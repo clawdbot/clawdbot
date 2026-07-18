@@ -22,6 +22,7 @@ import {
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   releaseAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -914,7 +915,7 @@ async function prepareCronRunContext(params: {
   const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
   const modelApi =
     findModelInCatalog(thinkingCatalog, provider, model)?.api ??
-    configuredProvider?.models.find((candidate) => candidate.id === model)?.api ??
+    configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
     configuredProvider?.api;
   const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
     cfg: cfgWithAgentDefaults,
@@ -1774,8 +1775,10 @@ export async function runCronIsolatedAgentTurn(params: {
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     };
-    const execution = await prepared.context.sessionWorkAdmission.run(async () =>
-      executeCronRun(executionParams),
+    const execution = await prepared.context.sessionWorkAdmission.run(() =>
+      withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
+        executeCronRun(executionParams),
+      ),
     );
     const finalized = await finalizeCronRun({
       prepared: prepared.context,

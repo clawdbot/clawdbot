@@ -80,6 +80,45 @@ describe("probeSlack", () => {
     );
   });
 
+  it("maps a human auth.test identity for user identity", async () => {
+    authTestMock.mockResolvedValue({
+      ok: true,
+      user_id: "UUSER",
+      user: "test-human",
+      team_id: "T123",
+      team: "OpenClaw",
+    });
+
+    await expect(probeSlack("test-user-token", 2500, { identity: "user" })).resolves.toMatchObject({
+      ok: true,
+      user: { id: "UUSER", name: "test-human" },
+      team: { id: "T123", name: "OpenClaw" },
+    });
+  });
+
+  it("rejects a bot token in the user identity slot", async () => {
+    authTestMock.mockResolvedValue({
+      ok: true,
+      user_id: "UBOT",
+      bot_id: "BBOT",
+      user: "test-bot",
+    });
+
+    await expect(probeSlack("test-user-token", 2500, { identity: "user" })).resolves.toMatchObject({
+      ok: false,
+      error: "Slack auth.test identified a bot token; user identity requires a user OAuth token",
+    });
+  });
+
+  it("rejects user identity auth.test responses without a human user_id", async () => {
+    authTestMock.mockResolvedValue({ ok: true, user: "test-human" });
+
+    await expect(probeSlack("test-user-token", 2500, { identity: "user" })).resolves.toMatchObject({
+      ok: false,
+      error: "Slack auth.test returned no human user_id for user identity",
+    });
+  });
+
   it("keeps optional auth metadata fields undefined when Slack omits them", async () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(200).mockReturnValueOnce(235);
     authTestMock.mockResolvedValue({ ok: true });

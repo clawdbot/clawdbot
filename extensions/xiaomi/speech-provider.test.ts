@@ -35,9 +35,7 @@ describe("buildXiaomiSpeechProvider", () => {
     it("registers Xiaomi MiMo as a speech provider", () => {
       expect(provider.id).toBe("xiaomi");
       expect(provider.aliases).toContain("mimo");
-      expect(provider.models).toContain("mimo-v2.5-tts");
-      expect(provider.models).toContain("mimo-v2-tts");
-      expect(provider.models).toContain("mimo-v2.5-tts-voicedesign");
+      expect(provider.models).toEqual(["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign"]);
       expect(provider.voices).toContain("mimo_default");
     });
   });
@@ -78,7 +76,7 @@ describe("buildXiaomiSpeechProvider", () => {
           providers: {
             xiaomi: {
               baseUrl: "https://example.com/v1/",
-              model: "mimo-v2-tts",
+              model: "mimo-v2.5-tts",
               voice: "default_en",
               format: "wav",
               style: "Bright and fast.",
@@ -91,7 +89,7 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(config).toEqual({
         apiKey: undefined,
         baseUrl: "https://example.com/v1",
-        model: "mimo-v2-tts",
+        model: "mimo-v2.5-tts",
         voice: "default_en",
         format: "wav",
         style: "Bright and fast.",
@@ -143,9 +141,9 @@ describe("buildXiaomiSpeechProvider", () => {
         handled: true,
         overrides: { voice: "default_en" },
       });
-      expect(provider.parseDirectiveToken!({ key: "model", value: "mimo-v2-tts", policy })).toEqual(
-        { handled: true, overrides: { model: "mimo-v2-tts" } },
-      );
+      expect(
+        provider.parseDirectiveToken!({ key: "model", value: "mimo-v2.5-tts", policy }),
+      ).toEqual({ handled: true, overrides: { model: "mimo-v2.5-tts" } });
       expect(provider.parseDirectiveToken!({ key: "style", value: "whispered", policy })).toEqual({
         handled: true,
         overrides: { style: "whispered" },
@@ -192,7 +190,7 @@ describe("buildXiaomiSpeechProvider", () => {
         cfg: {} as never,
         providerConfig: {
           apiKey: "sk-test",
-          model: "mimo-v2-tts",
+          model: "mimo-v2.5-tts",
           voice: "default_en",
           style: "Bright.",
         },
@@ -213,7 +211,7 @@ describe("buildXiaomiSpeechProvider", () => {
         "Content-Type": "application/json",
       });
       const body = JSON.parse(init!.body as string);
-      expect(body.model).toBe("mimo-v2-tts");
+      expect(body.model).toBe("mimo-v2.5-tts");
       expect(body.messages).toEqual([
         { role: "user", content: "Bright." },
         { role: "assistant", content: "Hello from OpenClaw." },

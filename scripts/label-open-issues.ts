@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRecord } from "../src/utils.js";
 import { readBoundedResponseText as readBoundedBodyText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
@@ -644,7 +645,7 @@ function truncateBody(body: string): string {
   if (body.length <= MAX_BODY_CHARS) {
     return body;
   }
-  return `${body.slice(0, MAX_BODY_CHARS)}\n\n[truncated]`;
+  return `${truncateUtf16Safe(body, MAX_BODY_CHARS)}\n\n[truncated]`;
 }
 
 function buildItemPrompt(item: LabelItem, kind: "issue" | "pull request"): string {

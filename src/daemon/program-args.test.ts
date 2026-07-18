@@ -1,7 +1,7 @@
 // Daemon program argument tests cover CLI argument construction for services.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -203,10 +203,45 @@ describe("resolveGatewayProgramArguments", () => {
     expect(execFileSyncMock).toHaveBeenCalledWith(
       path.win32.join(String.raw`D:\Windows`, "System32", "where.exe"),
       ["node"],
-      { encoding: "utf8" },
+      { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" },
     );
     expect(result?.programArguments).toEqual([
       String.raw`D:\Tools\node.exe`,
+      "--import",
+      "tsx",
+      repoEntryPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
+  it("bounds POSIX Node runtime lookup", async () => {
+    const repoIndexPath = path.resolve("/repo/src/index.ts");
+    const repoEntryPath = path.resolve("/repo/src/entry.ts");
+    process.argv = ["/usr/local/bin/bun", repoIndexPath];
+    process.execPath = "/usr/local/bin/bun";
+    fsMocks.realpath.mockResolvedValue(repoIndexPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    execFileSyncMock.mockReturnValue("/usr/local/bin/node\n");
+
+    const result = await withMockedPlatform(
+      "linux",
+      async () =>
+        await resolveGatewayProgramArguments({
+          dev: true,
+          port: 18789,
+          runtime: "node",
+        }),
+    );
+
+    expect(execFileSyncMock).toHaveBeenCalledWith("which", ["node"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
+    expect(result.programArguments).toEqual([
+      "/usr/local/bin/node",
       "--import",
       "tsx",
       repoEntryPath,

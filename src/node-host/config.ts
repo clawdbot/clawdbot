@@ -31,6 +31,8 @@ export type NodeHostConfig = {
   nodeId: string;
   displayName?: string;
   gateway?: NodeHostGatewayConfig;
+  /** Share installed macOS applications through device.apps (default: false). */
+  installedAppsSharing?: boolean;
 };
 
 export const NODE_HOST_CONFIG_KEY = "current";
@@ -120,6 +122,9 @@ function rowToNodeHostConfig(row: NodeHostConfigRuntimeRow): NodeHostConfig {
   if (row.gateway_tls !== null && row.gateway_tls !== 0 && row.gateway_tls !== 1) {
     throw new Error("invalid node-host SQLite row: gateway_tls must be 0, 1, or null");
   }
+  if (row.installed_apps_sharing !== 0 && row.installed_apps_sharing !== 1) {
+    throw new Error("invalid node-host SQLite row: installed_apps_sharing must be 0 or 1");
+  }
   const gateway: NodeHostGatewayConfig = {
     host: optionalNonEmptyString(row.gateway_host, "gateway_host"),
     port: validatePort(row.gateway_port, "SQLite gateway_port"),
@@ -133,6 +138,7 @@ function rowToNodeHostConfig(row: NodeHostConfigRuntimeRow): NodeHostConfig {
     nodeId,
     displayName: optionalNonEmptyString(row.display_name, "display_name"),
     gateway: hasGateway ? gateway : undefined,
+    installedAppsSharing: row.installed_apps_sharing === 1,
   };
 }
 
@@ -163,6 +169,7 @@ function configToRow(params: {
     gateway_tls: gateway?.tls === undefined ? null : gateway.tls ? 1 : 0,
     gateway_tls_fingerprint: gateway?.tlsFingerprint ?? null,
     gateway_context_path: gateway?.contextPath ?? null,
+    installed_apps_sharing: params.config.installedAppsSharing ? 1 : 0,
     updated_at_ms: params.updatedAtMs,
   };
 }
@@ -184,6 +191,7 @@ function readNodeHostConfigRow(
         "gateway_tls",
         "gateway_tls_fingerprint",
         "gateway_context_path",
+        "installed_apps_sharing",
         "updated_at_ms",
       ])
       .where("config_key", "=", NODE_HOST_CONFIG_KEY),
@@ -212,6 +220,7 @@ export async function configureNodeHost(params: {
   env?: NodeJS.ProcessEnv;
   nowMs?: number;
   candidateNodeId?: string;
+  installedAppsSharing?: boolean;
 }): Promise<NodeHostConfig> {
   const env = params.env ?? process.env;
   assertNodeHostLegacyStateMigrated(env);
@@ -236,6 +245,7 @@ export async function configureNodeHost(params: {
       nodeId,
       displayName,
       gateway,
+      installedAppsSharing: params.installedAppsSharing ?? existing?.installedAppsSharing ?? false,
     };
     const row = configToRow({ config: next, updatedAtMs });
     const { config_key: _configKey, ...updates } = row;

@@ -294,7 +294,7 @@ func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ str
 func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
 	translated := strings.ReplaceAll(text, "Visible prose", "Видимый текст")
-	translated = regexp.MustCompile(`(?m)^\s+(__OC_I18N_\d+__)`).ReplaceAllString(translated, "$1")
+	translated = regexp.MustCompile(`(?m)^(__OC_I18N_\d+__)`).ReplaceAllString(translated, "  $1")
 	return translated, nil
 }
 
@@ -730,6 +730,35 @@ func TestExtractMarkdownListMarkerPrefixesIgnoresFencedExamples(t *testing.T) {
 	want := []string{"- ", "> 1. "}
 	if got := extractMarkdownListMarkerPrefixes(text); !slices.Equal(got, want) {
 		t.Fatalf("list marker prefixes mismatch\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestNormalizeMaskedListMarkerPlaceholdersRemovesAddedContainers(t *testing.T) {
+	t.Parallel()
+
+	mapping := map[string]string{
+		"__OC_I18N_000001__": "- ",
+		"__OC_I18N_000002__": "  - ",
+		"__OC_I18N_000003__": "> 1. ",
+		"__OC_I18N_000004__": "`inline`",
+	}
+	translated := strings.Join([]string{
+		"  __OC_I18N_000001__Top level",
+		"> __OC_I18N_000002__Nested",
+		"  > __OC_I18N_000003__Quoted",
+		"  __OC_I18N_000004__ prose",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"__OC_I18N_000001__Top level",
+		"__OC_I18N_000002__Nested",
+		"__OC_I18N_000003__Quoted",
+		"  __OC_I18N_000004__ prose",
+		"",
+	}, "\n")
+
+	if got := normalizeMaskedListMarkerPlaceholders(translated, mapping); got != want {
+		t.Fatalf("normalized placeholders changed unexpectedly\nwant:\n%s\ngot:\n%s", want, got)
 	}
 }
 

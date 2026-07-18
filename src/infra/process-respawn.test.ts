@@ -204,6 +204,19 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("exits to external supervision without invoking inherited native restart hooks", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "supervised" });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("returns supervised when OpenClaw gateway task markers are set on Windows", () => {
     clearSupervisorHints();
     setPlatform("win32");
@@ -326,6 +339,18 @@ describe("respawnGatewayProcessForUpdate", () => {
         stdio: "inherit",
       },
     );
+  });
+
+  it("delegates update restarts to external supervision without spawning", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result).toEqual({ mode: "supervised" });
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   });
 
   it("rewrites a pnpm-versioned OpenClaw entry before detached update respawn", () => {

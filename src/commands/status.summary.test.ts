@@ -1,5 +1,7 @@
 // Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
@@ -204,6 +206,8 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    setActiveDegradedPlugins([]);
+    setActiveDegradedSecretOwners([]);
     statusSummaryMocks.taskRegistrySummary = {
       total: 0,
       active: 0,
@@ -272,6 +276,102 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("reports degraded SecretRef owners without exposing ref identifiers", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: "discord:ops",
+        state: "unavailable",
+        paths: ["channels.discord.accounts.ops.token"],
+        refKeys: ["env:default:PRIVATE_REF_ID"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    const summary = await getStatusSummary();
+
+    expect(summary.degradedSecretOwners).toEqual([
+      {
+        ownerKind: "account",
+        ownerId: "discord:ops",
+        state: "unavailable",
+        paths: ["channels.discord.accounts.ops.token"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");
+  });
+
+  it("reports every plugin configured unavailable by startup verification", async () => {
+    setActiveDegradedPlugins([
+      {
+        pluginId: "discord",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "unreadable-package-json",
+          detail: "Could not read /private/plugins/discord/package.json: permission denied",
+          installPath: "/private/plugins/discord",
+        },
+      },
+      {
+        pluginId: "matrix",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-main-entry",
+          detail: "dist/index.js is missing",
+        },
+      },
+      {
+        pluginId: "peer-plugin",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-openclaw-peer-link",
+          detail:
+            "/private/plugins/peer-plugin/node_modules/openclaw points to /private/other/openclaw instead of /private/host/openclaw",
+          installPath: "/private/plugins/peer-plugin",
+        },
+      },
+    ]);
+
+    const summary = await getStatusSummary();
+
+    expect(summary.degradedPlugins).toEqual([
+      {
+        pluginId: "discord",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "unreadable-package-json",
+          detail: "Could not read <plugin-install>/package.json: permission denied",
+        },
+      },
+      {
+        pluginId: "matrix",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-main-entry",
+          detail: "dist/index.js is missing",
+        },
+      },
+      {
+        pluginId: "peer-plugin",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-openclaw-peer-link",
+          detail:
+            'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
+        },
+      },
+    ]);
+    expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/plugins");
+    expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/host");
   });
 
   it("reuses one reconciled task snapshot for task summaries and audit findings", async () => {

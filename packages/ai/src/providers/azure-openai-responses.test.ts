@@ -104,4 +104,24 @@ describe("azure-openai-responses", () => {
       }
     }
   });
+
+  it("disables response storage and clamps small output limits", async () => {
+    let sentParams: { max_output_tokens?: unknown; store?: unknown } | undefined;
+    const hostFetch: typeof fetch = async (input, init) => {
+      sentParams = (await new Request(input, init).json()) as typeof sentParams;
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    };
+
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    try {
+      await streamSimpleAzureOpenAIResponses(azureResponsesModel, context, {
+        apiKey: "test-api-key",
+        maxTokens: 1,
+      }).result();
+
+      expect(sentParams).toMatchObject({ max_output_tokens: 16, store: false });
+    } finally {
+      configureAiTransportHost({});
+    }
+  });
 });

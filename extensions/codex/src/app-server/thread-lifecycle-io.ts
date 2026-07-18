@@ -21,7 +21,7 @@ import type {
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
-import { readActiveCodexTurnIds } from "./thread-fingerprints.js";
+import { readActiveCodexTurnIdsFromResume } from "./thread-fingerprints.js";
 import {
   CodexAdoptedThreadActiveError,
   CodexRingZeroAttestationError,
@@ -265,7 +265,7 @@ export async function resumeExistingCodexThread(
       threadId: response.thread.id,
       action: "resumed",
     });
-    const activeTurnIds = readActiveCodexTurnIds(response.thread);
+    const activeTurnIds = readActiveCodexTurnIdsFromResume(response);
     return {
       ...resumeBinding,
       threadId: response.thread.id,

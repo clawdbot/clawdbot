@@ -21,6 +21,33 @@ function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => strin
 }
 
 describe("native hook relay CLI", () => {
+  it("passes the explicit state database path to direct bridge lookup", async () => {
+    const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    await expect(
+      runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId: "relay-1",
+          stateDb: "/tmp/profile/state/openclaw.sqlite",
+          generation: "generation-1",
+          event: "post_tool_use",
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+          invokeBridge: invokeBridge as never,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(invokeBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relayId: "relay-1",
+        stateDbPath: "/tmp/profile/state/openclaw.sqlite",
+      }),
+    );
+  });
+
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {
     const callGateway = vi.fn(async (_opts: unknown) => ({ stdout: "", stderr: "", exitCode: 0 }));
     const stdout = createWritableTextBuffer();

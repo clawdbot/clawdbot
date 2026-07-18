@@ -39,7 +39,9 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
+import { noteMainSessionRecoveryIntegrity } from "./doctor-main-session-recovery.js";
 import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
+import { countLabel, formatFilePreview } from "./doctor-state-integrity-format.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
@@ -51,19 +53,6 @@ type DoctorPrompterLike = {
   }) => Promise<boolean>;
   note?: typeof note;
 };
-
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function formatFilePreview(paths: string[], limit = 3): string {
-  const names = paths.slice(0, limit).map((filePath) => path.basename(filePath));
-  const remaining = paths.length - names.length;
-  if (remaining > 0) {
-    return `${names.join(", ")}, and ${remaining} more`;
-  }
-  return names.join(", ");
-}
 
 function existsDir(dir: string): boolean {
   try {
@@ -1276,7 +1265,15 @@ export async function noteStateIntegrity(
   const store = loadSessionStore(storePath, { skipCache: true, clone: false });
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
-  if (entries.length > 0) {
+  const canonicalEntryCount = await noteMainSessionRecoveryIntegrity({
+    agentId,
+    storePath: absoluteStorePath,
+    warnings,
+    changes,
+    confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
+    countLabel,
+  });
+  if (entries.length > 0 || canonicalEntryCount > 0) {
     const recent = entries
       .slice()
       .toSorted((a, b) => {

@@ -76,10 +76,13 @@ describe("package Telegram live Docker E2E", () => {
     );
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
-    expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
-    expect(installRun).not.toContain("run_logged docker run --rm");
-    expect(script).toContain("run_logged docker_e2e_run_with_harness");
-    expect(script).toContain('docker_e2e_print_log "$run_log"');
+    expect(installRun).toContain(
+      'run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_run_cmd run --rm',
+    );
+    expect(installRun).not.toContain("run_logged_print_heartbeat docker run --rm");
+    expect(script).toContain(
+      'run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness',
+    );
     expect(script).not.toContain('cat "$run_log"');
     expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain(
@@ -102,7 +105,7 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw --version");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw onboard");
     expect(runtimeRun).toContain(
-      'OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard',
+      'OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command openclaw onboard',
     );
     expect(runtimeRun).not.toContain("export OPENAI_API_KEY=");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
@@ -111,6 +114,28 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain('openclaw_e2e_print_log "$file"');
     expect(runtimeRun).not.toContain("sed -n '1,220p'");
     expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
+  });
+
+  it("isolates onboarding hot-path config from the live suite", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'runtime_home="$(mktemp -d "/tmp/openclaw-npm-telegram-runtime.XXXXXX")"',
+    );
+    expect(script).toContain(
+      'hotpath_home="$(mktemp -d "/tmp/openclaw-npm-telegram-hotpath.XXXXXX")"',
+    );
+    expect(script).toContain('export HOME="$hotpath_home"');
+    expect(script).toContain('export HOME="$runtime_home"');
+  });
+
+  it("fails fast after the first package Telegram scenario failure", () => {
+    const runner = readFileSync(
+      path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-runner.ts"),
+      "utf8",
+    );
+
+    expect(runner).toContain("failFast: true");
   });
 
   it("can install a resolved package tarball instead of a registry spec", () => {
@@ -210,6 +235,10 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain('*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;');
     expect(script).toContain('mkdir -p "$OUTPUT_DIR_HOST"');
+    expect(script).toContain(
+      'printf \'schema=1\\nexit_code=%s\\nlive_output=job_log\\n\' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"',
+    );
+    expect(script).toContain("trap cleanup EXIT");
     expect(dockerEnv).toContain(
       '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
     );

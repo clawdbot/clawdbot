@@ -231,6 +231,42 @@ describe("browser plugin", () => {
     });
   });
 
+  it("passes the browser-owned run binding into the tool layer", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const binding = {
+      kind: "tab",
+      tabId: 7,
+      target: "host",
+      profile: "chrome",
+      targetId: "target-7",
+    };
+    const tool = factory({ toolBindings: { browser: binding } });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "snapshot" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({ runToolBinding: binding });
+  });
+
+  it("rejects malformed run bindings before creating the lazy browser tool", () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    expect(() => factory({ toolBindings: { browser: { kind: "tab" } } })).toThrow(
+      "invalid browser run binding",
+    );
+  });
+
   it("derives group chat type for browser media scope", async () => {
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);

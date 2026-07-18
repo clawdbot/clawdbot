@@ -123,7 +123,9 @@ final class MacNodeModeCoordinator: NSObject {
             runtime: MacNodeRuntime(
                 nodeHostWorker: nodeHostWorker,
                 canvasSurfaceUrl: { await session.currentCanvasHostUrl() },
-                refreshCanvasSurfaceUrl: { await session.refreshCanvasHostUrl() }),
+                refreshCanvasSurfaceUrl: { observedURL in
+                    await session.refreshCanvasHostUrl(replacing: observedURL)
+                }),
             nodeHostWorker: nodeHostWorker,
             presenceReporter: MacNodePresenceReporter(),
             observeNotifications: true,
@@ -261,6 +263,14 @@ final class MacNodeModeCoordinator: NSObject {
             isPaused: UserDefaults.standard.bool(forKey: pauseDefaultsKey),
             computerControlEnabled: UserDefaults.standard.object(
                 forKey: computerControlEnabledKey) as? Bool ?? false)
+    }
+
+    func currentCanvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
+        await self.session.currentCanvasHostRoute()
+    }
+
+    func refreshCanvasPluginSurfaceRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {
+        await self.session.refreshCanvasHostRoute(replacing: observedURL)
     }
 
     private func refresh(isPaused: Bool, computerControlEnabled: Bool) {

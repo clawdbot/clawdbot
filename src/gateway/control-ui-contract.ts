@@ -3,6 +3,12 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
+export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
+
+/** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
+export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
+
 /** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
 export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
 

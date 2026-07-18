@@ -1,4 +1,5 @@
 import CoreLocation
+import Dispatch
 import Foundation
 import OpenClawKit
 import Testing
@@ -43,6 +44,40 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    private final class CatalogWorkerProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private let releaseFirst = DispatchSemaphore(value: 0)
+        private var calls = 0
+        private var active = 0
+        private var peakActive = 0
+
+        func run() -> String {
+            self.lock.lock()
+            self.calls += 1
+            let call = self.calls
+            self.active += 1
+            self.peakActive = max(self.peakActive, self.active)
+            self.lock.unlock()
+            if call == 1 {
+                self.releaseFirst.wait()
+            }
+            self.lock.lock()
+            self.active -= 1
+            self.lock.unlock()
+            return "call-\(call)"
+        }
+
+        func release() {
+            self.releaseFirst.signal()
+        }
+
+        func snapshot() -> (calls: Int, peakActive: Int) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return (self.calls, self.peakActive)
+        }
+    }
+
     private func waitForCount(_ expected: Int, counter: LockedCounter) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(1))
@@ -58,6 +93,19 @@ struct MacNodeRuntimeTests {
         func refresh() -> String? {
             self.calls += 1
             return "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token"
+        }
+    }
+
+    actor CanvasReconnectProbe {
+        private var surfaceURL = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
+
+        func current() -> String? {
+            self.surfaceURL
+        }
+
+        func reconnectDuringRefresh() -> String? {
+            self.surfaceURL = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
+            return nil
         }
     }
 
@@ -231,6 +279,56 @@ struct MacNodeRuntimeTests {
         #expect(read.payloadJSON == readPayload)
     }
 
+    @Test func `Claude catalog worker serializes filesystem operations`() async throws {
+        let probe = CatalogWorkerProbe()
+        let worker = MacNodeClaudeSessionCatalogWorker(
+            listOperation: { _ in probe.run() },
+            readOperation: { _ in probe.run() })
+        let first = Task { try await worker.list(paramsJSON: nil) }
+        while probe.snapshot().calls == 0 {
+            await Task.yield()
+        }
+        let second = Task { try await worker.read(paramsJSON: nil) }
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(probe.snapshot().calls == 1)
+        let cancelStarted = ContinuousClock.now
+        let watchdog = Task {
+            try await Task.sleep(for: .seconds(1))
+            probe.release()
+        }
+        second.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await second.value
+        }
+        #expect(ContinuousClock.now - cancelStarted < .milliseconds(500))
+        watchdog.cancel()
+        probe.release()
+        #expect(try await first.value == "call-1")
+        #expect(try await worker.read(paramsJSON: nil) == "call-2")
+        #expect(probe.snapshot().peakActive == 1)
+    }
+
+    @Test func `Claude catalog worker propagates caller cancellation`() async {
+        let started = LockedCounter()
+        let worker = MacNodeClaudeSessionCatalogWorker(
+            listOperation: { _ in
+                started.increment()
+                while !Task.isCancelled {
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+                throw CancellationError()
+            },
+            readOperation: { _ in "unused" })
+        let task = Task { try await worker.list(paramsJSON: nil) }
+        #expect(await self.waitForCount(1, counter: started))
+
+        task.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+    }
+
     @Test func `handle invoke enforces local Claude catalog policy`() async {
         let runtime = MacNodeRuntime(
             claudeSessionCatalogEnabled: { false },
@@ -251,7 +349,7 @@ struct MacNodeRuntimeTests {
         let probe = CanvasRefreshProbe()
         let resolver = MacNodeCanvasHostedSurfaceResolver(
             currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
-            refreshSurfaceURL: { await probe.refresh() })
+            refreshSurfaceURL: { _ in await probe.refresh() })
 
         let current = await resolver.resolveA2UIURL()
         #expect(current ==
@@ -268,7 +366,7 @@ struct MacNodeRuntimeTests {
         let probe = CanvasRefreshProbe()
         let resolver = MacNodeCanvasHostedSurfaceResolver(
             currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
-            refreshSurfaceURL: { await probe.refresh() })
+            refreshSurfaceURL: { _ in await probe.refresh() })
 
         let resolved = try await resolver.resolveTarget(
             "/__openclaw__/canvas/demo%20page.html?mode=proof#result")
@@ -280,6 +378,18 @@ struct MacNodeRuntimeTests {
         let external = try await resolver.resolveTarget("https://example.com/")
         #expect(external == nil)
         #expect(await probe.calls == 1)
+    }
+
+    @Test func `hosted Canvas commands use replacement route after refresh fails`() async throws {
+        let probe = CanvasReconnectProbe()
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { await probe.current() },
+            refreshSurfaceURL: { _ in await probe.reconnectDuringRefresh() })
+
+        let resolved = try await resolver.resolveTarget("/__openclaw__/canvas/demo.html")
+
+        #expect(resolved?.url.absoluteString ==
+            "http://127.0.0.1:18789/__openclaw__/cap/new-token/__openclaw__/canvas/demo.html")
     }
 
     @Test func `handle invoke rejects empty notification`() async throws {
@@ -979,5 +1089,4 @@ struct MacNodeRuntimeTests {
             nodeId: controlHeavyNodeId)
         #expect(controlHeavyProjection > 25 * 1024 * 1024)
     }
-
 }

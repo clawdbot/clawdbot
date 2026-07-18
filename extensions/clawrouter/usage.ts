@@ -113,6 +113,7 @@ export async function fetchClawRouterUsage(params: {
   );
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
     }
     const payload = await readClawRouterUsagePayload(response, params.timeoutMs);

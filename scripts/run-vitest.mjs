@@ -350,25 +350,39 @@ function resolveExplicitVitestMode(argv) {
   return mode;
 }
 
+function resolveVitestCompileCacheSafeEnv(env) {
+  if (!env.NODE_COMPILE_CACHE && !env.NODE_COMPILE_CACHE_PORTABLE) {
+    return env;
+  }
+  // Coverage can be enabled inside a dynamic Vitest config, which this wrapper
+  // cannot know before spawning. Keep the cache for orchestration/build tools,
+  // but never let a Vitest child deserialize bytecode into V8 coverage.
+  const spawnEnv = { ...env, NODE_DISABLE_COMPILE_CACHE: "1" };
+  delete spawnEnv.NODE_COMPILE_CACHE;
+  delete spawnEnv.NODE_COMPILE_CACHE_PORTABLE;
+  return spawnEnv;
+}
+
 /**
  * Adds default watchdog env for non-watch Vitest runs.
  */
 export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
+  const baseEnv = resolveVitestCompileCacheSafeEnv(env);
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
-    return env;
+    return baseEnv;
   }
-  if (explicitMode !== "run" && !isTruthyEnvValue(env.CI)) {
-    return env;
+  if (explicitMode !== "run" && !isTruthyEnvValue(baseEnv.CI)) {
+    return baseEnv;
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
-  const hasTimeout = Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
+  const hasTimeout = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
   const timeoutMs = hasTimeout
-    ? parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
+    ? parsePositiveInt(baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
     : defaultTimeoutMs;
-  const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
+  const hasHeartbeat = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
-    ...env,
+    ...baseEnv,
     ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }

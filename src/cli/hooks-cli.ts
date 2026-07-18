@@ -546,6 +546,7 @@ export function registerHooksCli(program: Command): void {
     .description("Internal native harness hook relay")
     .requiredOption("--provider <provider>", "Native harness provider")
     .requiredOption("--relay-id <id>", "Native hook relay id")
+    .option("--state-db <path>", "Shared state database path")
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
     .option(

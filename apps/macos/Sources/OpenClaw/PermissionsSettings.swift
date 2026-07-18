@@ -166,6 +166,19 @@ extension Capability {
         .camera,
         .location,
     ]
+
+    var permissionDisplayName: String {
+        switch self {
+        case .appleScript: "Automation (AppleScript)"
+        case .notifications: "Notifications"
+        case .accessibility: "Accessibility"
+        case .screenRecording: "Screen Recording"
+        case .microphone: "Microphone"
+        case .speechRecognition: "Speech Recognition"
+        case .camera: "Camera"
+        case .location: "Location"
+        }
+    }
 }
 
 struct PermissionStatusList: View {
@@ -260,7 +273,7 @@ struct PermissionRow: View {
                         .foregroundStyle(self.status ? Color.green : Color.secondary)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.title).font(.body.weight(.semibold))
+                    Text(self.capability.permissionDisplayName).font(.body.weight(.semibold))
                     Text(self.subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -321,19 +334,6 @@ struct PermissionRow: View {
 
     private var iconSize: CGFloat {
         self.compact ? 28 : 32
-    }
-
-    private var title: String {
-        switch self.capability {
-        case .appleScript: "Automation (AppleScript)"
-        case .notifications: "Notifications"
-        case .accessibility: "Accessibility"
-        case .screenRecording: "Screen Recording"
-        case .microphone: "Microphone"
-        case .speechRecognition: "Speech Recognition"
-        case .camera: "Camera"
-        case .location: "Location"
-        }
     }
 
     private var subtitle: String {

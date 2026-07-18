@@ -275,6 +275,7 @@ async function restoreMcpAppViewOnce(params: {
     // A reconstructed preview can render and read its owning server resources,
     // but cannot call tools without a fresh run carrying current effective policy.
     allowedAppToolNames: new Set(),
+    readOnly: true,
   });
   const view = getMcpAppViewLease(params.viewId, runtime);
   return view ? { runtime, view } : undefined;

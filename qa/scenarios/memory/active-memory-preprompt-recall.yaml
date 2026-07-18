@@ -43,6 +43,8 @@ scenario:
     kind: flow
     summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
     channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: Mutates legacy Active Memory state and runs doctor while the Gateway is stopped, then restarts the Gateway.
     config:
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on
@@ -84,31 +86,37 @@ flow:
         - set: activeSessionKey
           value:
             expr: "'agent:qa:qa-channel:direct:active-memory-on'"
-        - set: toggleStorePath
+        - set: doctorOutputPath
           value:
-            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'session-toggles.json')"
-        - call: fs.rm
+            expr: "path.join(env.gateway.tempRoot, 'active-memory-doctor-output.txt')"
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: qa gateway child does not expose restartAfterStateMutation
+        - call: env.gateway.restartAfterStateMutation
           args:
-            - ref: toggleStorePath
-            - force: true
-        - call: fs.mkdir
-          args:
-            - expr: "path.dirname(toggleStorePath)"
-            - recursive: true
-        - call: fs.writeFile
-          args:
-            - ref: toggleStorePath
-            - expr: "`${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\\n`"
-            - utf8
-        - call: runQaCli
-          saveAs: doctorFixOutput
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  (async () => {
+                    const toggleStorePath = path.join(ctx.stateDir, "plugins", "active-memory", "session-toggles.json");
+                    await fs.rm(toggleStorePath, { force: true });
+                    await fs.mkdir(path.dirname(toggleStorePath), { recursive: true });
+                    await fs.writeFile(toggleStorePath, `${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\n`, "utf8");
+                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes"], {
+                      timeoutMs: liveTurnTimeoutMs(env, 60000),
+                    });
+                    await fs.writeFile(doctorOutputPath, doctorFixOutput, "utf8");
+                  })()
+        - call: waitForGatewayHealthy
           args:
             - ref: env
-            - - doctor
-              - --fix
-              - --yes
-            - timeoutMs:
-                expr: liveTurnTimeoutMs(env, 60000)
+            - 120000
+        - call: fs.readFile
+          saveAs: doctorFixOutput
+          args:
+            - ref: doctorOutputPath
+            - utf8
         - assert:
             expr: "String(doctorFixOutput).includes('Migrated 1 Active Memory session toggle entry')"
             message:

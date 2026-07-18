@@ -2,6 +2,8 @@
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
 
+const DARWIN_PS_TIMEOUT_MS = 1000;
+
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
 }
@@ -59,6 +61,7 @@ function getDarwinProcessStartTime(pid: number): number | null {
         encoding: "utf8",
         env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
+        timeout: DARWIN_PS_TIMEOUT_MS,
       })
       .trim();
     // Darwin's lstart output has no timezone. Force UTC for both ps and parsing so

@@ -11,6 +11,8 @@ The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
 permission prompts, notifications, WebChat, voice input, Canvas, and
 Mac-hosted node tools such as `system.run`.
 
+Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
+
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
 ## Download
@@ -98,7 +100,7 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
-- Menu bar status, notifications, health, and WebChat.
+- Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
 - One Mac node that combines native Canvas, camera/screen capture, notifications,
   location, and computer control with the CLI node host's system, browser,

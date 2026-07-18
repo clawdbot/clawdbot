@@ -14,12 +14,23 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "runtimeAugment": true,
-        "providers": {
+    "providers": {
       "claude-cli": {
         "models": [
           {
             "id": "claude-sonnet-5",
             "name": "Claude Sonnet 5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 128000
+          },
+          {
+            "id": "claude-fable-5",
+            "name": "Claude Fable 5 (Claude CLI)",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
@@ -247,6 +258,7 @@
   },
   "cliBackends": ["claude-cli"],
   "syntheticAuthRefs": ["claude-cli"],
+  "nonSecretAuthMarkers": ["openclaw:claude-cli-api-key-helper"],
   "setup": {
     "providers": [
       {

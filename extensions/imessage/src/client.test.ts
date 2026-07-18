@@ -86,6 +86,38 @@ describe("IMessageRpcClient child stream error handling", () => {
     },
   );
 
+  it("clears the stop fallback timer when the child closes first", async () => {
+    const realClearTimeout = globalThis.clearTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let scheduledTimer: NodeJS.Timeout | undefined;
+
+    try {
+      const { IMessageRpcClient } = await import("./client.js");
+      const client = new IMessageRpcClient({ cliPath: "imsg" });
+      await client.start();
+      const endMock = vi.fn(() => {
+        child.emit("close", 0, null);
+        return child.stdin;
+      });
+      child.stdin.end = endMock;
+
+      await client.stop();
+
+      expect(endMock).toHaveReturnedWith(child.stdin);
+      expect(setTimeoutSpy).toHaveBeenCalledOnce();
+      scheduledTimer = setTimeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
+      expect(scheduledTimer).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(scheduledTimer);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      if (scheduledTimer) {
+        realClearTimeout(scheduledTimer);
+      }
+      vi.restoreAllMocks();
+    }
+  });
+
   it("settles the client after a real child stdout stream failure", async () => {
     const childProcess =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");

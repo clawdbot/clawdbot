@@ -5,8 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { resolveMemoryCorePluginConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingPluginConfig,
+  resolveSessionTranscriptsDirForAgent,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -236,7 +238,7 @@ function createHarness(
           },
         },
       };
-  const pluginConfig = resolveMemoryCorePluginConfig(resolvedConfig) ?? {};
+  const pluginConfig = resolveMemoryDreamingPluginConfig(resolvedConfig) ?? {};
   const beforeAgentReply = async (
     event: { cleanedBody: string },
     ctx: { trigger?: string; workspaceDir?: string },
@@ -434,7 +436,7 @@ describe("memory-core dreaming phases", () => {
     await runDreamingSweepPhases({
       workspaceDir,
       cfg: testConfig,
-      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
       logger,
       subagent,
       nowMs,
@@ -501,7 +503,7 @@ describe("memory-core dreaming phases", () => {
       runDreamingSweepPhases({
         workspaceDir,
         cfg: testConfig,
-        pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+        pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
         logger,
         subagent,
         nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
@@ -737,7 +739,7 @@ describe("memory-core dreaming phases", () => {
     await runDreamingSweepPhases({
       workspaceDir,
       cfg: testConfig,
-      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
       logger,
       subagent,
       nowMs,

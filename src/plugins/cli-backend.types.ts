@@ -121,6 +121,16 @@ export type CliBackendPlugin = {
    */
   ownsNativeCompaction?: boolean;
   /**
+   * Whether embedded runs opted into `cliBackendDispatch: "subscription-auth"`
+   * execute through this backend when the selected credential is
+   * subscription-scoped (oauth/token) or unresolvable.
+   *
+   * Set only when this backend's model provider rejects or meters direct API
+   * calls on subscription tokens, so the passthrough would fail or silently
+   * bill outside plan limits. API-key credentials always keep the passthrough.
+   */
+  subscriptionAuthDispatch?: boolean;
+  /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
    * Keep provider-specific test wiring here instead of scattering it across

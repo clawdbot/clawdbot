@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AuthStorageBackend } from "./auth-storage.js";
 
 // auth-storage.ts persists via the named import `writeFileSync` from node:fs,
 // and replaceFileAtomicSync (in @openclaw/fs-safe) writes its temp file via the
@@ -126,5 +127,45 @@ describe("file auth storage", () => {
     const storage = new FileAuthStorageBackend(join(tmpDir, "auth.json"));
 
     await expect(storage.withLockAsync(async () => ({ result: undefined }))).rejects.toBe(error);
+  });
+
+  it("throws without changing memory when malformed storage cannot be reloaded", () => {
+    tmpDir = fs.mkdtempSync(join(tmpdir(), "auth-malformed-"));
+    const authPath = join(tmpDir, "auth.json");
+    fs.writeFileSync(authPath, "{invalid-json", "utf-8");
+    const storage = AuthStorage.create(authPath);
+
+    expect(() => storage.set("openai", { type: "api_key", key: "test-token-placeholder" })).toThrow(
+      "Cannot update auth storage because it could not be loaded",
+    );
+    expect(storage.has("openai")).toBe(false);
+    expect(fs.readFileSync(authPath, "utf-8")).toBe("{invalid-json");
+  });
+
+  it("throws without changing memory when the durable write fails", () => {
+    const writeError = new Error("simulated durable write failure");
+    let persisted = "{}";
+    const backend: AuthStorageBackend = {
+      withLock: (fn) => {
+        const update = fn(persisted);
+        if (update.next !== undefined) {
+          throw writeError;
+        }
+        return update.result;
+      },
+      withLockAsync: async (fn) => {
+        const update = await fn(persisted);
+        if (update.next !== undefined) {
+          persisted = update.next;
+        }
+        return update.result;
+      },
+    };
+    const storage = AuthStorage.fromStorage(backend);
+
+    expect(() => storage.set("openai", { type: "api_key", key: "test-token-placeholder" })).toThrow(
+      /simulated durable write failure/,
+    );
+    expect(storage.has("openai")).toBe(false);
   });
 });

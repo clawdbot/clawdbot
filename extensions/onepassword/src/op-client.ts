@@ -241,6 +241,12 @@ export class OpClient {
         env: {
           OP_SERVICE_ACCOUNT_TOKEN: token,
           HOME: this.home,
+          // Force the pure service-account path. Without both overrides, op
+          // 2.35 on macOS still reads the 1Password desktop app's settings and
+          // can block on a per-PID App Data Protection dialog until a human
+          // answers, hanging the broker for timeoutMs on Mac gateway hosts.
+          OP_LOAD_DESKTOP_APP_SETTINGS: "false",
+          OP_BIOMETRIC_UNLOCK_ENABLED: "false",
         },
         timeoutMs: this.timeoutMs,
         maxBufferBytes: MAX_STDOUT_BYTES,

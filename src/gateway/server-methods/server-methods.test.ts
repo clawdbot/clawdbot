@@ -43,6 +43,13 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
 vi.mock("../../commands/status.js", () => ({
@@ -2942,9 +2949,12 @@ describe("exec approval handlers", () => {
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
   ): Promise<{ id: string; request: Record<string, unknown> }> {
-    await vi.waitFor(() => {
-      expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
-    });
+    await waitForFast(
+      () => {
+        expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
+      },
+      { timeout: 5_000 },
+    );
     return getRequestedExecApprovalPayload(broadcasts);
   }
 
@@ -3216,7 +3226,7 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3343,7 +3353,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3404,7 +3414,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3476,7 +3486,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3522,7 +3532,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3574,7 +3584,7 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3618,7 +3628,7 @@ describe("exec approval handlers", () => {
       client: requesterClient,
       params: { id: "approval-auto-review-mismatch", twoPhase: true },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3669,7 +3679,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3702,7 +3712,7 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
     const acceptedId = respond.mock.calls.find((call) => call[1]?.status === "accepted")?.[1]?.id;
@@ -4482,7 +4492,7 @@ describe("exec approval handlers", () => {
       },
     });
     await waitForRequestedExecApprovalPayload(broadcasts);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -4563,7 +4573,7 @@ describe("exec approval handlers", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(lastMockCallArg(respond)).toBe(true);
       expectRecordFields(lastMockCallArg(respond, 1), {
         status: "accepted",
@@ -4646,7 +4656,7 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-ios-cleanup", host: "gateway" },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
     });
 
@@ -4658,7 +4668,7 @@ describe("exec approval handlers", () => {
     });
     await requestPromise;
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expectRecordFields(mockCallArg(iosPushDelivery.handleResolved), {
         id: "approval-ios-cleanup",
         decision: "allow-once",
@@ -4693,7 +4703,7 @@ describe("exec approval handlers", () => {
       await vi.advanceTimersByTimeAsync(250);
       await requestPromise;
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expectRecordFields(mockCallArg(iosPushDelivery.handleExpired), {
           id: "approval-ios-expire",
         });
@@ -4724,7 +4734,7 @@ describe("exec approval handlers", () => {
         },
       });
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(lastMockCallArg(respond)).toBe(true);
         expectRecordFields(lastMockCallArg(respond, 1), {
           status: "accepted",
@@ -4756,7 +4766,7 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     });
     expect(expireSpy).not.toHaveBeenCalled();

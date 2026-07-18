@@ -12,6 +12,7 @@ export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
 export { resolveDefaultAgentId, resolveSessionAgentIds } from "../agents/agent-scope.js";
 export { resolveMemorySearchConfig } from "../agents/memory-search.js";
+export { resolveMemoryDreamingPluginConfig } from "../memory-host-sdk/dreaming.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
 export { getRuntimeConfig } from "../config/config.js";
 export type { OpenClawConfig } from "../config/config.js";

@@ -34,6 +34,8 @@ type ChatWelcomeProps = {
   onOpenSession?: (sessionKey: string) => void;
 };
 
+type WelcomeMascot = HTMLElement & { tease: boolean; catchOnce: () => void };
+
 const WELCOME_SUGGESTION_KEYS = [
   "chat.welcome.suggestions.whatCanYouDo",
   "chat.welcome.suggestions.summarizeRecentSessions",
@@ -168,9 +170,47 @@ function renderWelcomeHero(
 /** The start-screen welcome block, shared by the empty chat and the new-session draft. */
 export function renderWelcomeState(props: ChatWelcomeProps) {
   const recentSessions = selectWelcomeRecentSessions(props);
+  let fileDragDepth = 0;
+  const mascotFor = (event: DragEvent): WelcomeMascot | null => {
+    const target = event.currentTarget;
+    return target instanceof HTMLElement
+      ? target.querySelector<WelcomeMascot>(".agent-chat__welcome-clawd openclaw-mascot")
+      : null;
+  };
 
   return html`
-    <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
+    <div
+      class="agent-chat__welcome"
+      style="--agent-color: var(--accent)"
+      @dragenter=${(event: DragEvent) => {
+        if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+          return;
+        }
+        fileDragDepth += 1;
+        const mascot = mascotFor(event);
+        if (mascot) {
+          mascot.tease = true;
+        }
+      }}
+      @dragleave=${(event: DragEvent) => {
+        fileDragDepth = Math.max(0, fileDragDepth - 1);
+        const mascot = mascotFor(event);
+        if (mascot && fileDragDepth === 0) {
+          mascot.tease = false;
+        }
+      }}
+      @drop=${(event: DragEvent) => {
+        if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+          return;
+        }
+        fileDragDepth = 0;
+        const mascot = mascotFor(event);
+        if (mascot) {
+          mascot.tease = false;
+          mascot.catchOnce();
+        }
+      }}
+    >
       ${renderWelcomeHero({
         assistantName: props.assistantName,
         assistantAvatar: props.assistantAvatar,

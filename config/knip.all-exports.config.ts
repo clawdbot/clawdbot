@@ -62,6 +62,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/helpers/config/bundled-channel-config-runtime.ts!",
   // The topology analyzer owns these as an intentionally self-contained graph.
   "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  // The focused Oxlint test invokes these deliberate violations by path.
+  "test/fixtures/oxlint-boundary-guards/*.ts!",
 ] as const;
 
 const workspaces = Object.fromEntries(

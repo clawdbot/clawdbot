@@ -167,6 +167,13 @@ shorthand values.
 | `OPENCLAW_CONFIG_PATH`   | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                                                                                    |
 | `OPENCLAW_INCLUDE_ROOTS` | Path-list of directories where `$include` directives may resolve files outside the config directory (default: none - `$include` is confined to the config dir). Tilde-expanded.                                                         |
 
+## Agent helper tool downloads
+
+Set `OPENCLAW_OFFLINE=1` to prevent OpenClaw from downloading its pinned `fd`
+and `ripgrep` helper binaries. Existing helpers under the OpenClaw tools
+directory and working system binaries remain eligible; a missing helper stays
+unavailable instead of triggering a network request.
+
 ## Logging
 
 | Variable                         | Purpose                                                                                                                                                                                      |

@@ -34,6 +34,10 @@ vi.mock("../compaction.js", async () => {
 
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
 
+function summaryResult(text: string) {
+  return { kind: "summary" as const, text };
+}
+
 const {
   collectToolFailures,
   formatToolFailuresSection,
@@ -1442,7 +1446,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("uses structured instructions when summarizing dropped history chunks", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mock summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -1499,7 +1503,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("caps summarization reserve tokens to the model output limit", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mock summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture({
@@ -1538,7 +1542,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("adds Copilot IDE headers to built-in compaction summarization", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mock summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture({
@@ -1584,7 +1588,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("summary missing headings");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("summary missing headings"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -1633,20 +1637,22 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages
-      .mockResolvedValueOnce("latest ask status")
+      .mockResolvedValueOnce(summaryResult("latest ask status"))
       .mockResolvedValueOnce(
-        [
-          "## Decisions",
-          "Keep current flow.",
-          "## Open TODOs",
-          "None.",
-          "## Constraints/Rules",
-          "Follow rules.",
-          "## Pending user asks",
-          "latest ask status",
-          "## Exact identifiers",
-          "None.",
-        ].join("\n"),
+        summaryResult(
+          [
+            "## Decisions",
+            "Keep current flow.",
+            "## Open TODOs",
+            "None.",
+            "## Constraints/Rules",
+            "Follow rules.",
+            "## Pending user asks",
+            "latest ask status",
+            "## Exact identifiers",
+            "None.",
+          ].join("\n"),
+        ),
       );
 
     const sessionManager = stubSessionManager();
@@ -1733,32 +1739,36 @@ describe("compaction-safeguard recent-turn preservation", () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages
       .mockResolvedValueOnce(
-        [
-          "## Decisions",
-          "Keep current flow.",
-          "## Open TODOs",
-          "None.",
-          "## Constraints/Rules",
-          "Follow rules.",
-          "## Pending user asks",
-          "latest ask status",
-          "## Exact identifiers",
-          "None.",
-        ].join("\n"),
+        summaryResult(
+          [
+            "## Decisions",
+            "Keep current flow.",
+            "## Open TODOs",
+            "None.",
+            "## Constraints/Rules",
+            "Follow rules.",
+            "## Pending user asks",
+            "latest ask status",
+            "## Exact identifiers",
+            "None.",
+          ].join("\n"),
+        ),
       )
       .mockResolvedValueOnce(
-        [
-          "## Decisions",
-          "Keep current flow.",
-          "## Open TODOs",
-          "None.",
-          "## Constraints/Rules",
-          "Follow rules.",
-          "## Pending user asks",
-          "older context",
-          "## Exact identifiers",
-          "None.",
-        ].join("\n"),
+        summaryResult(
+          [
+            "## Decisions",
+            "Keep current flow.",
+            "## Open TODOs",
+            "None.",
+            "## Constraints/Rules",
+            "Follow rules.",
+            "## Pending user asks",
+            "older context",
+            "## Exact identifiers",
+            "None.",
+          ].join("\n"),
+        ),
       );
 
     const sessionManager = stubSessionManager();
@@ -1822,8 +1832,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
     const splitTurnPrefixSummary = "split-turn prefix context that must survive capping";
     mockSummarizeInStages
-      .mockResolvedValueOnce(oversizedHistorySummary)
-      .mockResolvedValueOnce(splitTurnPrefixSummary)
+      .mockResolvedValueOnce(summaryResult(oversizedHistorySummary))
+      .mockResolvedValueOnce(summaryResult(splitTurnPrefixSummary))
       .mockRejectedValueOnce(new Error("retry transient failure"));
 
     const sessionManager = stubSessionManager();
@@ -1949,18 +1959,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("re-distills prior summaries on the LLM path instead of preserving them verbatim", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue(
-      [
-        "## Decisions",
-        "Condensed prior context with latest status.",
-        "## Open TODOs",
-        "None.",
-        "## Constraints/Rules",
-        "Preserve identifiers.",
-        "## Pending user asks",
-        "latest ask status",
-        "## Exact identifiers",
-        "None.",
-      ].join("\n"),
+      summaryResult(
+        [
+          "## Decisions",
+          "Condensed prior context with latest status.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "Preserve identifiers.",
+          "## Pending user asks",
+          "latest ask status",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      ),
     );
 
     const sessionManager = stubSessionManager();
@@ -2009,6 +2021,55 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const messages = requireArray(call.messages);
     expect(JSON.stringify(messages[0])).toContain("<previous-compaction-summary>");
     expect(JSON.stringify(messages[0])).toContain("Old duplicated section");
+    expect(result.compaction?.summary).not.toContain("Old duplicated section");
+  });
+
+  it("preserves the prior summary when staged summarization returns a generic fallback", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue({
+      kind: "generic-fallback",
+      text: "Context contained 4 messages. Summary unavailable due to size limits.",
+    });
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: "latest ask status", timestamp: 1 }],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "## Goal\nKnown context that must survive the outage.",
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary).toContain("Known context that must survive the outage.");
+    expect(result.compaction?.summary).toContain("Summary unavailable due to size limits.");
   });
 
   it("falls back to LLM when provider throws a provider-side AbortError with signal not aborted", async () => {
@@ -2018,7 +2079,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     // isAbortError() matched this shape so tryProviderSummarize rethrew and the
     // extension runner swallowed the error — the LLM fallback path was skipped.
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("llm fallback summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("llm fallback summary"));
 
     const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",
@@ -2225,7 +2286,7 @@ describe("compaction-safeguard extension model fallback", () => {
     // neither apiKey nor headers. `ok: true` must be trusted so compaction runs
     // instead of wedging every message with a false "no credentials" cancel.
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mock summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture({ provider: "amazon-bedrock" });
@@ -2450,7 +2511,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("falls back to visible custom session branch entries before writing an empty boundary", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("branch summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
 
     const now = Date.now();
     const sessionManager = {
@@ -2539,7 +2600,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("does not replay inter-session sessions_send branch turns as fallback history", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("branch summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
 
     const now = Date.now();
     const sessionManager = {
@@ -2607,7 +2668,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     { toolName: "functions.sessions_send", expectedRoles: ["user", "assistant"] },
   ])("preserves unfinished inter-session work after a $toolName result", async (scenario) => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("unfinished branch summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("unfinished branch summary"));
 
     const now = Date.now();
     const sessionManager = {
@@ -2694,7 +2755,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("keeps source-session sends as inert status history", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("completed send summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("completed send summary"));
 
     const now = Date.now();
     const sessionManager = {
@@ -2810,7 +2871,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("preserves completed historical inter-session turns outside the active tail", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("historical branch summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("historical branch summary"));
 
     const now = Date.now();
     const sessionManager = {
@@ -2902,7 +2963,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("recovers user and assistant branch turns when compaction preparation has only tool output", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("branch summary with visible turns");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary with visible turns"));
 
     const now = Date.now();
     const sessionManager = {

@@ -293,6 +293,11 @@ async function runRecallSubagent(params: {
       reasoningLevel: "off",
       silentExpected: true,
       authProfileFailurePolicy: "local",
+      // On subscription-only claude-cli setups, direct provider API calls
+      // either fail with a billing rejection or silently draw metered extra
+      // usage; route recall through the CLI backend so it runs on plan
+      // limits like the session's main turns.
+      cliBackendDispatch: "subscription-auth",
       cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
       onAgentToolResult: (event) => {

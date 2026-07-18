@@ -4,22 +4,12 @@ import {
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { z } from "zod";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
-
-function getLog(): ReturnType<typeof createSubsystemLogger> {
-  if (!log) {
-    log = createSubsystemLogger("config/schema");
-  }
-  return log;
-}
 
 export type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
@@ -289,8 +279,6 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
 
   if (isSensitive) {
     hints[path] = { ...hints[path], sensitive: true };
-  } else if (isSensitiveConfigPath(path) && !hints[path]?.sensitive) {
-    getLog().debug(`possibly sensitive key found: (${path})`);
   }
 
   if (currentSchema instanceof z.ZodObject) {

@@ -450,9 +450,9 @@ function isToolResultTextBlock(
 }
 
 type ToolResultSpillDetails = {
-  fullOutputPath: string;
-  spillTruncated: boolean;
-  spilledChars?: number;
+  path: string;
+  truncated: boolean;
+  chars?: number;
 };
 
 function getToolResultSpillDetails(message: AgentMessage): ToolResultSpillDetails | undefined {
@@ -460,17 +460,25 @@ function getToolResultSpillDetails(message: AgentMessage): ToolResultSpillDetail
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return undefined;
   }
-  const fullOutputPath = (details as { fullOutputPath?: unknown }).fullOutputPath;
-  if (typeof fullOutputPath !== "string" || fullOutputPath.length === 0) {
+  const nested = (details as { spill?: unknown }).spill;
+  const nestedSpill =
+    nested && typeof nested === "object" && !Array.isArray(nested)
+      ? (nested as Record<string, unknown>)
+      : undefined;
+  // web_fetch owns the nested contract. Exec tools still own the flat spill fields.
+  const path = nestedSpill?.path ?? (details as { fullOutputPath?: unknown }).fullOutputPath;
+  if (typeof path !== "string" || path.length === 0) {
     return undefined;
   }
-  const spillTruncated = (details as { spillTruncated?: unknown }).spillTruncated === true;
-  const spilledChars = (details as { spilledChars?: unknown }).spilledChars;
+  const truncated =
+    nestedSpill?.truncated === true ||
+    (details as { spillTruncated?: unknown }).spillTruncated === true;
+  const chars = nestedSpill?.chars ?? (details as { spilledChars?: unknown }).spilledChars;
   return {
-    fullOutputPath,
-    spillTruncated,
-    ...(typeof spilledChars === "number" && Number.isFinite(spilledChars)
-      ? { spilledChars: Math.max(0, Math.floor(spilledChars)) }
+    path,
+    truncated,
+    ...(typeof chars === "number" && Number.isFinite(chars)
+      ? { chars: Math.max(0, Math.floor(chars)) }
       : {}),
   };
 }
@@ -508,31 +516,30 @@ function resolveAggregateElisionMarkers(
   }
   // Details alone are not model-visible. Only preserve paths that already
   // appeared in the original footer, so elision discloses nothing new.
-  if (!toolResultTextContainsFullOutputFooter(message, spill.fullOutputPath)) {
+  if (!toolResultTextContainsFullOutputFooter(message, spill.path)) {
     return undefined;
   }
   // Aggregate elision is a rare recovery path, not a request hot path; one
   // existence check avoids pointing the model at already-deleted spill files.
-  if (!existsSync(spill.fullOutputPath)) {
+  if (!existsSync(spill.path)) {
     return undefined;
   }
   // The path was already disclosed in the original tool footer; preserving it
   // here adds no new disclosure and only keeps recovery possible.
-  if (spill.spillTruncated) {
-    const count =
-      spill.spilledChars === undefined ? "capped content" : `first ${spill.spilledChars} chars`;
+  if (spill.truncated) {
+    const count = spill.chars === undefined ? "capped content" : `first ${spill.chars} chars`;
     return {
-      full: `[tool result elided: partial output preserved at ${spill.fullOutputPath} (${count}); read it if the output is needed]`,
-      compact: `[partial: ${spill.fullOutputPath}]`,
+      full: `[tool result elided: partial output preserved at ${spill.path} (${count}); read it if the output is needed]`,
+      compact: `[partial: ${spill.path}]`,
       truncationSuffix: (truncatedChars) =>
-        `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; partial output at ${spill.fullOutputPath}]`,
+        `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; partial output at ${spill.path}]`,
     };
   }
   return {
-    full: `[tool result elided: full output preserved at ${spill.fullOutputPath}; read it if the output is needed]`,
-    compact: `[read ${spill.fullOutputPath}]`,
+    full: `[tool result elided: full output preserved at ${spill.path}; read it if the output is needed]`,
+    compact: `[read ${spill.path}]`,
     truncationSuffix: (truncatedChars) =>
-      `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; full output at ${spill.fullOutputPath}]`,
+      `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; full output at ${spill.path}]`,
   };
 }
 

@@ -121,7 +121,7 @@ describeControlUiE2e("Control UI agent page scope", () => {
         .click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expect
-        .poll(() => sidebar.locator(".sidebar-agent-chip__name").textContent())
+        .poll(() => sidebar.locator(".sidebar-agent-card__name").textContent())
         .toBe("Writer");
 
       await sidebar.getByRole("link", { name: "Usage" }).click();
@@ -142,7 +142,7 @@ describeControlUiE2e("Control UI agent page scope", () => {
         })
         .toBe(true);
       await expect
-        .poll(() => sidebar.locator(".sidebar-agent-chip__name").textContent())
+        .poll(() => sidebar.locator(".sidebar-agent-card__name").textContent())
         .toBe("Writer");
       await screenshot(page, "02-all-agents-usage.png");
 

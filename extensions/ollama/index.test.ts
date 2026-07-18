@@ -334,6 +334,30 @@ describe("ollama plugin", () => {
     expect(ensureOllamaModelPulledMock).not.toHaveBeenCalled();
   });
 
+  it("prefers the strongest tool-calling family among installed models", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        { id: "llama3.3:70b", name: "llama3.3:70b", compat: { supportsTools: true } },
+        { id: "qwen3.5:4b", name: "qwen3.5:4b", compat: { supportsTools: true } },
+        {
+          id: "nomic-embed-text",
+          name: "nomic-embed-text",
+          compat: { supportsTools: true },
+        },
+      ],
+    });
+
+    await expect(provider.auth[0].appGuidedSetup?.detect({ config: {}, env: {} })).resolves.toEqual(
+      {
+        modelRef: "ollama/qwen3.5:4b",
+        detail: "qwen3.5:4b at http://127.0.0.1:11434",
+      },
+    );
+  });
+
   it("uses configured Ollama access while discovering installed models", async () => {
     const provider = registerProvider();
     const configuredValue = "configured-access";
@@ -1701,13 +1725,12 @@ describe("ollama plugin", () => {
 
   it("resolves GLM-5.2 from the cloud fallback catalog", () => {
     const provider = registerOllamaCloudProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "ollama-cloud",
+      modelId: "glm-5.2:cloud",
+    } as never);
 
-    expect(
-      provider.resolveDynamicModel?.({
-        provider: "ollama-cloud",
-        modelId: "glm-5.2:cloud",
-      } as never),
-    ).toEqual(
+    expect(model).toEqual(
       expect.objectContaining({
         provider: "ollama-cloud",
         id: "glm-5.2:cloud",
@@ -1716,6 +1739,7 @@ describe("ollama plugin", () => {
         reasoning: true,
       }),
     );
+    expect(model?.contextTokens).toBeUndefined();
   });
 
   it("does not mint synthetic auth for public IPv4 baseUrl", () => {
@@ -1762,6 +1786,7 @@ describe("ollama plugin", () => {
         id: "qwen3:32b",
         baseUrl: "http://127.0.0.1:11434/v1",
         contextWindow: 202_752,
+        contextTokens: 32_768,
       },
       streamFn: baseStreamFn,
     });
@@ -1771,7 +1796,7 @@ describe("ollama plugin", () => {
     }
     void wrapped({} as never, {} as never, {});
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
-    expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
+    expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(32_768);
   });
 
   it("owns replay policy for OpenAI-compatible and native Ollama routes", () => {

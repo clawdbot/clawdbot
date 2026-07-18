@@ -189,8 +189,13 @@ class GatewaySessionReconnectTest {
           requireNotNull(
             harness.session.captureRequestLease("manual|127.0.0.1|${server.port}"),
           )
+        assertTrue(lease.isCurrent())
         harness.session.reconnect()
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { reconnected.await() }
+        assertFalse(lease.isCurrent())
+        var committed = false
+        assertFalse(lease.commitIfCurrent { committed = true })
+        assertFalse(committed)
         val result =
           runCatching {
             lease.request(

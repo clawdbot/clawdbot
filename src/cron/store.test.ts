@@ -497,6 +497,40 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.bak`);
   });
 
+  it("stores queued reservations separately from active run markers", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("job-queued-phase", true);
+    const job = expectDefined(payload.jobs[0], "payload.jobs[0] test invariant");
+    job.state = {
+      nextRunAtMs: job.createdAtMs,
+      startupCatchupAtMs: job.createdAtMs,
+      queuedAtMs: job.createdAtMs + 1,
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    const queuedRow = openOpenClawStateDatabase()
+      .db.prepare("SELECT running_at_ms, state_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as { running_at_ms: number | null; state_json: string };
+    expect(queuedRow.running_at_ms).toBeNull();
+    expect(JSON.parse(queuedRow.state_json)).toMatchObject({
+      queuedAtMs: job.createdAtMs + 1,
+      startupCatchupAtMs: job.createdAtMs,
+    });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      queuedAtMs: job.createdAtMs + 1,
+      startupCatchupAtMs: job.createdAtMs,
+    });
+
+    job.state.queuedAtMs = undefined;
+    job.state.runningAtMs = job.createdAtMs + 2;
+    await saveCronStore(store.storePath, payload, { stateOnly: true });
+
+    const activated = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(activated?.queuedAtMs).toBeUndefined();
+    expect(activated?.runningAtMs).toBe(job.createdAtMs + 2);
+  });
+
   it("updates runtime state without replacing concurrent cron config", async () => {
     const store = await makeStorePath();
     const stale = makeStore("job-state-only", true);

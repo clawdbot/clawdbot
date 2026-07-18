@@ -8,6 +8,7 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants
 const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
   opus: "claude-opus-4-8",
   sonnet: "claude-sonnet-5",
+  fable: "claude-fable-5",
   haiku: "claude-haiku-4-5",
 };
 

@@ -4,6 +4,16 @@ import { startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
+const drainSmsIngress = vi.hoisted(() => vi.fn(async () => undefined));
+const disposeSmsIngress = vi.hoisted(() => vi.fn());
+const createSmsIngressSpool = vi.hoisted(() =>
+  vi.fn(() => ({
+    enqueue: vi.fn(),
+    drainOnce: drainSmsIngress,
+    dispose: disposeSmsIngress,
+  })),
+);
+
 const { registeredRoutes, registerPluginHttpRoute, waitUntilAbort } = vi.hoisted(() => {
   const routeCleanups: Array<() => void> = [];
   return {
@@ -18,6 +28,8 @@ const { registeredRoutes, registerPluginHttpRoute, waitUntilAbort } = vi.hoisted
 });
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", () => ({ waitUntilAbort }));
+
+vi.mock("./ingress-spool.js", () => ({ createSmsIngressSpool }));
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
   createFixedWindowRateLimiter: () => ({
@@ -51,6 +63,9 @@ describe("startSmsGatewayAccount", () => {
   beforeEach(() => {
     registerPluginHttpRoute.mockClear();
     waitUntilAbort.mockClear();
+    createSmsIngressSpool.mockClear();
+    drainSmsIngress.mockClear();
+    disposeSmsIngress.mockClear();
   });
 
   afterEach(() => {

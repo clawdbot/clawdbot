@@ -179,6 +179,7 @@ export function resolveThinkingProfile(params: {
   model?: string | null;
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
+  providerPolicySource?: "active" | "active-or-bundled";
 }): ResolvedThinkingProfile {
   const context = resolveThinkingPolicyContext(params);
   if (!context.normalizedProvider) {
@@ -193,10 +194,16 @@ export function resolveThinkingProfile(params: {
     ...(context.params ? { params: context.params } : {}),
     compat: context.compat,
   };
-  const providerProfile = resolveProviderThinkingProfile({
+  const providerProfileParams = {
     provider: context.normalizedProvider,
     context: providerContext,
-  });
+  };
+  const providerProfile =
+    params.providerPolicySource === "active"
+      ? resolveProviderThinkingProfile(providerProfileParams, {
+          allowPublicArtifactFallback: false,
+        })
+      : resolveProviderThinkingProfile(providerProfileParams);
   // Any anthropic-messages catalog row routes through the canonical Claude
   // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
   // non-Claude models on the anthropic-messages transport collapse to the Claude
@@ -377,12 +384,14 @@ export function resolveSupportedThinkingLevel(params: {
   level: ThinkLevel;
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
+  providerPolicySource?: "active" | "active-or-bundled";
 }): ThinkLevel {
   const profile = resolveThinkingProfile({
     provider: params.provider,
     model: params.model,
     catalog: params.catalog,
     agentRuntime: params.agentRuntime,
+    providerPolicySource: params.providerPolicySource,
   });
   return resolveSupportedThinkingLevelFromProfile(profile, params.level);
 }

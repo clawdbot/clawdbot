@@ -873,6 +873,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           onIdentityAvatarSelect: (file) => selectIdentityAvatar(this, file),
           onIdentitySave: () => this.saveIdentityDraft(),
           onChannelsRefresh: () => void this.context.channels.refresh(false),
+          onOpenMemoryImport: () => this.context.navigate("memory-import"),
           onCronRefresh: () => void this.refreshCron(),
           onCronRunNow: (jobId) => this.runCronJobNow(jobId),
           onSkillsFilterChange: (next) => (this.skillsFilter = next),

@@ -43,9 +43,11 @@ const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
 
 // Clack-backed WizardPrompter implementation for interactive CLI setup. It
 // converts the generic wizard prompt contract into styled Clack prompts.
-function guardCancel<T>(value: T | symbol): T {
+function guardCancel<T>(value: T | symbol, signal?: AbortSignal): T {
   if (isCancel(value)) {
-    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    if (!signal?.aborted) {
+      cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    }
     throw new WizardCancelledError();
   }
   return value;
@@ -99,12 +101,16 @@ async function withHorizontalCursorActionsDisabled<T>(
 async function runPromptWithNavigation<T>(
   navigation: WizardPromptNavigation | undefined,
   work: (signal: AbortSignal | undefined) => Promise<T | symbol>,
+  externalSignal?: AbortSignal,
 ): Promise<T> {
   if (!hasPromptNavigation(navigation)) {
-    return guardCancel(await work(undefined));
+    return guardCancel(await work(externalSignal), externalSignal);
   }
 
   const controller = new AbortController();
+  const signal = externalSignal
+    ? AbortSignal.any([controller.signal, externalSignal])
+    : controller.signal;
   let navigationDirection: "back" | "forward" | undefined;
   const onKeypress = (_input: string | undefined, key: KeypressInfo | undefined) => {
     const nextDirection = resolveNavigationDirection(navigation, key);
@@ -117,11 +123,11 @@ async function runPromptWithNavigation<T>(
 
   try {
     process.stdin.on("keypress", onKeypress);
-    const value = await work(controller.signal);
+    const value = await work(signal);
     if (navigationDirection) {
       throw new WizardNavigationError(navigationDirection);
     }
-    return guardCancel(value);
+    return guardCancel(value, externalSignal);
   } finally {
     process.stdin.off("keypress", onKeypress);
   }
@@ -257,38 +263,42 @@ export function createClackPrompter(): WizardPrompter {
       return await withHorizontalCursorActionsDisabled(
         hasPromptNavigation(params.navigation),
         async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) => {
-            const message = stylePromptMessage(params.message);
-            const validateInput = validate
-              ? (value: string | undefined) => validate(value ?? "")
-              : undefined;
-            if (params.sensitive) {
+          await runPromptWithNavigation(
+            params.navigation,
+            async (signal) => {
+              const message = stylePromptMessage(params.message);
+              const validateInput = validate
+                ? (value: string | undefined) => validate(value ?? "")
+                : undefined;
+              if (params.sensitive) {
+                return params.navigation
+                  ? await passwordWithNavigationFooter({
+                      message,
+                      validate: validateInput,
+                      navigation: params.navigation,
+                      signal,
+                    })
+                  : await password({ message, validate: validateInput, signal });
+              }
               return params.navigation
-                ? await passwordWithNavigationFooter({
+                ? await textWithNavigationFooter({
                     message,
+                    initialValue: params.initialValue,
+                    placeholder: params.placeholder,
                     validate: validateInput,
                     navigation: params.navigation,
                     signal,
                   })
-                : await password({ message, validate: validateInput, signal });
-            }
-            return params.navigation
-              ? await textWithNavigationFooter({
-                  message,
-                  initialValue: params.initialValue,
-                  placeholder: params.placeholder,
-                  validate: validateInput,
-                  navigation: params.navigation,
-                  signal,
-                })
-              : await text({
-                  message,
-                  initialValue: params.initialValue,
-                  placeholder: params.placeholder,
-                  validate: validateInput,
-                  signal,
-                });
-          }),
+                : await text({
+                    message,
+                    initialValue: params.initialValue,
+                    placeholder: params.placeholder,
+                    validate: validateInput,
+                    signal,
+                  });
+            },
+            params.signal,
+          ),
       );
     },
     confirm: async (params) =>

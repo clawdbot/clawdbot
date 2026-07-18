@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { readFileWindowFullySync } from "../infra/file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   resolveTrajectoryFilePath,
@@ -79,7 +80,7 @@ function readFirstNonEmptyLine(filePath: string): string | null {
   try {
     fd = fs.openSync(filePath, "r");
     const buffer = Buffer.alloc(64 * 1024);
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const bytesRead = readFileWindowFullySync(fd, buffer, 0);
     if (bytesRead <= 0) {
       return null;
     }

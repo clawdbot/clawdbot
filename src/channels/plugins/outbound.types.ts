@@ -44,6 +44,8 @@ export type ChannelOutboundContext = {
   deliveryQueueId?: string;
   /** @internal Stable platform-send index within one durable payload. */
   deliveryPartIndex?: number;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before starting another fallible step. */
@@ -166,6 +168,17 @@ export type ChannelOutboundAdapter = {
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
   textChunkLimit?: number;
+  /**
+   * Reserve the exact provider id used by the next single-message send.
+   * Presence opts the channel into conversations_turn reply correlation.
+   */
+  prepareConversationTurnMessageId?: (params: {
+    cfg: OpenClawConfig;
+    to: string;
+    text: string;
+    accountId?: string | null;
+    threadId?: string | number | null;
+  }) => string;
   sanitizeText?: (params: {
     text: string;
     payload: ReplyPayload;

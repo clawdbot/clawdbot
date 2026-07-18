@@ -452,6 +452,141 @@ describe("resolveModel forward-compat errors and overrides", () => {
     );
   });
 
+  it("rejects azure openai gpt-5.3-codex-spark through the openai owner when azure config has no matching model row", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [makeModel("gpt-5.5")],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "azure-openai-responses",
+      "gpt-5.3-codex-spark",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+    );
+  });
+
+  it("keeps unconditional codex-only suppression on the openai owner when azure config has a matching model row", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [makeModel("gpt-5.3-codex-spark")],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "azure-openai-responses",
+      "gpt-5.3-codex-spark",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+    );
+  });
+
+  it("keeps provider-level azure deployment names on the azure owner", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "azure-openai-responses",
+      "customer-gpt-deployment",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "azure-openai-responses",
+      id: "customer-gpt-deployment",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
+  it("uses retained azure alias transport defaults for provider-level deployment names", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "azure-openai-responses",
+      "customer-gpt-deployment",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "azure-openai-responses",
+      id: "customer-gpt-deployment",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
+  it("rejects provider-level azure codex-only aliases through the openai owner", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "azure-openai-responses",
+      "gpt-5.3-codex-spark",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+    );
+  });
+
   it("uses codex fallback even when openai provider is configured", () => {
     const cfg: OpenClawConfig = {
       models: {

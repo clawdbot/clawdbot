@@ -43,6 +43,7 @@ export async function fetchDiscordJson(params: {
   });
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       return { ok: false, status: response.status };
     }
     return {

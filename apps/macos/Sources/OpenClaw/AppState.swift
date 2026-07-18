@@ -145,8 +145,11 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
-                if self.swabbleEnabled {
+                if self.swabbleEnabled, !self.talkEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+                if self.talkEnabled {
+                    Task { await TalkModeRuntime.shared.inputDeviceSelectionDidChange() }
                 }
             }
         }
@@ -251,6 +254,10 @@ final class AppState {
 
     var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
+    }
+
+    var quickChatEnabled: Bool {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
     }
 
     var execApprovalMode: ExecApprovalQuickMode
@@ -445,6 +452,7 @@ final class AppState {
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
+        self.quickChatEnabled = UserDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
         self.peekabooBridgeEnabled = UserDefaults.standard
@@ -1156,6 +1164,7 @@ extension AppState {
         state.connectionMode = .local
         state.remoteTransport = .ssh
         state.canvasEnabled = true
+        state.quickChatEnabled = true
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteToken = "example-token"

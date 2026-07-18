@@ -8,7 +8,7 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-import type { SessionListRow } from "./sessions-helpers.js";
+import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
@@ -38,7 +38,7 @@ export async function resolveAnnounceTarget(params: {
   }
 
   try {
-    const list = await callGatewayLazy<{ sessions: Array<SessionListRow> }>({
+    const list = await callGatewayLazy<{ sessions: Array<GatewaySessionListRow> }>({
       method: "sessions.list",
       params: {
         includeGlobal: true,

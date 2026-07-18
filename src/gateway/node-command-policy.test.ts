@@ -452,6 +452,23 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("system.run")).toBe(true);
   });
 
+  it("uses the app-recommendation kill switch for gateway device.apps access", () => {
+    const macNode = {
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: ["device.apps"],
+    };
+    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, macNode).has("device.apps")).toBe(
+      true,
+    );
+    expect(
+      resolveNodeCommandAllowlist(
+        { wizard: { appRecommendations: false } } as OpenClawConfig,
+        macNode,
+      ).has("device.apps"),
+    ).toBe(false);
+  });
+
   it("allows approved node-host MCP calls while denyCommands still wins", () => {
     const node = {
       platform: "linux",

@@ -4,6 +4,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { getLogbookState, stopLogbookPolling } from "./logbook-controller.ts";
 import { renderLogbook } from "./logbook-view.ts";
 import { PluginPage } from "./plugin-page.ts";
@@ -170,11 +171,11 @@ describe("PluginPage", () => {
       expect(page.querySelector("iframe")).toBeNull();
 
       pendingRefresh.resolve(externalPluginConfig());
-      await vi.waitFor(() => expect(page.probeCalls).toEqual(["/plugins/external/panel"]));
+      await waitForFast(() => expect(page.probeCalls).toEqual(["/plugins/external/panel"]));
       expect(page.querySelector("iframe")).toBeNull();
 
       pendingProbe.resolve(true);
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(page.querySelector("iframe")?.getAttribute("src")).toBe("/plugins/external/panel"),
       );
     } finally {
@@ -188,7 +189,7 @@ describe("PluginPage", () => {
     page.probeResults = [Promise.resolve(false)];
     document.body.append(page);
     try {
-      await vi.waitFor(() => expect(page.textContent).toContain("Plugin panel unavailable"));
+      await waitForFast(() => expect(page.textContent).toContain("Plugin panel unavailable"));
       expect(page.probeCalls).toEqual(["/plugins/external/panel"]);
       expect(page.querySelector("iframe")).toBeNull();
     } finally {
@@ -202,7 +203,7 @@ describe("PluginPage", () => {
     const page = createExternalPluginPage(refresh, true, path);
     document.body.append(page);
     try {
-      await vi.waitFor(() => expect(page.querySelector("iframe")?.getAttribute("src")).toBe(path));
+      await waitForFast(() => expect(page.querySelector("iframe")?.getAttribute("src")).toBe(path));
       expect(page.probeCalls).toEqual([path]);
     } finally {
       page.remove();
@@ -214,7 +215,7 @@ describe("PluginPage", () => {
     const page = createExternalPluginPage(refresh);
     document.body.append(page);
     try {
-      await vi.waitFor(() => expect(page.textContent).toContain("Plugin panel unavailable"));
+      await waitForFast(() => expect(page.textContent).toContain("Plugin panel unavailable"));
       expect(page.querySelector("iframe")).toBeNull();
       expect(refresh).toHaveBeenCalledOnce();
     } finally {
@@ -347,7 +348,7 @@ describe("PluginPage", () => {
     const page = createExternalPluginPage(refresh);
     document.body.append(page);
     try {
-      await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
+      await waitForFast(() => expect(page.querySelector("iframe")).not.toBeNull());
       const context = (page as unknown as { context: ApplicationContext<RouteId> }).context;
       const gateway = context.gateway;
       const snapshot = gateway.snapshot as { connected: boolean };
@@ -367,7 +368,7 @@ describe("PluginPage", () => {
           updateGatewaySource: (source: ApplicationContext<RouteId>["gateway"]) => void;
         }
       ).updateGatewaySource(gateway);
-      await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
+      await waitForFast(() => expect(page.querySelector("iframe")).not.toBeNull());
       expect(refresh).toHaveBeenCalledTimes(2);
     } finally {
       page.remove();
@@ -441,7 +442,7 @@ describe("PluginPage", () => {
     document.body.append(page);
     try {
       bundledView.resolve({ render: () => "Logbook view", stop });
-      await vi.waitFor(() => expect(page.textContent).toContain("Logbook view"));
+      await waitForFast(() => expect(page.textContent).toContain("Logbook view"));
       const previousHost = bundledViewHost(page);
 
       hello.controlUiTabs = [];
@@ -509,7 +510,7 @@ describe("PluginPage", () => {
       createContext(firstRequest);
     document.body.append(page);
     try {
-      await vi.waitFor(() => expect(firstRequest).toHaveBeenCalled());
+      await waitForFast(() => expect(firstRequest).toHaveBeenCalled());
       const firstHost = bundledViewHost(page);
       expect(getLogbookState(firstHost).pollTimer).not.toBeNull();
 
@@ -518,7 +519,7 @@ describe("PluginPage", () => {
       page.requestUpdate();
       await page.updateComplete;
 
-      await vi.waitFor(() => expect(secondRequest).toHaveBeenCalledWith("logbook.status", {}));
+      await waitForFast(() => expect(secondRequest).toHaveBeenCalledWith("logbook.status", {}));
       expect(bundledViewHost(page)).not.toBe(firstHost);
       expect(getLogbookState(firstHost).pollTimer).toBeNull();
     } finally {
@@ -599,7 +600,7 @@ describe("PluginPage", () => {
     } as unknown as ApplicationContext<RouteId>;
     document.body.append(page);
     try {
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
       const staleHost = bundledViewHost(page);
 
       snapshot.connected = false;
@@ -612,14 +613,14 @@ describe("PluginPage", () => {
       staleStatus.resolve(responseFor("logbook.status"));
       staleDays.resolve(responseFor("logbook.days"));
       staleTimeline.resolve(responseFor("logbook.timeline"));
-      await vi.waitFor(() => expect(getLogbookState(staleHost).timeline).not.toBeNull());
+      await waitForFast(() => expect(getLogbookState(staleHost).timeline).not.toBeNull());
       expect(getLogbookState(disconnectedHost).timeline).toBeNull();
 
       snapshot.connected = true;
       listener?.(snapshot);
       await page.updateComplete;
       expect(bundledViewHost(page)).not.toBe(disconnectedHost);
-      await vi.waitFor(() => expect(getLogbookState(bundledViewHost(page)).status).not.toBeNull());
+      await waitForFast(() => expect(getLogbookState(bundledViewHost(page)).status).not.toBeNull());
     } finally {
       page.remove();
     }
@@ -670,7 +671,7 @@ describe("PluginPage", () => {
       await page.updateComplete;
 
       currentWorkspaceLoad.resolve({ render: () => "current workspace view", stop: vi.fn() });
-      await vi.waitFor(() => expect(page.textContent).toContain("current workspace view"));
+      await waitForFast(() => expect(page.textContent).toContain("current workspace view"));
 
       firstWorkspaceLoad.resolve({ render: () => "stale workspace view", stop: vi.fn() });
       await Promise.resolve();

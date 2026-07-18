@@ -29,6 +29,12 @@ export function collectRuntimeConfigAssignments(params: {
     context: params.context,
     active: msteams.enabled !== false,
     inactiveReason: "Microsoft Teams channel is disabled.",
+    owner: {
+      ownerKind: "account",
+      ownerId: "msteams:default",
+      requiredForGateway: false,
+      disposition: "isolate",
+    },
     apply: (value) => {
       msteams.appPassword = value;
     },

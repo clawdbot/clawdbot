@@ -97,6 +97,20 @@ const applyPatchSchema = Type.Object({
   }),
 });
 
+const ApplyPatchToolOutputSchema = Type.Object(
+  {
+    summary: Type.Object(
+      {
+        added: Type.Array(Type.String()),
+        modified: Type.Array(Type.String()),
+        deleted: Type.Array(Type.String()),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Create the agent tool wrapper for applying patch-envelope input. */
 export function createApplyPatchTool(
   options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
@@ -110,6 +124,7 @@ export function createApplyPatchTool(
     label: "apply_patch",
     description: "Patch one/many files. Input requires *** Begin Patch and *** End Patch.",
     parameters: applyPatchSchema,
+    outputSchema: ApplyPatchToolOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { input?: string };
       const input = typeof params.input === "string" ? params.input : "";

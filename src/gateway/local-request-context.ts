@@ -56,6 +56,8 @@ function createLocalGatewayRequestContext(
   const sessionEvents = new Set<string>();
   const chatRuns = new Map<string, ChatRunEntry>();
   const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
+  const chatRunPlanSnapshots: NonNullable<GatewayRequestContext["chatRunPlanSnapshots"]> =
+    new Map();
   const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
   const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
   const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
@@ -65,6 +67,7 @@ function createLocalGatewayRequestContext(
   // deltas share the client run id prefix but are tracked under separate keys.
   const clearChatRunState = (runId: string) => {
     chatRunBuffers.delete(runId);
+    chatRunPlanSnapshots.delete(runId);
     chatDeltaSentAt.delete(runId);
     chatDeltaLastBroadcastLen.delete(runId);
     chatDeltaLastBroadcastText.delete(runId);
@@ -78,6 +81,7 @@ function createLocalGatewayRequestContext(
     cron: unavailableCron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
@@ -105,6 +109,7 @@ function createLocalGatewayRequestContext(
     chatQueuedTurns: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers,
+    chatRunPlanSnapshots,
     chatDeltaSentAt,
     chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText,

@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -133,10 +134,6 @@ const providerApiKeyResolverLoader = createLazyImportLoader(
   () => import("./models-config.providers.secrets.js"),
 );
 
-function shouldLogModelCatalogTiming(): boolean {
-  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
-}
-
 function loadModelSuppression() {
   return modelSuppressionLoader.load();
 }
@@ -164,9 +161,6 @@ export function resetModelCatalogCacheForTest() {
 export function setModelCatalogImportForTest(loader?: () => Promise<AgentDiscoveryModule>) {
   importAgentDiscovery = loader ?? defaultImportAgentDiscovery;
 }
-
-/** @deprecated Use `setModelCatalogImportForTest`. */
-export { setModelCatalogImportForTest as __setModelCatalogImportForTest };
 
 function catalogEntryDedupeKey(provider: string, id: string): string {
   const normalizedProvider = normalizeProviderId(provider);
@@ -337,12 +331,20 @@ function mergeCatalogRouteVariants(
 function createModelCatalogSnapshot(
   entries: ModelCatalogEntry[],
   routeVariants: ModelCatalogRouteVariantCollector,
+  authoritative = true,
 ): ModelCatalogSnapshot {
   return {
     entries: sortModelCatalogEntries(entries),
     routeVariants: sortModelCatalogEntries(routeVariants.entries),
+    authoritative,
   };
 }
+
+const EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT: ModelCatalogSnapshot = {
+  entries: [],
+  routeVariants: [],
+  authoritative: false,
+};
 
 export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
@@ -672,7 +674,8 @@ function loadReadOnlyStaticModelCatalog(params?: {
     mergeCatalogRouteVariants(routeVariants, configuredModels);
     mergeCatalogEntries(models, configuredModels, { preserveBaseName: true });
   }
-  return createModelCatalogSnapshot(models, routeVariants);
+  // Static-only catalog: discovery/persisted rows were unavailable, so this is degraded.
+  return createModelCatalogSnapshot(models, routeVariants, false);
 }
 
 /** Loads logical entries together with browse-only physical route provenance. */
@@ -681,8 +684,8 @@ export async function loadModelCatalogSnapshot(
 ): Promise<ModelCatalogSnapshot> {
   if (params?.cacheOnly === true) {
     return loadedModelCatalogGeneration === modelCatalogGeneration
-      ? (loadedModelCatalogSnapshot ?? { entries: [], routeVariants: [] })
-      : { entries: [], routeVariants: [] };
+      ? (loadedModelCatalogSnapshot ?? EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT)
+      : EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT;
   }
   const readOnly = params?.readOnly === true;
   if (readOnly) {
@@ -706,7 +709,8 @@ export async function loadModelCatalogSnapshot(
   const loadCatalog = async () => {
     const models: ModelCatalogEntry[] = [];
     const routeVariants = createModelCatalogRouteVariantCollector();
-    const timingEnabled = shouldLogModelCatalogTiming();
+    const cfg = params?.config ?? getRuntimeConfig();
+    const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
     const startMs = timingEnabled ? Date.now() : 0;
     const logStage = (stage: string, extra?: string) => {
       if (!timingEnabled) {
@@ -716,7 +720,6 @@ export async function loadModelCatalogSnapshot(
       log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
     };
     try {
-      const cfg = params?.config ?? getRuntimeConfig();
       const workspaceDir = params?.workspaceDir ?? resolveModelWorkspaceDir(cfg, undefined);
       let manifestMetadataSnapshot: PluginMetadataSnapshot | undefined;
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
@@ -950,9 +953,9 @@ export async function loadModelCatalogSnapshot(
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
-        return createModelCatalogSnapshot(models, routeVariants);
+        return createModelCatalogSnapshot(models, routeVariants, false);
       }
-      return { entries: [], routeVariants: [] };
+      return EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT;
     }
   };
 

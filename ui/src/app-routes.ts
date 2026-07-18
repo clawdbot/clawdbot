@@ -5,11 +5,13 @@ import type { ApplicationContext } from "./app/context.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
+import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
+import { page as custodianPage } from "./pages/custodian/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
@@ -42,9 +44,11 @@ type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteMod
 
 const APP_ROUTE_TREE = [
   chatPage,
+  custodianPage,
   newSessionPage,
   activityPage,
   agentsPage,
+  approvalsPage,
   channelsPage,
   connectionPage,
   aboutPage,

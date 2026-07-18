@@ -1,0 +1,127 @@
+.onboarding-memory-import-dialog {
+  --openclaw-modal-width: 640px;
+}
+
+.onboarding-memory-import {
+  display: grid;
+  max-height: min(720px, calc(100dvh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: var(--shadow-xl);
+}
+
+.onboarding-memory-import > header,
+.onboarding-memory-import > footer {
+  padding: 22px 24px;
+}
+
+.onboarding-memory-import > header {
+  border-bottom: 1px solid var(--border);
+}
+
+.onboarding-memory-import h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.onboarding-memory-import header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.onboarding-memory-import > ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 18px 24px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.onboarding-memory-import__provider {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-subtle);
+}
+
+.onboarding-memory-import__provider label {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.onboarding-memory-import__provider input {
+  margin-top: 3px;
+}
+
+.onboarding-memory-import__provider-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.onboarding-memory-import__provider-copy code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboarding-memory-import__provider-copy small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.onboarding-memory-import__provider-copy small span,
+.onboarding-memory-import__provider-status span {
+  color: var(--danger);
+}
+
+.onboarding-memory-import__provider-copy small span {
+  flex-basis: 100%;
+}
+
+.onboarding-memory-import__provider-status {
+  min-height: 18px;
+  margin: 8px 0 0 28px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.onboarding-memory-import > footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.onboarding-memory-import__review {
+  margin-left: auto;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .onboarding-memory-import > header,
+  .onboarding-memory-import > footer,
+  .onboarding-memory-import > ul {
+    padding-inline: 18px;
+  }
+
+  .onboarding-memory-import > footer {
+    flex-wrap: wrap;
+  }
+
+  .onboarding-memory-import__review {
+    width: 100%;
+    margin-left: 0;
+  }
+}

@@ -2,17 +2,13 @@
 import { describe, expect, it } from "vitest";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
+  assistantAvatarFallbackUrl,
   isRenderableControlUiAvatarUrl,
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
 } from "../avatar.ts";
-import {
-  assistantAvatarFallbackUrl,
-  buildAgentContext,
-  formatBytes,
-  resolveEffectiveModelFallbacks,
-} from "./display.ts";
+import { buildAgentContext, formatBytes, resolveEffectiveModelFallbacks } from "./display.ts";
 
 describe("formatBytes", () => {
   it("preserves the Control UI byte-size display contract", () => {

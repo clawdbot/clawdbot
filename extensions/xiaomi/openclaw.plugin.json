@@ -26,43 +26,30 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "mimo-v2-flash",
-            "name": "Xiaomi MiMo V2 Flash",
-            "input": ["text"],
-            "contextWindow": 262144,
-            "maxTokens": 8192,
+            "id": "mimo-v2.5",
+            "name": "Xiaomi MiMo V2.5",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.0028,
               "cacheWrite": 0
             }
           },
           {
-            "id": "mimo-v2-pro",
-            "name": "Xiaomi MiMo V2 Pro",
+            "id": "mimo-v2.5-pro",
+            "name": "Xiaomi MiMo V2.5 Pro",
             "input": ["text"],
             "reasoning": true,
             "contextWindow": 1048576,
-            "maxTokens": 32000,
+            "maxTokens": 131072,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "mimo-v2-omni",
-            "name": "Xiaomi MiMo V2 Omni",
-            "input": ["text", "image"],
-            "reasoning": true,
-            "contextWindow": 262144,
-            "maxTokens": 32000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 0.435,
+              "output": 0.87,
+              "cacheRead": 0.0036,
               "cacheWrite": 0
             }
           }

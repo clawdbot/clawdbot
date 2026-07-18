@@ -352,7 +352,7 @@ jobs:
           }
           attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
           if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
-            jq -e '.status == "in_progress" and .conclusion == null' \
+            jq -e '(.status == "queued" or .status == "in_progress") and .conclusion == null' \
               <<< "$attempt_json" >/dev/null || {
               echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
               exit 1
@@ -406,7 +406,8 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
+          OPENCLAW_QA_SUITE_PROGRESS: "1"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}
           PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || '' }}

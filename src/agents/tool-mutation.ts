@@ -76,6 +76,7 @@ const MESSAGE_READ_ONLY_ACTIONS = new Set([
 
 const REPLAY_SAFE_TOOL_NAMES = new Set([
   "agents_list",
+  "conversations_list",
   "find",
   "get_goal",
   "glob",
@@ -342,6 +343,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "apply_patch":
     case "sessions_spawn":
     case "sessions_send":
+    case "conversations_send":
+    case "conversations_turn":
     case "create_goal":
     case "update_goal":
       return true;

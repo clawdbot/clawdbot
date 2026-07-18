@@ -38,6 +38,7 @@ import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
 
 const loadMatrixActionClientModule = createLazyRuntimeModule(
   () => import("./matrix/actions/client.js"),
@@ -68,10 +69,18 @@ function markCliFailure(): void {
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    totalBytes += buffer.byteLength;
+    if (totalBytes > MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES) {
+      throw new Error(
+        `Matrix recovery key stdin exceeds ${MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES} bytes.`,
+      );
+    }
+    chunks.push(buffer);
   }
-  const recoveryKey = Buffer.concat(chunks).toString("utf8").trim();
+  const recoveryKey = Buffer.concat(chunks, totalBytes).toString("utf8").trim();
   if (!recoveryKey) {
     throw new Error("Matrix recovery key was requested from stdin, but stdin was empty.");
   }

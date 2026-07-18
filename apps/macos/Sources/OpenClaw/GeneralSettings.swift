@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 import Observation
 import OpenClawDiscovery
 import OpenClawKit
@@ -59,6 +60,9 @@ struct GeneralSettings: View {
                 CanvasManager.shared.hideAll()
             }
         }
+        .onChange(of: self.state.quickChatEnabled) { _, enabled in
+            QuickChatController.shared.setEnabled(enabled)
+        }
         .onChange(of: self.computerControlEnabled) { _, _ in
             // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
             self.state.applyPeekabooBridgeHostState()
@@ -93,8 +97,21 @@ struct GeneralSettings: View {
                 SettingsCardToggleRow(
                     title: "Play menu bar icon animations",
                     subtitle: "Enable idle blinks and wiggles on the status icon.",
-                    binding: self.$state.iconAnimationsEnabled,
+                    binding: self.$state.iconAnimationsEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Quick Chat",
+                    subtitle: "Show a floating composer for quick messages, summoned with a global shortcut.",
+                    binding: self.$state.quickChatEnabled)
+
+                SettingsCardRow(
+                    title: "Quick Chat shortcut",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main session.",
                     showsDivider: false)
+                {
+                    KeyboardShortcuts.Recorder(for: .toggleQuickChat)
+                }
+                .disabled(!self.state.quickChatEnabled)
             }
 
             SettingsCardGroup("Capabilities") {

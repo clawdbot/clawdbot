@@ -63,9 +63,10 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128000,
+    contextTokens: 24_000,
     maxTokens: 8192,
     compat: { supportsTools: true, supportsUsageInStreaming: true },
-    params: { num_ctx: 128000 },
+    params: { num_ctx: 48_000 },
   } satisfies ModelProviderConfig["models"][number];
 
   const buildMockProvider = async (
@@ -130,9 +131,38 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     expect(result).not.toBeNull();
     const discoveryResult = expectDefined(result, "Ollama Cloud discovery result");
     expect(discoveryResult.provider.models).toHaveLength(1);
-    expect(expectDefined(discoveryResult.provider.models[0], "Ollama Cloud model").id).toBe(
-      "minimax-m3:cloud",
+    expect(expectDefined(discoveryResult.provider.models[0], "Ollama Cloud model")).toEqual(
+      cloudModel,
     );
+  });
+
+  it("preserves explicit local model context overrides without discovery", async () => {
+    let providerCalled = false;
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434",
+                api: "ollama",
+                models: [cloudModel],
+              },
+            },
+          },
+        },
+        env: {},
+        resolveProviderApiKey: () => ({}),
+      },
+      pluginConfig: {},
+      buildProvider: async () => {
+        providerCalled = true;
+        return await buildMockProvider();
+      },
+    });
+
+    expect(providerCalled).toBe(false);
+    expect(result?.provider.models).toEqual([cloudModel]);
   });
 
   it("does not call buildProvider for remote base URL without explicit models", async () => {

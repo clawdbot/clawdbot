@@ -18,6 +18,7 @@ import {
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -540,29 +541,29 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
   it.each([
     {
       rejection: new Error("CLI exceeded timeout (300s) and was terminated."),
-      modeLabel: "overall CLI turn budget" as const,
+      mode: "overall" as const,
       routingSubstring: undefined as string | undefined,
     },
     {
       rejection: new Error("CLI produced no output for 120s and was terminated."),
-      modeLabel: "no-output stall" as const,
+      mode: "no-output" as const,
       routingSubstring: undefined,
     },
     {
       rejection: new Error(
         "All models failed (2): anthropic/claude-opus-4-7: CLI exceeded timeout (300s) and was terminated. | anthropic/foo: bar",
       ),
-      modeLabel: "overall CLI turn budget" as const,
+      mode: "overall" as const,
       routingSubstring: "(routing anthropic/claude-opus-4-7)",
     },
     {
       rejection: new Error("codex-cli/gpt-5.5: CLI exceeded timeout (60s) and was terminated."),
-      modeLabel: "overall CLI turn budget" as const,
+      mode: "overall" as const,
       routingSubstring: "(routing codex-cli/gpt-5.5)",
     },
   ])(
-    "surfaces CLI subprocess timeout copy instead of generic failure when verbose is off ($modeLabel)",
-    async ({ rejection, modeLabel, routingSubstring }) => {
+    "surfaces CLI subprocess timeout copy instead of generic failure when verbose is off ($mode)",
+    async ({ rejection, mode, routingSubstring }) => {
       state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
@@ -575,16 +576,53 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
         throw new Error("expected final reply");
       }
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-      expect(result.payload.text).toContain("CLI subprocess");
       expect(result.payload.text).not.toContain("Claude CLI");
-      expect(result.payload.text).toContain(modeLabel);
-      expect(result.payload.text).toContain("gateway may still be healthy");
-      expect(result.payload.text).toContain("cliBackends.<your-runtime>");
+      expect(result.payload.text).toContain("gateway is unaffected");
+      if (mode === "overall") {
+        expect(result.payload.text).toContain("overall turn limit");
+        expect(result.payload.text).toContain("detached OpenClaw sub-agent");
+        expect(result.payload.text).toContain("agents.defaults.timeoutSeconds");
+        expect(result.payload.text).not.toContain("noOutputTimeoutMs");
+      } else {
+        expect(result.payload.text).toContain("CLI subprocess");
+        expect(result.payload.text).toContain("no-output watchdog");
+        expect(result.payload.text).toContain("separate from the overall agent timeout");
+        expect(result.payload.text).toContain(
+          "agents.defaults.cliBackends.<id>.reliability.watchdog.{fresh,resume}.noOutputTimeoutMs",
+        );
+        expect(result.payload.text).not.toContain("agents.defaults.timeoutSeconds");
+      }
+      expect(result.payload.text).not.toContain("/new");
       if (routingSubstring) {
         expect(result.payload.text).toContain(routingSubstring);
       }
     },
   );
+
+  it("explains that CLI background tasks share the timed-out parent process", () => {
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
+        reason: "timeout",
+        provider: "claude-cli",
+        code: "cli_overall_timeout",
+        cliTimeout: {
+          mode: "overall",
+          timeoutSeconds: 600,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 1,
+        },
+      }),
+      sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.text).toContain("1 CLI background task");
+    expect(payload?.text).toContain("1 active CLI tool call");
+    expect(payload?.text).toContain("shares the parent CLI process");
+    expect(payload?.text).toContain("Effects may be partial");
+    expect(payload?.text).toContain("no run timeout by default");
+  });
 
   it.each([
     {

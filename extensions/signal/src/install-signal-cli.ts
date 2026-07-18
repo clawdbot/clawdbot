@@ -83,6 +83,10 @@ function chunkByteLength(chunk: unknown): number {
   return Buffer.byteLength(String(chunk));
 }
 
+async function cancelUnusedResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 /**
  * Pick a native release asset from the official GitHub releases.
  *
@@ -149,6 +153,7 @@ export async function downloadToFile(
   });
   try {
     if (!response.ok || !response.body) {
+      await cancelUnusedResponseBody(response);
       throw new Error(`HTTP ${response.status || "?"} downloading file`);
     }
 
@@ -313,6 +318,7 @@ export async function installSignalCliFromRelease(
   let payload: ReleaseResponse;
   try {
     if (!response.ok) {
+      await cancelUnusedResponseBody(response);
       return {
         ok: false,
         error: `Failed to fetch release info (${response.status})`,

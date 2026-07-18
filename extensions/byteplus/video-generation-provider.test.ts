@@ -93,7 +93,7 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
         content: {
           video_url: "https://example.com/byteplus.mp4",
         },
-        model: params?.model ?? "seedance-1-0-lite-t2v-250428",
+        model: params?.model ?? "seedance-1-0-pro-250528",
       }),
     )
     .mockResolvedValueOnce({
@@ -186,7 +186,10 @@ function makeOversizedJsonStream(): {
 
 describe("byteplus video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildBytePlusVideoGenerationProvider());
+    const provider = buildBytePlusVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.defaultModel).toBe("seedance-1-0-pro-250528");
+    expect(provider.models).toEqual(["seedance-1-0-pro-250528", "seedance-1-5-pro-251215"]);
   });
 
   it("creates a content-generation task, polls, and downloads the video", async () => {
@@ -195,7 +198,7 @@ describe("byteplus video generation provider", () => {
     const provider = buildBytePlusVideoGenerationProvider();
     const result = await provider.generateVideo({
       provider: "byteplus",
-      model: "seedance-1-0-lite-t2v-250428",
+      model: "seedance-1-0-pro-250528",
       prompt: "A lantern floats upward into the night sky",
       cfg: {},
     });
@@ -236,20 +239,20 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "short video",
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("BytePlus generated video download exceeds 1 bytes");
   });
 
-  it("switches t2v image requests to i2v models and lowercases resolution", async () => {
-    mockSuccessfulBytePlusTask({ model: "seedance-1-0-lite-i2v-250428" });
+  it("keeps the unified model for image requests and lowercases resolution", async () => {
+    mockSuccessfulBytePlusTask({ model: "seedance-1-0-pro-250528" });
 
     const provider = buildBytePlusVideoGenerationProvider();
     await provider.generateVideo({
       provider: "byteplus",
-      model: "seedance-1-0-lite-t2v-250428",
+      model: "seedance-1-0-pro-250528",
       prompt: "Animate this still image",
       resolution: "720P",
       inputImages: [{ url: "https://example.com/first-frame.png" }],
@@ -257,7 +260,7 @@ describe("byteplus video generation provider", () => {
     });
 
     expect(requireBytePlusPostBody()).toEqual({
-      model: "seedance-1-0-lite-i2v-250428",
+      model: "seedance-1-0-pro-250528",
       resolution: "720p",
       content: [
         { type: "text", text: "Animate this still image" },
@@ -351,7 +354,7 @@ describe("byteplus video generation provider", () => {
     const provider = buildBytePlusVideoGenerationProvider();
     const result = await provider.generateVideo({
       provider: "byteplus",
-      model: "seedance-1-0-lite-t2v-250428",
+      model: "seedance-1-0-pro-250528",
       prompt: "A lantern floats upward into the night sky",
       cfg: {},
     });
@@ -378,7 +381,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "bad create response",
         cfg: {},
       }),
@@ -404,7 +407,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "missing status",
         cfg: {},
       }),
@@ -428,7 +431,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "malformed content",
         cfg: {},
       }),
@@ -450,7 +453,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "oversized submit response",
         cfg: {},
       }),
@@ -481,7 +484,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "oversized poll response",
         cfg: {},
       }),

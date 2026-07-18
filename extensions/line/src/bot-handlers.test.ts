@@ -5,7 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { LineAccountConfig } from "./types.js";
 
 type MessageEvent = webhook.MessageEvent;
-type PostbackEvent = webhook.PostbackEvent;
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
@@ -176,7 +175,6 @@ vi.mock("./bot-message-context.js", () => ({
 }));
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
-let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -228,7 +226,6 @@ function createLineWebhookTestContext(params: {
   groupAllowFrom?: LineAccountConfig["groupAllowFrom"];
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
-  replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
@@ -260,20 +257,7 @@ function createLineWebhookTestContext(params: {
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
-    ...(params.replayCache ? { replayCache: params.replayCache } : {}),
   };
-}
-
-function createOpenGroupReplayContext(
-  processMessage: LineWebhookContext["processMessage"],
-  replayCache: ReturnType<typeof createLineWebhookReplayCache>,
-): Parameters<typeof handleLineWebhookEvents>[1] {
-  return createLineWebhookTestContext({
-    processMessage,
-    groupPolicy: "open",
-    requireMention: false,
-    replayCache,
-  });
 }
 
 async function expectGroupMessageBlocked(params: {
@@ -300,23 +284,9 @@ async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
   expect(processMessage).toHaveBeenCalledTimes(1);
 }
 
-async function startInflightReplayDuplicate(params: {
-  event: MessageEvent;
-  processMessage: LineWebhookContext["processMessage"];
-}) {
-  const context = createOpenGroupReplayContext(
-    params.processMessage,
-    createLineWebhookReplayCache(),
-  );
-  const firstRun = handleLineWebhookEvents([params.event], context);
-  await Promise.resolve();
-  const secondRun = handleLineWebhookEvents([params.event], context);
-  return { firstRun, secondRun };
-}
-
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
+    ({ handleLineWebhookEvents } = await import("./bot-handlers.js"));
   });
 
   afterAll(() => {
@@ -801,173 +771,6 @@ describe("handleLineWebhookEvents", () => {
     expect(pairingRequest?.channel).toBe("line");
     expect(pairingRequest?.id).toBe("cross-account-user");
     expect(pairingRequest?.accountId).toBe("work");
-  });
-
-  it("deduplicates replayed webhook events by webhookEventId before processing", async () => {
-    const processMessage = vi.fn();
-    const event = createReplayMessageEvent({
-      messageId: "m-replay",
-      groupId: "group-replay",
-      userId: "user-replay",
-      webhookEventId: "evt-replay-1",
-      isRedelivery: true,
-    });
-    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
-
-    await handleLineWebhookEvents([event], context);
-    await handleLineWebhookEvents([event], context);
-
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
-    expect(processMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips concurrent redeliveries while the first event is still processing", async () => {
-    let resolveFirst: (() => void) | undefined;
-    const firstDone = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const processMessage = vi.fn(async () => {
-      await firstDone;
-    });
-    const event = createReplayMessageEvent({
-      messageId: "m-inflight",
-      groupId: "group-inflight",
-      userId: "user-inflight",
-      webhookEventId: "evt-inflight-1",
-      isRedelivery: true,
-    });
-    const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
-    resolveFirst?.();
-    await Promise.all([firstRun, secondRun]);
-
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
-    expect(processMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("commits in-flight failures so concurrent duplicates do not retry", async () => {
-    let rejectFirst: ((err: Error) => void) | undefined;
-    const firstDone = new Promise<void>((_, reject) => {
-      rejectFirst = reject;
-    });
-    const processMessage = vi.fn(async () => {
-      await firstDone;
-    });
-    const event = createReplayMessageEvent({
-      messageId: "m-inflight-fail",
-      groupId: "group-inflight",
-      userId: "user-inflight",
-      webhookEventId: "evt-inflight-fail-1",
-      isRedelivery: true,
-    });
-    const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
-    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
-    rejectFirst?.(new Error("transient inflight failure"));
-
-    await firstFailure;
-    await expect(secondRun).resolves.toBeUndefined();
-    expect(processMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("deduplicates redeliveries by LINE message id when webhookEventId changes", async () => {
-    const processMessage = vi.fn();
-    const event = {
-      type: "message",
-      message: { id: "m-dup-1", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-dup", userId: "user-dup" },
-      mode: "active",
-      webhookEventId: "evt-dup-1",
-      deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: {
-        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] } },
-      },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: {
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["user-dup"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
-
-    await handleLineWebhookEvents([event], context);
-    await handleLineWebhookEvents(
-      [
-        {
-          ...event,
-          webhookEventId: "evt-dup-redelivery",
-          deliveryContext: { isRedelivery: true },
-        } as MessageEvent,
-      ],
-      context,
-    );
-
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
-    expect(processMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("deduplicates postback redeliveries by webhookEventId when replyToken changes", async () => {
-    const processMessage = vi.fn();
-    buildLinePostbackContextMock.mockResolvedValue({
-      ctxPayload: { From: "line:user:user-postback" },
-      route: { agentId: "default" },
-      isGroup: false,
-      accountId: "default",
-    });
-    const event = {
-      type: "postback",
-      postback: { data: "action=confirm" },
-      replyToken: "reply-token-1",
-      timestamp: Date.now(),
-      source: { type: "user", userId: "user-postback" },
-      mode: "active",
-      webhookEventId: "evt-postback-1",
-      deliveryContext: { isRedelivery: false },
-    } as PostbackEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { dmPolicy: "open", allowFrom: ["*"] } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { dmPolicy: "open", allowFrom: ["*"] },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
-
-    await handleLineWebhookEvents([event], context);
-    await handleLineWebhookEvents(
-      [
-        {
-          ...event,
-          replyToken: "reply-token-2",
-          deliveryContext: { isRedelivery: true },
-        } as PostbackEvent,
-      ],
-      context,
-    );
-
-    expect(buildLinePostbackContextMock).toHaveBeenCalledTimes(1);
-    expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
   it("skips group messages by default when requireMention is not configured", async () => {
@@ -1507,30 +1310,6 @@ describe("handleLineWebhookEvents", () => {
 
     // Should be skipped because there is a non-bot mention and the bot was not mentioned.
     expect(processMessage).not.toHaveBeenCalled();
-  });
-
-  it("keeps replay cache committed after a non-retryable event failure", async () => {
-    const processMessage = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transient failure"))
-      .mockResolvedValueOnce(undefined);
-    const event = createReplayMessageEvent({
-      messageId: "m-fail-then-retry",
-      groupId: "group-retry",
-      userId: "user-retry",
-      webhookEventId: "evt-fail-then-retry",
-      isRedelivery: false,
-    });
-    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
-
-    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("transient failure");
-    await handleLineWebhookEvents([event], context);
-
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
-    expect(processMessage).toHaveBeenCalledTimes(1);
-    expect(context.runtime.error).toHaveBeenCalledWith(
-      "line: event handler failed: Error: transient failure",
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

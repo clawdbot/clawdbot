@@ -1,10 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  isMainSessionRecoveryExhausted,
+  transitionMainSessionRecovery,
+} from "../../agents/main-session-recovery-state.js";
+import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery-store.js";
 import {
   mergeSessionEntry,
   resolveSessionLifecycleTimestamps,
   resolveSessionWorkStartError,
   type SessionEntry,
+  type InternalSessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
 import {
@@ -70,6 +77,7 @@ export async function persistAgentSessionPhase(params: {
   sessionAgentId: string;
   mainSessionKey: string;
   lifecycleGeneration: string;
+  isRestartRecoveryResumeRun: boolean;
   runId: string;
   agentId?: string;
   suppressVisibleSessionEffects: boolean;
@@ -99,6 +107,7 @@ export async function persistAgentSessionPhase(params: {
   }) => void;
   getAdmittedSessionId: () => string;
   setCronContinuationClaim: (claim: CronContinuationClaim) => void;
+  setMainRestartRecoveryOwnerLease: (lease: MainSessionRecoveryOwnerLease) => void;
   respond: GatewayRequestHandlerOptions["respond"];
 }): Promise<AgentSessionPersistResult | undefined> {
   let patchBuild = params.initialPatchBuild;
@@ -108,6 +117,7 @@ export async function persistAgentSessionPhase(params: {
   let sessionPersistedBeforeGatewayAdmission = params.initialSessionPersistedBeforeGatewayAdmission;
   let supersededSessionId = params.initialSupersededSessionId;
   let restoredCronContinuation: RestoredCronContinuation | undefined;
+  let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let skipAgentInitialSessionTouch = false;
   const recoveredSessionStartedAt =
     !patchBuild.isNewSession &&
@@ -135,6 +145,7 @@ export async function persistAgentSessionPhase(params: {
     let archivedDuringStoreUpdateError: string | undefined;
     let deletedDuringStoreUpdateError: string | undefined;
     let restoredCronContinuationError: string | undefined;
+    let restartRecoveryReservationConflict: string | undefined;
     try {
       persisted =
         (await patchSessionEntryTarget(
@@ -165,6 +176,18 @@ export async function persistAgentSessionPhase(params: {
             if (archivedError) {
               archivedDuringStoreUpdateError = archivedError;
               throw new Error(archivedError);
+            }
+            const internalFreshEntry = freshEntry as InternalSessionEntry | undefined;
+            if (
+              !params.isRestartRecoveryResumeRun &&
+              internalFreshEntry &&
+              (internalFreshEntry.mainRestartRecovery?.tombstone ||
+                isMainSessionRecoveryExhausted(internalFreshEntry))
+            ) {
+              restartRecoveryReservationConflict =
+                `Session "${params.canonicalSessionKey}" is quarantined after restart recovery ` +
+                "exhaustion; use /new or /reset before starting new work.";
+              throw new Error(restartRecoveryReservationConflict);
             }
             let entryForPatch = freshEntry;
             if (params.restoredCronContinuationIdentity) {
@@ -243,6 +266,38 @@ export async function persistAgentSessionPhase(params: {
               sessionKey: params.canonicalSessionKey,
               storePath: params.storePath,
             });
+            const recoveryTransition = params.isRestartRecoveryResumeRun
+              ? transitionMainSessionRecovery(merged as InternalSessionEntry, {
+                  kind: "validate_recovery",
+                  lifecycleGeneration: params.lifecycleGeneration,
+                  runId: params.runId,
+                  sessionId: params.request.expectedExistingSessionId ?? merged.sessionId,
+                })
+              : transitionMainSessionRecovery(merged as InternalSessionEntry, {
+                  kind: "claim_foreground",
+                  cycleId: randomUUID(),
+                  lifecycleGeneration: params.lifecycleGeneration,
+                  sessionId: merged.sessionId,
+                  sessionKey: params.canonicalSessionKey,
+                  claimId: mainRestartRecoveryOwnerLease?.claimId ?? randomUUID(),
+                  runId: params.runId,
+                });
+            if (
+              params.isRestartRecoveryResumeRun &&
+              recoveryTransition.kind !== "recovery_validated"
+            ) {
+              restartRecoveryReservationConflict =
+                `Session "${params.canonicalSessionKey}" restart recovery reservation is stale; ` +
+                "recovery was skipped.";
+              throw new Error(restartRecoveryReservationConflict);
+            }
+            if (recoveryTransition.kind === "foreground_claimed") {
+              mainRestartRecoveryOwnerLease = {
+                ...recoveryTransition.claim,
+                storePath: params.storePath,
+              };
+              params.setMainRestartRecoveryOwnerLease(mainRestartRecoveryOwnerLease);
+            }
             if (
               params.request.deliver === true &&
               resolveSendPolicy({
@@ -296,6 +351,14 @@ export async function persistAgentSessionPhase(params: {
           false,
           undefined,
           errorShape(ErrorCodes.UNAVAILABLE, restoredCronContinuationError),
+        );
+        return undefined;
+      }
+      if (restartRecoveryReservationConflict) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, restartRecoveryReservationConflict),
         );
         return undefined;
       }

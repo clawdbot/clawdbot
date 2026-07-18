@@ -18,6 +18,7 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
 
 type MinimalServicePathOptions = {
@@ -407,6 +408,7 @@ function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): 
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
+  existingNodeOptions?: string;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
@@ -427,6 +429,7 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    NODE_OPTIONS: resolveGatewayHeapNodeOptions(params.existingNodeOptions),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),

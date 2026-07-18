@@ -14,16 +14,20 @@ import {
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
-} from "../agents/workspace.js";
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveAdvertisedControlUiLinks,
@@ -48,6 +52,18 @@ export { randomToken } from "./random-token.js";
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
+
+/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
+export function buildOnboardingControlUiUrl(params: {
+  httpUrl: string;
+  authMode?: GatewayAuthMode;
+  token?: string;
+  suppressTokenOutput?: boolean;
+}): string {
+  return params.authMode === "token" && params.token && !params.suppressTokenOutput
+    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+    : params.httpUrl;
+}
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
@@ -248,14 +264,14 @@ export async function ensureWorkspaceAndSessions(
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
+export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
   if (!pathname) {
-    return;
+    return false;
   }
   try {
-    await fs.access(pathname);
-  } catch {
-    return;
+    await fs.lstat(pathname);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
   try {
     const targetPath = path.resolve(pathname);
@@ -264,8 +280,10 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
       allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
     });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
+    return true;
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
+    return false;
   }
 }
 
@@ -297,13 +315,15 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
-    await moveToTrash(workspaceDir, runtime);
-    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-      workspaceDir,
-    ).entries()) {
-      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
-        await moveToTrash(attestationPath, runtime);
+    const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+    const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    const workspaceRemoved = await moveToTrash(workspaceDir, runtime);
+    if (workspaceRemoved) {
+      const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+      for (const warning of legacyCleanup.warnings) {
+        runtime.log(warning);
       }
+      deleteWorkspaceState(statePlan);
     }
   }
 }

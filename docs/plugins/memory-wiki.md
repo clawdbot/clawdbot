@@ -196,16 +196,25 @@ claims:
 
 ## Compile pipeline
 
-Compile reads wiki pages, normalizes summaries, and emits stable
-machine-facing artifacts under:
-
-- `.openclaw-wiki/cache/agent-digest.json`
-- `.openclaw-wiki/cache/claims.jsonl`
-
-Agents and runtime code read these digests instead of scraping Markdown.
+Compile reads wiki pages, normalizes summaries, and persists a machine-facing
+snapshot in OpenClaw's shared SQLite plugin state. Runtime code uses the
+lifecycle-owned owner snapshot to load SQLite during async prompt preparation;
+synchronous prompt assembly never scrapes Markdown or reads cache files.
 Compiled output also powers first-pass wiki indexing for search/get, claim-id
 lookup back to owning pages, compact prompt supplements, and report
 generation.
+
+Source edits and vault restores become machine-facing only after the next
+compile. Restarting or refreshing the plugin lifecycle compares the vault's
+causally chained compile publication with SQLite and rejects a snapshot from a
+newer, rolled-back state. A compiler that started before the rollback cannot
+publish against the restored predecessor. Prompt preparation does not poll the
+vault or install file watchers.
+After rollback quarantine, a compile in the running process clears the owner
+immediately; a separate compiler process requires plugin lifecycle refresh so
+the daemon can confirm the new durable publication.
+Compiled caches are rebuildable: cache rows from before publication epochs are
+treated as misses and replaced by the next compile; they are not migrated.
 
 ## Dashboards and health reports
 
@@ -270,7 +279,7 @@ plugin supports corpus selection.
 ## Prompt and context behavior
 
 When `context.includeCompiledDigestPrompt` is enabled, memory prompt sections
-append a compact compiled snapshot from `agent-digest.json`: top pages only,
+append a compact compiled snapshot from plugin state: top pages only,
 top claims only, contradiction count, question count, confidence/freshness
 qualifiers. This is opt-in because it changes prompt shape; it mainly matters
 for context engines or prompt assembly that explicitly consume memory

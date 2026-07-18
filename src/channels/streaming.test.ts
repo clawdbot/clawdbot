@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChannelProgressDraftLine,
-  buildPlanUpdateStepFields,
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
@@ -102,8 +102,19 @@ describe("buildChannelProgressDraftLine", () => {
   });
 });
 
+describe("mergeChannelProgressDraftLine", () => {
+  it("keeps identical visible lines distinct when their stable ids differ", () => {
+    const first = { id: "tool-1", kind: "tool" as const, text: "bash", label: "bash" };
+    const second = { id: "tool-2", kind: "tool" as const, text: "bash", label: "bash" };
+
+    const lines = mergeChannelProgressDraftLine([first], second, { maxLines: 8 });
+
+    expect(lines.map((line) => line.id)).toEqual(["tool-1", "tool-2"]);
+  });
+});
+
 describe("normalizeAgentPlanSteps", () => {
-  it("normalizes legacy strings and typed entries, dropping blanks", () => {
+  it("normalizes external-plugin string steps and typed entries, dropping blanks", () => {
     expect(
       normalizeAgentPlanSteps([
         "Inspect",
@@ -117,14 +128,6 @@ describe("normalizeAgentPlanSteps", () => {
       { step: "Patch", status: "in_progress" },
     ]);
     expect(normalizeAgentPlanSteps(undefined)).toBeUndefined();
-  });
-
-  it("builds both deprecation-window payload fields", () => {
-    expect(buildPlanUpdateStepFields([{ step: "Inspect", status: "completed" }])).toEqual({
-      steps: ["Inspect"],
-      planSteps: [{ step: "Inspect", status: "completed" }],
-    });
-    expect(buildPlanUpdateStepFields(undefined)).toEqual({});
   });
 });
 

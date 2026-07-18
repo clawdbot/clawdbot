@@ -85,6 +85,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   isRawModelRun: boolean;
   messages: AgentMessage[];
   preparedUserTurnMessage?: AgentMessage;
+  heartbeatOutcomeContext?: string;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -148,14 +149,19 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     }
   }
 
+  const hasNonEmptyTranscriptPrompt = Boolean(input.prompt.effectiveTranscriptPrompt?.trim());
+  // A non-empty transcript prompt is a persistence substitution. Keep the
+  // assembled model prompt authoritative even when no hook added context.
+  const shouldUseExplicitModelPrompt =
+    input.prompt.hasPromptBuildContext || hasNonEmptyTranscriptPrompt;
   const promptSubmission = resolveRuntimeContextPromptParts({
     effectivePrompt: input.prompt.promptForRuntimeContextSplit,
     transcriptPrompt: input.prompt.transcriptPromptForRuntimeSplit,
-    modelPrompt: input.prompt.hasPromptBuildContext
+    modelPrompt: shouldUseExplicitModelPrompt
       ? input.prompt.promptForModelBeforeRuntimeContextSplit
       : undefined,
     modelPromptBuildContext:
-      input.prompt.hasPromptBuildContext && input.prompt.effectiveTranscriptPrompt !== undefined
+      shouldUseExplicitModelPrompt && input.prompt.effectiveTranscriptPrompt !== undefined
         ? {
             promptBeforeHooks: input.prompt.promptBeforePromptBuildHooks,
             transcriptPromptBeforeTransforms: input.prompt.effectiveTranscriptPrompt,
@@ -209,7 +215,11 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   }
   const runtimeContextForHook = isRuntimeOnlyTurn
     ? undefined
-    : [currentInboundContextText, promptSubmission.runtimeContext?.trim()]
+    : [
+        currentInboundContextText,
+        promptSubmission.runtimeContext?.trim(),
+        input.heartbeatOutcomeContext?.trim(),
+      ]
         .filter((value): value is string => Boolean(value))
         .join("\n\n") || undefined;
   const runtimeContextMessageForCurrentTurn =

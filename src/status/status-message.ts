@@ -1158,8 +1158,11 @@ export function buildStatusMessage(args: StatusArgs): string {
       ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
       : ` · auto fallback; config primary ${configuredDefaultModelLabel} · check provider`
     : "";
+  // A user-driven live switch that no completed turn has applied yet: surface
+  // it so /status does not imply the new selection is already running.
+  const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
   const modelLines = [
-    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
+    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
   ];
 
   // Show configured fallback models (from agent model config)

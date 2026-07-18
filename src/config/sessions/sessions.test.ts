@@ -302,16 +302,34 @@ describe("session lifecycle timestamps", () => {
         "utf8",
       );
 
-      const timestamps = resolveSessionLifecycleTimestamps({
-        storePath,
-        entry: {
-          sessionId: "legacy-session",
-          sessionFile,
-          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
-        },
-      });
+      const realReadSync = fs.readSync.bind(fs);
+      let shortReadCalls = 0;
+      const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+        fd: number,
+        buffer: NodeJS.ArrayBufferView,
+        offset: number,
+        length: number,
+        position: fs.ReadPosition | null,
+      ) => {
+        shortReadCalls += 1;
+        return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+      }) as typeof fs.readSync);
 
-      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      try {
+        const timestamps = resolveSessionLifecycleTimestamps({
+          storePath,
+          entry: {
+            sessionId: "legacy-session",
+            sessionFile,
+            updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+          },
+        });
+
+        expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+        expect(shortReadCalls).toBeGreaterThan(1);
+      } finally {
+        readSpy.mockRestore();
+      }
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
@@ -876,7 +894,8 @@ describe("session store writer queue", () => {
     writeSessionStoreCache({
       storePath,
       store,
-      mtimeMs: 1,
+      ctimeNs: 1n,
+      mtimeNs: 1n,
       sizeBytes: serialized.length,
       serialized,
       cloneSerialized: serialized,
@@ -886,11 +905,43 @@ describe("session store writer queue", () => {
 
     const cached = readSessionStoreCache({
       storePath,
-      mtimeMs: 1,
+      ctimeNs: 1n,
+      mtimeNs: 1n,
       sizeBytes: serialized.length,
     });
 
     expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
+  });
+
+  it("invalidates session store cache when ctime nanoseconds change inside the same millisecond", () => {
+    const key = "agent:main:ctime-ns-cache";
+    const storePath = "/tmp/openclaw-ctime-ns-cache-test.json";
+    const store = {
+      [key]: {
+        sessionId: "s-ctime-ns-cache",
+        updatedAt: Date.now(),
+      },
+    } satisfies Record<string, SessionEntry>;
+    const serialized = JSON.stringify(store);
+    writeSessionStoreCache({
+      storePath,
+      store,
+      ctimeNs: 1_000_000n,
+      mtimeNs: 1_000_000n,
+      sizeBytes: serialized.length,
+      serialized,
+      cloneSerialized: serialized,
+      takeOwnership: true,
+    });
+
+    const cached = readSessionStoreCache({
+      storePath,
+      ctimeNs: 1_000_001n,
+      mtimeNs: 1_000_000n,
+      sizeBytes: serialized.length,
+    });
+
+    expect(cached).toBeNull();
   });
 
   it("returns an owned parsed store for fresh skip-cache loads without cloning again", async () => {

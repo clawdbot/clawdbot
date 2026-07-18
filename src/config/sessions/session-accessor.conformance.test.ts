@@ -1561,6 +1561,61 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
+  it("preserves an active SQLite cron entry when durable entries exceed maxEntries", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const cronKey = "agent:main:cron:job-1";
+    const cronEntry = {
+      lifecycleRevision: "cron-revision-1",
+      sessionId: "cron-session",
+      updatedAt: Date.now(),
+    };
+
+    for (const [sessionKey, sessionId] of [
+      ["agent:main:slack:channel:C1", "channel-session-1"],
+      ["agent:main:slack:channel:C2", "channel-session-2"],
+    ] as const) {
+      await patchSqliteSessionEntry(
+        scopeFor(sessionKey),
+        () => ({ sessionId, updatedAt: Date.now() - 1 }),
+        {
+          fallbackEntry: { sessionId, updatedAt: Date.now() - 1 },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+    }
+
+    await patchSqliteSessionEntry(scopeFor(cronKey), () => cronEntry, {
+      fallbackEntry: cronEntry,
+      replaceEntry: true,
+    });
+    await patchSqliteSessionEntry(scopeFor(cronKey), () => ({
+      model: "gpt-5.5",
+      updatedAt: Date.now() + 1,
+    }));
+
+    expect(loadSqliteSessionEntry(scopeFor(cronKey))).toMatchObject({
+      lifecycleRevision: "cron-revision-1",
+      model: "gpt-5.5",
+      sessionId: "cron-session",
+    });
+  });
+
   it("evicts old SQLite transcript rows only when no remaining entry references them", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {

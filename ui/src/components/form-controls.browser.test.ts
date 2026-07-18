@@ -255,7 +255,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <input class="settings-sidebar__search-input" value="editable settings search" />
             </aside>
             <aside class="sidebar">
-              <div class="sidebar-recent-sessions">Recent session</div>
+              <div class="sidebar-shell__body">Recent session</div>
             </aside>
             <main class="content" style="height: 100px">
               <div class="settings-card">App chrome tile</div>
@@ -286,8 +286,8 @@ describeBrowserLayout("app chrome interaction styles", () => {
           chromeSelection: style(".settings-card").userSelect,
           contentScrollbar: scrollbarWidth(".content"),
           inputSelection: style(".settings-sidebar__search-input").userSelect,
-          regularSidebarScrollbar: scrollbarWidth(".sidebar-recent-sessions"),
-          regularSidebarSelection: style(".sidebar-recent-sessions").userSelect,
+          regularSidebarScrollbar: scrollbarWidth(".sidebar-shell__body"),
+          regularSidebarSelection: style(".sidebar-shell__body").userSelect,
           settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
           settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
         };

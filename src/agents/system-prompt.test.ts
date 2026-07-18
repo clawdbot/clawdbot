@@ -401,6 +401,17 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("guides visible terminal work separately from quiet exec", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "terminal"],
+    });
+
+    expect(prompt).toContain(
+      "- terminal: Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
+    );
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

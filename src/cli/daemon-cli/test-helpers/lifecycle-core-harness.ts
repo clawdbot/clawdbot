@@ -50,7 +50,7 @@ export function resetLifecycleServiceMocks() {
   service.restart.mockReset();
   service.isLoaded.mockResolvedValue(true);
   service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
-  service.readRuntime.mockResolvedValue({ status: "running" });
+  service.readRuntime.mockResolvedValue({ status: "stopped" });
   service.stop.mockResolvedValue(undefined);
   service.uninstall.mockResolvedValue(undefined);
   service.restart.mockResolvedValue({ outcome: "completed" });

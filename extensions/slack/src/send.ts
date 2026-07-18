@@ -51,7 +51,6 @@ import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
-import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const SLACK_DELIVERY_METADATA_EVENT = "openclaw_delivery";
@@ -318,20 +317,18 @@ function resolveToken(params: {
   fallbackToken?: string;
   fallbackSource?: SlackTokenSource;
 }) {
-  const explicit = resolveSlackBotToken(params.explicit);
+  const explicit = normalizeOptionalString(params.explicit);
   if (explicit) {
     return explicit;
   }
-  const fallback = resolveSlackBotToken(params.fallbackToken);
+  const fallback = normalizeOptionalString(params.fallbackToken);
   if (!fallback) {
     logVerbose(
-      `slack send: missing bot token for account=${params.accountId} explicit=${Boolean(
+      `slack send: missing write token for account=${params.accountId} explicit=${Boolean(
         params.explicit,
       )} source=${params.fallbackSource ?? "unknown"}`,
     );
-    throw new Error(
-      `Slack bot token missing for account "${params.accountId}" (set channels.slack.accounts.${params.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
-    );
+    throw new Error(`Slack write token missing for account "${params.accountId}".`);
   }
   return fallback;
 }
@@ -991,8 +988,9 @@ export async function sendMessageSlack(
     : resolveToken({
         explicit: opts.token,
         accountId: account.accountId,
-        fallbackToken: account.botToken,
-        fallbackSource: account.botTokenSource,
+        fallbackToken: resolveSlackOperationToken(account, "write"),
+        fallbackSource:
+          account.identity === "user" ? account.userTokenSource : account.botTokenSource,
       });
   const recipient = enterpriseDelivery ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   const queueKey = createSlackSendQueueKey({

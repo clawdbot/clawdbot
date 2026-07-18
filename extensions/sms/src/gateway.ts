@@ -1,10 +1,12 @@
 // Sms plugin module implements gateway behavior.
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
+import { createSmsIngressSpool } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler, type SmsWebhookHandlerParams } from "./webhook.js";
 
 const CHANNEL_ID = "sms";
+const SMS_INGRESS_DRAIN_INTERVAL_MS = 500;
 
 const activeRoutes = new Map<string, () => void>();
 const activeRoutePaths = new Map<string, string>();
@@ -52,7 +54,8 @@ export function collectSmsStartupWarnings(account: ResolvedSmsAccount): string[]
 function registerSmsWebhookRoute(params: {
   cfg: SmsWebhookHandlerParams["cfg"];
   account: ResolvedSmsAccount;
-  channelRuntime: SmsWebhookHandlerParams["channelRuntime"];
+  channelRuntime: Parameters<typeof createSmsIngressSpool>[0]["channelRuntime"];
+  abortSignal: AbortSignal;
   log?: SmsGatewayLog;
 }): () => void {
   const key = routeKey(params.account);
@@ -65,29 +68,49 @@ function registerSmsWebhookRoute(params: {
   }
   activeRoutes.get(key)?.();
   activeRoutePaths.delete(webhookPath);
-  const unregister = registerPluginHttpRoute({
-    path: webhookPath,
-    auth: "plugin",
-    pluginId: CHANNEL_ID,
-    accountId: params.account.accountId,
-    log: (msg) => params.log?.info?.(msg),
-    handler: createSmsWebhookHandler(params),
-  });
-  activeRoutes.set(key, unregister);
-  activeRoutePaths.set(webhookPath, params.account.accountId);
-  return () => {
-    unregister();
-    activeRoutes.delete(key);
-    if (activeRoutePaths.get(webhookPath) === params.account.accountId) {
-      activeRoutePaths.delete(webhookPath);
-    }
+  const ingress = createSmsIngressSpool(params);
+  const requestDrain = () => {
+    void ingress.drainOnce().catch((error: unknown) => {
+      params.log?.error?.(
+        `SMS ingress drain failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   };
+  const drainTimer = setInterval(requestDrain, SMS_INGRESS_DRAIN_INTERVAL_MS);
+  drainTimer.unref?.();
+  try {
+    const unregisterRoute = registerPluginHttpRoute({
+      path: webhookPath,
+      auth: "plugin",
+      pluginId: CHANNEL_ID,
+      accountId: params.account.accountId,
+      log: (msg) => params.log?.info?.(msg),
+      handler: createSmsWebhookHandler({ ...params, ingress }),
+    });
+    const unregister = () => {
+      clearInterval(drainTimer);
+      ingress.dispose();
+      unregisterRoute();
+      activeRoutes.delete(key);
+      if (activeRoutePaths.get(webhookPath) === params.account.accountId) {
+        activeRoutePaths.delete(webhookPath);
+      }
+    };
+    activeRoutes.set(key, unregister);
+    activeRoutePaths.set(webhookPath, params.account.accountId);
+    requestDrain();
+    return unregister;
+  } catch (error) {
+    clearInterval(drainTimer);
+    ingress.dispose();
+    throw error;
+  }
 }
 
 export async function startSmsGatewayAccount(params: {
   cfg: SmsWebhookHandlerParams["cfg"];
   account: ResolvedSmsAccount;
-  channelRuntime: SmsWebhookHandlerParams["channelRuntime"];
+  channelRuntime: Parameters<typeof createSmsIngressSpool>[0]["channelRuntime"];
   abortSignal: AbortSignal;
   log?: SmsGatewayLog;
 }) {

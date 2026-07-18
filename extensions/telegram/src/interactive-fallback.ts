@@ -1,12 +1,12 @@
 // Telegram plugin module implements interactive fallback behavior.
 import {
   adaptMessagePresentationForChannel,
-  interactiveReplyToPresentation,
+  legacyInteractiveReplyToPresentation,
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   renderMessagePresentationFallbackText,
-  resolveInteractiveTextFallback,
+  resolveLegacyInteractiveTextFallback,
   type MessagePresentation,
   type MessagePresentationInteractiveBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -122,7 +122,7 @@ export function canonicalizeTelegramPresentationPayload(payload: ReplyPayload): 
     capabilities: TELEGRAM_PRESENTATION_CAPABILITIES,
   });
 
-  const interactive = normalizeInteractiveReply(payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   const existingButtons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
     interactive,
@@ -141,7 +141,7 @@ export function canonicalizeTelegramPresentationPayload(payload: ReplyPayload): 
     presentation: { ...presentation, blocks: fallbackBlocks },
   });
   const currentText =
-    resolveInteractiveTextFallback({ text: payload.text, interactive })?.trim() ?? "";
+    resolveLegacyInteractiveTextFallback({ text: payload.text, interactive })?.trim() ?? "";
   const hasFallback =
     fallbackText.length > 0 &&
     (currentText === fallbackText || currentText.endsWith(`\n\n${fallbackText}`));
@@ -168,8 +168,8 @@ export function resolveTelegramInteractiveTextFallback(params: {
   interactive?: unknown;
   presentation?: unknown;
 }): string | undefined {
-  const interactive = normalizeInteractiveReply(params.interactive);
-  const text = resolveInteractiveTextFallback({
+  const interactive = normalizeLegacyInteractiveReply(params.interactive);
+  const text = resolveLegacyInteractiveTextFallback({
     text: params.text ?? undefined,
     interactive,
   });
@@ -189,7 +189,7 @@ export function resolveTelegramInteractiveTextFallback(params: {
   if (!interactive) {
     return text;
   }
-  const interactivePresentation = interactiveReplyToPresentation(interactive);
+  const interactivePresentation = legacyInteractiveReplyToPresentation(interactive);
   if (!interactivePresentation) {
     return text;
   }

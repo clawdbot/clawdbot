@@ -11,7 +11,8 @@ import { RealtimeTalkSession } from "./realtime-talk.ts";
 
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
-  localOptions: { inputDeviceId?: string };
+  options: { provider?: string; transport?: string; capabilities?: string[] };
+  localOptions: { inputDeviceId?: string; videoEnabled?: boolean };
 };
 
 function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSession {
@@ -64,6 +65,24 @@ describe("chat realtime actions", () => {
 
     expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
     expect(startSpy).toHaveBeenCalledOnce();
+  });
+
+  it("launches video talk through the configured provider and owns the preview stream", async () => {
+    const state = createState();
+
+    await state.toggleRealtimeTalk({ video: true });
+    const session = inspectSession(state);
+    const stream = {} as MediaStream;
+    session.callbacks.onVideoStream?.(stream);
+
+    expect(session.options.provider).toBeUndefined();
+    expect(session.options.transport).toBeUndefined();
+    expect(session.options.capabilities).toEqual(["camera-frame"]);
+    expect(session.localOptions.videoEnabled).toBe(true);
+    expect(state.realtimeTalkVideoStream).toBe(stream);
+
+    await state.toggleRealtimeTalk();
+    expect(state.realtimeTalkVideoStream).toBeNull();
   });
 
   it("re-reads the persisted microphone on every launch instead of caching it", async () => {

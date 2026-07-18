@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -12,13 +13,31 @@ import {
   getRunAgentTurnWithFallback,
   createMockTypingSignaler,
   createFollowupRun,
+  createMockReplyOperation,
   createMinimalRunAgentTurnParams,
   NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
+  type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const state = setupAgentRunnerExecutionTestState();
+
+function createOverloadSummaryError() {
+  return Object.assign(new Error("All models failed (1): anthropic/claude-opus-4-1: overloaded"), {
+    name: "FallbackSummaryError",
+    attempts: [
+      {
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        error: "overloaded",
+        reason: "overloaded",
+        status: 529,
+      },
+    ],
+    soonestCooldownExpiry: null,
+  });
+}
 
 describe("runAgentTurnWithFallback: provider failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
@@ -276,15 +295,19 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "surfaces overloaded fallback copy in $label chats",
     async (testCase) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("model is overloaded"));
-
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      vi.useFakeTimers();
+      state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
+
+      const resultPromise = runAgentTurnWithFallback(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
       );
+      await vi.advanceTimersByTimeAsync(217_500);
+      const result = await resultPromise;
 
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(11);
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);
@@ -294,8 +317,310 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     },
   );
 
+  it("retries fallback-wide overloads turn-locally and sends one delayed status notice", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(createOverloadSummaryError());
+    }
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "recovered" }],
+      meta: {},
+    });
+    const onBlockReply = vi.fn();
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
+    );
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(7_501);
+    const result = await resultPromise;
+
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(5);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("success");
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const notice = onBlockReply.mock.calls[0]?.[0];
+    expect(notice).toMatchObject({
+      text: "The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isStatusNotice: true,
+    });
+    expect(getReplyPayloadMetadata(notice)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it.each(["tool_execution_started", "assistant_output_started"] as const)(
+    "does not replay an overloaded turn after %s",
+    async (phase) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onExecutionPhase?.({ phase });
+        throw new Error("model is overloaded");
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain("overloaded");
+      }
+    },
+  );
+
+  it.each(["tool_execution_started", "assistant_output_started"] as const)(
+    "does not replay a CLI timeout after %s",
+    async (phase) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onExecutionPhase?.({ phase });
+        throw new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
+          reason: "timeout",
+          provider: "claude-cli",
+          code: "cli_overall_timeout",
+          cliTimeout: {
+            mode: "overall",
+            timeoutSeconds: 600,
+            observedActivity: true,
+            activeToolCount: phase === "tool_execution_started" ? 1 : 0,
+            backgroundTaskCount: 0,
+          },
+        });
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain("overall turn limit");
+        expect(result.payload.text).toContain("did not replay this turn automatically");
+      }
+    },
+  );
+
+  it("warns about partial effects when an active CLI tool hits the no-output watchdog", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "tool_execution_started" });
+      throw new FailoverError("CLI produced no output for 120s and was terminated.", {
+        reason: "timeout",
+        provider: "claude-cli",
+        code: "cli_no_output_timeout",
+        cliTimeout: {
+          mode: "no-output",
+          timeoutSeconds: 120,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 0,
+        },
+      });
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("no-output watchdog");
+      expect(result.payload.text).toContain("1 active CLI tool call");
+      expect(result.payload.text).toMatch(/effects may be partial/i);
+      expect(result.payload.text).toContain("did not replay this turn automatically");
+    }
+  });
+
+  it.each(["tool_execution_started", "assistant_output_started"] as const)(
+    "cancels the pending overload notice after %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      let resolveRetry!: (value: unknown) => void;
+      const retryResult = new Promise<unknown>((resolve) => {
+        resolveRetry = resolve;
+      });
+      state.runEmbeddedAgentMock
+        .mockRejectedValueOnce(new Error("model is overloaded"))
+        .mockImplementationOnce((params: EmbeddedAgentParams) => {
+          params.onExecutionPhase?.({ phase });
+          return retryResult;
+        });
+      const onBlockReply = vi.fn();
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const resultPromise = runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      resolveRetry({ payloads: [{ text: "recovered" }], meta: {} });
+      await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
+    },
+  );
+
+  it("sends the delayed overload notice while a retry provider call is still running", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    let resolveRetry!: (value: unknown) => void;
+    const retryResult = new Promise<unknown>((resolve) => {
+      resolveRetry = resolve;
+    });
+    state.runWithModelFallbackMock
+      .mockRejectedValueOnce(createOverloadSummaryError())
+      .mockImplementationOnce(() => retryResult);
+    const onBlockReply = vi.fn((..._args: unknown[]) => new Promise<void>(() => {}));
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
+    );
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+
+    resolveRetry({
+      result: { payloads: [{ text: "recovered" }], meta: {} },
+      provider: "anthropic",
+      model: "claude-opus-4-1",
+      attempts: [],
+    });
+    await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
+    expect(onBlockReply.mock.calls[0]?.[1]).toMatchObject({
+      abortSignal: expect.objectContaining({ aborted: true }),
+      timeoutMs: 5_000,
+    });
+  });
+
+  it("does not block retry when a slow first overload makes the status notice immediately due", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    let rejectInitial!: (error: unknown) => void;
+    const initialResult = new Promise<unknown>((_resolve, reject) => {
+      rejectInitial = reject;
+    });
+    state.runWithModelFallbackMock
+      .mockImplementationOnce(() => initialResult)
+      .mockResolvedValueOnce({
+        result: { payloads: [{ text: "recovered" }], meta: {} },
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        attempts: [],
+      });
+    const onBlockReply = vi.fn((..._args: unknown[]) => new Promise<void>(() => {}));
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    rejectInitial(createOverloadSummaryError());
+    await vi.advanceTimersByTimeAsync(2_500);
+
+    await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("interrupts overload backoff on abort and cancels the pending status notice", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
+    const abortController = new AbortController();
+    const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
+    const onBlockReply = vi.fn();
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: { onBlockReply },
+        replyOperation,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    abortController.abort();
+    await expect(resultPromise).resolves.toMatchObject({
+      kind: "final",
+      payload: { text: SILENT_REPLY_TOKEN },
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    const agentEvents = await import("../../infra/agent-events.js");
+    expect(vi.mocked(agentEvents.emitAgentEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "error", aborted: true }),
+      }),
+    );
+  });
+
+  it("interrupts the transient HTTP retry backoff on abort", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    state.runEmbeddedAgentMock.mockRejectedValue(
+      new FailoverError("provider request timed out", {
+        reason: "timeout",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+      }),
+    );
+    const abortController = new AbortController();
+    const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({ replyOperation }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    abortController.abort();
+    await expect(resultPromise).resolves.toMatchObject({
+      kind: "final",
+      payload: { text: SILENT_REPLY_TOKEN },
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels the overload notice immediately when a slow retrying turn is aborted", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    let resolveRetry!: (value: unknown) => void;
+    const retryResult = new Promise<unknown>((resolve) => {
+      resolveRetry = resolve;
+    });
+    state.runWithModelFallbackMock
+      .mockRejectedValueOnce(createOverloadSummaryError())
+      .mockImplementationOnce(() => retryResult);
+    const abortController = new AbortController();
+    const onBlockReply = vi.fn();
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: { abortSignal: abortController.signal, onBlockReply },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(27_499);
+    abortController.abort();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    resolveRetry({
+      result: { payloads: [{ text: "recovered" }], meta: {} },
+      provider: "anthropic",
+      model: "claude-opus-4-1",
+      attempts: [],
+    });
+    await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
+  });
+
   it("surfaces typed overloaded failures without rate-limit cooldown copy", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    state.runEmbeddedAgentMock.mockRejectedValue(
       new FailoverError("529 Please try again", {
         reason: "overloaded",
         provider: "anthropic",
@@ -304,13 +629,15 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const resultPromise = runAgentTurnWithFallback(
       createMinimalRunAgentTurnParams({
         sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
       }),
     );
+    await vi.advanceTimersByTimeAsync(217_500);
+    const result = await resultPromise;
 
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(11);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.isError).toBe(true);

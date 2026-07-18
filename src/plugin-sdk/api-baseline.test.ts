@@ -5,10 +5,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import {
+  computePluginSdkApiBaselineHashFileContent,
   listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
+  type PluginSdkApiBaselineRender,
 } from "./api-baseline.js";
 
 describe("Plugin SDK API baseline", () => {
@@ -117,5 +119,44 @@ describe("Plugin SDK API baseline", () => {
     );
     expect(rendered.json).not.toContain('"line":');
     expect(rendered.jsonl).not.toContain('"sourceLine":');
+  });
+
+  it("renders snapshots independently of entrypoint discovery order", async () => {
+    const entrypoints = ["core", "provider-auth", "channel-policy"];
+    const forward = await renderPluginSdkApiBaseline({ entrypoints });
+    const reverse = await renderPluginSdkApiBaseline({ entrypoints: entrypoints.toReversed() });
+
+    expect(reverse.json).toBe(forward.json);
+    expect(reverse.jsonl).toBe(forward.jsonl);
+  });
+
+  it("hashes entrypoints independently so unrelated API changes merge", () => {
+    const moduleSurface = (entrypoint: string, declaration: string) => ({
+      category: null,
+      entrypoint,
+      exports: [
+        {
+          declaration,
+          exportName: `${entrypoint}Export`,
+          kind: "function" as const,
+          source: { path: `src/plugin-sdk/${entrypoint}.ts` },
+        },
+      ],
+      importSpecifier: `openclaw/plugin-sdk/${entrypoint}`,
+      source: { path: `src/plugin-sdk/${entrypoint}.ts` },
+    });
+    const render = (declaration: string): PluginSdkApiBaselineRender => ({
+      baseline: {
+        generatedBy: "scripts/generate-plugin-sdk-api-baseline.ts",
+        modules: [moduleSurface("alpha", declaration), moduleSurface("beta", "stable")],
+      },
+      json: "",
+      jsonl: "",
+    });
+    const before = computePluginSdkApiBaselineHashFileContent(render("before")).split("\n");
+    const after = computePluginSdkApiBaselineHashFileContent(render("after")).split("\n");
+
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
   });
 });

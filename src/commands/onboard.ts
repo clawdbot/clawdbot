@@ -40,6 +40,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "resetScope",
   "nonInteractive",
   "classic",
+  "tui",
 ]);
 
 function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {

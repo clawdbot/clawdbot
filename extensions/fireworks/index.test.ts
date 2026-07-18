@@ -164,7 +164,7 @@ describe("fireworks provider plugin", () => {
     expect(
       provider.resolveThinkingProfile?.({
         provider: "fireworks",
-        modelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        modelId: FIREWORKS_DEFAULT_MODEL_ID,
       }),
     ).toEqual({
       levels: [{ id: "off" }],

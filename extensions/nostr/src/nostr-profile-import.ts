@@ -159,9 +159,9 @@ export async function importProfileFromRelays(
     );
 
     // Parse the profile content
-    let content: ProfileContent;
+    let parsedContent: unknown;
     try {
-      content = JSON.parse(bestEvent.event.content) as ProfileContent;
+      parsedContent = JSON.parse(bestEvent.event.content) as unknown;
     } catch {
       return {
         ok: false,
@@ -170,6 +170,19 @@ export async function importProfileFromRelays(
         sourceRelay: bestEvent.relay,
       };
     }
+    if (
+      typeof parsedContent !== "object" ||
+      parsedContent === null ||
+      Array.isArray(parsedContent)
+    ) {
+      return {
+        ok: false,
+        error: "Profile event content must be a JSON object",
+        relaysQueried,
+        sourceRelay: bestEvent.relay,
+      };
+    }
+    const content = parsedContent as ProfileContent;
 
     // Convert to our profile format
     const profile = contentToProfile(content);

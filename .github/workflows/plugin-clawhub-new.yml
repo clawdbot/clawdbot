@@ -344,6 +344,7 @@ jobs:
 
       - name: Validate release publish approval run
         env:
+          ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
           APPROVAL_PATH: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
           CHILD_WORKFLOW_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}

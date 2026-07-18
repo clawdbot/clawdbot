@@ -61,6 +61,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   const deactivate = () => {
     lifecycleActive = false;
     clearHeartbeat();
+    params.abortSignal?.removeEventListener("abort", onAbort);
   };
 
   const onAbort = () => {

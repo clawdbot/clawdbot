@@ -1,14 +1,20 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatCommandEntry
+import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatWidgetResource
+import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
+import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -19,6 +25,13 @@ import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
+import ai.openclaw.app.ui.chat.ChatComposerSendStartResult
+import ai.openclaw.app.ui.chat.ChatComposerStateStore
+import ai.openclaw.app.ui.chat.PendingAttachment
+import ai.openclaw.app.ui.chat.chatComposerTextDraftsFromSnapshot
+import ai.openclaw.app.ui.chat.matchesSession
+import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
+import ai.openclaw.app.ui.chat.toOutgoingAttachment
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
@@ -26,8 +39,10 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,9 +52,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
 enum class ChatDraftPlacement {
@@ -47,10 +64,49 @@ enum class ChatDraftPlacement {
   BeforeExisting,
 }
 
-data class ChatDraft(
+internal data class ChatDraft(
   val text: String,
   val placement: ChatDraftPlacement,
+  val owner: ChatComposerOwner? = null,
 )
+
+internal fun claimChatDraftForOwner(
+  draft: ChatDraft,
+  owner: ChatComposerOwner,
+  mainSessionKey: String,
+): ChatDraft? {
+  val capturedOwner = draft.owner ?: return draft
+  if (capturedOwner == owner) return draft
+  if (!shouldMigrateComposerDraft(capturedOwner, owner, mainSessionKey)) return null
+  return draft.copy(owner = owner)
+}
+
+internal data class PendingAssistantAutoSend(
+  val prompt: String,
+  val owner: ChatComposerOwner,
+  val id: String = UUID.randomUUID().toString(),
+)
+
+private data class AssistantAutoSendOperation(
+  var owner: ChatComposerOwner,
+  val pendingId: String,
+  val composerSendId: String,
+)
+
+internal fun clearCompletedAssistantAutoSend(
+  current: PendingAssistantAutoSend?,
+  completedId: String,
+): PendingAssistantAutoSend? = current?.takeUnless { it.id == completedId }
+
+internal fun retainRefusedAssistantPrompt(
+  prompt: String,
+  existing: String,
+): String =
+  when {
+    existing.isBlank() -> prompt
+    prompt.isBlank() || existing == prompt -> existing
+    else -> "$prompt\n\n$existing"
+  }
 
 data class ChatShareDraft(
   val id: Long,
@@ -60,6 +116,7 @@ data class ChatShareDraft(
 )
 
 internal const val MAX_PENDING_CHAT_SHARES = 16
+private const val CHAT_COMPOSER_DRAFTS_STATE_KEY = "chat-composer-text-drafts"
 
 /** Bounded process-local queue whose stable head survives Activity recreation with the ViewModel. */
 internal class ChatShareDraftQueue(
@@ -67,50 +124,108 @@ internal class ChatShareDraftQueue(
 ) {
   private val lock = Any()
   private val drafts = ArrayDeque<ChatShareDraft>()
+  private val ownersById = mutableMapOf<Long, ChatComposerOwner>()
   private val headLease = Mutex()
   private val _head = MutableStateFlow<ChatShareDraft?>(null)
   val head: StateFlow<ChatShareDraft?> = _head.asStateFlow()
+  private val _queued = MutableStateFlow<List<ChatShareDraft>>(emptyList())
+  val queued: StateFlow<List<ChatShareDraft>> = _queued.asStateFlow()
+  private val _ownerRevision = MutableStateFlow(0L)
+  val ownerRevision: StateFlow<Long> = _ownerRevision.asStateFlow()
 
   init {
     require(capacity > 0)
   }
 
-  fun enqueue(draft: ChatShareDraft): Boolean =
+  fun enqueue(
+    draft: ChatShareDraft,
+    owner: ChatComposerOwner,
+  ): Boolean =
     synchronized(lock) {
       if (drafts.size >= capacity) return@synchronized false
       drafts.addLast(draft)
-      _head.value = drafts.first()
+      ownersById[draft.id] = owner
+      publishQueueLocked()
       true
     }
 
   /** Only the active loader may advance the queue; stale effects cannot acknowledge a newer head. */
-  fun acknowledgeHead(id: Long): Boolean =
+  fun acknowledgeHead(
+    id: Long,
+    owner: ChatComposerOwner,
+  ): Boolean =
     synchronized(lock) {
-      if (drafts.firstOrNull()?.id != id) return@synchronized false
-      drafts.removeFirst()
-      _head.value = drafts.firstOrNull()
+      val ownedHead = firstForOwnerLocked(owner)
+      if (ownedHead?.id != id) return@synchronized false
+      drafts.remove(ownedHead)
+      ownersById.remove(id)
+      publishQueueLocked()
       true
     }
 
   /** Serializes loaders across overlapping Activity instances while rechecking the stable head. */
   suspend fun withHeadLease(
     id: Long,
+    owner: ChatComposerOwner,
     block: suspend () -> Unit,
   ): Boolean =
     headLease.withLock {
-      if (synchronized(lock) { drafts.firstOrNull()?.id } != id) return@withLock false
+      val claimed =
+        synchronized(lock) {
+          firstForOwnerLocked(owner)?.id == id
+        }
+      if (!claimed) return@withLock false
       block()
       true
     }
 
-  fun clear() {
+  fun migrateOwner(
+    from: ChatComposerOwner,
+    to: ChatComposerOwner,
+  ) {
+    if (from == to) return
     synchronized(lock) {
-      drafts.clear()
-      _head.value = null
+      var changed = false
+      for ((id, owner) in ownersById.toMap()) {
+        if (owner == from) {
+          ownersById[id] = to
+          changed = true
+        }
+      }
+      if (changed) _ownerRevision.value += 1
     }
   }
 
+  fun clear() {
+    synchronized(lock) {
+      drafts.clear()
+      ownersById.clear()
+      publishQueueLocked()
+    }
+  }
+
+  suspend fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
+    headLease.withLock {
+      synchronized(lock) {
+        val removedIds = ownersById.filterValues(matches).keys
+        if (removedIds.isEmpty()) return@synchronized
+        drafts.removeAll { it.id in removedIds }
+        removedIds.forEach(ownersById::remove)
+        publishQueueLocked()
+      }
+    }
+  }
+
+  fun ownerOf(id: Long): ChatComposerOwner? = synchronized(lock) { ownersById[id] }
+
   internal fun size(): Int = synchronized(lock) { drafts.size }
+
+  private fun firstForOwnerLocked(owner: ChatComposerOwner): ChatShareDraft? = drafts.firstOrNull { draft -> ownersById[draft.id] == owner }
+
+  private fun publishQueueLocked() {
+    _head.value = drafts.firstOrNull()
+    _queued.value = drafts.toList()
+  }
 }
 
 internal fun shouldStartRuntimeOnForeground(
@@ -146,13 +261,18 @@ internal class CronEditorDraftMemory {
 class MainViewModel private constructor(
   app: Application,
   private val prefs: SecurePrefs,
+  savedStateHandle: SavedStateHandle,
 ) : AndroidViewModel(app) {
-  constructor(app: Application) : this(app, (app as NodeApp).prefs)
+  constructor(
+    app: Application,
+    savedStateHandle: SavedStateHandle,
+  ) : this(app, (app as NodeApp).prefs, savedStateHandle)
 
   internal constructor(
     app: NodeApp,
     prefs: SecurePrefs,
-  ) : this(app as Application, prefs)
+    savedStateHandle: SavedStateHandle,
+  ) : this(app as Application, prefs, savedStateHandle)
 
   private val nodeApp = app as NodeApp
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
@@ -180,13 +300,49 @@ class MainViewModel private constructor(
   internal val requestedSettingsRoute: StateFlow<SettingsRoute?> get() = requestedSettingsRouteState
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
-  private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
-  val chatDraft: StateFlow<ChatDraft?> = _chatDraft
+  private val chatDraftState = MutableStateFlow<ChatDraft?>(null)
+  internal val chatDraft: StateFlow<ChatDraft?> = chatDraftState
+  private val chatDraftLock = Any()
+  private var attachedComposerRuntime: NodeRuntime? = null
+  private var removeChatSessionDeletionListener: (() -> Unit)? = null
+
+  // SavedStateHandle preserves a bounded set of complete owner-scoped drafts through process
+  // recreation. Durable admission clears only the accepted snapshot, so later edits survive.
+  internal val chatComposerState =
+    ChatComposerStateStore(
+      initialDrafts = chatComposerTextDraftsFromSnapshot(savedStateHandle[CHAT_COMPOSER_DRAFTS_STATE_KEY]),
+      onDraftSnapshotChanged = { snapshot -> savedStateHandle[CHAT_COMPOSER_DRAFTS_STATE_KEY] = snapshot },
+    )
+  private val assistantAutoSendLock = Any()
+
+  init {
+    val recoveredChatComposerSends = chatComposerState.recoveredSends()
+    if (recoveredChatComposerSends.isNotEmpty()) {
+      // A pending checkpoint is hidden until the durable outbox gives a definitive answer.
+      // Database errors leave it parked instead of exposing text that may already be sending.
+      viewModelScope.launch {
+        val runtime = runCatching { ensureRuntime() }.getOrNull() ?: return@launch
+        recoveredChatComposerSends.forEach { pending ->
+          val admitted =
+            runCatching { runtime.wasChatOutboxCommandAdmitted(pending.commandId) }.getOrNull() ?: return@forEach
+          chatComposerState.resolveRecoveredSend(
+            commandId = pending.commandId,
+            fallbackOwner = pending.owner,
+            admitted = admitted,
+          )
+        }
+      }
+    }
+  }
+
   val chatShareDraft: StateFlow<ChatShareDraft?> = chatShareDraftQueue.head
-  private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
-  val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
+  internal val chatShareDrafts: StateFlow<List<ChatShareDraft>> = chatShareDraftQueue.queued
+  internal val chatShareDraftOwnerRevision: StateFlow<Long> = chatShareDraftQueue.ownerRevision
+  private val pendingAssistantAutoSendMutable = MutableStateFlow<PendingAssistantAutoSend?>(null)
+  internal val pendingAssistantAutoSend: StateFlow<PendingAssistantAutoSend?> = pendingAssistantAutoSendMutable
   private val _assistantAutoSendInFlight = MutableStateFlow(false)
   val assistantAutoSendInFlight: StateFlow<Boolean> = _assistantAutoSendInFlight
+  private var assistantAutoSendOperation: AssistantAutoSendOperation? = null
 
   /**
    * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
@@ -195,8 +351,37 @@ class MainViewModel private constructor(
     runtimeRef.value?.let { return it }
     val runtime = nodeApp.ensureRuntime()
     runtime.setForeground(foreground)
-    runtimeRef.value = runtime
+    attachComposerRuntime(runtime)
     return runtime
+  }
+
+  private fun attachComposerRuntime(runtime: NodeRuntime) {
+    if (attachedComposerRuntime === runtime) {
+      runtimeRef.value = runtime
+      return
+    }
+    removeChatSessionDeletionListener?.invoke()
+    attachedComposerRuntime = runtime
+    removeChatSessionDeletionListener =
+      runtime.addChatSessionDeletionListener { deletion ->
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+          deletion.gatewayId?.let { gatewayId ->
+            clearChatComposerSession(
+              gatewayStableId = gatewayId,
+              agentId = deletion.agentId,
+              sessionKey = deletion.sessionKey,
+              mainSessionKey = deletion.mainSessionKey,
+            )
+          }
+        }
+      }
+    runtimeRef.value = runtime
+  }
+
+  override fun onCleared() {
+    removeChatSessionDeletionListener?.invoke()
+    removeChatSessionDeletionListener = null
+    attachedComposerRuntime = null
   }
 
   internal fun claimInitialIntentRouting(): Boolean = initialIntentGate.claim()
@@ -223,7 +408,7 @@ class MainViewModel private constructor(
     prefs.setVoiceWakeWords(VoiceWakePreferences.defaultTriggerWords)
     val runtime = nodeApp.ensureScreenshotFixtureRuntime()
     runtime.setForeground(foreground)
-    runtimeRef.value = runtime
+    attachComposerRuntime(runtime)
     _requestedHomeDestination.value = scene.homeDestination
     requestedSettingsRouteState.value = scene.settingsRoute
   }
@@ -316,6 +501,8 @@ class MainViewModel private constructor(
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
     runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
+  internal val gatewayComposerDefaultAgentOwner: StateFlow<GatewayDefaultAgentOwner?> =
+    runtimeState(initial = null) { it.gatewayComposerDefaultAgentOwner }
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
   val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
   val cronJobs: StateFlow<List<GatewayCronJobSummary>> = runtimeState(initial = emptyList()) { it.cronJobs }
@@ -414,6 +601,7 @@ class MainViewModel private constructor(
     runtimeState(initial = emptyList()) { it.talkModeConversation }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
+  val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionOwnerAgentId }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHistoryLoading }
@@ -426,6 +614,7 @@ class MainViewModel private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
   val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
@@ -517,8 +706,55 @@ class MainViewModel private constructor(
   /** Clears setup credentials without starting the runtime just to discard first-run pairing auth. */
   private suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val reset = nodeApp.resetGatewaySetupAuth(stableId)
-    nodeApp.peekRuntime()?.let { runtimeRef.value = it }
+    nodeApp.peekRuntime()?.let(::attachComposerRuntime)
+    if (reset) clearChatComposerGateway(stableId)
     return reset
+  }
+
+  /** Auth replacement retires the old gateway identity, including every retained composer owner. */
+  internal suspend fun clearChatComposerGateway(stableId: String) {
+    val gateway = stableId.trim()
+    if (gateway.isEmpty()) return
+    clearChatComposerOwners { it.gatewayStableId == gateway }
+  }
+
+  internal suspend fun clearChatComposerSession(
+    gatewayStableId: String,
+    agentId: String,
+    sessionKey: String,
+    mainSessionKey: String,
+  ) {
+    val gateway = gatewayStableId.trim()
+    val agent = agentId.trim()
+    val key = sessionKey.trim()
+    if (gateway.isEmpty() || agent.isEmpty() || key.isEmpty()) return
+    clearChatComposerOwners { owner ->
+      owner.matchesSession(
+        gatewayStableId = gateway,
+        agentId = agent,
+        sessionKey = key,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  }
+
+  private suspend fun clearChatComposerOwners(matches: (ChatComposerOwner) -> Boolean) {
+    chatComposerState.removeMediaOwners(matches)
+    chatShareDraftQueue.removeOwners(matches)
+    synchronized(assistantAutoSendLock) {
+      // Read the live operation id while its start/finally paths are excluded so cleanup retains
+      // exactly that gate after removing other state owned by the retired identity.
+      chatComposerState.removeOwners(matches, assistantAutoSendOperation?.composerSendId)
+    }
+    pendingAssistantAutoSendMutable.update { pending ->
+      pending?.takeIf { !matches(it.owner) }
+    }
+    synchronized(chatDraftLock) {
+      chatDraftState.value = chatDraftState.value?.takeIf { draft -> draft.owner?.let(matches) != true }
+    }
+    // Repeat after suspending share cleanup. Any callback that raced the first tombstone is
+    // serialized with this final token-and-attachment purge before cleanup returns.
+    chatComposerState.removeMediaOwners(matches)
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
@@ -603,7 +839,7 @@ class MainViewModel private constructor(
       gatewayConfigOperationMutex.withLock {
         if (operation != gatewayConfigOperationSeq.get()) return@withLock
         nodeApp.peekRuntime()?.also { runtime ->
-          runtimeRef.value = runtime
+          attachComposerRuntime(runtime)
           runtime.prepareForGatewaySetup()
         }
         // Pairing another gateway no longer forgets existing gateways; per-gateway
@@ -670,17 +906,19 @@ class MainViewModel private constructor(
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
     _requestedHomeDestination.value = HomeDestination.Chat
     chatShareDraftQueue.clear()
+    val owner = currentOrProvisionalChatComposerOwner()
     if (request.autoSend) {
-      _pendingAssistantAutoSend.value = request.prompt
-      _chatDraft.value = null
+      pendingAssistantAutoSendMutable.value = request.prompt?.let { PendingAssistantAutoSend(prompt = it, owner = owner) }
+      setChatDraft(null)
       return
     }
-    _pendingAssistantAutoSend.value = null
-    _chatDraft.value = request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace) }
+    pendingAssistantAutoSendMutable.value = null
+    setChatDraft(request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace, owner = owner) })
   }
 
   /** Opens shared content as a fresh composer draft; sending still requires an explicit tap. */
   fun handleShareLaunch(request: ShareLaunchRequest): Boolean {
+    val owner = currentOrProvisionalChatComposerOwner()
     val accepted =
       chatShareDraftQueue.enqueue(
         ChatShareDraft(
@@ -689,11 +927,12 @@ class MainViewModel private constructor(
           imageUris = request.imageUris,
           droppedImageCount = request.droppedImageCount,
         ),
+        owner,
       )
     if (!accepted) return false
     _requestedHomeDestination.value = HomeDestination.Chat
-    _pendingAssistantAutoSend.value = null
-    _chatDraft.value = null
+    pendingAssistantAutoSendMutable.value = null
+    setChatDraft(null)
     return true
   }
 
@@ -705,49 +944,136 @@ class MainViewModel private constructor(
     _requestedHomeDestination.value = destination
   }
 
-  fun clearChatDraft() {
-    _chatDraft.value = null
+  internal fun consumeChatDraft(
+    expected: ChatDraft,
+    owner: ChatComposerOwner,
+    mainSessionKey: String,
+  ): ChatDraft? =
+    synchronized(chatDraftLock) {
+      val current = chatDraftState.value
+      if (current !== expected) return@synchronized null
+      val claimed = claimChatDraftForOwner(current, owner, mainSessionKey) ?: return@synchronized null
+      chatDraftState.value = null
+      claimed
+    }
+
+  private fun setChatDraft(value: ChatDraft?) {
+    synchronized(chatDraftLock) {
+      chatDraftState.value = value
+    }
   }
 
-  fun acknowledgeChatShareDraft(id: Long) {
-    chatShareDraftQueue.acknowledgeHead(id)
-  }
-
-  suspend fun withChatShareDraftLease(
+  internal fun acknowledgeChatShareDraft(
     id: Long,
-    block: suspend () -> Unit,
-  ): Boolean = chatShareDraftQueue.withHeadLease(id, block)
+    owner: ChatComposerOwner,
+  ): Boolean = chatShareDraftQueue.acknowledgeHead(id, owner)
 
-  fun setChatReplyDraft(value: String) {
-    _pendingAssistantAutoSend.value = null
-    _chatDraft.value = ChatDraft(text = value, placement = ChatDraftPlacement.BeforeExisting)
+  internal suspend fun withChatShareDraftLease(
+    id: Long,
+    owner: ChatComposerOwner,
+    block: suspend () -> Unit,
+  ): Boolean = chatShareDraftQueue.withHeadLease(id, owner, block)
+
+  internal fun chatShareDraftTargetsOwner(
+    id: Long,
+    owner: ChatComposerOwner,
+    mainSessionKey: String,
+  ): Boolean {
+    val captured = chatShareDraftQueue.ownerOf(id) ?: return false
+    return captured == owner || shouldMigrateComposerDraft(captured, owner, mainSessionKey)
+  }
+
+  internal fun chatShareDraftForOwner(
+    owner: ChatComposerOwner,
+    mainSessionKey: String,
+  ): ChatShareDraft? =
+    chatShareDraftQueue.queued.value.firstOrNull { draft ->
+      chatShareDraftTargetsOwner(draft.id, owner, mainSessionKey)
+    }
+
+  internal fun resolveChatShareDraftOwner(
+    id: Long?,
+    owner: ChatComposerOwner,
+    mainSessionKey: String,
+  ) {
+    if (id == null) return
+    val captured = chatShareDraftQueue.ownerOf(id) ?: return
+    if (shouldMigrateComposerDraft(captured, owner, mainSessionKey)) {
+      chatShareDraftQueue.migrateOwner(captured, owner)
+    }
+  }
+
+  internal fun setChatReplyDraft(
+    value: String,
+    owner: ChatComposerOwner,
+  ) {
+    if (!isCurrentChatComposerOwner(owner)) return
+    pendingAssistantAutoSendMutable.value = null
+    setChatDraft(ChatDraft(text = value, placement = ChatDraftPlacement.BeforeExisting, owner = owner))
   }
 
   /** Claims an assistant prompt before sending so Compose effect restarts cannot dispatch it twice. */
-  fun dispatchPendingAssistantAutoSend(
-    pendingPrompt: String,
+  internal fun dispatchPendingAssistantAutoSend(
+    pending: PendingAssistantAutoSend,
     thinking: String,
   ) {
-    val prompt = pendingPrompt.trim().ifEmpty { return }
+    val prompt = pending.prompt.trim().ifEmpty { return }
     if (!chatHealthOk.value || pendingRunCount.value > 0) return
-    if (!_assistantAutoSendInFlight.compareAndSet(false, true)) return
-    if (_pendingAssistantAutoSend.value != pendingPrompt) {
-      _assistantAutoSendInFlight.value = false
-      return
-    }
+    if (!isCurrentChatComposerOwner(pending.owner)) return
+    if (runtimeRef.value?.canSendForOwner(pending.owner) != true) return
+    val operation =
+      synchronized(assistantAutoSendLock) {
+        if (!_assistantAutoSendInFlight.compareAndSet(false, true)) return
+        if (pendingAssistantAutoSendMutable.value != pending) {
+          _assistantAutoSendInFlight.value = false
+          return
+        }
+        val composerSendId = chatComposerState.tryBeginTrackedSend(pending.owner)
+        if (composerSendId == null) {
+          _assistantAutoSendInFlight.value = false
+          return
+        }
+        val started =
+          AssistantAutoSendOperation(
+            owner = pending.owner,
+            pendingId = pending.id,
+            composerSendId = composerSendId,
+          )
+        assistantAutoSendOperation = started
+        started
+      }
     viewModelScope.launch {
       try {
-        sendChatAwaitAcceptance(
-          message = prompt,
-          thinking = thinking,
-          attachments = emptyList(),
-        )
-        // A definitive rejection is surfaced by chatError; it must not strand the
-        // one-shot assistant prompt or overwrite text typed into the composer.
-        _pendingAssistantAutoSend.compareAndSet(pendingPrompt, null)
+        val accepted =
+          sendChatForOwnerAwaitAcceptance(
+            owner = pending.owner,
+            message = prompt,
+            thinking = thinking,
+            attachments = emptyList(),
+            idempotencyKey = UUID.randomUUID().toString(),
+          )
+        if (accepted) {
+          pendingAssistantAutoSendMutable.update { current ->
+            clearCompletedAssistantAutoSend(current, operation.pendingId)
+          }
+        } else {
+          val current = pendingAssistantAutoSendMutable.value
+          if (current?.id == operation.pendingId && pendingAssistantAutoSendMutable.compareAndSet(current, null)) {
+            // Refusal can mean owner validation changed before admission. Preserve the one-shot
+            // prompt as editable text, using the operation owner that alias migration updates.
+            val currentDraft = chatComposerState.textDrafts[operation.owner]
+            chatComposerState.textDrafts[operation.owner] = retainRefusedAssistantPrompt(current.prompt, currentDraft)
+          }
+        }
       } finally {
-        // Observable release wakes a newer prompt queued while this send was in flight.
-        _assistantAutoSendInFlight.value = false
+        synchronized(assistantAutoSendLock) {
+          if (assistantAutoSendOperation === operation) {
+            chatComposerState.finishTrackedSend(operation.composerSendId)
+            assistantAutoSendOperation = null
+            // Observable releases wake a prompt blocked by this or a manual send admission.
+            _assistantAutoSendInFlight.value = false
+          }
+        }
       }
     }
   }
@@ -891,6 +1217,11 @@ class MainViewModel private constructor(
   }
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
+
+  internal suspend fun resolveInlineWidgetResource(
+    path: String,
+    failedResource: ChatWidgetResource?,
+  ) = ensureRuntime().resolveInlineWidgetResource(path, failedResource)
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
@@ -1076,8 +1407,11 @@ class MainViewModel private constructor(
     ensureRuntime().refreshHealthLogs()
   }
 
-  fun loadChat(sessionKey: String) {
-    ensureRuntime().loadChat(sessionKey)
+  fun loadChat(
+    sessionKey: String,
+    ownerAgentId: String? = null,
+  ) {
+    ensureRuntime().loadChat(sessionKey, ownerAgentId)
   }
 
   fun refreshChat() {
@@ -1093,6 +1427,7 @@ class MainViewModel private constructor(
 
   suspend fun patchChatSession(
     key: String,
+    ownerAgentId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -1103,6 +1438,7 @@ class MainViewModel private constructor(
   ) {
     ensureRuntime().patchChatSession(
       key = key,
+      ownerAgentId = ownerAgentId,
       label = label,
       clearLabel = clearLabel,
       category = category,
@@ -1113,8 +1449,19 @@ class MainViewModel private constructor(
     )
   }
 
-  suspend fun deleteChatSession(key: String) {
-    ensureRuntime().deleteChatSession(key)
+  suspend fun deleteChatSession(
+    key: String,
+    ownerAgentId: String?,
+  ) {
+    val deleted = ensureRuntime().deleteChatSession(key, ownerAgentId) ?: return
+    deleted.gatewayId?.let { gatewayId ->
+      clearChatComposerSession(
+        gatewayStableId = gatewayId,
+        agentId = deleted.agentId,
+        sessionKey = deleted.sessionKey,
+        mainSessionKey = deleted.mainSessionKey,
+      )
+    }
   }
 
   /** Remembers a custom session group locally so it renders as an empty section. */
@@ -1139,7 +1486,10 @@ class MainViewModel private constructor(
     ensureRuntime().dissolveChatSessionGroup(group)
   }
 
-  suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)
+  suspend fun forkChatSession(
+    parentKey: String,
+    ownerAgentId: String? = null,
+  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId)
 
   suspend fun listWorkspaceFiles(
     path: String?,
@@ -1174,8 +1524,99 @@ class MainViewModel private constructor(
     runtimeRef.value?.stopMessageSpeech()
   }
 
-  fun switchChatSession(sessionKey: String) {
-    ensureRuntime().switchChatSession(sessionKey)
+  fun switchChatSession(
+    sessionKey: String,
+    ownerAgentId: String? = null,
+  ) {
+    ensureRuntime().switchChatSession(sessionKey, ownerAgentId)
+  }
+
+  /** Reads the authoritative flows at commit time so stale Compose callbacks cannot cross chats. */
+  private fun currentChatComposerOwner(): ChatComposerOwner? {
+    val runtime = runtimeRef.value ?: return null
+    return resolveChatComposerOwner(
+      gatewayStableId = activeGatewayStableId.value,
+      gatewayDefaultAgentId = runtime.chatSessionOwnerAgentId.value ?: runtime.gatewayDefaultAgentId.value,
+      lastVerifiedOwner = runtime.gatewayComposerDefaultAgentOwner.value,
+      sessionKey = runtime.chatSessionKey.value,
+      mainSessionKey = runtime.mainSessionKey.value,
+    )
+  }
+
+  /** Captures a share before async runtime startup; later hello/alias resolution may migrate it. */
+  private fun currentOrProvisionalChatComposerOwner(): ChatComposerOwner =
+    currentChatComposerOwner()
+      ?: resolveChatComposerOwner(
+        gatewayStableId = activeGatewayStableId.value,
+        gatewayDefaultAgentId = chatSessionOwnerAgentId.value ?: gatewayDefaultAgentId.value,
+        lastVerifiedOwner = gatewayComposerDefaultAgentOwner.value,
+        sessionKey = chatSessionKey.value,
+        mainSessionKey = mainSessionKey.value,
+      )
+
+  internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
+    (
+      currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()
+    ) == expected
+
+  internal fun resolveChatComposerOwnerAliases(
+    to: ChatComposerOwner,
+    mainSessionKey: String,
+  ) {
+    val (composerSources, operationSource) =
+      synchronized(assistantAutoSendLock) {
+        // The gate and operation owner must move together so finally releases the migrated key.
+        val sources = chatComposerState.resolveAliases(to = to, mainSessionKey = mainSessionKey)
+        val operationSource =
+          assistantAutoSendOperation?.let { operation ->
+            operation.owner.takeIf { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }?.also {
+              operation.owner = to
+            }
+          }
+        sources to operationSource
+      }
+    val pendingAutoSend = pendingAssistantAutoSendMutable.value
+    val pendingAutoSendSource =
+      pendingAutoSend
+        ?.owner
+        ?.takeIf { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }
+    if (pendingAutoSendSource != null) {
+      pendingAssistantAutoSendMutable.compareAndSet(pendingAutoSend, pendingAutoSend.copy(owner = to))
+    }
+    val sources = composerSources + listOfNotNull(pendingAutoSendSource, operationSource)
+    sources.forEach { source -> chatShareDraftQueue.migrateOwner(from = source, to = to) }
+  }
+
+  /** The ViewModel owns image decoding so Activity recreation cannot cancel an accepted picker result. */
+  internal fun importChatComposerAttachments(
+    owner: ChatComposerOwner,
+    mediaAuthorizationId: String,
+    mainSessionKey: String,
+    expectedCount: Int,
+    load: suspend () -> List<PendingAttachment>,
+  ) {
+    val importId =
+      chatComposerState.beginMediaImport(owner, mediaAuthorizationId, mainSessionKey) ?: return
+    viewModelScope.launch(Dispatchers.IO) {
+      try {
+        val loaded =
+          try {
+            load()
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            emptyList()
+          }
+        chatComposerState.completeMediaImport(
+          importId = importId,
+          candidates = loaded,
+          failedCount = expectedCount - loaded.size,
+        )
+      } catch (err: CancellationException) {
+        chatComposerState.cancelMediaImport(importId)
+        throw err
+      }
+    }
   }
 
   fun selectChatAgent(agentId: String) {
@@ -1207,12 +1648,69 @@ class MainViewModel private constructor(
     ensureRuntime().deleteChatOutboxCommand(id)
   }
 
+  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().listBackgroundTasks(agentId)
+
+  suspend fun getBackgroundTask(taskId: String): BackgroundTask = ensureRuntime().getBackgroundTask(taskId)
+
   fun sendChat(
     message: String,
     thinking: String,
     attachments: List<OutgoingAttachment>,
   ) {
     ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
+  }
+
+  internal suspend fun sendChatForOwnerAwaitAcceptance(
+    owner: ChatComposerOwner,
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+    idempotencyKey: String,
+  ): Boolean =
+    ensureRuntime().sendChatForOwnerAwaitAcceptance(
+      owner = owner,
+      message = message,
+      thinking = thinking,
+      attachments = attachments,
+      idempotencyKey = idempotencyKey,
+    )
+
+  /** Admission outlives the composing Activity; accepted payloads clear by owner and snapshot. */
+  internal fun beginChatComposerSend(
+    owner: ChatComposerOwner,
+    thinking: String,
+  ): ChatComposerSendStartResult {
+    if (!isCurrentChatComposerOwner(owner)) return ChatComposerSendStartResult.Unavailable
+    val start = chatComposerState.beginSend(owner)
+    val request = start.request ?: return start.result
+    val outgoing = request.attachments.map(PendingAttachment::toOutgoingAttachment)
+    viewModelScope.launch {
+      var accepted: Boolean? = null
+      try {
+        accepted =
+          sendChatForOwnerAwaitAcceptance(
+            owner = request.owner,
+            message = request.message,
+            thinking = thinking,
+            attachments = outgoing,
+            idempotencyKey = request.commandId,
+          )
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        accepted = false
+      } finally {
+        chatComposerState.completeSend(request, accepted)
+      }
+    }
+    return ChatComposerSendStartResult.Started
+  }
+
+  internal fun acknowledgeChatComposerSendAdmission(
+    owner: ChatComposerOwner,
+    id: String,
+  ) {
+    chatComposerState.acknowledgeSendAdmission(owner, id)
   }
 
   suspend fun sendChatAwaitAcceptance(

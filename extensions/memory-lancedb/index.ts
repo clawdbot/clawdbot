@@ -300,26 +300,112 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
+    const dimensions = this.dimensions;
+    const startedAtMs =
+      options?.timeoutMs && Number.isFinite(options.timeoutMs) ? Date.now() : null;
+    try {
+      const response = await this.postEmbedding(text, { includeDimensions: true, options });
+      return normalizeEmbeddingVector(response.data?.[0]?.embedding);
+    } catch (error) {
+      if (typeof dimensions !== "number" || !isEmbeddingDimensionsRejectedError(error)) {
+        throw error;
+      }
+    }
+
+    const fallbackOptions =
+      startedAtMs === null || options?.timeoutMs === undefined
+        ? options
+        : { timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAtMs)) };
+    const response = await this.postEmbedding(text, {
+      includeDimensions: false,
+      options: fallbackOptions,
+    });
+    const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
+    return truncateEmbeddingVector(embedding, dimensions, this.model);
+  }
+
+  private async postEmbedding(
+    text: string,
+    request: {
+      includeDimensions: boolean;
+      options?: { timeoutMs?: number };
+    },
+  ): Promise<EmbeddingCreateResponse> {
     const params: Record<string, unknown> = {
       model: this.model,
       input: text,
+      ...(request.includeDimensions && typeof this.dimensions === "number"
+        ? { dimensions: this.dimensions }
+        : {}),
     };
-    if (this.dimensions) {
-      params.dimensions = this.dimensions;
-    }
+
     ensureGlobalUndiciEnvProxyDispatcher();
     // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
     // omitted, then decodes the response. Several compatible providers either
     // reject encoding_format or always return float arrays, so use the generic
     // transport and normalize the response ourselves.
-    const response = await (
+    return await (
       await this.clientPromise
     ).post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
-      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+      ...(request.options?.timeoutMs ? { timeout: request.options.timeoutMs, maxRetries: 0 } : {}),
     });
-    return normalizeEmbeddingVector(response.data?.[0]?.embedding);
   }
+}
+
+function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
+  const record = asRecord(error);
+  if (record?.status !== 400 && record?.status !== 422) {
+    return false;
+  }
+  const details = stringifyEmbeddingApiError(error).toLowerCase();
+  return /\bdimensions\b/.test(details) && isUnsupportedEmbeddingFieldError(details);
+}
+
+function isUnsupportedEmbeddingFieldError(details: string): boolean {
+  if (/\b(?:parameter|field|argument)[_ -]value\b/.test(details)) {
+    return false;
+  }
+  return (
+    /\bextra[_ -]forbidden\b/.test(details) ||
+    /\bextra inputs? (?:are )?not permitted\b/.test(details) ||
+    /\bextra fields? (?:are )?not permitted\b/.test(details) ||
+    /\b(?:unknown|unrecognized|unexpected|unsupported)[_ -](?:request[_ -])?(?:parameter|field|argument)\b/.test(
+      details,
+    )
+  );
+}
+
+function stringifyEmbeddingApiError(error: unknown): string {
+  const record = asRecord(error);
+  const parts = error instanceof Error ? [error.message] : [];
+  for (const value of [record?.code, record?.type, record?.param, record?.error]) {
+    if (typeof value === "string" || typeof value === "number") {
+      parts.push(String(value));
+      continue;
+    }
+    if (value && typeof value === "object") {
+      try {
+        parts.push(JSON.stringify(value));
+      } catch {
+        // The SDK error message and scalar fields still provide bounded detection.
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+function truncateEmbeddingVector(embedding: number[], dimensions: number, model: string): number[] {
+  if (embedding.length < dimensions) {
+    throw new Error(
+      `Embedding model ${model} returned ${embedding.length} dimensions, need at least ${dimensions} for local truncation`,
+    );
+  }
+  const truncated = embedding.slice(0, dimensions);
+  // Prefix truncation changes vector magnitude. Re-normalize so LanceDB distance
+  // ranking compares fallback query and stored vectors on the same scale.
+  const magnitude = Math.sqrt(truncated.reduce((sum, value) => sum + value * value, 0));
+  return magnitude > 0 ? truncated.map((value) => value / magnitude) : truncated;
 }
 
 class ProviderAdapterEmbeddings implements Embeddings {
@@ -452,7 +538,9 @@ class MemoryRecallEmbeddingError extends Error {
 }
 
 export const testing = {
+  isEmbeddingDimensionsRejectedError,
   runWithTimeout,
+  truncateEmbeddingVector,
 } as const;
 
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {

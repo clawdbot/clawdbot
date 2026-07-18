@@ -8,7 +8,7 @@ import {
 import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 

@@ -519,6 +519,7 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: InternalGetReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   replyPayloadRunState?: ReplyPayloadRunState;
+  onSettled?: () => void | Promise<void>;
 }): Promise<DispatchInboundResult> {
   const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
   const replyPayloadRunState = params.replyPayloadRunState ?? {
@@ -546,6 +547,7 @@ export async function dispatchInboundMessage(params: {
   installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, replyPayloadRunState);
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
+    onSettled: params.onSettled,
     run: () =>
       measureDiagnosticsTimelineSpan(
         "auto_reply.dispatch_reply_from_config",
@@ -649,6 +651,12 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
+  const onTypingController = params.replyOptions?.onTypingController
+    ? (typing: Parameters<NonNullable<typeof params.replyOptions.onTypingController>>[0]) => {
+        replyOptions.onTypingController?.(typing);
+        params.replyOptions?.onTypingController?.(typing);
+      }
+    : replyOptions.onTypingController;
   markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   try {
     return await dispatchInboundMessage({
@@ -660,6 +668,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,
+        onTypingController,
         onReplyAdmissionWaitChange: (waiting) => {
           // A turn waiting to own the lane cannot make the current owner's reply stale.
           // Suspend only that generation so independent newer turns still fence old replies.

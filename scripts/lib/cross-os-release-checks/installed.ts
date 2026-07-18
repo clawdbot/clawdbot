@@ -420,8 +420,9 @@ export async function runOnboardWithInstalledCli(params: {
   providerConfig: ProviderConfig;
   installDaemon: boolean;
   logPath: string;
+  allocateGatewayPort?: boolean;
 }) {
-  await withAllocatedGatewayPort(params.lane, async () => {
+  const runOnboard = async () => {
     const args = buildReleaseOnboardArgs({
       authChoice: params.providerConfig.authChoice,
       gatewayPort: params.lane.gatewayPort,
@@ -436,7 +437,15 @@ export async function runOnboardWithInstalledCli(params: {
       logPath: params.logPath,
       timeoutMs: 10 * 60 * 1000,
     });
-  });
+  };
+  if (params.allocateGatewayPort === false) {
+    if (params.lane.gatewayPort <= 0) {
+      throw new Error("Installed onboarding requires a reserved gateway port.");
+    }
+    await runOnboard();
+    return;
+  }
+  await withAllocatedGatewayPort(params.lane, runOnboard);
 }
 
 export function buildReleaseOnboardArgs(params: {

@@ -5,11 +5,11 @@ import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
-  forceMeetEnglishUi,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
+import { forceMeetEnglishUi } from "./google-meet-urls.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
 const GOOGLE_MEET_NEW_URL = "https://meet.google.com/new";

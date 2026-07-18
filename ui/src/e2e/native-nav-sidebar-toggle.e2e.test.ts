@@ -196,14 +196,18 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
 
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
+    const search = toolbar.getByRole("button", { name: "Open command palette" });
+    const newSession = toolbar.getByRole("button", { name: "New session" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
+    await expect.poll(() => search.isVisible()).toBe(true);
+    await expect.poll(() => newSession.isVisible()).toBe(true);
 
     await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
-    await toolbar.getByRole("button", { name: "Open command palette" }).click();
+    await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
 
@@ -226,7 +230,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(false);
 
-    await toolbar.getByRole("button", { name: "New session" }).click();
+    await newSession.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
     await expect
@@ -280,9 +284,19 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {
+  it("moves drawer and search controls into the narrow chat title bar", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
-    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    const header = page.locator(".chat-pane__header").first();
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--merged-chat-chrome");
+    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
+      .toBe(true);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
+      .toBe(true);
   });
 
   it("keeps the sidebar rail beside a half-width native link browser", async () => {

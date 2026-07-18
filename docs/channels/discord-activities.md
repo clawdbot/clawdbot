@@ -121,7 +121,7 @@ Add the user's stable Discord ID to `allowFrom` or `dm.allowFrom` on the same Di
 
 ### “Widget unavailable”
 
-Launch the button from the channel where the agent posted it. If Discord does not carry the button's custom ID into the Activity, OpenClaw falls back only when that channel has exactly one live widget; multiple widgets fail closed as unavailable.
+Launch the button from the channel where the agent posted it. OpenClaw tracks launches server-side when clicked, so a fresh launch record can resolve the exact widget even when Discord omits or mangles the button's custom ID. When neither the custom ID nor a launch record resolves, OpenClaw opens the most recently posted live widget in that channel. Older widgets remain addressable through buttons that preserve their custom ID.
 
 ### “You cannot launch Activities in this channel”
 

@@ -58,6 +58,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     expect(broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "final" }),
+      { sessionKeys: ["agent:main:main"] },
     );
     expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");

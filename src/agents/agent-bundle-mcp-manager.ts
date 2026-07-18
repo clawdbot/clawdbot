@@ -302,20 +302,31 @@ export function createSessionMcpRuntimeManager(
     async disposeSession(sessionId) {
       await lifecycle.disposeManagedSession(sessionId);
     },
-    deferRetirement(sessionId) {
-      if (lifecycle.runtimeKeysForSessionId(sessionId).length === 0) {
+    deferRetirement(sessionId, retirementOpts) {
+      if (retirementOpts?.retainAcrossReuse === true) {
+        store.requiredRetirementSessionIds.add(sessionId);
+      } else {
+        store.requiredRetirementSessionIds.delete(sessionId);
+      }
+      if (
+        lifecycle.runtimeKeysForSessionId(sessionId).length === 0 &&
+        retirementOpts?.retainAcrossReuse !== true
+      ) {
         return false;
       }
       store.deferredRetirementSessionIds.add(sessionId);
       return true;
     },
     async completeDeferredRetirement(sessionId, runtime) {
-      if (!store.deferredRetirementSessionIds.has(sessionId) || runtime.sessionId !== sessionId) {
+      if (
+        !store.deferredRetirementSessionIds.has(sessionId) ||
+        (runtime !== undefined && runtime.sessionId !== sessionId)
+      ) {
         return false;
       }
       if (
         lifecycle.totalActiveLeasesForSessionId(sessionId) > 0 ||
-        (runtime.activeLeases ?? 0) > 0
+        (runtime?.activeLeases ?? 0) > 0
       ) {
         return false;
       }
@@ -327,14 +338,18 @@ export function createSessionMcpRuntimeManager(
         return false;
       }
       const managedSet = new Set(managed);
-      if (isCombinedSessionMcpRuntime(runtime)) {
-        if (!runtime.managedParts.every((part) => managedSet.has(part))) {
+      if (runtime !== undefined) {
+        if (isCombinedSessionMcpRuntime(runtime)) {
+          if (!runtime.managedParts.every((part) => managedSet.has(part))) {
+            return false;
+          }
+        } else if (!managedSet.has(runtime)) {
           return false;
         }
-      } else if (!managedSet.has(runtime)) {
-        return false;
       }
-      await lifecycle.disposeManagedSession(sessionId);
+      await lifecycle.disposeManagedSession(sessionId, {
+        preserveRequiredRetirement: store.requiredRetirementSessionIds.has(sessionId),
+      });
       return true;
     },
     async disposeAll() {
@@ -350,6 +365,7 @@ export function createSessionMcpRuntimeManager(
       store.sessionIdBySessionKey.clear();
       store.idleTtlMsBySessionId.clear();
       store.deferredRetirementSessionIds.clear();
+      store.requiredRetirementSessionIds.clear();
       store.connectionMetaByRuntimeKey.clear();
       store.advertisedScopedCatalogBySessionId.clear();
       const lateRuntimes = await Promise.all(

@@ -82,6 +82,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
+          filter: blob:none
 
       - name: Resolve checked-out ref
         id: ref
@@ -130,14 +131,14 @@ jobs:
             release_year="${BASH_REMATCH[1]}"
             release_month="${BASH_REMATCH[2]}"
             extended_stable_branch="extended-stable/${release_year}.${release_month}.33"
-            git fetch --no-tags origin "+refs/heads/${extended_stable_branch}:refs/remotes/origin/${extended_stable_branch}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${extended_stable_branch}:refs/remotes/origin/${extended_stable_branch}"
             if [[ "${WORKFLOW_REF}" == "refs/heads/${extended_stable_branch}" ]] && [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/remotes/origin/${extended_stable_branch}")" ]]; then
               exit 0
             fi
             echo "Extended-stable plugin npm publishes must run from ${extended_stable_branch} at its exact branch tip." >&2
             exit 1
           fi
-          git fetch --no-tags origin \
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
           if [[ "${PREFLIGHT_ONLY}" == "true" ]] && ! git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main; then
@@ -158,7 +159,7 @@ jobs:
           fi
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             alpha_branch="${WORKFLOW_REF#refs/heads/}"
-            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
             if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
               exit 0
             fi
@@ -618,7 +619,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${SOURCE_SHA}"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "${SOURCE_SHA}"
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
           git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json" > "${source_package_json}"
 
@@ -1098,7 +1099,7 @@ jobs:
               echo "npm token bootstrap requires trusted main tooling or a protected SHA-pinned release-publish tag." >&2
               exit 1
             }
-            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
             git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
               echo "npm token bootstrap workflow revision is not reachable from current main." >&2
               exit 1
@@ -1128,6 +1129,7 @@ jobs:
           curl --fail --location --silent --show-error \
             --retry 2 \
             --retry-all-errors \
+            --connect-timeout 10 \
             --max-time 120 \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -1135,7 +1137,7 @@ jobs:
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
             -o "$artifact_zip"
 
-          git fetch --no-tags --depth=1 origin "$TARGET_SHA"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "$TARGET_SHA"
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
           git show "${TARGET_SHA}:${PACKAGE_DIR}/package.json" > "$source_package_json"
           source_package_json_sha256="$(sha256sum "$source_package_json" | awk '{print $1}')"
@@ -1240,8 +1242,55 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-      - name: Publish approved bootstrap tarball
+      - name: Check bootstrap npm package version
+        id: bootstrap_npm_package_version
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import crypto from "node:crypto";
+          import fs from "node:fs";
+          import { fetchNpmRegistryPackumentWithRetry } from "./scripts/lib/npm-publish-plan.mjs";
+
+          const packageName = process.env.PACKAGE_NAME;
+          const packageVersion = process.env.PACKAGE_VERSION;
+          const tarball = fs.readFileSync(process.env.TARBALL_PATH);
+          const expectedIntegrity = `sha512-${crypto.createHash("sha512").update(tarball).digest("base64")}`;
+          const expectedShasum = crypto.createHash("sha1").update(tarball).digest("hex");
+          const registryFetch = await fetchNpmRegistryPackumentWithRetry({
+            packageName,
+            packageUrl: `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
+          });
+          if (registryFetch.status === 404) {
+            console.log("already_published=false");
+            process.exit(0);
+          }
+          if (!registryFetch.ok) {
+            throw new Error(`${packageName}: npm registry returned HTTP ${registryFetch.status}.`);
+          }
+          const publishedDist = registryFetch.packument?.versions?.[packageVersion]?.dist;
+          if (!publishedDist) {
+            console.log("already_published=false");
+            process.exit(0);
+          }
+          if (
+            publishedDist.integrity !== expectedIntegrity ||
+            publishedDist.shasum !== expectedShasum
+          ) {
+            throw new Error(
+              `${packageName}@${packageVersion}: npm registry tarball identity does not match the approved bootstrap artifact.`,
+            );
+          }
+          console.error(`${packageName}@${packageVersion} already matches the approved bootstrap artifact.`);
+          console.log("already_published=true");
+          NODE
+
+      - name: Publish approved bootstrap tarball
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.bootstrap_npm_package_version.outputs.already_published != 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
@@ -1272,12 +1321,14 @@ jobs:
           } > "$npmrc"
           chmod 0600 "$npmrc"
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # A timeout can race a committed publish. On rerun, the preceding check
+          # accepts only this tarball's exact integrity and shasum before skipping.
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \
             NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
             NPM_CONFIG_USERCONFIG="$npmrc" \
-            npm publish "$TARBALL_PATH" \
+            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \
               --access public \
               --ignore-scripts \
               --provenance \
@@ -1300,12 +1351,17 @@ jobs:
       - name: Record Meta trusted publisher checkpoint
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
+          ALREADY_PUBLISHED: ${{ steps.bootstrap_npm_package_version.outputs.already_published }}
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
         run: |
           {
             echo "## Meta npm bootstrap follow-up"
             echo
-            echo "- Published \`${PACKAGE_NAME}\` from the verified immutable tarball."
+            if [[ "$ALREADY_PUBLISHED" == "true" ]]; then
+              echo "- Verified existing \`${PACKAGE_NAME}\` against the approved immutable tarball."
+            else
+              echo "- Published \`${PACKAGE_NAME}\` from the verified immutable tarball."
+            fi
             echo "- Configure the GitHub trusted publisher for \`plugin-npm-release.yml\` and environment \`npm-release\` before the next OIDC publish."
           } >> "$GITHUB_STEP_SUMMARY"
 

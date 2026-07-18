@@ -30,24 +30,24 @@ openclaw models scan
 
 ### Status
 
-`openclaw models status` shows the resolved default/fallbacks plus an auth overview. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
+`openclaw models status` shows the resolved default/fallbacks plus an auth overview. For plugin-owned agent runtimes such as Codex, it also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 
 In `--json` output, `auth.providers` is the env/config/store-aware provider overview, while `auth.oauth` is auth-store profile health only.
 
 Options:
 
-| Flag                      | Effect                                                                                                        |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `--json`                  | JSON output; auth-profile, provider, and startup diagnostics go to stderr so stdout stays pipeable into `jq`. |
-| `--plain`                 | Plain text output.                                                                                            |
-| `--check`                 | Exit non-zero if auth is expiring/expired: `1` = expired/missing, `2` = expiring.                             |
-| `--probe`                 | Live probe of configured auth profiles. Real requests; may consume tokens and trigger rate limits.            |
-| `--probe-provider <name>` | Probe one provider only.                                                                                      |
-| `--probe-profile <id>`    | Probe specific auth profile ids (repeat or comma-separated).                                                  |
-| `--probe-timeout <ms>`    | Per-probe timeout.                                                                                            |
-| `--probe-concurrency <n>` | Concurrent probes.                                                                                            |
-| `--probe-max-tokens <n>`  | Probe max tokens (best effort).                                                                               |
-| `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                          |
+| Flag                      | Effect                                                                                                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `--json`                  | JSON output; auth-profile, provider, and startup diagnostics go to stderr so stdout stays pipeable into `jq`.                            |
+| `--plain`                 | Plain text output.                                                                                                                       |
+| `--check`                 | Exit non-zero if auth is expiring/expired or a selected agent runtime is unavailable: `1` = unavailable/expired/missing, `2` = expiring. |
+| `--probe`                 | Live probe of configured auth profiles. Real requests; may consume tokens and trigger rate limits.                                       |
+| `--probe-provider <name>` | Probe one provider only.                                                                                                                 |
+| `--probe-profile <id>`    | Probe specific auth profile ids (repeat or comma-separated).                                                                             |
+| `--probe-timeout <ms>`    | Per-probe timeout.                                                                                                                       |
+| `--probe-concurrency <n>` | Concurrent probes.                                                                                                                       |
+| `--probe-max-tokens <n>`  | Probe max tokens (best effort).                                                                                                          |
+| `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                                                     |
 
 Probe rows can come from auth profiles, env credentials, or `models.json`. Probe status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 

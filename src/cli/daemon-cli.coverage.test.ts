@@ -350,9 +350,10 @@ describe("daemon-cli coverage", () => {
     serviceRestart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValueOnce({ status: "stopped" });
 
     await runDaemonCommand(["daemon", "start", "--json"]);
-    await runDaemonCommand(["daemon", "stop", "--json"]);
+    await runDaemonCommand(["daemon", "stop", "--json", "--force"]);
 
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);

@@ -56,9 +56,14 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
 
   if (process.platform !== "win32") {
     const signalIgnoringDescendantScript = [
+      "import fs from 'node:fs';",
       "process.on('SIGHUP', () => {});",
       "process.on('SIGINT', () => {});",
       "process.on('SIGTERM', () => {});",
+      "const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH;",
+      "const pidTmpPath = `${pidPath}.tmp.${process.pid}`;",
+      "fs.writeFileSync(pidTmpPath, String(process.pid));",
+      "fs.renameSync(pidTmpPath, pidPath);",
       "setInterval(() => {}, 1000);",
     ].join("");
     const script = [
@@ -145,8 +150,9 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  cd "$deleted_cwd" || exit 1',
       "fi",
       'if [ -n "${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}" ]; then',
+      // The descendant publishes its own PID only after its signal handlers exist.
+      // Atomic rename makes path existence a complete readiness handshake.
       `  ${shellSingleQuote(process.execPath)} --input-type=module --eval ${shellSingleQuote(signalIgnoringDescendantScript)} &`,
-      '  printf "%s" "$!" > "$OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH"',
       '  trap "exit 0" INT TERM HUP',
       "  while :; do sleep 1; done",
       "fi",
@@ -640,7 +646,9 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
     const runnerExit = waitForProcessExit(runner);
     await sendSignals(runner.pid!);
     await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
-    await waitForCondition(() => !isProcessAlive(descendantPid));
+    // The wrapper waits for the detached process group to disappear before exit.
+    // A live PID here would expose the cleanup-ordering regression this proves.
+    expect(isProcessAlive(descendantPid)).toBe(false);
   } finally {
     if (runner.pid && isProcessAlive(runner.pid)) {
       runner.kill("SIGKILL");

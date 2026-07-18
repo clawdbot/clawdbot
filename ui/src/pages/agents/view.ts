@@ -14,7 +14,11 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import { renderSettingsEmpty, renderSettingsSection } from "../../components/settings-ui.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsNavRow,
+  renderSettingsSection,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
@@ -122,6 +126,7 @@ type AgentsProps = {
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onChannelsRefresh: () => void;
+  onOpenMemoryImport?: () => void;
   onCronRefresh: () => void;
   onCronRunNow: (jobId: string) => void;
   onSkillsFilterChange: (next: string) => void;
@@ -355,9 +360,18 @@ export function renderAgents(props: AgentsProps) {
                   })
                 : nothing}
               ${props.activePanel === "memory"
-                ? html`<openclaw-agent-memory-panel
-                    .agentId=${selectedAgent.id}
-                  ></openclaw-agent-memory-panel>`
+                ? html`
+                    <div class="settings-group agent-memory-import-row">
+                      ${renderSettingsNavRow({
+                        title: t("tabs.memoryImport"),
+                        description: t("subtitles.memoryImport"),
+                        onClick: () => props.onOpenMemoryImport?.(),
+                      })}
+                    </div>
+                    <openclaw-agent-memory-panel
+                      .agentId=${selectedAgent.id}
+                    ></openclaw-agent-memory-panel>
+                  `
                 : nothing}
             `}
       </section>

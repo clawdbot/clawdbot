@@ -34,11 +34,11 @@ private actor CancellingCameraService: CameraServicing {
         []
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
         throw CancellationError()
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
         throw CancellationError()
     }
 }
@@ -61,6 +61,18 @@ private actor RecordingCameraService: CameraServicing {
 
     func clipCallCount() -> Int {
         self.clipCalls
+    }
+}
+
+private actor ApprovalResolutionCapture {
+    private var kind: ApprovalKind?
+
+    func record(kind: ApprovalKind) {
+        self.kind = kind
+    }
+
+    func recordedKind() -> ApprovalKind? {
+        self.kind
     }
 }
 
@@ -174,7 +186,7 @@ private actor OverlappingCameraService: CameraServicing {
         []
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
         self.snapCount += 1
         if self.snapCount == 1 {
             self.firstStarted.yield()
@@ -189,7 +201,7 @@ private actor OverlappingCameraService: CameraServicing {
         return (format: "jpg", base64: "", width: 1, height: 1)
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
         throw CancellationError()
     }
 
@@ -344,7 +356,9 @@ private func waitForMainActorWork(
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: timeout)
     while clock.now < deadline {
-        if condition() { return true }
+        if condition() {
+            return true
+        }
         await Task.yield()
     }
     return condition()
@@ -965,7 +979,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "echo tapped-b")
     }
 
-    @Test @MainActor func `unified approval get accepts only matching exec presentation`() throws {
+    @Test @MainActor func `unified approval get accepts matching exec and plugin presentations`() throws {
         let execJSON = #"""
         {
           "approval": {
@@ -1035,9 +1049,116 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
           }
         }
         """#
-        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+        let decodedPluginPrompt = try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
             pluginJSON,
+            approvalID: "approval-unified")
+        let pluginPrompt = try #require(decodedPluginPrompt)
+        #expect(pluginPrompt.kind == "plugin")
+        #expect(pluginPrompt.commandText == "Plugin approval")
+        #expect(pluginPrompt.descriptionText == "Review")
+        #expect(pluginPrompt.pluginId == "example")
+        #expect(pluginPrompt.toolName == "guarded")
+        #expect(pluginPrompt.pluginSeverity == "warning")
+        #expect(pluginPrompt.agentId == "main")
+        #expect(pluginPrompt.allowedDecisions == ["allow-once", "deny"])
+        #expect(pluginPrompt.allowsAllowOnce)
+        #expect(!pluginPrompt.allowsAllowAlways)
+        #expect(pluginPrompt.allowsDeny)
+
+        let whitespaceDescriptionJSON = pluginJSON.replacingOccurrences(
+            of: #""description": "Review""#,
+            with: #""description": "   ""#)
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            whitespaceDescriptionJSON,
             approvalID: "approval-unified") == nil)
+    }
+
+    @Test @MainActor func `plugin notification prompt resolves with plugin kind`() async throws {
+        let pluginJSON = #"""
+        {
+          "approval": {
+            "id": "approval-plugin",
+            "status": "pending",
+            "urlPath": "/approve/approval-plugin",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "plugin",
+              "title": "Allow guarded plugin tool?",
+              "description": "The plugin wants to perform a guarded action.",
+              "severity": "warning",
+              "pluginId": "example",
+              "toolName": "guarded",
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        let capture = ApprovalResolutionCapture()
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(pluginJSON)
+        appModel._test_setExecApprovalResolutionSuccessHandler { _, kind, _, _ in
+            await capture.record(kind: kind)
+        }
+
+        await appModel._test_presentExecApprovalNotificationPrompt(ApprovalNotificationPrompt(
+            approvalId: "approval-plugin",
+            gatewayDeviceId: nil,
+            kind: .plugin))
+
+        let prompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(prompt.kind == "plugin")
+        #expect(prompt.commandText == "Allow guarded plugin tool?")
+        #expect(prompt.descriptionText == "The plugin wants to perform a guarded action.")
+        #expect(prompt.allowsAllowOnce)
+        #expect(!prompt.allowsAllowAlways)
+        #expect(prompt.allowsDeny)
+        #expect(watchService.lastSentExecApprovalPrompt == nil)
+
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+
+        #expect(await capture.recordedKind() == .plugin)
+        #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
+        #expect(watchService.lastSentExecApprovalResolved == nil)
+    }
+
+    @Test @MainActor func `persisted plugin approval restores into phone inbox only`() throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+
+        let firstWatchService = MockWatchMessagingService()
+        let firstModel = NodeAppModel(watchMessagingService: firstWatchService)
+        firstModel._test_setConnectedGatewayID("test-gateway")
+        try firstModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-plugin-restored",
+                kind: .plugin,
+                commandText: "Allow guarded plugin tool?",
+                allowedDecisions: ["allow-once", "deny"],
+                descriptionText: "The plugin wants to perform a guarded action.",
+                pluginId: "example",
+                toolName: "guarded",
+                pluginSeverity: "warning",
+                expiresAtMs: 4_000_000_000_000)))
+        #expect(firstWatchService.lastSentExecApprovalPrompt == nil)
+
+        let restoredWatchService = MockWatchMessagingService()
+        let restoredModel = NodeAppModel(watchMessagingService: restoredWatchService)
+        restoredModel._test_setConnectedGatewayID("test-gateway")
+
+        #expect(restoredModel._test_pendingExecApprovalInboxItems().map(\.id) == [
+            "approval-plugin-restored",
+        ])
+        restoredModel._test_presentPendingExecApprovalFromInbox(
+            approvalID: "approval-plugin-restored",
+            gatewayStableID: "test-gateway")
+        #expect(restoredModel._test_pendingExecApprovalPrompt()?.kind == "plugin")
+        #expect(restoredWatchService.lastSentExecApprovalPrompt == nil)
     }
 
     @Test @MainActor func `exec approval prompt rejects malformed decision sets`() {
@@ -1211,9 +1332,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
           }
         }
         """#
-        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
+        let decodedPluginResult = try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
             pluginResponseJSON,
-            approvalID: "approval-race") == nil)
+            approvalID: "approval-race")
+        let pluginResult = try #require(decodedPluginResult)
+        #expect(pluginResult.status == "denied")
+        #expect(pluginResult.decision == "deny")
+        #expect(pluginResult.text == "This approval was already denied.")
     }
 
     @Test @MainActor func `legacy approval resolve acknowledgment uses neutral gateway attribution`() async throws {

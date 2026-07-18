@@ -611,7 +611,8 @@ subsystem references.
 
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
-rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
+rate-limited to 30 requests per 60 seconds, per method, per
+`deviceId+clientIp`; see [Rate limiting](/gateway/security/rate-limiting). Restart
 requests coalesce and then enforce a 30-second cooldown between restart cycles.
 `update.status` is read-only but admin-scoped because the restart sentinel can
 include update step summaries and command output tails.

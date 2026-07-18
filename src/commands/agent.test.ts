@@ -25,7 +25,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
@@ -65,6 +65,7 @@ vi.mock("../agents/auth-profiles/store.js", () => {
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
+    loadAuthProfileStoreWithoutExternalProfiles: vi.fn(createEmptyStore),
     replaceRuntimeAuthProfileStoreSnapshots: vi.fn(),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => createEmptyStore()),
@@ -1100,6 +1101,7 @@ describe("agentCommand", () => {
 
       expect(prepared.sessionStore).not.toBe(cached);
       expect(prepared.sessionEntry).not.toBe(cached);
+      expect(prepared).not.toHaveProperty("recoveryCandidateEntry");
       expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
       expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
     });

@@ -1,10 +1,10 @@
 import Foundation
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if !os(macOS)
 import PhotosUI
-import UniformTypeIdentifiers
 #endif
 
 private struct CleanChatComposerSurface: ViewModifier {
@@ -93,6 +93,16 @@ struct OpenClawChatComposer: View {
 
             if self.showsAttachments, !self.viewModel.attachments.isEmpty {
                 self.attachmentsStrip
+            }
+
+            if let replyTarget = self.viewModel.replyTarget {
+                ChatReplyPreview(target: replyTarget) {
+                    self.viewModel.clearReplyTarget()
+                }
+            }
+
+            if let talkControl, talkControl.isEnabled {
+                ChatTalkActivityStrip(control: talkControl)
             }
 
             if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
@@ -186,6 +196,12 @@ struct OpenClawChatComposer: View {
                         if self.viewModel.showsThinkingPicker {
                             self.thinkingPicker
                         }
+                        #if os(macOS)
+                        self.verbosityPicker
+                        if self.viewModel.selectedModelSupportsFastMode {
+                            self.fastModeToggle
+                        }
+                        #endif
                     }
                     if self.viewModel.showsModelPicker {
                         self.modelPicker
@@ -238,11 +254,16 @@ struct OpenClawChatComposer: View {
 
     private var thinkingPicker: some View {
         Picker(selection: Binding(
-            get: { self.viewModel.thinkingLevel },
+            get: { self.viewModel.thinkingSelectionID },
             set: { next in self.viewModel.selectThinkingLevel(next) }))
         {
+            Text(String(localized: "Default (inherited)"))
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
             ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(option.label)
+                Text(String(
+                    format: String(localized: "%@ (override)"),
+                    option.label))
                     .font(OpenClawChatTypography.captionSemiBold)
                     .tag(option.id)
             }
@@ -254,7 +275,49 @@ struct OpenClawChatComposer: View {
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 140, alignment: .leading)
+        .disabled(self.viewModel.isUpdatingSessionSettings)
     }
+
+    #if os(macOS)
+    private var verbosityPicker: some View {
+        Picker(selection: Binding(
+            get: { self.viewModel.verboseLevel },
+            set: { self.viewModel.selectVerboseLevel($0) }))
+        {
+            Text(String(localized: "Default (inherited)"))
+                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
+            Text(String(localized: "Off")).tag("off")
+            Text(String(localized: "On")).tag("on")
+            Text(String(localized: "Full")).tag("full")
+        } label: {
+            Text(String(localized: "Verbosity"))
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .help(String(localized: "Verbosity"))
+        .disabled(self.viewModel.isUpdatingSessionSettings)
+    }
+
+    private var fastModeToggle: some View {
+        Picker(selection: Binding(
+            get: { self.viewModel.fastModeSelectionID },
+            set: { self.viewModel.selectFastMode($0) }))
+        {
+            Text(String(localized: "Default (inherited)"))
+                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
+            Text(String(localized: "On")).tag("on")
+            Text(String(localized: "Off")).tag("off")
+        } label: {
+            Label(String(localized: "Fast"), systemImage: "bolt.fill")
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .help(String(localized: "Fast responses"))
+        .disabled(self.viewModel.isUpdatingSessionSettings)
+    }
+    #endif
 
     private var modelPicker: some View {
         // Sections come from an O(n) recompute over the catalog; bind once per body eval.
@@ -266,32 +329,33 @@ struct OpenClawChatComposer: View {
             Text(self.viewModel.defaultModelLabel)
                 .font(OpenClawChatTypography.captionSemiBold)
                 .tag(OpenClawChatViewModel.defaultModelSelectionID)
-            if sections.pinned.isEmpty, sections.recent.isEmpty {
-                // No pins/recents yet: keep the pre-feature flat list without section chrome.
-                self.modelOptions(sections.remaining)
-            } else {
-                if !sections.pinned.isEmpty {
-                    Section {
-                        self.modelOptions(sections.pinned)
-                    } header: {
-                        Text("Pinned")
-                            .font(OpenClawChatTypography.captionSemiBold)
-                    }
+            if !sections.pinned.isEmpty {
+                Section {
+                    self.modelOptions(sections.pinned)
+                } header: {
+                    Text("Pinned")
+                        .font(OpenClawChatTypography.captionSemiBold)
                 }
-                if !sections.recent.isEmpty {
-                    Section {
-                        self.modelOptions(sections.recent)
-                    } header: {
-                        Text("Recent")
-                            .font(OpenClawChatTypography.captionSemiBold)
-                    }
+            }
+            if !sections.recent.isEmpty {
+                Section {
+                    self.modelOptions(sections.recent)
+                } header: {
+                    Text("Recent")
+                        .font(OpenClawChatTypography.captionSemiBold)
                 }
-                if !sections.remaining.isEmpty {
-                    Section {
-                        self.modelOptions(sections.remaining)
-                    } header: {
-                        Text("Models")
-                            .font(OpenClawChatTypography.captionSemiBold)
+            }
+            ForEach(sections.providers) { provider in
+                Section {
+                    self.modelOptions(provider.models)
+                } header: {
+                    HStack(spacing: 4) {
+                        Text(provider.displayName)
+                        if provider.isDefaultProvider {
+                            Text(String(localized: "Default"))
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -304,13 +368,21 @@ struct OpenClawChatComposer: View {
         .controlSize(.small)
         .frame(maxWidth: 240, alignment: .leading)
         .help("Model")
+        .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
     private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
         ForEach(models) { model in
-            Text(model.displayLabel)
-                .font(OpenClawChatTypography.captionSemiBold)
-                .tag(model.selectionID)
+            HStack(spacing: 4) {
+                Text(model.displayLabel)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                if self.viewModel.isDefaultModel(model) {
+                    Text(String(localized: "Default"))
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .tag(model.selectionID)
         }
     }
 
@@ -570,7 +642,7 @@ struct OpenClawChatComposer: View {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
+                ChatTalkButtonGlyph(control: talkControl)
                     .font(OpenClawChatTypography.captionSemiBold)
                 Text(talkControl.isEnabled ? "Stop" : "Talk")
                     .font(OpenClawChatTypography.captionSemiBold)
@@ -594,13 +666,14 @@ struct OpenClawChatComposer: View {
         .accessibilityValue(self.talkAccessibilityValue(talkControl))
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.talkHelpText(talkControl))
+        .chatTalkInputDeviceMenu(talkControl)
     }
 
     private func compactTalkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
         Button {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
-            Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
+            ChatTalkButtonGlyph(control: talkControl)
                 .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
                 .foregroundStyle(.white)
                 .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
@@ -622,6 +695,7 @@ struct OpenClawChatComposer: View {
         .accessibilityValue(self.talkAccessibilityValue(talkControl))
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.talkHelpText(talkControl))
+        .chatTalkInputDeviceMenu(talkControl)
     }
 
     private func talkButtonFill(_ talkControl: OpenClawChatTalkControl) -> AnyShapeStyle {
@@ -702,8 +776,8 @@ struct OpenClawChatComposer: View {
                     guard self.isAttachmentInputEnabled else { return }
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 },
-                onKeyCommand: { command in
-                    self.handleComposerKeyCommand(command)
+                onKeyCommand: { command, context in
+                    self.handleComposerKeyCommand(command, context: context)
                 })
                 .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
                 .padding(.horizontal, 4)
@@ -960,28 +1034,46 @@ extension OpenClawChatComposer {
     /// Keyboard routing while the slash panel is open: arrows move the
     /// highlight, Tab/Return accept, Escape dismisses. Returning false hands
     /// the key back to the text view (typing, send-on-return).
-    private func handleComposerKeyCommand(_ command: ChatComposerKeyCommand) -> Bool {
-        guard self.isSlashPopoverPresented else { return false }
-        let matches = self.viewModel.slashCommandMatches(query: self.slashQuery ?? "", filter: .all)
+    private func handleComposerKeyCommand(
+        _ command: ChatComposerKeyCommand,
+        context: ChatComposerKeyCommandContext) -> Bool
+    {
+        if self.isSlashPopoverPresented {
+            let matches = self.viewModel.slashCommandMatches(query: self.slashQuery ?? "", filter: .all)
+            switch command {
+            case .escape:
+                self.setSlashPanelPresented(false)
+                return true
+            case .moveUp:
+                guard !matches.isEmpty else { return true }
+                self.slashHighlightIndex = (self.slashHighlightIndex - 1 + matches.count) % matches.count
+                return true
+            case .moveDown:
+                guard !matches.isEmpty else { return true }
+                self.slashHighlightIndex = (self.slashHighlightIndex + 1) % matches.count
+                return true
+            case .tab, .returnKey:
+                guard matches.indices.contains(self.slashHighlightIndex) else {
+                    self.setSlashPanelPresented(false)
+                    return command == .tab
+                }
+                self.selectSlashCommand(matches[self.slashHighlightIndex])
+                return true
+            }
+        }
+
         switch command {
-        case .escape:
-            self.setSlashPanelPresented(false)
-            return true
         case .moveUp:
-            guard !matches.isEmpty else { return true }
-            self.slashHighlightIndex = (self.slashHighlightIndex - 1 + matches.count) % matches.count
-            return true
+            return self.viewModel.recallPreviousInput(caretOnFirstLine: context.caretOnFirstLine)
         case .moveDown:
-            guard !matches.isEmpty else { return true }
-            self.slashHighlightIndex = (self.slashHighlightIndex + 1) % matches.count
+            return self.viewModel.recallNextInput()
+        case .escape:
+            if self.viewModel.cancelInputRecall() { return true }
+            guard self.viewModel.replyTarget != nil else { return false }
+            self.viewModel.clearReplyTarget()
             return true
         case .tab, .returnKey:
-            guard matches.indices.contains(self.slashHighlightIndex) else {
-                self.setSlashPanelPresented(false)
-                return command == .tab
-            }
-            self.selectSlashCommand(matches[self.slashHighlightIndex])
-            return true
+            return false
         }
     }
     #endif
@@ -1251,409 +1343,3 @@ extension OpenClawChatComposer {
         self.viewModel.send()
     }
 }
-
-#if os(macOS)
-import AppKit
-import UniformTypeIdentifiers
-
-/// Navigation keys the composer intercepts while UI like the slash-command
-/// panel is open. The handler returns true when it consumed the key.
-enum ChatComposerKeyCommand: Equatable {
-    case moveUp
-    case moveDown
-    case tab
-    case escape
-    case returnKey
-}
-
-enum ChatComposerKeyRouting {
-    /// Maps a key event to an interceptable command. Modified keys (except
-    /// plain Shift on arrows) stay with the text view so shortcuts keep
-    /// working; marked text (IME composition) is never intercepted.
-    static func command(
-        keyCode: UInt16,
-        modifierFlags: NSEvent.ModifierFlags,
-        hasMarkedText: Bool) -> ChatComposerKeyCommand?
-    {
-        guard !hasMarkedText else { return nil }
-        let disallowed: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-        guard modifierFlags.isDisjoint(with: disallowed) else { return nil }
-        switch keyCode {
-        case 126: return .moveUp
-        case 125: return .moveDown
-        case 48: return .tab
-        case 53: return .escape
-        case 36: return .returnKey
-        default: return nil
-        }
-    }
-}
-
-private struct ChatComposerTextView: NSViewRepresentable {
-    @Binding var text: String
-    @Binding var shouldFocus: Bool
-    var isEnabled: Bool
-    var onSend: () -> Void
-    var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
-    var onKeyCommand: (_ command: ChatComposerKeyCommand) -> Bool = { _ in false }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
-        guard let composerTextView = textView as? ChatComposerNSTextView else {
-            preconditionFailure("ChatComposerTextViewFactory must return ChatComposerNSTextView")
-        }
-        composerTextView.delegate = context.coordinator
-
-        composerTextView.string = self.text
-        composerTextView.onSend = { [weak composerTextView] in
-            composerTextView?.window?.makeFirstResponder(nil)
-            self.onSend()
-        }
-        composerTextView.onPasteImageAttachment = self.onPasteImageAttachment
-        composerTextView.onKeyCommand = self.onKeyCommand
-
-        let scroll = NSScrollView()
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
-        scroll.hasHorizontalScroller = false
-        scroll.documentView = textView
-        return scroll
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
-        textView.onPasteImageAttachment = self.onPasteImageAttachment
-        textView.onKeyCommand = self.onKeyCommand
-        textView.isEditable = self.isEnabled
-        textView.isSelectable = self.isEnabled
-
-        if self.shouldFocus, self.isEnabled, let window = scrollView.window {
-            window.makeFirstResponder(textView)
-            self.shouldFocus = false
-        } else if !self.isEnabled, scrollView.window?.firstResponder == textView {
-            scrollView.window?.makeFirstResponder(nil)
-            self.shouldFocus = false
-        }
-
-        let isEditing = scrollView.window?.firstResponder == textView
-
-        // While the user is typing, binding updates just echo textDidChange;
-        // rewriting the view then would jump the cursor. A binding value the
-        // coordinator never reported is programmatic (send-clear, slash
-        // completion) and must reach the view even mid-edit.
-        let isEcho = context.coordinator.lastReportedText == self.text
-        if isEditing, isEcho { return }
-
-        if textView.string != self.text {
-            context.coordinator.isProgrammaticUpdate = true
-            defer { context.coordinator.isProgrammaticUpdate = false }
-            textView.string = self.text
-            if isEditing {
-                textView.setSelectedRange(NSRange(location: (self.text as NSString).length, length: 0))
-            }
-        }
-        context.coordinator.lastReportedText = self.text
-    }
-
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: ChatComposerTextView
-        var isProgrammaticUpdate = false
-        var lastReportedText: String?
-
-        init(_ parent: ChatComposerTextView) {
-            self.parent = parent
-        }
-
-        func textDidChange(_ notification: Notification) {
-            guard !self.isProgrammaticUpdate else { return }
-            guard let view = notification.object as? NSTextView else { return }
-            guard view.window?.firstResponder === view else { return }
-            self.lastReportedText = view.string
-            self.parent.text = view.string
-        }
-    }
-}
-
-enum ChatComposerTextViewFactory {
-    /// Internal for @testable import coverage of composer text view defaults.
-    @MainActor
-    static func makeConfiguredTextView() -> NSTextView {
-        let textView = ChatComposerNSTextView()
-        textView.drawsBackground = false
-        textView.isRichText = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 2, height: 4)
-        textView.focusRingType = .none
-        textView.allowsUndo = true
-        textView.minSize = .zero
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
-        return textView
-    }
-}
-
-private final class ChatComposerNSTextView: NSTextView {
-    var onSend: (() -> Void)?
-    var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
-    var onKeyCommand: ((_ command: ChatComposerKeyCommand) -> Bool)?
-
-    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        var types = super.readablePasteboardTypes
-        for type in ChatComposerPasteSupport.readablePasteboardTypes where !types.contains(type) {
-            types.append(type)
-        }
-        return types
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if let command = ChatComposerKeyRouting.command(
-            keyCode: event.keyCode,
-            modifierFlags: event.modifierFlags,
-            hasMarkedText: hasMarkedText()),
-            self.onKeyCommand?(command) == true
-        {
-            return
-        }
-        let isReturn = event.keyCode == 36
-        if isReturn {
-            if hasMarkedText() {
-                super.keyDown(with: event)
-                return
-            }
-            if event.modifierFlags.contains(.shift) {
-                super.insertNewline(nil)
-                return
-            }
-            self.onSend?()
-            return
-        }
-        super.keyDown(with: event)
-    }
-
-    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        if !self.handleImagePaste(from: pboard, matching: type) {
-            return super.readSelection(from: pboard, type: type)
-        }
-        return true
-    }
-
-    override func paste(_ sender: Any?) {
-        if !self.handleImagePaste(from: NSPasteboard.general, matching: nil) {
-            super.paste(sender)
-        }
-    }
-
-    override func pasteAsPlainText(_ sender: Any?) {
-        self.paste(sender)
-    }
-
-    private func handleImagePaste(
-        from pasteboard: NSPasteboard,
-        matching preferredType: NSPasteboard.PasteboardType?) -> Bool
-    {
-        let attachments = ChatComposerPasteSupport.imageAttachments(from: pasteboard, matching: preferredType)
-        if !attachments.isEmpty {
-            self.deliver(attachments)
-            return true
-        }
-
-        let fileReferences = ChatComposerPasteSupport.imageFileReferences(from: pasteboard, matching: preferredType)
-        if !fileReferences.isEmpty {
-            self.loadAndDeliver(fileReferences)
-            return true
-        }
-
-        return false
-    }
-
-    private func deliver(_ attachments: [ChatComposerPasteSupport.ImageAttachment]) {
-        for attachment in attachments {
-            self.onPasteImageAttachment?(
-                attachment.data,
-                attachment.fileName,
-                attachment.mimeType)
-        }
-    }
-
-    private func loadAndDeliver(_ fileReferences: [ChatComposerPasteSupport.FileImageReference]) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self, fileReferences] in
-            let attachments = ChatComposerPasteSupport.loadImageAttachments(from: fileReferences)
-            guard !attachments.isEmpty else { return }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.deliver(attachments)
-            }
-        }
-    }
-}
-
-enum ChatComposerPasteSupport {
-    typealias ImageAttachment = (data: Data, fileName: String, mimeType: String)
-    typealias FileImageReference = (url: URL, fileName: String, mimeType: String)
-
-    static var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [.fileURL] + preferredImagePasteboardTypes.map(\.type)
-    }
-
-    static func imageAttachments(
-        from pasteboard: NSPasteboard,
-        matching preferredType: NSPasteboard.PasteboardType? = nil) -> [ImageAttachment]
-    {
-        let dataAttachments = self.imageAttachmentsFromRawData(in: pasteboard, matching: preferredType)
-        if !dataAttachments.isEmpty {
-            return dataAttachments
-        }
-
-        if let preferredType, !self.matchesImageType(preferredType) {
-            return []
-        }
-
-        guard let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage], !images.isEmpty else {
-            return []
-        }
-        return images.enumerated().compactMap { index, image in
-            self.imageAttachment(from: image, index: index)
-        }
-    }
-
-    static func imageFileReferences(
-        from pasteboard: NSPasteboard,
-        matching preferredType: NSPasteboard.PasteboardType? = nil) -> [FileImageReference]
-    {
-        guard self.matchesFileURL(preferredType) else { return [] }
-        return self.imageFileReferencesFromFileURLs(in: pasteboard)
-    }
-
-    static func loadImageAttachments(from fileReferences: [FileImageReference]) -> [ImageAttachment] {
-        fileReferences.compactMap { reference in
-            guard let data = try? Data(contentsOf: reference.url), !data.isEmpty else {
-                return nil
-            }
-            return (
-                data: data,
-                fileName: reference.fileName,
-                mimeType: reference.mimeType)
-        }
-    }
-
-    private static func imageFileReferencesFromFileURLs(in pasteboard: NSPasteboard) -> [FileImageReference] {
-        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty else {
-            return []
-        }
-
-        return urls.enumerated().compactMap { index, url -> FileImageReference? in
-            guard url.isFileURL,
-                  let type = UTType(filenameExtension: url.pathExtension),
-                  type.conforms(to: .image)
-            else {
-                return nil
-            }
-
-            let mimeType = type.preferredMIMEType ?? "image/\(type.preferredFilenameExtension ?? "png")"
-            let fileName = url.lastPathComponent.isEmpty
-                ? self.defaultFileName(index: index, ext: type.preferredFilenameExtension ?? "png")
-                : url.lastPathComponent
-            return (url: url, fileName: fileName, mimeType: mimeType)
-        }
-    }
-
-    private static func imageAttachmentsFromRawData(
-        in pasteboard: NSPasteboard,
-        matching preferredType: NSPasteboard.PasteboardType?) -> [ImageAttachment]
-    {
-        let items = pasteboard.pasteboardItems ?? []
-        guard !items.isEmpty else { return [] }
-
-        return items.enumerated().compactMap { index, item in
-            self.imageAttachment(from: item, index: index, matching: preferredType)
-        }
-    }
-
-    private static func imageAttachment(from image: NSImage, index: Int) -> ImageAttachment? {
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData)
-        else {
-            return nil
-        }
-
-        if let pngData = bitmap.representation(using: .png, properties: [:]), !pngData.isEmpty {
-            return (
-                data: pngData,
-                fileName: self.defaultFileName(index: index, ext: "png"),
-                mimeType: "image/png")
-        }
-
-        guard !tiffData.isEmpty else {
-            return nil
-        }
-        return (
-            data: tiffData,
-            fileName: self.defaultFileName(index: index, ext: "tiff"),
-            mimeType: "image/tiff")
-    }
-
-    private static func imageAttachment(
-        from item: NSPasteboardItem,
-        index: Int,
-        matching preferredType: NSPasteboard.PasteboardType?) -> ImageAttachment?
-    {
-        for type in self.preferredImagePasteboardTypes where self.matches(preferredType, candidate: type.type) {
-            guard let data = item.data(forType: type.type), !data.isEmpty else { continue }
-            return (
-                data: data,
-                fileName: self.defaultFileName(index: index, ext: type.fileExtension),
-                mimeType: type.mimeType)
-        }
-        return nil
-    }
-
-    private static let preferredImagePasteboardTypes: [
-        (type: NSPasteboard.PasteboardType, fileExtension: String, mimeType: String)
-    ] = [
-        (.png, "png", "image/png"),
-        (.tiff, "tiff", "image/tiff"),
-        (NSPasteboard.PasteboardType("public.jpeg"), "jpg", "image/jpeg"),
-        (NSPasteboard.PasteboardType("com.compuserve.gif"), "gif", "image/gif"),
-        (NSPasteboard.PasteboardType("public.heic"), "heic", "image/heic"),
-        (NSPasteboard.PasteboardType("public.heif"), "heif", "image/heif"),
-    ]
-
-    private static func matches(
-        _ preferredType: NSPasteboard.PasteboardType?,
-        candidate: NSPasteboard.PasteboardType) -> Bool
-    {
-        guard let preferredType else { return true }
-        return preferredType == candidate
-    }
-
-    private static func matchesFileURL(_ preferredType: NSPasteboard.PasteboardType?) -> Bool {
-        guard let preferredType else { return true }
-        return preferredType == .fileURL
-    }
-
-    private static func matchesImageType(_ preferredType: NSPasteboard.PasteboardType) -> Bool {
-        self.preferredImagePasteboardTypes.contains { $0.type == preferredType }
-    }
-
-    private static func defaultFileName(index: Int, ext: String) -> String {
-        "pasted-image-\(index + 1).\(ext)"
-    }
-}
-#endif

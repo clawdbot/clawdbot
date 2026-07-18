@@ -343,6 +343,7 @@ async function finalizeLineInboundContext(params: {
     From: fromAddress,
     To: toAddress,
     SessionKey: params.route.sessionKey,
+    DmScope: params.route.dmScope,
     AccountId: params.route.accountId,
     ChatType: params.source.isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,

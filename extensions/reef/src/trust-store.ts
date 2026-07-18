@@ -6,30 +6,65 @@ import type { ReefChannelConfig } from "./config-schema.js";
 import { normalizeReefTarget } from "./config-schema.js";
 import {
   ReefAutonomySchema,
+  ReefPeerIdentitySchema,
   ReefPeerTrustSchema,
+  matchesReefPeerIdentity,
+  sameReefPeerIdentity,
   type ReefAutonomy,
+  type ReefPeerIdentity,
   type ReefPeerTrust,
 } from "./friend-types.js";
-import type { RelayFriend } from "./types.js";
+import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } from "./types.js";
 
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
+const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
+export const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
+const REEF_RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+export const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const ReefOutboundRequestSchema = z.record(z.uuid(), z.number().int().nonnegative());
-
+const ReefRejectionNoticeStateSchema = z
+  .object({
+    lastRejectionAt: z.number().int().nonnegative(),
+    lastResendAt: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+const ReefOutboundRejectionSchema = z
+  .object({
+    category: z.string().min(1).max(64).optional(),
+    notice: ReefRejectionNoticeStateSchema.optional(),
+  })
+  .strict();
+const ReefOutboundDeliveryBindingSchema = z
+  .object({
+    bodyHash: z.string().regex(SHA256_HEX_PATTERN),
+    textHash: z.string().regex(SHA256_HEX_PATTERN).optional(),
+    recipient: ReefPeerIdentitySchema,
+  })
+  .strict();
+const ReefOutboundDeliverySchema = ReefOutboundDeliveryBindingSchema.extend({
+  resendDisabled: z.literal(true).optional(),
+  rejection: ReefOutboundRejectionSchema.optional(),
+}).strict();
 const ReefPeerStateSchema = z
   .object({
     revision: z.number().int().nonnegative(),
     trust: ReefPeerTrustSchema.optional(),
     outboundRequests: ReefOutboundRequestSchema.optional(),
+    rejectionNotice: ReefRejectionNoticeStateSchema.optional(),
   })
   .strict();
 
 type ReefPeerStateSnapshot = z.infer<typeof ReefPeerStateSchema>;
+type ReefOutboundDeliveryBinding = z.infer<typeof ReefOutboundDeliveryBindingSchema>;
+type ReefOutboundDelivery = z.infer<typeof ReefOutboundDeliverySchema>;
 
 type ReefTrustStores = {
   peers: PluginStateSyncKeyedStore<ReefPeerStateSnapshot>;
+  deliveries: PluginStateSyncKeyedStore<z.infer<typeof ReefOutboundDeliverySchema>>;
 };
 
 function requirePeer(raw: string): string {
@@ -73,6 +108,14 @@ function openStores(openStore: PluginRuntime["state"]["openSyncKeyedStore"]): Re
       namespace: REEF_TRUST_STORE_NAMESPACE,
       maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
       overflowPolicy: "reject-new",
+    }),
+    // The envelope and its receipt can each spend 30 days queued. Keep a
+    // boundary margin so a delayed receipt still finds its exact send binding.
+    deliveries: openStore<z.infer<typeof ReefOutboundDeliverySchema>>({
+      namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
+      maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
     }),
   };
 }
@@ -191,6 +234,7 @@ export class ReefTrustStore {
           safetyNumberChanged: false,
           approvedAt,
         },
+        ...(current.rejectionNotice ? { rejectionNotice: current.rejectionNotice } : {}),
       };
     });
   }
@@ -284,12 +328,236 @@ export class ReefTrustStore {
     });
   }
 
+  recordOutboundDelivery(
+    peer: string,
+    id: string,
+    binding: ReefOutboundDeliveryBinding,
+    options: { resendDisabled?: true } = {},
+  ): void {
+    const key = this.#deliveryKey(peer, id);
+    const value = ReefOutboundDeliverySchema.parse({ ...binding, ...options });
+    if (!this.stores.deliveries.registerIfAbsent(key, value)) {
+      throw new Error(`Duplicate outbound Reef delivery id ${id}`);
+    }
+  }
+
+  outboundDelivery(
+    peer: string,
+    id: string,
+  ): z.infer<typeof ReefOutboundDeliverySchema> | undefined {
+    const value = this.stores.deliveries.lookup(this.#deliveryKey(peer, id));
+    return value === undefined ? undefined : ReefOutboundDeliverySchema.parse(value);
+  }
+
+  consumeOutboundDelivery(peer: string, id: string, binding: ReefOutboundDeliveryBinding): boolean {
+    const expected = this.#parseDeliveryBinding(binding);
+    const deleteIf = this.stores.deliveries.deleteIf;
+    if (!deleteIf) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
+    }
+    return deleteIf(this.#deliveryKey(peer, id), (current) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(current);
+      return (
+        parsed.success &&
+        this.#matchesDeliveryBinding(parsed.data, expected) &&
+        parsed.data.rejection === undefined
+      );
+    });
+  }
+
+  discardOutboundDelivery(peer: string, id: string, binding: ReefOutboundDeliveryBinding): boolean {
+    const expected = this.#parseDeliveryBinding(binding);
+    const deleteIf = this.stores.deliveries.deleteIf;
+    if (!deleteIf) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
+    }
+    return deleteIf(this.#deliveryKey(peer, id), (current) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(current);
+      return parsed.success && this.#matchesDeliveryBinding(parsed.data, expected);
+    });
+  }
+
+  recordOutboundRejection(
+    peer: string,
+    id: string,
+    binding: ReefOutboundDeliveryBinding,
+    category?: string,
+  ): boolean {
+    const key = this.#deliveryKey(peer, id);
+    const expected = this.#parseDeliveryBinding(binding);
+    const current = this.outboundDelivery(peer, id);
+    if (!current || !this.#matchesDeliveryBinding(current, expected)) {
+      return false;
+    }
+    if (current.rejection) {
+      return true;
+    }
+    const update = this.stores.deliveries.update;
+    if (!update) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
+    }
+    return update(key, (value) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+      if (!parsed.success || !this.#matchesDeliveryBinding(parsed.data, expected)) {
+        return undefined;
+      }
+      if (parsed.data.rejection) {
+        return parsed.data;
+      }
+      const rejection = ReefOutboundRejectionSchema.parse({
+        ...(category ? { category } : {}),
+        ...(parsed.data.resendDisabled ? { notice: { lastRejectionAt: Date.now() } } : {}),
+      });
+      return { ...parsed.data, rejection };
+    });
+  }
+
+  pendingOutboundRejections(): ReefDeliveryRejection[] {
+    return this.stores.deliveries
+      .entries()
+      .filter((entry) => entry.key.startsWith(this.#prefix))
+      .flatMap((entry) => {
+        const delivery = ReefOutboundDeliverySchema.parse(entry.value);
+        if (!delivery.rejection) {
+          return [];
+        }
+        const separator = entry.key.lastIndexOf(":");
+        const peer = requirePeer(entry.key.slice(this.#prefix.length, separator));
+        const id = entry.key.slice(separator + 1);
+        if (
+          !MESSAGE_ID_PATTERN.test(id) ||
+          !matchesReefPeerIdentity(this.get(peer), delivery.recipient)
+        ) {
+          return [];
+        }
+        return [
+          {
+            id,
+            peer,
+            recipient: delivery.recipient,
+            ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
+            ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
+            ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
+          },
+        ];
+      })
+      .toSorted((left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1));
+  }
+
+  reserveOutboundRejectionNotice(
+    peer: string,
+    id: string,
+    recipient: ReefPeerIdentity,
+    state: ReefRejectionNoticeState,
+  ): { kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState } {
+    const update = this.stores.deliveries.update;
+    if (!update) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
+    }
+    const expectedRecipient = ReefPeerIdentitySchema.parse(recipient);
+    if (!matchesReefPeerIdentity(this.get(peer), expectedRecipient)) {
+      throw new Error(`Reef peer @${requirePeer(peer)} changed keys before rejection recovery`);
+    }
+    const noticeState = ReefRejectionNoticeStateSchema.parse(state);
+    let outcome:
+      | { kind: "reserved" }
+      | { kind: "existing"; state: ReefRejectionNoticeState }
+      | undefined;
+    const updated = update(this.#deliveryKey(peer, id), (value) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+      if (
+        !parsed.success ||
+        !parsed.data.rejection ||
+        !sameReefPeerIdentity(parsed.data.recipient, expectedRecipient)
+      ) {
+        return undefined;
+      }
+      if (parsed.data.rejection.notice) {
+        outcome = { kind: "existing", state: parsed.data.rejection.notice };
+        return parsed.data;
+      }
+      outcome = { kind: "reserved" };
+      return {
+        ...parsed.data,
+        rejection: {
+          ...parsed.data.rejection,
+          notice: noticeState,
+        },
+      };
+    });
+    if (!updated || !outcome) {
+      throw new Error(`Reef rejection ${id} lost its durable delivery state`);
+    }
+    return outcome;
+  }
+
+  completeOutboundRejection(peer: string, id: string, state: ReefRejectionNoticeState): boolean {
+    const noticeState = ReefRejectionNoticeStateSchema.parse(state);
+    this.#requireUpdate()(this.#key(peer), (value) => {
+      const current = this.#parseState(value);
+      const previous = current.rejectionNotice;
+      const hasResendAt =
+        previous?.lastResendAt !== undefined || noticeState.lastResendAt !== undefined;
+      return {
+        ...current,
+        rejectionNotice: {
+          lastRejectionAt: Math.max(previous?.lastRejectionAt ?? 0, noticeState.lastRejectionAt),
+          ...(hasResendAt
+            ? {
+                lastResendAt: Math.max(previous?.lastResendAt ?? 0, noticeState.lastResendAt ?? 0),
+              }
+            : {}),
+        },
+      };
+    });
+    const key = this.#deliveryKey(peer, id);
+    const deleteIf = this.stores.deliveries.deleteIf;
+    if (!deleteIf) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
+    }
+    const deleted = deleteIf(key, (value) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+      return parsed.success && parsed.data.rejection?.notice !== undefined;
+    });
+    return deleted || this.stores.deliveries.lookup(key) === undefined;
+  }
+
+  rejectionNoticeState(peer: string): ReefRejectionNoticeState | undefined {
+    return this.snapshot(peer).rejectionNotice;
+  }
+
   #key(peer: string): string {
     return `${this.#prefix}${requirePeer(peer)}`;
   }
 
+  #deliveryKey(peer: string, id: string): string {
+    if (!MESSAGE_ID_PATTERN.test(id)) {
+      throw new Error(`Invalid Reef delivery id: ${id}`);
+    }
+    return `${this.#prefix}${requirePeer(peer)}:${id}`;
+  }
+
   #parseState(value: ReefPeerStateSnapshot | undefined): ReefPeerStateSnapshot {
     return value === undefined ? { revision: 0 } : ReefPeerStateSchema.parse(value);
+  }
+
+  #parseDeliveryBinding(binding: ReefOutboundDeliveryBinding): ReefOutboundDeliveryBinding {
+    return ReefOutboundDeliveryBindingSchema.parse({
+      bodyHash: binding.bodyHash,
+      ...(binding.textHash ? { textHash: binding.textHash } : {}),
+      recipient: binding.recipient,
+    });
+  }
+
+  #matchesDeliveryBinding(
+    current: ReefOutboundDelivery,
+    expected: ReefOutboundDeliveryBinding,
+  ): boolean {
+    return (
+      current.bodyHash === expected.bodyHash &&
+      current.textHash === expected.textHash &&
+      sameReefPeerIdentity(current.recipient, expected.recipient)
+    );
   }
 
   #hasOutboundRequests(state: ReefPeerStateSnapshot): boolean {

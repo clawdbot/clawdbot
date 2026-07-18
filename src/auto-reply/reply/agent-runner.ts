@@ -23,10 +23,12 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -65,6 +67,15 @@ import {
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+  withBeforeAgentReplyObserver,
+} from "../../plugins/before-agent-reply.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
@@ -186,9 +197,10 @@ import {
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
-import { readChannelSourceTurnId } from "./source-turn-id.js";
+import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   buildStrandedReplyRetryFollowupRun,
@@ -1229,7 +1241,6 @@ export async function runReplyAgent(replyParams: {
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
   isContinuationWake?: boolean;
   replyOperation?: ReplyOperation;
-  beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -1263,8 +1274,9 @@ export async function runReplyAgent(replyParams: {
     replyThreadingOverride,
     isContinuationWake,
     replyOperation: providedReplyOperation,
-    beforeAgentReply,
   } = replyParams;
+  // One lifecycle for all adoption sites in this run.
+  const turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
@@ -1272,6 +1284,7 @@ export async function runReplyAgent(replyParams: {
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const hookTrigger = resolveReplyHookTrigger(opts);
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
@@ -1297,16 +1310,6 @@ export async function runReplyAgent(replyParams: {
     mode: typingMode,
     isHeartbeat,
   });
-  let beforeAgentReplyInvoked = false;
-  const invokeBeforeAgentReply = async (admitted?: {
-    sessionId?: string;
-  }): Promise<ReplyPayload | undefined> => {
-    if (!beforeAgentReply || beforeAgentReplyInvoked) {
-      return undefined;
-    }
-    beforeAgentReplyInvoked = true;
-    return await beforeAgentReply(admitted);
-  };
   const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
   const restartRecoveryEntry =
     sessionKey && storePath
@@ -1379,14 +1382,8 @@ export async function runReplyAgent(replyParams: {
   };
 
   let shouldQueueAfterSteerRejection = false;
+  let beforeAgentReplyDispatchedForSteer = false;
   if (effectiveShouldSteer && isActive) {
-    // Steering never reaches reply-lane admission. Preserve the hook's
-    // historical before-queue boundary instead of silently skipping it.
-    const hookReply = await invokeBeforeAgentReply();
-    if (hookReply) {
-      typing.cleanup();
-      return hookReply;
-    }
     // Steer against the operation that owns THIS session's run slot. A native
     // command continuation whose slot adoption was skipped (#104844) still
     // carries a source-keyed reservation; steering by its stale sessionId
@@ -1397,13 +1394,72 @@ export async function runReplyAgent(replyParams: {
         ? providedReplyOperation
         : (registeredReplyOperation ?? providedReplyOperation);
     const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
+    // Channel dispatch normally stamps the route-scoped source id. Internal
+    // callers can derive the same per-message identity from the prepared turn.
+    const steerRunId = expectDefined(
+      restartRecoverySourceTurnId ??
+        buildChannelSourceTurnId({
+          provider:
+            followupRun.originatingChannel ??
+            followupRun.run.messageProvider ??
+            sessionCtx.Provider,
+          accountId:
+            followupRun.originatingAccountId ??
+            followupRun.run.agentAccountId ??
+            sessionCtx.AccountId,
+          conversationId:
+            followupRun.originatingTo ??
+            followupRun.originatingChatId ??
+            sessionKey ??
+            followupRun.run.sessionKey,
+          messageId: followupRun.messageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+        }) ??
+        normalizeOptionalString(opts?.runId),
+      "steered turn id",
+    );
+    const trigger = hookTrigger;
+    const hookResult = await runBeforeAgentReplyForTurn({
+      runId: steerRunId,
+      trigger,
+      event: { cleanedBody: followupRun.prompt },
+      context: {
+        runId: steerRunId,
+        agentId: followupRun.run.agentId,
+        sessionKey: sessionKey ?? followupRun.run.sessionKey,
+        sessionId: steerSessionId,
+        workspaceDir: followupRun.run.workspaceDir,
+        modelProviderId: followupRun.run.provider,
+        modelId: followupRun.run.model,
+        trigger,
+        ...buildAgentHookContextChannelFields({
+          sessionKey: sessionKey ?? followupRun.run.sessionKey,
+          messageChannel: followupRun.originatingChannel,
+          messageProvider: followupRun.run.messageProvider,
+          currentChannelId: followupRun.originatingChatId,
+          messageTo: followupRun.originatingTo,
+          senderId: followupRun.run.senderId,
+        }),
+        ...buildAgentHookContextIdentityFields({
+          trigger,
+          senderId: followupRun.run.senderId,
+          chatId: followupRun.originatingChatId,
+          channelContext: followupRun.run.channelContext,
+        }),
+      },
+    });
+    beforeAgentReplyDispatchedForSteer = true;
+    if (hookResult?.handled) {
+      typing.cleanup();
+      return buildHandledBeforeAgentReplyPayloads(hookResult.reply);
+    }
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
-        ...(opts?.onTurnAdopted ? { waitForTranscriptCommit: true } : {}),
+        ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode
           ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
@@ -1417,10 +1473,23 @@ export async function runReplyAgent(replyParams: {
     if (steerOutcome.queued) {
       activeReplyOperation?.recordActivity();
       try {
-        await opts?.onTurnAdopted?.();
+        await turnAdoptionLifecycle?.onAdopted();
       } catch (error) {
-        // Transcript-backed steering is already irrevocably queued here.
-        // Replaying ingress would duplicate the injected user turn.
+        if (isIngressAdoptionLostError(error)) {
+          // Claim was tombstoned/superseded/guillotined after transcript commit.
+          // Cancel the active run so steered tools do not keep executing; do not
+          // rethrow — replaying ingress would duplicate the injected user turn.
+          const abortKey = sessionKey ?? queueKey;
+          if (abortKey) {
+            replyRunRegistry.abort(abortKey);
+          }
+          logVerbose(
+            `queue: active session ${steerSessionId} adoption lost after transcript commit (${error.code}); aborting steered turn without ingress replay`,
+          );
+          typing.cleanup();
+          return undefined;
+        }
+        // Ordinary callback failures: transcript-backed steering is irrevocable.
         logVerbose(
           `queue: active session ${steerSessionId} adoption finalizer failed after transcript commit: ${String(
             error,
@@ -1449,7 +1518,7 @@ export async function runReplyAgent(replyParams: {
     resetTriggered: effectiveResetTriggered,
   });
 
-  const queuedRunFollowupTurn = createFollowupRunner({
+  const baseQueuedRunFollowupTurn = createFollowupRunner({
     opts,
     typing,
     typingMode,
@@ -1461,6 +1530,18 @@ export async function runReplyAgent(replyParams: {
     agentCfgContextTokens,
     toolProgressDetail,
   });
+  // A transcript-rejected steer can become this exact queued turn. Preserve its
+  // earlier hook decision without suppressing hooks for other queued messages.
+  const queuedRunFollowupTurn = (queued: FollowupRun) =>
+    beforeAgentReplyDispatchedForSteer && queued === followupRun
+      ? withBeforeAgentReplyObserver(
+          {
+            beforeDispatch: async () => false,
+            afterDispatch: async (result) => result,
+          },
+          () => baseQueuedRunFollowupTurn(queued),
+        )
+      : baseQueuedRunFollowupTurn(queued);
 
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
@@ -1471,13 +1552,6 @@ export async function runReplyAgent(replyParams: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    // Follow-up queues are process-local and may collect multiple sources.
-    // Run each source hook before enqueue so handled turns never enter a batch.
-    const hookReply = await invokeBeforeAgentReply();
-    if (hookReply) {
-      typing.cleanup();
-      return hookReply;
-    }
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -1661,6 +1735,7 @@ export async function runReplyAgent(replyParams: {
     : undefined;
   const {
     admitUserTurn,
+    beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
@@ -1671,8 +1746,7 @@ export async function runReplyAgent(replyParams: {
     getEntry: () =>
       sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
     getSessionId: () => replyOperation.sessionId,
-    beforeAgentReplyState:
-      beforeAgentReply === undefined ? undefined : beforeAgentReplyInvoked ? "continue" : "pending",
+    beforeAgentReplyState: "admitted",
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
@@ -2024,88 +2098,103 @@ export async function runReplyAgent(replyParams: {
     // Adoption marks run start and must never be spool-replayed (would re-run tools).
     // Suppressed delivery persists only the user transcript; crashed suppressed runs die
     // silently. Deliverable turns atomically persist transcript plus recovery ownership.
-    await opts?.onTurnAdopted?.();
-    const shouldCheckpointBeforeAgentReply =
-      beforeAgentReply !== undefined && !beforeAgentReplyInvoked;
-    const hookReply = await invokeBeforeAgentReply({ sessionId: replyOperation.sessionId });
-    if (hookReply) {
-      const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
-      const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
-      let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
-        state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
-      };
-      if (sessionKey && storePath && normalizedHookReplies.length > 0) {
-        const sourceReplyPolicy = resolveSourceReplyPolicy({
-          cfg,
-          sessionCtx,
-          sessionEntry: activeSessionEntry,
-          sessionKey,
-          runtimePolicySessionKey,
-          opts,
-        });
-        if (!sourceReplyPolicy.suppressDelivery) {
-          const pendingFinalDeliveryIntentId = crypto.randomUUID();
-          setReplyPayloadMetadata(hookReply, {
-            pendingFinalDeliveryIntentId,
-            pendingFinalDeliveryRetryText: hookFinalDeliveryText,
-          });
-          hookCheckpoint = {
-            state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
-            pendingFinalDelivery: {
-              text: hookFinalDeliveryText ?? "",
-              intentId: pendingFinalDeliveryIntentId,
-              context: resolveReplyRunDeliveryContext({
-                cfg,
-                sessionCtx,
-                sessionEntry: activeSessionEntry,
-                sessionKey,
-                runtimePolicySessionKey,
-                opts,
-              }),
-            },
+    await turnAdoptionLifecycle?.onAdopted();
+    const runOutcome = await withBeforeAgentReplyObserver(
+      {
+        beforeDispatch: async () => {
+          const shouldDispatch = await beginBeforeAgentReply();
+          if (!shouldDispatch || !beforeAgentReplyDispatchedForSteer) {
+            return shouldDispatch;
+          }
+          // The same source fell through from steering. Advance recovery while
+          // preserving the hook decision made before the attempted injection.
+          await checkpointBeforeAgentReply({ state: "continue" });
+          return false;
+        },
+        afterDispatch: async (hookResult) => {
+          if (!hookResult?.handled) {
+            await checkpointBeforeAgentReply({ state: "continue" });
+            return hookResult;
+          }
+          const hookReply = hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+          const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
+          const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
+          let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
+            state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
           };
-        } else {
-          // dispatch-from-config owns source visibility for every returned payload.
-          // This checkpoint records that recovery owes no delivery; the outer gate drops the reply.
-          hookCheckpoint = { state: "handled-silent" };
-        }
-      }
-      await checkpointBeforeAgentReply(hookCheckpoint);
-      return returnWithQueuedFollowupDrain(hookReply);
-    }
-    if (shouldCheckpointBeforeAgentReply) {
-      await checkpointBeforeAgentReply({ state: "continue" });
-    }
-    const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
-      runAgentTurnWithFallback({
-        commandBody,
-        transcriptCommandBody,
-        followupRun,
-        sessionCtx,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        replyOperation,
-        opts,
-        typingSignals,
-        blockReplyPipeline,
-        blockStreamingEnabled,
-        blockReplyChunking,
-        resolvedBlockStreamingBreak,
-        applyReplyToMode,
-        shouldEmitToolResult,
-        shouldEmitToolOutput,
-        pendingToolTasks,
-        resetSessionAfterRoleOrderingConflict,
-        isHeartbeat,
-        sessionKey,
-        runtimePolicySessionKey,
-        getActiveSessionEntry: () => activeSessionEntry,
-        activeSessionStore,
-        storePath,
-        resolvedVerboseLevel,
-        toolProgressDetail,
-        replyMediaContext,
-        isRestartRecoveryArmed,
-      }),
+          if (sessionKey && storePath && normalizedHookReplies.length > 0) {
+            const sourceReplyPolicy = resolveSourceReplyPolicy({
+              cfg,
+              sessionCtx,
+              sessionEntry: activeSessionEntry,
+              sessionKey,
+              runtimePolicySessionKey,
+              opts,
+            });
+            if (!sourceReplyPolicy.suppressDelivery) {
+              const pendingFinalDeliveryIntentId = crypto.randomUUID();
+              setReplyPayloadMetadata(hookReply, {
+                pendingFinalDeliveryIntentId,
+                pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              });
+              hookCheckpoint = {
+                state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
+                pendingFinalDelivery: {
+                  text: hookFinalDeliveryText ?? "",
+                  intentId: pendingFinalDeliveryIntentId,
+                  context: resolveReplyRunDeliveryContext({
+                    cfg,
+                    sessionCtx,
+                    sessionEntry: activeSessionEntry,
+                    sessionKey,
+                    runtimePolicySessionKey,
+                    opts,
+                  }),
+                },
+              };
+            } else {
+              // dispatch-from-config owns source visibility for every returned payload.
+              // This checkpoint records that recovery owes no delivery; the outer gate drops the reply.
+              hookCheckpoint = { state: "handled-silent" };
+            }
+          }
+          await checkpointBeforeAgentReply(hookCheckpoint);
+          return { ...hookResult, reply: hookReply };
+        },
+      },
+      () =>
+        traceAgentPhase("reply.run_agent_turn", () =>
+          runAgentTurnWithFallback({
+            commandBody,
+            transcriptCommandBody,
+            followupRun,
+            sessionCtx,
+            replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+            replyOperation,
+            opts,
+            typingSignals,
+            blockReplyPipeline,
+            blockStreamingEnabled,
+            blockReplyChunking,
+            resolvedBlockStreamingBreak,
+            applyReplyToMode,
+            shouldEmitToolResult,
+            shouldEmitToolOutput,
+            pendingToolTasks,
+            resetSessionAfterRoleOrderingConflict,
+            isHeartbeat,
+            hookTrigger,
+            sessionKey,
+            runtimePolicySessionKey,
+            getActiveSessionEntry: () => activeSessionEntry,
+            activeSessionStore,
+            storePath,
+            resolvedVerboseLevel,
+            toolProgressDetail,
+            replyMediaContext,
+            isRestartRecoveryArmed,
+          }),
+        ),
     );
 
     if (runOutcome.kind === "final") {
@@ -2395,6 +2484,18 @@ export async function runReplyAgent(replyParams: {
       clearCliSessionBinding,
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
+    if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
+      // A completed run that executed the persisted selection consumes the
+      // pending live-switch flag; CLI harness runs never hit the embedded
+      // attempt-recovery clear, so /status would report the switch forever.
+      await consolidateLiveModelSwitchAfterRun({
+        cfg,
+        sessionKey,
+        agentId: followupRun.run.agentId,
+        providerUsed,
+        modelUsed,
+      });
+    }
 
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,

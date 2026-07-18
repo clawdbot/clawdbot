@@ -81,7 +81,7 @@ jobs:
     name: Scan shared kit from iOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -173,7 +173,7 @@ jobs:
     name: Scan shared kit from macOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:
       - name: Checkout

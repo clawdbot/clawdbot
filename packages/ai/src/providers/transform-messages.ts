@@ -80,7 +80,10 @@ export function transformMessages<TApi extends Api>(
 ): Message[] {
   // Build a map of original tool call IDs to normalized IDs
   const toolCallIdMap = new Map<string, string>();
-  const imageAwareMessages = downgradeUnsupportedImages(messages, model);
+  const normalizedMessages = messages.map((msg) =>
+    msg.content == null ? { ...msg, content: [] } : msg,
+  );
+  const imageAwareMessages = downgradeUnsupportedImages(normalizedMessages, model);
 
   // First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
   const transformed = imageAwareMessages.map((msg) => {

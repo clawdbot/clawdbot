@@ -1635,6 +1635,33 @@ describe("handleSlackAction", () => {
     expect(token).toBe("xoxp-user");
   });
 
+  it("uses the user token for user-identity writes", async () => {
+    const token = await resolveSendToken({
+      channels: {
+        slack: {
+          identity: "user",
+          userToken: "test-user-token",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(token).toBe("test-user-token");
+  });
+
+  it("does not fall back to a bot token when a user identity has no user token", async () => {
+    await expect(
+      resolveSendToken({
+        channels: {
+          slack: {
+            identity: "user",
+            botToken: "test-bot-token",
+          },
+        },
+      } as OpenClawConfig),
+    ).rejects.toThrow('Slack operation token missing for account "default".');
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
   it("returns all emojis when no limit is provided", async () => {
     listSlackEmojis.mockResolvedValueOnce({
       ok: true,

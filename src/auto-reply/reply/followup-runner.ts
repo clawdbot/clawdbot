@@ -43,7 +43,7 @@ import {
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
-import { buildPlanUpdateStepFields } from "../../channels/streaming.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -315,7 +315,7 @@ async function forwardFollowupProgressEvent(params: {
       phase: readStringValue(evt.data.phase),
       title: readStringValue(evt.data.title),
       explanation: readStringValue(evt.data.explanation),
-      ...buildPlanUpdateStepFields(evt.data.steps),
+      steps: normalizeAgentPlanSteps(evt.data.steps),
       source: readStringValue(evt.data.source),
     });
   }

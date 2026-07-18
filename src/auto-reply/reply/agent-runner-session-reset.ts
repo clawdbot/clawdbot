@@ -1,4 +1,5 @@
 // Handles session reset requests produced during agent runner execution.
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
@@ -105,6 +106,7 @@ export async function resetReplyRunSession(params: {
     memoryFlushLastFailedAt: undefined,
     memoryFlushLastFailureError: undefined,
   };
+  transitionMainSessionRecovery(nextEntry, { kind: "clear" });
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const nextSessionFile = formatSqliteSessionFileMarker({
     agentId,

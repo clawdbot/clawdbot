@@ -3,10 +3,38 @@ import Foundation
 /// Pure grouping/filtering for the macOS sessions sidebar. Kept UI-free so the
 /// pin/search/ordering rules stay unit-testable.
 enum ChatSessionSidebarModel {
+    struct Badges: Equatable {
+        let runningCount: Int
+        let failedCount: Int
+        let hasUnread: Bool
+    }
+
+    struct Node: Identifiable, Equatable {
+        let session: OpenClawChatSessionEntry
+        let children: [Node]
+        let badges: Badges
+
+        var id: String {
+            self.session.key
+        }
+
+        var outlineChildren: [Node]? {
+            self.children.isEmpty ? nil : self.children
+        }
+
+        var hasUnreadDescendant: Bool {
+            self.children.contains { $0.badges.hasUnread }
+        }
+    }
+
     struct Section: Identifiable, Equatable {
         let id: String
         let title: String?
-        let sessions: [OpenClawChatSessionEntry]
+        let nodes: [Node]
+
+        var sessions: [OpenClawChatSessionEntry] {
+            self.nodes.map(\.session)
+        }
     }
 
     static func isHiddenInternalSession(_ key: String) -> Bool {
@@ -29,20 +57,114 @@ enum ChatSessionSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             query: query)
-        let pinned = visible.filter { $0.pinned == true }
-        let recent = visible.filter { $0.pinned != true }
+        // Pin state owns section placement. Cross-section parent links become
+        // roots so a child's own Pin/Unpin action always has visible effect.
+        let pinned = self.tree(from: visible.filter { $0.pinned == true })
+        let recent = self.tree(from: visible.filter { $0.pinned != true })
 
         var result: [Section] = []
         if !pinned.isEmpty {
-            result.append(Section(id: "pinned", title: "Pinned", sessions: pinned))
+            result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         if !recent.isEmpty {
             result.append(Section(
                 id: "recent",
                 title: pinned.isEmpty ? nil : "Recent",
-                sessions: recent))
+                nodes: recent))
         }
         return result
+    }
+
+    static func tree(from sessions: [OpenClawChatSessionEntry]) -> [Node] {
+        let hierarchyPresent = sessions.contains { session in
+            self.normalizedKey(session.spawnedBy) != nil ||
+                self.normalizedKey(session.parentSessionKey) != nil ||
+                session.childSessions != nil
+        }
+        guard hierarchyPresent else {
+            return sessions.map { self.node(session: $0, children: []) }
+        }
+
+        var entriesByKey: [String: OpenClawChatSessionEntry] = [:]
+        for session in sessions where entriesByKey[session.key] == nil {
+            entriesByKey[session.key] = session
+        }
+        var parentByChild: [String: String] = [:]
+        // The gateway child roster is freshness-filtered and omitted when
+        // empty. Persisted parent metadata can outlive that freshness window,
+        // so it is display metadata only and must not recreate stale edges.
+        for parent in sessions {
+            for childKey in parent.childSessions ?? [] where childKey != parent.key {
+                if entriesByKey[childKey] != nil, parentByChild[childKey] == nil {
+                    parentByChild[childKey] = parent.key
+                }
+            }
+        }
+
+        var orderByKey: [String: Int] = [:]
+        for (offset, session) in sessions.enumerated() where orderByKey[session.key] == nil {
+            orderByKey[session.key] = offset
+        }
+        for session in sessions {
+            var path: [String] = []
+            var indexByKey: [String: Int] = [:]
+            var cursor: String? = session.key
+            while let current = cursor, let parent = parentByChild[current] {
+                indexByKey[current] = path.count
+                path.append(current)
+                if let cycleStart = indexByKey[parent] {
+                    let cycle = path[cycleStart...]
+                    let root = cycle.min { (orderByKey[$0] ?? Int.max) < (orderByKey[$1] ?? Int.max) }
+                    if let root {
+                        parentByChild[root] = nil
+                    }
+                    break
+                }
+                cursor = parent
+            }
+        }
+
+        var childrenByParent: [String: [OpenClawChatSessionEntry]] = [:]
+        for session in sessions {
+            if let parentKey = parentByChild[session.key] {
+                childrenByParent[parentKey, default: []].append(session)
+            }
+        }
+
+        func build(_ session: OpenClawChatSessionEntry, ancestors: Set<String>) -> Node {
+            guard !ancestors.contains(session.key) else {
+                return Self.node(session: session, children: [])
+            }
+            var nextAncestors = ancestors
+            nextAncestors.insert(session.key)
+            let children = (childrenByParent[session.key] ?? []).map {
+                build($0, ancestors: nextAncestors)
+            }
+            return Self.node(session: session, children: children)
+        }
+
+        return sessions.compactMap { session in
+            guard parentByChild[session.key] == nil else { return nil }
+            return build(session, ancestors: [])
+        }
+    }
+
+    private static func node(session: OpenClawChatSessionEntry, children: [Node]) -> Node {
+        let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isRunning = session.hasActiveRun == true || session.hasActiveSubagentRun == true || status == "running"
+        let hasFailed = status == "failed" || status == "timeout"
+        return Node(
+            session: session,
+            children: children,
+            badges: Badges(
+                runningCount: (isRunning ? 1 : 0) + children.reduce(0) { $0 + $1.badges.runningCount },
+                failedCount: (hasFailed ? 1 : 0) + children.reduce(0) { $0 + $1.badges.failedCount },
+                hasUnread: session.unread == true || children.contains { $0.badges.hasUnread }))
+    }
+
+    private static func normalizedKey(_ key: String?) -> String? {
+        let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
     }
 
     static func displayName(for session: OpenClawChatSessionEntry) -> String {
@@ -60,6 +182,17 @@ enum ChatSessionSidebarModel {
         let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedMain = mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized != "main" && normalized != "global" && normalized != normalizedMain
+    }
+
+    static func canArchiveSession(
+        _ session: OpenClawChatSessionEntry,
+        mainSessionKey: String) -> Bool
+    {
+        let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
+            session.hasActiveRun != true &&
+            session.hasActiveSubagentRun != true &&
+            status != "running"
     }
 
     @MainActor

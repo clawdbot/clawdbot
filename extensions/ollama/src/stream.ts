@@ -347,23 +347,36 @@ function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | un
 function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   return (
     resolveOllamaConfiguredNumCtx(model) ??
-    Math.max(1, Math.floor(model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS))
+    Math.max(
+      1,
+      Math.floor(
+        model.contextTokens ?? model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+      ),
+    )
   );
 }
 
 /**
  * Resolves num_ctx for native /api/chat requests:
  *  1. explicit `params.num_ctx` set on the model wins,
- *  2. otherwise return undefined so Ollama's model, OLLAMA_CONTEXT_LENGTH,
- *     VRAM, or Modelfile policy decides.
+ *  2. the effective `contextTokens` runtime cap is forwarded when present,
+ *  3. otherwise Ollama's model, OLLAMA_CONTEXT_LENGTH, VRAM, or Modelfile policy decides.
  *
  * This intentionally differs from `resolveOllamaNumCtx` by not falling back
  * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
  * the OpenAI-compat path, but native `/api/chat` should not force the full
- * advertised catalog context for local models unless the operator opted in.
+ * advertised `contextWindow`; only an explicit runtime cap or operator override is forwarded.
  */
 function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefined {
-  return resolveOllamaConfiguredNumCtx(model);
+  const configured = resolveOllamaConfiguredNumCtx(model);
+  if (configured !== undefined) {
+    return configured;
+  }
+  const effective = model.contextTokens;
+  if (typeof effective !== "number" || !Number.isFinite(effective) || effective <= 0) {
+    return undefined;
+  }
+  return Math.floor(effective);
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {

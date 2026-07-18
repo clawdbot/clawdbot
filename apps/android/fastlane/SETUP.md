@@ -104,7 +104,7 @@ Release rules:
 - `apkCertificateSha256` in that manifest pins the upload certificate accepted for standalone release APKs; rotate it only with the encrypted keystore.
 - `MATCH_PASSWORD` enables Fastlane to pull encrypted Android signing assets into `apps/android/build/release-signing/` before release validation or archive builds.
 - Supported pinned Android versions use CalVer: `YYYY.M.D`.
-- `versionCode` uses `YYYYMMDDNN`, where `NN` is a two-digit build number for the pinned version.
+- Phone `versionCode` uses `YYYYMMDDNN`, where `NN` is `01` through `49`; the matching Wear APK adds `50` and uses `51` through `99`.
 - `pnpm android:version:pin -- --from-gateway` promotes the current root gateway version into the pinned Android release version.
 - `pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060502` increments another build on the same Android release train.
 - `pnpm android:version:sync` updates generated version artifacts.
@@ -113,8 +113,8 @@ Release rules:
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
 - `pnpm android:screenshots` builds and installs the Play debug app, launches deterministic screenshot scenes, and captures raw PNGs.
-- `pnpm android:release:archive` builds the signed Play AAB and third-party APK into `apps/android/build/release-artifacts/`.
-- `pnpm android:release:upload` uploads the Play AAB to the configured Google Play track. The default track is `internal`.
+- `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`.
+- `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:qa`.
 - Stable GitHub Release APK publication is separate from Google Play: `OpenClaw Release Publish` dispatches `.github/workflows/android-release.yml`, whose protected `android-release` environment provides `MATCH_PASSWORD`; the repository GitHub App reads the encrypted signing repo.
 - Production promotion remains manual in Google Play Console.
 - If `pnpm android:release:upload` fails, agent-driven releases must stop and report the failing step. Do not fall back to `pnpm android:release:archive`, `pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts plus Google Play upload commands, or mobile release ref recording.

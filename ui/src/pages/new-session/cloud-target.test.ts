@@ -1,8 +1,12 @@
+/* @vitest-environment jsdom */
+
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   deleteCloudDraftSession,
   deleteRecoveredCloudDraftSession,
+  renderCloudProfileMenuItems,
   startCloudInitialTurn,
 } from "./cloud-target.ts";
 
@@ -595,5 +599,26 @@ describe("cloud session startup", () => {
       "sessions.send",
       expect.objectContaining({ idempotencyKey: "recovery-message-1" }),
     );
+  });
+});
+
+describe("cloud target menu", () => {
+  it("disables cloud profiles with the runtime preflight reason", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [{ id: "aws", providerId: "crabbox" }],
+        selectedId: "",
+        submitting: false,
+        disabled: true,
+        disabledReason: "Cloud workers require the OpenClaw runtime; codex is selected.",
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+
+    const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
+    expect(button?.disabled).toBe(true);
+    expect(button?.title).toBe("Cloud workers require the OpenClaw runtime; codex is selected.");
   });
 });

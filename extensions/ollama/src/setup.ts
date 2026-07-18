@@ -49,6 +49,9 @@ const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
 const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
+const OLLAMA_RECOMMENDED_TOOLS_MODEL = "gemma4:e4b";
+const OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE = "about 9.6 GB";
+const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
@@ -223,6 +226,7 @@ async function pullOllamaModelCore(params: {
   baseUrl: string;
   modelName: string;
   onStatus?: (status: string, percent: number | null) => void;
+  signal?: AbortSignal;
 }): Promise<OllamaPullResult> {
   const baseUrl = resolveOllamaApiBase(params.baseUrl);
   const modelName = normalizeOllamaModelName(params.modelName) ?? params.modelName.trim();
@@ -232,6 +236,7 @@ async function pullOllamaModelCore(params: {
     OLLAMA_PULL_RESPONSE_TIMEOUT_MS,
   );
   try {
+    params.signal?.throwIfAborted();
     const { response, release } = await fetchWithSsrFGuard({
       url: `${baseUrl}/api/pull`,
       init: {
@@ -239,7 +244,9 @@ async function pullOllamaModelCore(params: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: modelName }),
       },
-      signal: responseController.signal,
+      signal: params.signal
+        ? AbortSignal.any([responseController.signal, params.signal])
+        : responseController.signal,
       policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
       auditContext: "ollama-setup.pull",
     });
@@ -331,11 +338,13 @@ async function pullOllamaModel(
   baseUrl: string,
   modelName: string,
   prompter: WizardPrompter,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const spinner = prompter.progress(`Downloading ${modelName}...`);
   const result = await pullOllamaModelCore({
     baseUrl,
     modelName,
+    ...(signal ? { signal } : {}),
     onStatus: (status, percent) => {
       const displayStatus = formatOllamaPullStatus(status);
       if (displayStatus.hidePercent) {
@@ -548,11 +557,99 @@ async function resolveHostBackedSuggestedModelNames(params: {
   return OLLAMA_SUGGESTED_MODELS_LOCAL;
 }
 
+function parseOllamaSetupShowInfo(data: {
+  model_info?: Record<string, unknown>;
+  capabilities?: unknown;
+  parameters?: unknown;
+}): Pick<OllamaModelWithContext, "contextWindow" | "capabilities"> {
+  let contextWindow: number | undefined;
+  for (const [key, value] of Object.entries(data.model_info ?? {})) {
+    if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
+      contextWindow = Math.floor(value);
+      break;
+    }
+  }
+  if (typeof data.parameters === "string") {
+    for (const line of data.parameters.split(/\r?\n/)) {
+      const match = line.trim().match(/^num_ctx\s+(-?\d+)\b/);
+      const parsed = match?.[1] ? Number.parseInt(match[1], 10) : undefined;
+      if (parsed && parsed > 0 && (contextWindow === undefined || parsed > contextWindow)) {
+        contextWindow = parsed;
+      }
+    }
+  }
+  const capabilities = Array.isArray(data.capabilities)
+    ? data.capabilities.filter((value): value is string => typeof value === "string")
+    : undefined;
+  return { contextWindow, capabilities };
+}
+
+async function inspectOllamaModelsForSetup(
+  baseUrl: string,
+  models: OllamaModelWithContext[],
+  signal?: AbortSignal,
+): Promise<{ inspected: OllamaModelWithContext[]; inspectionFailures: string[] }> {
+  const apiBase = resolveOllamaApiBase(baseUrl);
+  const inspected: OllamaModelWithContext[] = [];
+  const inspectionFailures: string[] = [];
+  for (let index = 0; index < models.length; index += OLLAMA_TOOLS_SCAN_CONCURRENCY) {
+    signal?.throwIfAborted();
+    const batch = models.slice(index, index + OLLAMA_TOOLS_SCAN_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (model) => {
+        try {
+          const requestSignal = signal
+            ? AbortSignal.any([AbortSignal.timeout(3000), signal])
+            : AbortSignal.timeout(3000);
+          const { response, release } = await fetchWithSsrFGuard({
+            url: `${apiBase}/api/show`,
+            init: {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: model.name }),
+              signal: requestSignal,
+            },
+            signal: requestSignal,
+            policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+            auditContext: "ollama-setup.tools-scan",
+          });
+          try {
+            if (!response.ok) {
+              throw new Error(`Ollama model inspection failed with HTTP ${response.status}`);
+            }
+            const data = await readProviderJsonResponse<{
+              model_info?: Record<string, unknown>;
+              capabilities?: unknown;
+              parameters?: unknown;
+            }>(response, "ollama-setup.tools-scan");
+            return Object.assign({}, model, parseOllamaSetupShowInfo(data));
+          } finally {
+            await release();
+          }
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Fail open per model: one stale/corrupt local model (observed: a
+          // months-old pull whose /api/show returns HTTP 500) must not brick
+          // the whole setup. Mark the failure with EMPTY capabilities: undefined
+          // means "never inspected" and downstream config building optimistically
+          // defaults that to supportsTools, which would advertise a broken model
+          // as tools-capable (ClawSweeper P2 on #109797).
+          inspectionFailures.push(`${model.name}: ${formatErrorMessage(error)}`);
+          return Object.assign({}, model, { capabilities: [] as string[] });
+        }
+      }),
+    );
+    inspected.push(...results);
+  }
+  return { inspected, inspectionFailures };
+}
+
 async function promptAndConfigureHostBackedOllama(params: {
   cfg: OpenClawConfig;
   mode: HostBackedOllamaInteractiveMode;
   prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }): Promise<OllamaSetupResult> {
   const baseUrl = await promptForOllamaBaseUrl(params.prompter, params.env);
   const { reachable, models } = await fetchOllamaModels(baseUrl);
@@ -562,12 +659,82 @@ async function promptAndConfigureHostBackedOllama(params: {
     throw new WizardCancelledError("Ollama not reachable");
   }
 
-  const enrichedModels = await enrichOllamaModelsWithContext(
+  const firstScan = await inspectOllamaModelsForSetup(
     baseUrl,
     models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+    params.signal,
   );
-  const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
-  const discoveredModelNames = models.map((model) => model.name);
+  let inspectedModels = firstScan.inspected;
+  const inspectionFailures = [...firstScan.inspectionFailures];
+  const supportsTools = (model: OllamaModelWithContext) =>
+    model.capabilities?.includes("tools") === true;
+  let hasToolsCapableModel = inspectedModels.some(supportsTools);
+  if (!hasToolsCapableModel && models.length > OLLAMA_CONTEXT_ENRICH_LIMIT) {
+    const remainingScan = await inspectOllamaModelsForSetup(
+      baseUrl,
+      models.slice(OLLAMA_CONTEXT_ENRICH_LIMIT),
+      params.signal,
+    );
+    inspectedModels = [...inspectedModels, ...remainingScan.inspected];
+    inspectionFailures.push(...remainingScan.inspectionFailures);
+    hasToolsCapableModel = remainingScan.inspected.some(supportsTools);
+  }
+  if (inspectionFailures.length > 0) {
+    await params.prompter.note(
+      [
+        "Some installed models could not be inspected and were skipped:",
+        ...inspectionFailures.slice(0, 5).map((line) => `- ${line}`),
+        ...(inspectionFailures.length > 5 ? [`…and ${inspectionFailures.length - 5} more`] : []),
+      ].join("\n"),
+      "Ollama",
+    );
+  }
+  const discoveredModelsByName = new Map(inspectedModels.map((model) => [model.name, model]));
+  let discoveredModelNames = models.map((model) => model.name);
+  // A pull offer is only meaningful when inspection actually worked: if every
+  // scan failed we cannot know what is installed, so recommending a multi-GB
+  // download would be guesswork against a misbehaving server.
+  const inspectionUsable =
+    inspectedModels.length === 0 || inspectionFailures.length < inspectedModels.length;
+  if (!hasToolsCapableModel && inspectionUsable) {
+    const shouldPullRecommended = await params.prompter.confirm({
+      message: `No tools-capable Ollama model is installed. Pull ${OLLAMA_RECOMMENDED_TOOLS_MODEL} (${OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE})?`,
+      initialValue: false,
+    });
+    if (shouldPullRecommended) {
+      if (
+        !(await pullOllamaModel(
+          baseUrl,
+          OLLAMA_RECOMMENDED_TOOLS_MODEL,
+          params.prompter,
+          params.signal,
+        ))
+      ) {
+        throw new WizardCancelledError("Failed to download recommended Ollama model");
+      }
+      params.signal?.throwIfAborted();
+      const recommendedScan = await inspectOllamaModelsForSetup(
+        baseUrl,
+        [{ name: OLLAMA_RECOMMENDED_TOOLS_MODEL }],
+        params.signal,
+      );
+      // Unlike the pre-existing-model scan, a just-pulled model that cannot be
+      // verified is a hard failure: configuring it unenriched would silently
+      // drop the tools capability the pull was for.
+      if (recommendedScan.inspectionFailures.length > 0) {
+        throw new WizardCancelledError(
+          `Failed to verify pulled Ollama model: ${recommendedScan.inspectionFailures[0]}`,
+        );
+      }
+      const [recommendedModel] = recommendedScan.inspected;
+      if (recommendedModel) {
+        discoveredModelsByName.set(recommendedModel.name, recommendedModel);
+      }
+      discoveredModelNames = mergeUniqueModelNames(discoveredModelNames, [
+        OLLAMA_RECOMMENDED_TOOLS_MODEL,
+      ]);
+    }
+  }
   const suggestedModelNames = await resolveHostBackedSuggestedModelNames({
     mode: params.mode,
     baseUrl,
@@ -592,6 +759,7 @@ export async function promptAndConfigureOllama(params: {
   prompter: WizardPrompter;
   secretInputMode?: SecretInputMode;
   allowSecretRefPrompt?: boolean;
+  signal?: AbortSignal;
 }): Promise<OllamaSetupResult> {
   const mode = (await params.prompter.select({
     message: "Ollama mode",
@@ -640,6 +808,7 @@ export async function promptAndConfigureOllama(params: {
     mode,
     prompter: params.prompter,
     env: params.env,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 

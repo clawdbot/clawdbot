@@ -88,10 +88,6 @@ Both providers are configured from a single API key. Setup registers both automa
     | ------------------------------------------------- | ------------------------ | ----- | ------- |
     | `volcengine-plan/ark-code-latest`                 | Ark Coding Plan          | text  | 256,000 |
     | `volcengine-plan/doubao-seed-code`                | Doubao Seed Code         | text  | 256,000 |
-    | `volcengine-plan/doubao-seed-code-preview-251028` | Doubao Seed Code Preview | text  | 256,000 |
-    | `volcengine-plan/glm-4.7`                         | GLM 4.7 Coding           | text  | 200,000 |
-    | `volcengine-plan/kimi-k2-thinking`                | Kimi K2 Thinking         | text  | 256,000 |
-    | `volcengine-plan/kimi-k2.5`                       | Kimi K2.5 Coding         | text  | 256,000 |
   </Tab>
 </Tabs>
 

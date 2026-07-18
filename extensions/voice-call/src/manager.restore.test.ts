@@ -28,6 +28,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call restore tests");
+      }) as never,
     },
   });
 }

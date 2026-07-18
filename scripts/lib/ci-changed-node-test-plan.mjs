@@ -97,7 +97,7 @@ export function hasQaSmokeAffectingChange(changedPaths, options = {}) {
 // id the graph walk cannot see), and the gate's own orchestration — changes
 // to the gate must not be able to skip the gated lane.
 const PROMPT_SNAPSHOT_SURFACE_RE =
-  /^(?:test\/(?:helpers\/agents|fixtures\/agents\/prompt-snapshots)|extensions\/codex)\/|^scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.[cm]?[jt]s)$|^scripts\/lib\/ci-changed-node-test-plan\.mjs$|^\.github\/(?:workflows\/ci\.yml$|actions\/)|^(?:package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml)$/u;
+  /^(?:test\/(?:helpers\/agents|fixtures\/agents\/prompt-snapshots)|extensions\/codex|packages)\/|^scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.[cm]?[jt]s)$|^scripts\/lib\/ci-changed-node-test-plan\.mjs$|^\.github\/(?:workflows\/ci\.yml$|actions\/)|^(?:package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml)$/u;
 // The generator renders real prompt-layer stacks, so its runtime blast radius
 // is the snapshot helper's import graph (auto-reply prompts, channel typing,
 // plugin-sdk agent harness, codex catalog fixtures).

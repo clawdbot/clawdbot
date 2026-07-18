@@ -382,6 +382,26 @@ describe("gatherDaemonStatus", () => {
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
   });
 
+  it("reports the heap limit from the installed Gateway service", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        NODE_OPTIONS: "--max-old-space-size=6144",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.gatewayHeap).toMatchObject({ appliedMiB: 6144 });
+    expect(status.service.gatewayHeap?.memorySource).toMatch(/^(constrained|physical)$/u);
+  });
+
   it("includes Windows firewall diagnostics during deep LAN gateway status", async () => {
     inspectWindowsGatewayFirewall.mockResolvedValueOnce({
       applies: true,

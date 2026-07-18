@@ -1,5 +1,6 @@
 // Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
+import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
@@ -29,6 +30,7 @@ export type TelegramMessageContextOptions = {
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
+  inboundDebounceMessages?: readonly Message[];
   spooledReplay?: boolean;
   /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
   isolateSpooledReplaySettlement?: boolean;

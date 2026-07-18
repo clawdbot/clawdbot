@@ -57,6 +57,9 @@ type GatewayTestHoistedState = {
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
+    endWaitCalls: string[];
+    endWaiters: Map<string, (ended: boolean) => void>;
+    resolveEndBeforeTimeoutIds: Set<string>;
     compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
@@ -107,6 +110,9 @@ const gatewayTestHoisted = vi.hoisted(() => {
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
+      endWaitCalls: [],
+      endWaiters: new Map<string, (ended: boolean) => void>(),
+      resolveEndBeforeTimeoutIds: new Set<string>(),
       compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
         ok: true,
         compacted: true,

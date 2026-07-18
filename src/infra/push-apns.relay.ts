@@ -295,6 +295,7 @@ async function sendApnsRelayRequest(params: {
   });
   // Do not follow relay redirects; grants and signatures are scoped to the configured relay origin.
   if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => undefined);
     return {
       ok: false,
       status: response.status,

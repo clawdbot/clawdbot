@@ -72,11 +72,11 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx,
         code: `
-          const first = await tools.call("openclaw:core:headless_first", {});
-          const second = await tools.call("openclaw:core:headless_second", {
-            value: first.result.details.value,
+          const first = await tools.callValue("openclaw:core:headless_first", {});
+          const second = await tools.callValue("openclaw:core:headless_second", {
+            value: first.value,
           });
-          return second.result.details;
+          return second;
         `,
         wallClockMs: 120_000,
       }),

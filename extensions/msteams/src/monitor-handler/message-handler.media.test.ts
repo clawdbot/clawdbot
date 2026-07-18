@@ -27,12 +27,12 @@ const taglessHtmlAttachment = {
 };
 
 function firstDispatchedContext(): Record<string, unknown> {
-  const call = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0];
-  const params = call?.[0] as { ctxPayload?: unknown } | undefined;
-  if (!params?.ctxPayload || typeof params.ctxPayload !== "object") {
+  const call = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0];
+  const params = call?.[0] as { ctx?: unknown } | undefined;
+  if (!params?.ctx || typeof params.ctx !== "object") {
     throw new Error("expected dispatched Teams context");
   }
-  return params.ctxPayload as Record<string, unknown>;
+  return params.ctx as Record<string, unknown>;
 }
 
 describe("msteams message handler Graph media recovery", () => {
@@ -44,7 +44,7 @@ describe("msteams message handler Graph media recovery", () => {
 
   beforeEach(() => {
     inboundMediaMockState.resolve.mockReset();
-    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
   it.each([
@@ -94,9 +94,7 @@ describe("msteams message handler Graph media recovery", () => {
           resolveTeamAadGroupId: expect.any(Function),
         }),
       );
-      expect(
-        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-      ).toHaveBeenCalledTimes(1);
+      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
       expect(firstDispatchedContext()).toMatchObject({
         BodyForAgent: "Describe the attached image file",
         MediaPaths: ["/tmp/from-graph.pdf"],
@@ -167,7 +165,7 @@ describe("msteams message handler Graph media recovery", () => {
 
     expect(inboundMediaMockState.resolve).toHaveBeenCalledTimes(1);
     expect(getTeamDetails).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
@@ -248,6 +246,6 @@ describe("msteams message handler Graph media recovery", () => {
     expect(getTeamDetails).not.toHaveBeenCalled();
     expect(inboundMediaMockState.resolve).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 });

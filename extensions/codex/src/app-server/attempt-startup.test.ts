@@ -466,6 +466,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
+    vi.useFakeTimers();
     const { harness, run } = startThreadWithHarness(500);
     const runError = run.then(
       () => undefined,
@@ -473,6 +474,7 @@ describe("startCodexAttemptThread", () => {
     );
     await answerInitialize(harness);
     await waitForThreadStart(harness);
+    await vi.advanceTimersByTimeAsync(500);
 
     const error = await runError;
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
@@ -514,6 +516,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("closes the shared app-server when startup times out during initialize", async () => {
+    vi.useFakeTimers();
     const initializeTimeoutPluginConfig = {
       ...pluginConfig,
       appServer: { command: "codex", requestTimeoutMs: 1_000 },
@@ -528,6 +531,7 @@ describe("startCodexAttemptThread", () => {
 
     const initialize = await waitForRequest(harness, "initialize");
     expect(initialize.id).toBeDefined();
+    await vi.advanceTimersByTimeAsync(1_000);
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
@@ -678,6 +682,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("closes a startup client that arrives after startup timeout", async () => {
+    vi.useFakeTimers();
     let observedFactoryOptions:
       | {
           onStartedClient?: (client: CodexAppServerClient) => void;
@@ -690,6 +695,10 @@ describe("startCodexAttemptThread", () => {
     const factoryDone = new Promise<void>((resolve) => {
       resolveFactoryDone = resolve;
     });
+    let releaseFactory: () => void = () => {};
+    const factoryRelease = new Promise<void>((resolve) => {
+      releaseFactory = resolve;
+    });
     const delayedFactoryPluginConfig = {
       ...pluginConfig,
       appServer: { command: "codex", requestTimeoutMs: 2_500 },
@@ -700,9 +709,7 @@ describe("startCodexAttemptThread", () => {
         try {
           factoryCalls += 1;
           observedFactoryOptions = options;
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 250);
-          });
+          await factoryRelease;
           options?.onStartedClient?.(factoryHarness.client);
           return factoryHarness.client;
         } finally {
@@ -711,9 +718,15 @@ describe("startCodexAttemptThread", () => {
       },
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
+    await vi.waitFor(() => expect(factoryCalls).toBe(1), { interval: 1 });
+    await vi.advanceTimersByTimeAsync(100);
 
-    await rejected;
-    await factoryDone;
+    try {
+      await rejected;
+    } finally {
+      releaseFactory();
+      await factoryDone;
+    }
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
       timeout: 2_000,
@@ -787,6 +800,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("clears the shared app-server when a startup RPC times out", async () => {
+    vi.useFakeTimers();
     const perRpcTimeoutPluginConfig = {
       ...pluginConfig,
       appServer: { command: "codex", requestTimeoutMs: 1_000 },
@@ -801,6 +815,7 @@ describe("startCodexAttemptThread", () => {
     );
     await answerInitialize(harness);
     await waitForRequest(harness, "plugin/list");
+    await vi.advanceTimersByTimeAsync(1_000);
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);

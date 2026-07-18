@@ -825,8 +825,8 @@ describe("resolveMaintenanceConfigFromInput", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.resetArchiveRetentionMs).toBeNull();
-    expect(maintenance.maxDiskBytes).toBe(2 * 1024 * 1024 * 1024);
-    expect(maintenance.highWaterBytes).toBe(Math.floor(2 * 1024 * 1024 * 1024 * 0.8));
+    expect(maintenance.maxDiskBytes).toBe(10 * 1024 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(10 * 1024 * 1024 * 1024 * 0.8));
   });
 
   it("honors explicit archive retention and disk budget opt-outs", () => {

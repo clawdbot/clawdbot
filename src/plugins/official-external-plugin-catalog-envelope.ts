@@ -40,6 +40,7 @@ type OfficialExternalPluginCatalogEnvelopeVerificationResult =
         | "missing-trust-key"
         | "invalid-signature";
       message: string;
+      authenticatedPayload?: unknown;
     };
 function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   payloadType: string;
@@ -110,17 +111,18 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
     }
   }
   if (trustedSignaturePublicKeys.size >= threshold) {
-    const feed = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
-    if (!feed) {
+    const decoded = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
+    if (!decoded?.feed) {
       return {
         ok: false,
         error: "invalid-payload",
         message: "hosted catalog signed envelope payload is invalid",
+        ...(decoded ? { authenticatedPayload: decoded.raw } : {}),
       };
     }
     return {
       ok: true,
-      feed,
+      feed: decoded.feed,
       signedBy: trustedSignatureKeyIds[0] ?? "",
       ...(threshold > 1
         ? {
@@ -218,10 +220,13 @@ function decodeOfficialExternalPluginCatalogEnvelopePayloadBytes(payload: string
 
 function decodeOfficialExternalPluginCatalogEnvelopePayload(
   payloadBytes: Buffer,
-): OfficialExternalPluginCatalogFeed | null {
+): { raw: unknown; feed: OfficialExternalPluginCatalogFeed | null } | null {
   try {
     const raw = JSON.parse(payloadBytes.toString("utf8")) as unknown;
-    return isOfficialExternalPluginCatalogFeed(raw) ? raw : null;
+    return {
+      raw,
+      feed: isOfficialExternalPluginCatalogFeed(raw) ? raw : null,
+    };
   } catch {
     return null;
   }

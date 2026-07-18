@@ -49,7 +49,9 @@ describe("sendSmsTextChunks", () => {
     });
 
     expect(sendSmsViaTwilio).toHaveBeenCalledTimes(2);
-    expect(sendSmsViaTwilio.mock.calls.map(([call]) => call.text)).toEqual(["alpha", "beta"]);
+    const texts = sendSmsViaTwilio.mock.calls.map(([call]) => call.text);
+    expect(texts).toEqual(["alpha", " beta"]);
+    expect(texts.join("")).toBe("alpha beta");
   });
 
   it("labels transcript-role headers promoted to an SMS chunk boundary", async () => {

@@ -536,12 +536,23 @@ describe("SystemAgentChatEngine", () => {
     // Starting the wizard is not a write: it begins immediately, no approval step.
     const tokenStep = await engine.handle("connect telegram");
     expect(tokenStep.text).toContain("Bot token");
+    // Text steps stay prose-only; only closed choices become typed questions.
+    expect(tokenStep.question).toBeUndefined();
 
     const modeStep = await engine.handle("123:abc");
     expect(modeStep.text).toContain("1. Pairing");
+    // The awaited select step is mirrored for card-capable clients; labels are
+    // the replies parseWizardAnswer accepts.
+    expect(modeStep.question).toEqual({
+      id: expect.any(String),
+      header: "Choose one",
+      question: "DM mode",
+      options: [{ label: "Pairing" }, { label: "Open" }],
+    });
 
-    const done = await engine.handle("2");
+    const done = await engine.handle("Open");
     expect(done.text).toContain("telegram is configured");
+    expect(done.question).toBeUndefined();
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 

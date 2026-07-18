@@ -16,6 +16,7 @@ function normalizeOptionalLowercaseString(raw?: string | null): string | undefin
 export const GATEWAY_CLIENT_IDS = {
   WEBCHAT_UI: "webchat-ui",
   CONTROL_UI: "openclaw-control-ui",
+  BROWSER_COPILOT: "openclaw-browser-copilot",
   TUI: "openclaw-tui",
   WEBCHAT: "webchat",
   CLI: "cli",
@@ -79,6 +80,8 @@ export const GATEWAY_CLIENT_CAPS = {
   APPROVALS: "approvals",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
+  RUN_TOOL_BINDINGS: "run-tool-bindings",
+  SESSION_SCOPED_EVENTS: "session-scoped-events",
   PLUGIN_APPROVALS: "plugin-approvals",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",

@@ -376,6 +376,183 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 
+  it("keeps reopened final answers as Activity candidates until turn completion selects one", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+
+    const lateTool = {
+      type: "commandExecution",
+      id: "late-tool",
+      command: "/bin/bash -lc 'printf late'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "late",
+      exitCode: 0,
+      durationMs: 1,
+    };
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
+      }),
+    );
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Second candidate", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "Second candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+        lateTool,
+        {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "Second candidate",
+        },
+      ]),
+    );
+
+    const candidateEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+      .map((event) => event.data);
+    expect(candidateEvents).toEqual([
+      expect.objectContaining({
+        itemId: "answer-1",
+        status: "candidate",
+        progressText: "First candidate",
+        hideFromChannelProgress: true,
+      }),
+      expect.objectContaining({
+        itemId: "answer-1",
+        status: "superseded",
+        progressText: "First candidate",
+        hideFromChannelProgress: true,
+      }),
+      expect.objectContaining({
+        itemId: "answer-2",
+        status: "candidate",
+        progressText: "Second candidate",
+        hideFromChannelProgress: true,
+      }),
+      expect.objectContaining({
+        itemId: "answer-2",
+        status: "selected",
+        progressText: "Second candidate",
+        hideFromChannelProgress: true,
+      }),
+    ]);
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Second candidate"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("answer_candidate");
+  });
+
+  it("does not reselect a final answer superseded by late tool work", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+
+    const lateTool = {
+      type: "commandExecution",
+      id: "late-tool",
+      command: "/bin/bash -lc 'printf late'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "late",
+      exitCode: 0,
+      durationMs: 1,
+    };
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
+      }),
+    );
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+        lateTool,
+      ]),
+    );
+
+    const candidateStatuses = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+      .map((event) => event.data.status);
+    expect(candidateStatuses).toEqual(["candidate", "superseded"]);
+  });
+
   it("streams final-answer assistant deltas into partial replies", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
@@ -2819,6 +2996,8 @@ describe("CodexAppServerEventProjector", () => {
     ]);
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("next");
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("[in_progress] patch");
     expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
     expect(onContextCompacted).toHaveBeenCalledOnce();
   });
@@ -6090,6 +6269,121 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.toolCallId).toBe("cmd-declined");
     expect(toolResult.status).toBe("blocked");
     expect(toolResult.isError).toBe(true);
+  });
+
+  it("warns once and preserves projection for an unknown Codex-native item status", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const notification = forCurrentTurn("item/completed", {
+      item: {
+        type: "commandExecution",
+        id: "cmd-future-status",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "pausedByProtocol",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      },
+    });
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "item",
+        phase: "end",
+        itemId: "cmd-future-status",
+      }).data.status,
+    ).toBe("completed");
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-future-status",
+      name: "bash",
+    }).data;
+    expect(toolResult).toMatchObject({ status: "completed", isError: false });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server item reported unknown status; continuing projection",
+      {
+        itemId: "cmd-future-status",
+        itemType: "commandExecution",
+        status: "pausedByProtocol",
+      },
+    );
+  });
+
+  it("warns once per raw unknown event kind and continues projecting known events", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const params = await createParams();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({ ...params, onPartialReply });
+    await projector.handleNotification(forCurrentTurn("thread/compacted", {}));
+    expect(warn).not.toHaveBeenCalled();
+    const rawEventKind = "item/futureStatus/updated\nforged";
+    const collidingSanitizedEventKind = "item/futureStatus/updated\\nforged";
+    const notification = forCurrentTurn(rawEventKind, {
+      itemId: "future-1",
+    });
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+    await projector.handleNotification(
+      forCurrentTurn(collidingSanitizedEventKind, { itemId: "future-2" }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-after-unknown", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("still projects", "msg-after-unknown"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "msg-after-unknown",
+          phase: "final_answer",
+          text: "still projects",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-after-unknown",
+          phase: "final_answer",
+          text: "still projects",
+        },
+      ]),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
+      "still projects",
+    ]);
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "still projects",
+      delta: "still projects",
+    });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server projector received unknown event kind; continuing: item/futureStatus/updated\\nforged",
+      {
+        eventKind: "item/futureStatus/updated\\nforged",
+        activeThreadId: THREAD_ID,
+        activeTurnId: TURN_ID,
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        matchesActiveThread: true,
+        matchesActiveTurn: true,
+      },
+    );
   });
 
   it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {

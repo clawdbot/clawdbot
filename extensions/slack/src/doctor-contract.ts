@@ -29,6 +29,55 @@ function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
   );
 }
 
+function hasLegacySlackThreadMentionPolicy(value: unknown): boolean {
+  const thread = asObjectRecord(asObjectRecord(value)?.thread);
+  return Boolean(thread && Object.hasOwn(thread, "requireExplicitMention"));
+}
+
+function normalizeSlackThreadMentionPolicy(params: {
+  value: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { value: Record<string, unknown>; changed: boolean } {
+  const thread = asObjectRecord(params.value.thread);
+  if (!thread || !Object.hasOwn(thread, "requireExplicitMention")) {
+    return { value: params.value, changed: false };
+  }
+
+  const next = { ...params.value };
+  const nextThread = { ...thread };
+  const implicitMentions = asObjectRecord(params.value.implicitMentions) ?? {};
+  const nextImplicitMentions = { ...implicitMentions };
+  const legacyValue = thread.requireExplicitMention;
+  const targetPath = `${params.pathPrefix}.implicitMentions.threadParticipation`;
+  if (nextImplicitMentions.threadParticipation !== undefined) {
+    params.changes.push(
+      `Removed ${params.pathPrefix}.thread.requireExplicitMention (${targetPath} already set).`,
+    );
+  } else if (typeof legacyValue === "boolean") {
+    // The retired key maps only the participated-thread fact. Replies to the bot
+    // remain independently governed by the canonical replyToBot policy.
+    nextImplicitMentions.threadParticipation = !legacyValue;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.thread.requireExplicitMention → ${targetPath} (${String(!legacyValue)}).`,
+    );
+  } else {
+    params.changes.push(
+      `Removed invalid ${params.pathPrefix}.thread.requireExplicitMention value.`,
+    );
+  }
+  delete nextThread.requireExplicitMention;
+  if (Object.keys(nextThread).length > 0) {
+    next.thread = nextThread;
+  } else {
+    delete next.thread;
+  }
+  if (Object.keys(nextImplicitMentions).length > 0) {
+    next.implicitMentions = nextImplicitMentions;
+  }
+  return { value: next, changed: true };
+}
+
 function normalizeSlackChannelAllowAliases(params: {
   channels: Record<string, unknown>;
   pathPrefix: string;
@@ -61,6 +110,24 @@ function normalizeSlackChannelAllowAliases(params: {
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
+  {
+    path: ["channels", "slack"],
+    message:
+      'channels.slack.thread.requireExplicitMention is legacy; use channels.slack.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
+    match: hasLegacySlackThreadMentionPolicy,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.thread.requireExplicitMention is legacy; use channels.slack.accounts.<id>.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
+    match: (value) => {
+      const accounts = asObjectRecord(value);
+      return Boolean(
+        accounts &&
+        Object.values(accounts).some((account) => hasLegacySlackThreadMentionPolicy(account)),
+      );
+    },
+  },
   {
     path: ["channels", "slack"],
     message:
@@ -97,6 +164,16 @@ export function normalizeCompatibilityConfig({
   let updated = rawEntry;
   let changed = aliases.config !== cfg;
 
+  const normalizedThreadPolicy = normalizeSlackThreadMentionPolicy({
+    value: updated,
+    pathPrefix: "channels.slack",
+    changes,
+  });
+  if (normalizedThreadPolicy.changed) {
+    updated = normalizedThreadPolicy.value;
+    changed = true;
+  }
+
   const channels = asObjectRecord(updated.channels);
   if (channels) {
     const normalized = normalizeSlackChannelAllowAliases({
@@ -115,21 +192,32 @@ export function normalizeCompatibilityConfig({
     let accountsChanged = false;
     const nextAccounts = { ...accounts };
     for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = asObjectRecord(accountValue);
-      const channelEntries = asObjectRecord(account?.channels);
-      if (!account || !channelEntries) {
+      let account = asObjectRecord(accountValue);
+      if (!account) {
         continue;
       }
-      const normalized = normalizeSlackChannelAllowAliases({
-        channels: channelEntries,
-        pathPrefix: `channels.slack.accounts.${accountId}.channels`,
+      const normalizedAccountThreadPolicy = normalizeSlackThreadMentionPolicy({
+        value: account,
+        pathPrefix: `channels.slack.accounts.${accountId}`,
         changes,
       });
-      if (!normalized.changed) {
-        continue;
+      if (normalizedAccountThreadPolicy.changed) {
+        account = normalizedAccountThreadPolicy.value;
+        nextAccounts[accountId] = account;
+        accountsChanged = true;
       }
-      nextAccounts[accountId] = { ...account, channels: normalized.channels };
-      accountsChanged = true;
+      const channelEntries = asObjectRecord(account.channels);
+      if (channelEntries) {
+        const normalized = normalizeSlackChannelAllowAliases({
+          channels: channelEntries,
+          pathPrefix: `channels.slack.accounts.${accountId}.channels`,
+          changes,
+        });
+        if (normalized.changed) {
+          nextAccounts[accountId] = { ...account, channels: normalized.channels };
+          accountsChanged = true;
+        }
+      }
     }
     if (accountsChanged) {
       updated = { ...updated, accounts: nextAccounts };

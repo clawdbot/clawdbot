@@ -11,7 +11,14 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+} from "../../plugins/before-agent-reply.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -27,17 +34,17 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { executePreparedEmbeddedRun } from "./run-execution.js";
 import {
+  createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
-  formatEmbeddedRunStageSummary,
-  shouldWarnEmbeddedRunStageSummary,
 } from "./run/attempt-stage-timing.js";
+import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
-import { buildHandledReplyPayloads } from "./run/handled-reply.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -95,14 +102,14 @@ async function runEmbeddedAgentInternal(
     ...paramsBase,
     sessionKey: effectiveSessionKey,
   });
-  let params: RunEmbeddedAgentParamsWithSessionFile = {
+  let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
     agentId: paramsBase.agentId ?? runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
     skillWorkshopProposalMutationBudget,
-  };
+  });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
@@ -165,6 +172,13 @@ async function runEmbeddedAgentInternal(
     throwIfAborted();
     return enqueueGlobal(async () => {
       throwIfAborted();
+      // Subscription-scoped claude-cli auth executes via the CLI backend;
+      // resolved post-admission so dispatched runs obey the same lifecycle,
+      // placement, and concurrency gates as native embedded runs.
+      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible(params);
+      if (cliDispatched) {
+        return cliDispatched;
+      }
       const started = Date.now();
       const startupStages = createEmbeddedRunStageTracker();
       const progressController = createEmbeddedRunProgressController({
@@ -173,22 +187,13 @@ async function runEmbeddedAgentInternal(
         startedAtMs: started,
       });
       const { notifyExecutionPhase } = progressController;
-      const emitStartupStageSummary = (phase: string) => {
-        const summary = startupStages.snapshot();
-        const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
-        if (!shouldWarn && !log.isEnabled("trace")) {
-          return;
-        }
-        const message = formatEmbeddedRunStageSummary(
-          `[trace:embedded-run] startup stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
-          summary,
-        );
-        if (shouldWarn) {
-          log.warn(message);
-        } else {
-          log.trace(message);
-        }
-      };
+      const emitStartupStageSummary = createEmbeddedRunStageSummaryEmitter({
+        label: "startup stages",
+        log,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        tracker: startupStages,
+      });
       params.onExecutionStarted?.({ lifecycleGeneration });
       notifyExecutionPhase("runner_entered");
       const workspaceResolution = resolveRunWorkspaceDir({
@@ -249,29 +254,35 @@ async function runEmbeddedAgentInternal(
         modelId,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields({
+          trigger: params.trigger,
+          senderId: params.senderId,
+          chatId: params.chatId,
+          channelContext: params.channelContext,
+        }),
       };
-      if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
-        notifyExecutionPhase("before_agent_reply", { provider, model: modelId });
-        const hookResult = await hookRunner.runBeforeAgentReply(
-          { cleanedBody: params.prompt },
-          hookCtx,
-        );
-        if (hookResult?.handled) {
-          return {
-            payloads: buildHandledReplyPayloads(hookResult.reply),
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta: {
-                sessionId: params.sessionId,
-                provider,
-                model: modelId,
-              },
-              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+      const hookResult = await runBeforeAgentReplyForTurn({
+        runId: params.runId,
+        trigger: params.trigger,
+        event: { cleanedBody: params.prompt },
+        context: hookCtx,
+        onDispatch: () => notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
+        onDeclined: () => notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
+      });
+      if (hookResult?.handled) {
+        return {
+          payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+          meta: {
+            durationMs: Date.now() - started,
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider,
+              model: modelId,
             },
-          };
-        }
-        notifyExecutionPhase("runtime_plugins", { provider, model: modelId });
+            finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+            finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+          },
+        };
       }
 
       return executePreparedEmbeddedRun({

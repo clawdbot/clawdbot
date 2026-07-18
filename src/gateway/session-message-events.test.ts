@@ -7,6 +7,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { RawData } from "ws";
 import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
@@ -24,6 +29,7 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
+  connectReq,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
@@ -44,6 +50,10 @@ let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
 
+// No explicit hook timeout: the suite harness cold-imports the full gateway
+// server graph, which can legitimately exceed 60s on contended CI runners.
+// Sibling gateway suites rely on the shared project hookTimeout (120s, 180s on
+// Windows) for the same boot; tightening it here caused flaky hook timeouts.
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
@@ -52,7 +62,7 @@ beforeAll(async () => {
     timeoutMs: SETUP_RPC_TIMEOUT_MS,
   });
   await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
-}, 60_000);
+});
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
@@ -167,6 +177,251 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
 }
 
 describe("session.message websocket events", () => {
+  test("enforces session-scoped chat delivery on real gateway connections", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        other: { sessionId: "sess-other", updatedAt: Date.now() },
+      },
+      storePath,
+    });
+    const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const copilotClient = {
+      id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+      version: "test",
+      platform: "chrome",
+      deviceFamily: "extension",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const copilotIdentityPath = path.join(path.dirname(storePath), "copilot-device.json");
+    const unpairedWs = await harness.openWs({ origin: copilotOrigin });
+    const pairingWs = await harness.openWs({ origin: copilotOrigin });
+    const wrongOriginWs = await harness.openWs({
+      origin: "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
+    });
+    const mainWs = await harness.openWs({ origin: copilotOrigin });
+    const otherWs = await harness.openWs();
+    const legacyWs = await harness.openWs();
+    try {
+      const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+      const unpaired = await connectReq(unpairedWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: path.join(path.dirname(storePath), "unpaired-copilot-device.json"),
+        prePairDevice: false,
+      });
+      expect(unpaired.ok).toBe(false);
+      expect(unpaired.error?.code).toBe("NOT_PAIRED");
+      unpairedWs.close();
+
+      const pairedHello = await connectOk(pairingWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: true,
+        browserOrigin: copilotOrigin,
+      });
+      const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
+      expect(deviceToken).toBeTruthy();
+      pairingWs.close();
+      const wrongOrigin = await connectReq(wrongOriginWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        deviceToken,
+        skipDefaultAuth: true,
+      });
+      expect(wrongOrigin.ok).toBe(false);
+      expect(wrongOrigin.error?.code).toBe("NOT_PAIRED");
+      expect(wrongOrigin.error?.message).toContain("dedicated paired device identity");
+      wrongOriginWs.close();
+
+      await connectOk(mainWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        deviceToken,
+        skipDefaultAuth: true,
+      });
+      await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
+      await connectOk(legacyWs, { scopes: ["operator.read"] });
+      await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
+      await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+
+      const mainEvent = onceMessage(
+        mainWs,
+        (message) =>
+          message.type === "event" &&
+          message.event === "chat" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+      const legacyEvent = onceMessage(
+        legacyWs,
+        (message) =>
+          message.type === "event" &&
+          message.event === "chat" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+      const otherReceived = onceMessage(
+        otherWs,
+        (message) => message.type === "event" && message.event === "chat",
+        300,
+      ).then(
+        () => true,
+        () => false,
+      );
+
+      const send = await rpcReq(mainWs, "chat.send", {
+        sessionKey: "main",
+        message: "/status",
+        toolBindings: {
+          browser: {
+            kind: "tab",
+            tabId: 7,
+            target: "host",
+            profile: "chrome",
+            targetId: "target-7",
+          },
+        },
+        idempotencyKey: "scoped-delivery-proof",
+      });
+      expect(send.ok, JSON.stringify(send)).toBe(true);
+      await expect(Promise.all([mainEvent, legacyEvent])).resolves.toHaveLength(2);
+      await expect(otherReceived).resolves.toBe(false);
+    } finally {
+      unpairedWs.close();
+      pairingWs.close();
+      wrongOriginWs.close();
+      mainWs.close();
+      otherWs.close();
+      legacyWs.close();
+    }
+  });
+
+  test("rejects client identity changes across a dedicated copilot pairing", async () => {
+    const storePath = await createSessionStoreFile();
+    const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const identityPath = path.join(path.dirname(storePath), "other-client-device.json");
+    const copilotIdentityPath = path.join(path.dirname(storePath), "copilot-paired-device.json");
+    const controlWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const copilotWs = await harness.openWs({
+      origin: copilotOrigin,
+    });
+    const pairingWs = await harness.openWs({
+      origin: copilotOrigin,
+    });
+    const downgradeWs = await harness.openWs();
+    const wrongModeWs = await harness.openWs({
+      origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    });
+    const webOriginWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const missingCapsWs = await harness.openWs({
+      origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    });
+    try {
+      const clientBase = {
+        version: "test",
+        platform: "chrome",
+        deviceFamily: "extension",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      };
+      const wrongMode = await connectReq(wrongModeWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          ...clientBase,
+          id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "wrong-mode-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(wrongMode.ok).toBe(false);
+      expect(wrongMode.error?.message).toContain("requires ui mode");
+      wrongModeWs.close();
+
+      const missingCaps = await connectReq(missingCapsWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: path.join(path.dirname(storePath), "missing-caps-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(missingCaps.ok).toBe(false);
+      expect(missingCaps.error?.message).toContain("session-scoped-events");
+      missingCapsWs.close();
+
+      const webOrigin = await connectReq(webOriginWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: path.join(path.dirname(storePath), "web-origin-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(webOrigin.ok).toBe(false);
+      expect(webOrigin.error?.message).toContain("canonical Chrome extension origin");
+      webOriginWs.close();
+
+      await connectOk(controlWs, {
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.CONTROL_UI },
+        deviceIdentityPath: identityPath,
+        prePairDevice: true,
+        scopes: ["operator.read", "operator.write"],
+      });
+      controlWs.close();
+
+      const response = await connectReq(copilotWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: identityPath,
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("NOT_PAIRED");
+      expect(response.error?.message).toContain("dedicated paired device identity");
+
+      await connectOk(pairingWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: true,
+        browserOrigin: copilotOrigin,
+        scopes: ["operator.read", "operator.write"],
+      });
+      pairingWs.close();
+
+      const downgrade = await connectReq(downgradeWs, {
+        client: {
+          ...clientBase,
+          id: GATEWAY_CLIENT_IDS.TEST,
+          mode: GATEWAY_CLIENT_MODES.TEST,
+        },
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(downgrade.ok).toBe(false);
+      expect(downgrade.error?.code).toBe("NOT_PAIRED");
+      expect(downgrade.error?.message).toContain("dedicated paired device identity");
+    } finally {
+      controlWs.close();
+      copilotWs.close();
+      pairingWs.close();
+      downgradeWs.close();
+      wrongModeWs.close();
+      webOriginWs.close();
+      missingCapsWs.close();
+    }
+  });
+
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({

@@ -284,6 +284,50 @@ describe("config shared auth disconnects", () => {
     );
   });
 
+  it("rejects unresolved TTS SecretRefs before config.set writes", async () => {
+    const submittedConfig: OpenClawConfig = {
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+            },
+          },
+        },
+      },
+    };
+    mockPreviousConfig({});
+    prepareSecretsRuntimeSnapshotMock.mockRejectedValueOnce(
+      new Error('Environment variable "ELEVENLABS_API_KEY" is missing or empty.'),
+    );
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(submittedConfig),
+        baseHash: "base-hash",
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
+      config: submittedConfig,
+      includeAuthStoreRefs: false,
+    });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("active SecretRef resolution failed"),
+      }),
+    );
+  });
+
   it("does not disconnect shared-auth clients for config.set auth writes without restart", async () => {
     const nextConfig = tokenAuthConfig("new-token");
     mockPreviousConfig(tokenAuthConfig("old-token"));

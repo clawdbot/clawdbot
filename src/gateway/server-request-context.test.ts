@@ -21,7 +21,10 @@ function makeContextParams(
       storePath: "/tmp/cron",
       cronEnabled: true,
     },
-    configReloader: { stop: vi.fn(async () => {}) },
+    configReloader: {
+      stop: vi.fn(async () => {}),
+      notifyPluginMetadataChanged: vi.fn(),
+    },
   };
   return {
     deps: {} as never,
@@ -131,7 +134,10 @@ describe("createGatewayRequestContext", () => {
         storePath: "/tmp/cron-a",
         cronEnabled: true,
       },
-      configReloader: { stop: vi.fn(async () => {}) },
+      configReloader: {
+        stop: vi.fn(async () => {}),
+        notifyPluginMetadataChanged: vi.fn(),
+      },
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -156,7 +162,10 @@ describe("createGatewayRequestContext", () => {
         storePath: "/tmp/cron",
         cronEnabled: true,
       },
-      configReloader: { stop: vi.fn(async () => {}) },
+      configReloader: {
+        stop: vi.fn(async () => {}),
+        notifyPluginMetadataChanged: vi.fn(),
+      },
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -166,12 +175,14 @@ describe("createGatewayRequestContext", () => {
     runtimeState.configReloader = {
       stop: vi.fn(async () => {}),
       hotReloadStatus: () => "active",
+      notifyPluginMetadataChanged: vi.fn(),
     };
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
 
     runtimeState.configReloader = {
       stop: vi.fn(async () => {}),
       hotReloadStatus: () => "disabled",
+      notifyPluginMetadataChanged: vi.fn(),
     };
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
   });

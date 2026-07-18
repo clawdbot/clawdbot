@@ -18,6 +18,12 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
+import {
+  buildCodexUserInputPresentation,
+  registerCodexUserInputActions,
+  type CodexUserInputActionAnswer,
+} from "./user-input-actions.js";
 
 type PendingUserInput = {
   requestId: number | string;
@@ -90,8 +96,13 @@ export function createCodexUserInputBridge(params: {
 
       return new Promise<JsonValue>((resolve) => {
         const abortListener = () => resolvePending(emptyUserInputResponse());
-        const cleanup = () => params.signal?.removeEventListener("abort", abortListener);
-        pending = {
+        let disposeAction = () => {};
+        const cleanup = () => {
+          params.signal?.removeEventListener("abort", abortListener);
+          disposeAction();
+          emitQuestionEvent(params.paramsForRun, "resolved", requestParams.itemId);
+        };
+        const current: PendingUserInput = {
           requestId: request.id,
           threadId: requestParams.threadId,
           turnId: requestParams.turnId,
@@ -101,16 +112,33 @@ export function createCodexUserInputBridge(params: {
           resolve,
           cleanup,
         };
+        const actionRegistration = requestParams.questions.some((question) => question.isSecret)
+          ? undefined
+          : registerCodexUserInputActions((answer) => {
+              const response = buildUserInputActionResponse(requestParams.questions, answer);
+              return response ? resolvePendingIfCurrent(current, response) : false;
+            });
+        disposeAction = actionRegistration?.dispose ?? disposeAction;
+        pending = current;
         params.signal?.addEventListener("abort", abortListener, { once: true });
         if (params.signal?.aborted) {
           resolvePending(emptyUserInputResponse());
           return;
         }
-        void deliverUserInputPrompt(params.paramsForRun, requestParams.questions).catch(
-          (error: unknown) => {
-            embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
-          },
+        emitQuestionEvent(
+          params.paramsForRun,
+          "requested",
+          requestParams.itemId,
+          requestParams.questions,
+          actionRegistration?.token,
         );
+        void deliverUserInputPrompt(
+          params.paramsForRun,
+          requestParams.questions,
+          actionRegistration?.token,
+        ).catch((error: unknown) => {
+          embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
+        });
       });
     },
     claimPendingRequest() {
@@ -222,10 +250,31 @@ function readOption(value: JsonValue): AgentHarnessUserInputOption | undefined {
 async function deliverUserInputPrompt(
   params: EmbeddedRunAttemptParams,
   questions: AgentHarnessUserInputQuestion[],
+  actionToken?: string,
 ): Promise<void> {
   await deliverAgentHarnessUserInputPrompt(params, questions, {
     formatText: formatCodexDisplayText,
     intro: "Codex needs input:",
+    presentation: actionToken ? buildCodexUserInputPresentation(questions, actionToken) : undefined,
+  });
+}
+
+function emitQuestionEvent(
+  params: EmbeddedRunAttemptParams,
+  phase: "requested" | "resolved",
+  itemId: string,
+  questions?: AgentHarnessUserInputQuestion[],
+  actionToken?: string,
+): void {
+  void emitCodexAppServerEvent(params, {
+    stream: "question",
+    data: {
+      phase,
+      itemId,
+      source: "codex-app-server",
+      ...(questions ? { questions } : {}),
+      ...(actionToken ? { actionToken } : {}),
+    },
   });
 }
 
@@ -236,6 +285,38 @@ function buildUserInputResponse(
   // Multi-question replies may use "header: answer" or numbered lines. Keep the
   // parser permissive so chat-channel replies remain ergonomic.
   return buildAgentHarnessUserInputAnswers(questions, inputText) as unknown as JsonObject;
+}
+
+function buildUserInputActionResponse(
+  questions: AgentHarnessUserInputQuestion[],
+  action: CodexUserInputActionAnswer,
+): JsonObject | undefined {
+  if (action.type === "choice") {
+    const question = questions.length === 1 ? questions[0] : undefined;
+    const option = question?.options?.[action.optionIndex];
+    return question && option
+      ? ({ answers: { [question.id]: { answers: [option.label] } } } as JsonObject)
+      : undefined;
+  }
+  if (
+    Object.keys(action.answers).length !== questions.length ||
+    !questions.every((question) => Object.hasOwn(action.answers, question.id))
+  ) {
+    return undefined;
+  }
+  const answerEntries: Array<[string, { answers: string[] }]> = [];
+  for (const question of questions) {
+    const rawAnswer = action.answers[question.id];
+    if (!rawAnswer?.trim()) {
+      return undefined;
+    }
+    const exactOption = question.options?.find((option) => option.label === rawAnswer);
+    if (!exactOption && question.options?.length && !question.isOther) {
+      return undefined;
+    }
+    answerEntries.push([question.id, { answers: [exactOption?.label ?? rawAnswer] }]);
+  }
+  return { answers: Object.fromEntries(answerEntries) } as unknown as JsonObject;
 }
 
 function emptyUserInputResponse(): JsonObject {

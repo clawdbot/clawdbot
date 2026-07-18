@@ -5,7 +5,9 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatTimelineTest {
@@ -102,6 +104,7 @@ class ChatTimelineTest {
         status = ChatOutboxStatus.Queued,
         retryCount = 0,
         lastError = null,
+        ownerAgentId = "main",
       )
     val consumed =
       visible.copy(
@@ -118,11 +121,151 @@ class ChatTimelineTest {
         items = listOf(visible, consumed),
         sessionKey = "main",
         mainSessionKey = "agent:work:main",
+        ownerAgentId = "main",
         messages = listOf(optimisticCopy),
       )
 
     // A row whose turn already renders as a message never shows a second bubble.
     assertEquals(listOf("visible-row"), filtered.map { it.id })
+  }
+
+  @Test
+  fun outboxRowsStayWithTheirAgentOwner() {
+    val mainOwner =
+      ChatOutboxItem(
+        id = "main-row",
+        sessionKey = "shared",
+        text = "main",
+        thinkingLevel = "off",
+        createdAtMs = 1,
+        status = ChatOutboxStatus.Queued,
+        retryCount = 0,
+        lastError = null,
+        ownerAgentId = "main",
+      )
+    val otherOwner = mainOwner.copy(id = "other-row", text = "other", ownerAgentId = "other")
+    val migratedOwnerless = mainOwner.copy(id = "legacy-row", text = "legacy", ownerAgentId = null)
+
+    val filtered =
+      outboxItemsForSession(
+        items = listOf(mainOwner, otherOwner, migratedOwnerless),
+        sessionKey = "shared",
+        mainSessionKey = "agent:main:device",
+        ownerAgentId = "main",
+      )
+
+    assertEquals(listOf("main-row"), filtered.map { it.id })
+  }
+
+  @Test
+  fun unreachableRowsRenderOnlyInTheNeutralRecoverySection() {
+    val ownerless =
+      ChatOutboxItem(
+        id = "legacy-row",
+        sessionKey = "shared",
+        text = "legacy private text",
+        thinkingLevel = "off",
+        createdAtMs = 1,
+        status = ChatOutboxStatus.Failed,
+        retryCount = 0,
+        lastError = "owner unknown",
+        ownerAgentId = null,
+      )
+    assertEquals(listOf(ownerless), outboxItemsForRecovery(listOf(ownerless)))
+
+    val timeline =
+      buildChatTimeline(
+        messages = emptyList(),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+        recoveryOutboxItems = listOf(ownerless),
+      )
+
+    assertEquals(
+      listOf("outbox-recovery:legacy-row", "outbox-recovery-header"),
+      timeline.items.map(::chatTimelineItemKey),
+    )
+  }
+
+  @Test
+  fun parkedMainAliasRowRemainsReachableForRecovery() {
+    val captured =
+      ChatOutboxItem(
+        id = "captured-main",
+        sessionKey = "main",
+        text = "park me",
+        thinkingLevel = "off",
+        createdAtMs = 1,
+        status = ChatOutboxStatus.Failed,
+        retryCount = 0,
+        lastError = OUTBOX_OWNER_CHANGED_ERROR,
+        ownerAgentId = "agent-a",
+      )
+
+    assertEquals(listOf(captured), outboxItemsForRecovery(listOf(captured)))
+    assertTrue(
+      outboxItemsForSession(
+        items = listOf(captured),
+        sessionKey = "main",
+        mainSessionKey = "agent:agent-a:device",
+        ownerAgentId = "agent-a",
+      ).isEmpty(),
+    )
+  }
+
+  @Test
+  fun validForeignMainAliasRowStaysHiddenUntilItsCapturedOwnerIsCurrent() {
+    val captured =
+      ChatOutboxItem(
+        id = "captured-main",
+        sessionKey = "main",
+        text = "keep private",
+        thinkingLevel = "off",
+        createdAtMs = 1,
+        status = ChatOutboxStatus.Queued,
+        retryCount = 0,
+        lastError = null,
+        ownerAgentId = "agent-a",
+      )
+
+    assertTrue(outboxItemsForRecovery(listOf(captured)).isEmpty())
+  }
+
+  @Test
+  fun foreignCustomAliasRowStaysHiddenUntilItsCapturedOwnerIsCurrent() {
+    val captured =
+      ChatOutboxItem(
+        id = "captured-custom",
+        sessionKey = "custom-alias",
+        text = "park me",
+        thinkingLevel = "off",
+        createdAtMs = 1,
+        status = ChatOutboxStatus.Failed,
+        retryCount = 0,
+        lastError = "owner changed",
+        ownerAgentId = "agent-a",
+      )
+
+    assertTrue(outboxItemsForRecovery(listOf(captured)).isEmpty())
+  }
+
+  @Test
+  fun agentQualifiedRowMovesToRecoveryWhenItsCapturedOwnerDisagrees() {
+    val mismatched =
+      ChatOutboxItem(
+        id = "mismatched-owner",
+        sessionKey = "agent:agent-b:device",
+        text = "park me",
+        thinkingLevel = "off",
+        createdAtMs = 1,
+        status = ChatOutboxStatus.Failed,
+        retryCount = 0,
+        lastError = "owner changed",
+        ownerAgentId = "agent-a",
+      )
+
+    assertEquals(listOf(mismatched), outboxItemsForRecovery(listOf(mismatched)))
   }
 
   private fun textMessage(

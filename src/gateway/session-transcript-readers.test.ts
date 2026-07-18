@@ -6,6 +6,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
@@ -273,7 +274,7 @@ describe("session transcript reader facade", () => {
     ]);
     await expect(
       readSessionMessagesAsync(scope, { mode: "recent", maxMessages: 1 }),
-    ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 4 } }]);
+    ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 3 } }]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
   });
 
@@ -315,7 +316,7 @@ describe("session transcript reader facade", () => {
     ).resolves.toMatchObject([{ content: "marker scoped prompt" }]);
     await expect(
       readSessionMessageByIdAsync({ sessionFile: marker, sessionId }, "marker-message"),
-    ).resolves.toMatchObject({ found: true, seq: 2 });
+    ).resolves.toMatchObject({ found: true, seq: 1 });
   });
 
   test("projects SQLite transcript reads to the active branch", async () => {
@@ -346,6 +347,10 @@ describe("session transcript reader facade", () => {
       ],
       touchSessionEntry: false,
     });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
 
     const messages = await readSessionMessagesAsync(scope, {
       mode: "full",
@@ -358,7 +363,7 @@ describe("session transcript reader facade", () => {
     ).toEqual(["root", "active"]);
     expect(
       messages.map((message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq),
-    ).toEqual([2, 4]);
+    ).toEqual([1, 2]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 
@@ -394,7 +399,7 @@ describe("session transcript reader facade", () => {
       page.messages.map(
         (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
       ),
-    ).toEqual([3, 4]);
+    ).toEqual([2, 3]);
   });
 
   test("honors agent ids when no store path or session file is provided", async () => {
@@ -416,7 +421,7 @@ describe("session transcript reader facade", () => {
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(1);
     await expect(readSessionMessageByIdAsync(scope, "agent-message")).resolves.toMatchObject({
       found: true,
-      seq: 2,
+      seq: 1,
     });
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade agent scope test" }),

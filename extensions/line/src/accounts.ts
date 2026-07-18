@@ -6,86 +6,138 @@ import {
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import type {
   LineAccountConfig,
   LineConfig,
+  LineCredentialUnavailableDiagnostic,
+  LineCredentialStatus,
   LineTokenSource,
   ResolvedLineAccount,
 } from "./types.js";
 
-function readFileIfExists(filePath: string | undefined): string | undefined {
-  return tryReadSecretFileSync(filePath, "LINE credential file", { rejectSymlink: true });
+function readCredentialFile(filePath: string, configPath: string) {
+  return tryReadSecretFileSync(
+    filePath,
+    "LINE credential file",
+    { rejectSymlink: true },
+    { configPath },
+  );
 }
+
+type ResolvedCredential = {
+  value: string;
+  source: LineTokenSource;
+  status: LineCredentialStatus;
+  diagnostic?: LineCredentialUnavailableDiagnostic;
+};
 
 function resolveToken(params: {
   accountId: string;
   baseConfig?: LineConfig;
   accountConfig?: LineAccountConfig;
-}): { token: string; tokenSource: LineTokenSource } {
+}): ResolvedCredential {
   const { accountId, baseConfig, accountConfig } = params;
 
   if (accountConfig?.channelAccessToken?.trim()) {
-    return { token: accountConfig.channelAccessToken.trim(), tokenSource: "config" };
+    return {
+      value: accountConfig.channelAccessToken.trim(),
+      source: "config",
+      status: "available",
+    };
   }
 
-  const accountFileToken = readFileIfExists(accountConfig?.tokenFile);
-  if (accountFileToken) {
-    return { token: accountFileToken, tokenSource: "file" };
+  if (accountConfig?.tokenFile?.trim()) {
+    const result = readCredentialFile(
+      accountConfig.tokenFile,
+      `channels.line.accounts.${accountId}.tokenFile`,
+    );
+    return result.status === "available"
+      ? { value: result.value, source: "file", status: "available" }
+      : {
+          value: "",
+          source: "file",
+          status: "configured_unavailable",
+          diagnostic: result.diagnostic,
+        };
   }
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     if (baseConfig?.channelAccessToken?.trim()) {
-      return { token: baseConfig.channelAccessToken.trim(), tokenSource: "config" };
+      return { value: baseConfig.channelAccessToken.trim(), source: "config", status: "available" };
     }
 
-    const baseFileToken = readFileIfExists(baseConfig?.tokenFile);
-    if (baseFileToken) {
-      return { token: baseFileToken, tokenSource: "file" };
+    if (baseConfig?.tokenFile?.trim()) {
+      const result = readCredentialFile(baseConfig.tokenFile, "channels.line.tokenFile");
+      return result.status === "available"
+        ? { value: result.value, source: "file", status: "available" }
+        : {
+            value: "",
+            source: "file",
+            status: "configured_unavailable",
+            diagnostic: result.diagnostic,
+          };
     }
 
     const envToken = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
     if (envToken) {
-      return { token: envToken, tokenSource: "env" };
+      return { value: envToken, source: "env", status: "available" };
     }
   }
 
-  return { token: "", tokenSource: "none" };
+  return { value: "", source: "none", status: "missing" };
 }
 
 function resolveSecret(params: {
   accountId: string;
   baseConfig?: LineConfig;
   accountConfig?: LineAccountConfig;
-}): string {
+}): ResolvedCredential {
   const { accountId, baseConfig, accountConfig } = params;
 
   if (accountConfig?.channelSecret?.trim()) {
-    return accountConfig.channelSecret.trim();
+    return { value: accountConfig.channelSecret.trim(), source: "config", status: "available" };
   }
 
-  const accountFileSecret = readFileIfExists(accountConfig?.secretFile);
-  if (accountFileSecret) {
-    return accountFileSecret;
+  if (accountConfig?.secretFile?.trim()) {
+    const result = readCredentialFile(
+      accountConfig.secretFile,
+      `channels.line.accounts.${accountId}.secretFile`,
+    );
+    return result.status === "available"
+      ? { value: result.value, source: "file", status: "available" }
+      : {
+          value: "",
+          source: "file",
+          status: "configured_unavailable",
+          diagnostic: result.diagnostic,
+        };
   }
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     if (baseConfig?.channelSecret?.trim()) {
-      return baseConfig.channelSecret.trim();
+      return { value: baseConfig.channelSecret.trim(), source: "config", status: "available" };
     }
 
-    const baseFileSecret = readFileIfExists(baseConfig?.secretFile);
-    if (baseFileSecret) {
-      return baseFileSecret;
+    if (baseConfig?.secretFile?.trim()) {
+      const result = readCredentialFile(baseConfig.secretFile, "channels.line.secretFile");
+      return result.status === "available"
+        ? { value: result.value, source: "file", status: "available" }
+        : {
+            value: "",
+            source: "file",
+            status: "configured_unavailable",
+            diagnostic: result.diagnostic,
+          };
     }
 
     const envSecret = process.env.LINE_CHANNEL_SECRET?.trim();
     if (envSecret) {
-      return envSecret;
+      return { value: envSecret, source: "env", status: "available" };
     }
   }
 
-  return "";
+  return { value: "", source: "none", status: "missing" };
 }
 
 export function resolveLineAccount(params: {
@@ -98,7 +150,7 @@ export function resolveLineAccount(params: {
   const accounts = lineConfig?.accounts;
   const accountConfig = resolveAccountEntry(accounts, accountId);
 
-  const { token, tokenSource } = resolveToken({
+  const token = resolveToken({
     accountId,
     baseConfig: lineConfig,
     accountConfig,
@@ -134,9 +186,19 @@ export function resolveLineAccount(params: {
     accountId,
     name,
     enabled,
-    channelAccessToken: token,
-    channelSecret: secret,
-    tokenSource,
+    channelAccessToken: token.value,
+    channelSecret: secret.value,
+    tokenSource: token.source,
+    signingSecretSource: secret.source,
+    tokenStatus: token.status,
+    signingSecretStatus: secret.status,
+    ...([token.diagnostic, secret.diagnostic].some(Boolean)
+      ? {
+          credentialDiagnostics: [token.diagnostic, secret.diagnostic].filter(
+            (diagnostic): diagnostic is LineCredentialUnavailableDiagnostic => Boolean(diagnostic),
+          ),
+        }
+      : {}),
     config: mergedConfig,
   };
 }

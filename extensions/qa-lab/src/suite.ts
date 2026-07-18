@@ -318,6 +318,26 @@ async function runQaSuiteCleanupSteps(steps: ReadonlyArray<() => Promise<void>>)
   return errors;
 }
 
+async function runQaFlowSuiteCleanupPlan(params: {
+  closeWebSessions?: () => Promise<void>;
+  cleanupTransport: () => Promise<void>;
+  stopGateway?: () => Promise<void>;
+  disposeAgentHarnesses: () => Promise<void>;
+  stopProvider?: () => Promise<void>;
+  finishLab: () => Promise<void>;
+}) {
+  return await runQaSuiteCleanupSteps([
+    ...(params.closeWebSessions ? [params.closeWebSessions] : []),
+    // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
+    // emit an unhandled response-close rejection during delivery.
+    params.cleanupTransport,
+    ...(params.stopGateway ? [params.stopGateway] : []),
+    params.disposeAgentHarnesses,
+    ...(params.stopProvider ? [params.stopProvider] : []),
+    params.finishLab,
+  ]);
+}
+
 function throwQaSuiteCleanupErrors(params: {
   cleanupErrors: unknown[];
   runFailed: boolean;
@@ -2000,40 +2020,31 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     throw error;
   } finally {
-    const cleanupSteps: Array<() => Promise<void>> = [];
     const activeEnv = env;
-    if (activeEnv) {
-      cleanupSteps.push(() => closeQaWebSessions(activeEnv.webSessionIds));
-    }
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     const activeGateway = gateway;
-    if (activeGateway) {
-      cleanupSteps.push(() =>
-        activeGateway.stop({
-          keepTemp,
-          preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
-        }),
-      );
-    }
-    cleanupSteps.push(
-      () => transportFactoryResult.cleanup(),
-      () => disposeRegisteredAgentHarnesses(),
-    );
     const activeMock = mock;
-    if (activeMock) {
-      cleanupSteps.push(() => activeMock.stop());
-    }
-    if (ownsLab) {
-      cleanupSteps.push(() => lab.stop());
-    } else {
-      cleanupSteps.push(async () => {
-        lab.setControlUi({
-          controlUiUrl: null,
-          controlUiProxyTarget: null,
-        });
-      });
-    }
-    const cleanupErrors = await runQaSuiteCleanupSteps(cleanupSteps);
+    const cleanupErrors = await runQaFlowSuiteCleanupPlan({
+      closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
+      cleanupTransport: () => transportFactoryResult.cleanup(),
+      stopGateway: activeGateway
+        ? () =>
+            activeGateway.stop({
+              keepTemp,
+              preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+            })
+        : undefined,
+      disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
+      stopProvider: activeMock ? () => activeMock.stop() : undefined,
+      finishLab: ownsLab
+        ? () => lab.stop()
+        : async () => {
+            lab.setControlUi({
+              controlUiUrl: null,
+              controlUiProxyTarget: null,
+            });
+          },
+    });
     throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
   }
 }
@@ -2050,6 +2061,7 @@ export const qaSuiteProgressTesting = {
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  runQaFlowSuiteCleanupPlan,
   runQaSuiteCleanupSteps,
   throwQaSuiteCleanupErrors,
   resolveQaSuiteControlUiEnabled,

@@ -7,7 +7,6 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.test-helpers.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
@@ -20,7 +19,9 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import {
+  applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
   makeContext,
   type AgentHandlerArgs,
@@ -45,6 +46,73 @@ const mocks = getAgentTestMocks();
 
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
+
+  it("rejects ordinary work on a restart-recovery tombstone", async () => {
+    const entry = {
+      sessionId: "tombstoned-session",
+      updatedAt: Date.now(),
+      status: "failed",
+      abortedLastRun: false,
+      mainRestartRecovery: {
+        cycleId: "cycle-exhausted",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    mockMainSessionEntry(entry);
+    mocks.updateSessionStore.mockImplementation(
+      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
+    );
+    const commandCallCount = mocks.agentCommand.mock.calls.length;
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "continue old work",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "tombstone-reuse",
+      },
+      { reqId: "tombstone-reuse", respond },
+    );
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
+    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
+  });
+
+  it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
+    const entry = {
+      sessionId: "exhausted-session",
+      updatedAt: Date.now(),
+      status: "running",
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-exhausted",
+        revision: 4,
+        chargedAttempts: 3,
+      },
+    };
+    mockMainSessionEntry(entry);
+    mocks.updateSessionStore.mockImplementation(
+      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
+    );
+    const commandCallCount = mocks.agentCommand.mock.calls.length;
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "continue old work",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "exhausted-reuse",
+      },
+      { reqId: "exhausted-reuse", respond },
+    );
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
+    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
+  });
 
   it("does not restore elevated defaults from idempotency key suffixes", async () => {
     const bashElevated = {
@@ -260,7 +328,9 @@ describe("gateway agent handler", () => {
         useTestStateDir(root);
         resetTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
-        subagentRegistryTesting.setDepsForTest({
+        // Route through the harness helper so the ensureRuntimePluginsLoaded
+        // pin survives this wholesale deps override.
+        applyGatewaySubagentRegistryTestDeps({
           persistSubagentRunsToDiskOrThrow: () => {
             throw new Error("disk full");
           },
@@ -361,7 +431,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves aborted async gateway agent runs as timed out", async () => {
+  it("preserves aborted async gateway agent runs as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -385,7 +455,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "timed_out",
+          status: "cancelled",
           terminalSummary: "aborted",
         });
         expectRecordFields(context.dedupe.get("agent:task-registry-agent-run-aborted")?.payload, {
@@ -397,7 +467,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("classifies aborted async gateway agent rejections as timed out", async () => {
+  it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -424,7 +494,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-abort-error"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "timed_out",
+          status: "cancelled",
           error: "AbortError: This operation was aborted",
         });
         expectRecordFields(
@@ -436,6 +506,9 @@ describe("gateway agent handler", () => {
             stopReason: "rpc",
           },
         );
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
+        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
@@ -467,11 +540,15 @@ describe("gateway agent handler", () => {
       );
 
       await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId(runId), {
+          status: "cancelled",
+        });
         expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
           runId,
           status: "timeout",
           summary: "aborted",
           stopReason: "restart",
+          timeoutPhase: "gateway_draining",
         });
       });
     });
@@ -516,6 +593,9 @@ describe("gateway agent handler", () => {
             stopReason: "timeout",
           },
         );
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
+        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
@@ -609,6 +689,42 @@ describe("gateway agent handler", () => {
           false,
         );
       });
+    });
+  });
+
+  it("settles ordinary async gateway agent rejections as failed", async () => {
+    const providerError = new Error("provider request failed");
+    mocks.agentCommand.mockRejectedValueOnce(providerError);
+    const context = makeContext();
+    const onSettled = vi.fn(() => true);
+    const respond = vi.fn();
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "background cli task",
+        sessionKey: "agent:main:main",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-provider-error-settlement",
+      dedupeKeys: ["agent:agent-run-provider-error-settlement"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: {
+          reason: "failed",
+          status: "error",
+          error: "Error: provider request failed",
+        },
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalled();
     });
   });
 
@@ -2030,7 +2146,14 @@ describe("gateway agent handler", () => {
 
       const defaultRuntime = getDetachedTaskLifecycleRuntime();
       const finalizeError = new Error("finalize boom");
+      // The background run completes off-turn; signal finalize instead of
+      // polling for it so contended runners cannot outlast a fixed poll budget.
+      let signalFinalizeCalled: () => void = () => {};
+      const finalizeCalled = new Promise<void>((resolve) => {
+        signalFinalizeCalled = resolve;
+      });
       const finalizeTaskRunByRunIdSpy = vi.fn(() => {
+        signalFinalizeCalled();
         throw finalizeError;
       });
       setDetachedTaskLifecycleRuntime({
@@ -2050,9 +2173,12 @@ describe("gateway agent handler", () => {
         { context, respond, reqId: "task-registry-finalize-throw" },
       );
 
+      // Event-driven wait bounded by the test timeout; the follow-up
+      // observations land in the same completion path right after finalize.
+      await finalizeCalled;
+      expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
       await waitForAssertion(() => {
         // Finalize threw, but the run must still complete (second res frame with ok status).
-        expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
         const completed = respond.mock.calls.some(([ok, payload]) => {
           return ok === true && (payload as { status?: string } | undefined)?.status === "ok";
         });

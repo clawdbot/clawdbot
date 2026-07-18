@@ -51,6 +51,7 @@ import {
   redactTranscriptMessageForStorage,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -185,6 +186,7 @@ export async function importSqliteSessionRows(
           }
           if (
             appendTranscriptEventInTransaction(database, transcriptScope, event, {
+              scheduleProjectionReconcile: false,
               touchMutation: false,
             })
           ) {
@@ -192,6 +194,7 @@ export async function importSqliteSessionRows(
             transcriptEvents += 1;
           }
         });
+        reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
       }
       if (params.transcriptMtimeMs !== undefined) {
         advanceTranscriptMutationAtInTransaction(
@@ -229,16 +232,18 @@ export async function appendSqliteTranscriptEvent(
 export function appendSqliteTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
-): void {
+): boolean {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
+  let appended = false;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
       return;
     }
-    appendTranscriptEventInTransaction(database, resolved, event);
+    appended = appendTranscriptEventInTransaction(database, resolved, event);
   }, toDatabaseOptions(resolved));
+  return appended;
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */

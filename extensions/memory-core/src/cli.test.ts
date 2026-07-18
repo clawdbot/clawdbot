@@ -1477,6 +1477,21 @@ describe("memory cli", () => {
     });
   });
 
+  it("passes the host SQLite lease hook to CLI memory managers", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({ search: vi.fn(async () => []), close });
+    const withLease = vi.fn();
+
+    await runMemoryCli(["search", "hello"], { withLease });
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+      withLease,
+    });
+  });
+
   it("accepts --query for memory search", async () => {
     const close = vi.fn(async () => {});
     const search = vi.fn(async () => []);

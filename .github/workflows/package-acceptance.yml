@@ -154,6 +154,11 @@ on:
         required: false
         default: false
         type: boolean
+      telegram_advisory:
+        description: Treat only Telegram acceptance failures as advisory
+        required: false
+        default: false
+        type: boolean
       workflow_ref:
         description: Trusted repo ref for workflow scripts and Docker E2E harness
         required: false
@@ -237,6 +242,11 @@ on:
         description: Unique artifact namespace when shared_image_policy=no-push-artifact
         required: false
         default: package-acceptance
+        type: string
+      candidate_artifact_json:
+        description: Immutable Docker image artifact tuple from Full Release Validation
+        required: false
+        default: ""
         type: string
       suite_profile:
         description: "Acceptance profile: smoke, package, product, full, or custom"
@@ -447,6 +457,7 @@ jobs:
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Setup Node environment
@@ -806,7 +817,7 @@ jobs:
       published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}
       published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
-      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
       package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}
@@ -819,6 +830,12 @@ jobs:
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false
       shared_image_artifact_namespace: ${{ inputs.shared_image_artifact_namespace }}
+      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
       shared_image_policy: ${{ inputs.shared_image_policy }}
     secrets: &docker_acceptance_secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -887,7 +904,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
-      advisory: ${{ inputs.advisory }}
+      advisory: ${{ inputs.advisory || inputs.telegram_advisory }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
@@ -930,6 +947,7 @@ jobs:
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
           TELEGRAM_ENABLED: ${{ needs.resolve_package.outputs.telegram_enabled }}
+          TELEGRAM_ADVISORY: ${{ inputs.telegram_advisory }}
         shell: bash
         run: |
           set -euo pipefail
@@ -964,7 +982,8 @@ jobs:
               result_failed=true
             fi
             if [[ "$result_failed" == "true" ]]; then
-              if [[ "$ADVISORY" == "true" && "$name" != "resolve_package" ]]; then
+              if [[ ("$ADVISORY" == "true" && "$name" != "resolve_package") ||
+                    ("$TELEGRAM_ADVISORY" == "true" && "$name" == "package_telegram") ]]; then
                 echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
                 continue
               fi

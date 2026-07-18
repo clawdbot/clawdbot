@@ -1288,6 +1288,16 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
   });
 }
 
+// Success output schemas do not describe policy-layer terminal results. Track
+// identity so catalog boundaries can reject them without trusting spoofable status fields.
+const preExecutionBlockedToolResults = new WeakSet<object>();
+
+export function isPreExecutionBlockedToolResult(result: unknown): boolean {
+  return (
+    result !== null && typeof result === "object" && preExecutionBlockedToolResults.has(result)
+  );
+}
+
 /** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
@@ -1296,7 +1306,7 @@ export function buildBlockedToolResult(params: {
   runId?: string;
 }) {
   recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
-  return {
+  const result = {
     content: [{ type: "text" as const, text: params.reason }],
     details: {
       status: "blocked",
@@ -1304,6 +1314,8 @@ export function buildBlockedToolResult(params: {
       reason: params.reason,
     },
   };
+  preExecutionBlockedToolResults.add(result);
+  return result;
 }
 
 // Build the private (trusted-listener-only) tool content payload for a tool

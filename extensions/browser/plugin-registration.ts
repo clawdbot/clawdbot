@@ -18,6 +18,7 @@ import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
 } from "./src/browser-gateway-contract.js";
+import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
 import {
@@ -72,7 +73,15 @@ function createLazyBrowserTool(opts?: {
     channel?: string;
     chatType?: string;
   };
+  runToolBinding?: unknown;
 }): AnyAgentTool {
+  const bindingResult =
+    opts?.runToolBinding === undefined
+      ? undefined
+      : parseBrowserTabToolBinding(opts.runToolBinding);
+  if (bindingResult && !bindingResult.ok) {
+    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
+  }
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -83,7 +92,9 @@ function createLazyBrowserTool(opts?: {
     parameters: BrowserToolSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
-      const tool = createBrowserTool(opts);
+      const tool = createBrowserTool(
+        bindingResult?.ok ? { ...opts, runToolBinding: bindingResult.binding } : opts,
+      );
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
@@ -104,6 +115,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
     channel?: string;
     chatType?: string;
   };
+  runToolBinding?: unknown;
 } {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
   const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
@@ -131,6 +143,9 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
             ...(mediaChatType ? { chatType: mediaChatType } : {}),
           },
         }
+      : {}),
+    ...(ctx.toolBindings && Object.hasOwn(ctx.toolBindings, "browser")
+      ? { runToolBinding: ctx.toolBindings.browser }
       : {}),
   };
 }

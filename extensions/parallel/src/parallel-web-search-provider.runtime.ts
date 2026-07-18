@@ -5,11 +5,9 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
   readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
@@ -203,12 +201,9 @@ export async function executeParallelWebSearchProviderTool(
   if (searchQueries.length === 0) {
     return invalidSearchQueriesPayload();
   }
-  const requestedCount =
-    readNumberParam(args, "count", { integer: true }) ??
-    (typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined);
   // Always pass max_results so Parallel matches the openclaw web_search default
   // of 5 instead of Parallel's own default of 10.
-  const count = resolveParallelSearchCount(requestedCount ?? DEFAULT_SEARCH_COUNT);
+  const count = resolveParallelSearchCount(args, searchConfig?.maxResults);
   const sessionId = normalizeParallelSessionId(
     readStringParam(args, "session_id"),
     PARALLEL_SESSION_ID_MAX_LENGTH,

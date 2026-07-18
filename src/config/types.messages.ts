@@ -61,15 +61,6 @@ export type BroadcastConfig = {
   [peerId: string]: string[] | BroadcastStrategy | undefined;
 };
 
-export type AudioConfig = {
-  /** @deprecated Use tools.media.audio.models instead. */
-  transcription?: {
-    // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
-    command: string[];
-    timeoutSeconds?: number;
-  };
-};
-
 export type StatusReactionsEmojiConfig = {
   queued?: string;
   thinking?: string;

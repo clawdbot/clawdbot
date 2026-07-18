@@ -7,8 +7,7 @@ import type {
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
-import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
@@ -144,11 +143,10 @@ function normalizeHeaderName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-async function buildHeaders(params: {
-  config: EmbeddingProviderCreateOptions["config"];
+function buildHeaders(params: {
   apiKey: string | undefined;
   extra: Record<string, unknown> | undefined;
-}): Promise<Record<string, string>> {
+}): Record<string, string> {
   const headers: Record<string, string> = {
     accept: "application/json",
     "content-type": "application/json",
@@ -158,8 +156,7 @@ async function buildHeaders(params: {
     if (!normalizedName || normalizedName === "authorization") {
       continue;
     }
-    const value = await resolveSecretString({
-      config: params.config,
+    const value = resolveSecretString({
       value: rawValue,
       path: `models.providers.*.headers.${normalizedName}`,
     });
@@ -191,30 +188,15 @@ function sanitizeCacheHeaders(headers: Record<string, string>): Record<string, s
   return Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined;
 }
 
-async function resolveSecretString(params: {
-  config: EmbeddingProviderCreateOptions["config"];
-  value: unknown;
-  path: string;
-}): Promise<string | undefined> {
-  const resolved = await resolveConfiguredSecretInputString({
-    config: params.config,
-    env: process.env,
+function resolveSecretString(params: { value: unknown; path: string }): string | undefined {
+  return normalizeResolvedSecretInputString({
     value: params.value,
     path: params.path,
-    unresolvedReasonStyle: "detailed",
   });
-  if (resolved.unresolvedRefReason) {
-    throw new Error(resolved.unresolvedRefReason);
-  }
-  return normalizeSecretInputString(resolved.value);
 }
 
-async function resolveRemoteApiKey(
-  config: EmbeddingProviderCreateOptions["config"],
-  value: unknown,
-): Promise<string | undefined> {
-  return await resolveSecretString({
-    config,
+function resolveRemoteApiKey(value: unknown): string | undefined {
+  return resolveSecretString({
     value,
     path: "agents.*.memorySearch.remote.apiKey",
   });
@@ -400,16 +382,14 @@ async function createOpenAICompatibleEmbeddingClient(
   const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
   const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? configuredProvider?.baseUrl);
   const model = normalizeModel(options.model, options.provider);
-  const apiKey = await resolveRemoteApiKey(
-    options.config,
+  const value = resolveRemoteApiKey(
     chooseSecretInputOverride(options.remote?.apiKey, configuredProvider?.apiKey),
   );
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);
-  const headers = await buildHeaders({
-    config: options.config,
-    apiKey,
+  const headers = buildHeaders({
+    apiKey: value,
     extra: {
       ...configuredProvider?.headers,
       ...options.remote?.headers,

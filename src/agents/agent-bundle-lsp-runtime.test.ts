@@ -160,7 +160,7 @@ describe("bundle LSP runtime", () => {
 
     await runtime.dispose();
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
   });
 
   it("fails LSP startup immediately when the child process cannot spawn", async () => {
@@ -175,7 +175,7 @@ describe("bundle LSP runtime", () => {
 
     expect(runtime.sessions).toEqual([]);
     expect(runtime.tools).toEqual([]);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
   });
 
   it.each([
@@ -430,7 +430,7 @@ describe("bundle LSP runtime", () => {
     ]);
 
     expect(outcome).toMatch(/LSP framing error/i);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
 
     await runtime.dispose();
   });
@@ -444,7 +444,7 @@ describe("bundle LSP runtime", () => {
 
     await disposeAllBundleLspRuntimes();
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
 
     killProcessTreeMock.mockClear();
     await runtime.dispose();

@@ -54,6 +54,28 @@ describe("buildTelegramPresentationButtons", () => {
     ]);
   });
 
+  it("encodes question buttons by record id and option index", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: ["Staging", "Production"].map((label) => ({
+              label,
+              action: { type: "question" as const, questionId, optionValue: label },
+            })),
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        { text: "Staging", callback_data: `tgq1:${questionId}:0`, style: undefined },
+        { text: "Production", callback_data: `tgq1:${questionId}:1`, style: undefined },
+      ],
+    ]);
+  });
+
   it("drops presentation buttons whose callback payload exceeds Telegram limits", () => {
     expect(
       buildTelegramPresentationButtons({
@@ -147,6 +169,35 @@ describe("buildTelegramPresentationButtons", () => {
       }),
     ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
     expect(parseTelegramApprovalCallbackData(callbackData)).toBeNull();
+    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
+  });
+
+  it("keeps transport-private question callback prefixes opaque for legacy values", () => {
+    const value = "tgq1:ask_0123456789abcdef0123456789abcdef:0";
+    const callbackData = buildTelegramOpaqueCallbackData(value);
+
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Plugin", value }],
+          },
+        ],
+      }),
+    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
+    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
+  });
+
+  it("keeps trimmed transport-private question prefixes opaque", () => {
+    const value = " tgq1:ask_0123456789abcdef0123456789abcdef:0 ";
+    const callbackData = buildTelegramOpaqueCallbackData(value);
+
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [{ type: "buttons", buttons: [{ label: "Plugin", value }] }],
+      }),
+    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
     expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
   });
 

@@ -10,6 +10,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { listRouteBindings } from "../config/bindings.js";
@@ -22,6 +23,7 @@ export type AgentSummary = {
   name?: string;
   identityName?: string;
   identityEmoji?: string;
+  identityAvatarUrl?: string;
   identitySource?: "identity" | "config";
   workspace: string;
   agentDir: string;
@@ -88,12 +90,17 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
     )?.identity;
     const identityName = identity?.name ?? configIdentity?.name?.trim();
     const identityEmoji = identity?.emoji ?? configIdentity?.emoji?.trim();
+    const identityAvatarUrl = resolveAgentAvatarUrlFromSource(
+      cfg,
+      id,
+      identity?.avatar ?? configIdentity?.avatar,
+    );
     const identitySource = identity
       ? "identity"
-      : configIdentity && (identityName || identityEmoji)
+      : configIdentity && (identityName || identityEmoji || identityAvatarUrl)
         ? "config"
         : undefined;
-    return {
+    const summary: AgentSummary = {
       id,
       name: normalizeOptionalString(
         configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.name,
@@ -107,6 +114,10 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       bindings: bindingCounts.get(id) ?? 0,
       isDefault: id === defaultAgentId,
     };
+    if (identityAvatarUrl) {
+      summary.identityAvatarUrl = identityAvatarUrl;
+    }
+    return summary;
   });
 }
 

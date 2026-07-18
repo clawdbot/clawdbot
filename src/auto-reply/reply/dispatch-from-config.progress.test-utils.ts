@@ -668,7 +668,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },
@@ -711,11 +711,11 @@ describe("dispatchReplyFromConfig", () => {
     ) => {
       await opts?.onPlanUpdate?.({
         phase: "update",
-        planSteps: [{ step: "Inspect code", status: "in_progress" }],
+        steps: [{ step: "Inspect code", status: "in_progress" }],
       });
       await opts?.onPlanUpdate?.({
         phase: "update",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
         ],
@@ -794,7 +794,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },
@@ -848,7 +848,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },
@@ -905,7 +905,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },

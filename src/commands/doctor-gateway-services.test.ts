@@ -404,6 +404,19 @@ describe("maybeRepairGatewayServiceConfig", () => {
     }
   });
 
+  it("reports the installed Gateway heap limit and derivation", async () => {
+    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+    command.environment = { NODE_OPTIONS: "--max-old-space-size=6144" };
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+
+    await runRepair({ gateway: {} });
+
+    expectNoteContaining("6144 MiB", "Gateway heap");
+    expectNoteContaining("adaptive default", "Gateway heap");
+  });
+
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
     setupGatewayTokenRepairScenario();
 

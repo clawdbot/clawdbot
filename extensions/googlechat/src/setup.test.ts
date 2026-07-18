@@ -1,4 +1,7 @@
 // Googlechat tests cover setup plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   createStartAccountContext,
   expectLifecyclePatch,
@@ -458,6 +461,43 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
+  const tempDirs: string[] = [];
+  const makeTempDir = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  };
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves user-relative service-account files before checking availability", () => {
+    const homeDir = makeTempDir("openclaw-googlechat-home-");
+    fs.writeFileSync(path.join(homeDir, "service-account.json"), "{}", { mode: 0o600 });
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+    try {
+      const resolved = resolveGoogleChatAccount({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccountFile: "~/service-account.json",
+            },
+          },
+        },
+        accountId: "default",
+      });
+
+      expect(resolved.credentialSource).toBe("file");
+      expect(resolved.credentialsFile).toBe("~/service-account.json");
+      expect(resolved.tokenStatus).toBe("available");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("parses default-account env JSON credentials only when they decode to an object", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
 
@@ -471,8 +511,9 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("ignores env JSON credentials when they decode to a non-object value", () => {
+    const missingFile = path.join(makeTempDir("openclaw-googlechat-missing-"), "missing.json");
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
-    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", missingFile);
 
     const resolved = resolveGoogleChatAccount({
       cfg: { channels: { googlechat: {} } },
@@ -481,7 +522,16 @@ describe("resolveGoogleChatAccount", () => {
 
     expect(resolved.credentialSource).toBe("env");
     expect(resolved.credentials).toBeUndefined();
-    expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
+    expect(resolved.credentialsFile).toBe(missingFile);
+    expect(resolved.tokenStatus).toBe("configured_unavailable");
+    expect(resolved.credentialDiagnostics).toEqual([
+      {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "env.GOOGLE_CHAT_SERVICE_ACCOUNT_FILE",
+        reason: "not-found",
+      },
+    ]);
+    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(missingFile);
   });
 
   it("inherits shared defaults from accounts.default for named accounts", () => {

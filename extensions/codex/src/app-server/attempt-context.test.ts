@@ -180,12 +180,14 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:marketing-agent:session-1",
         sessionAgentId: "marketing-agent",
         memoryToolNames: ["memory_search", "memory_get"],
+        sandboxed: true,
       });
 
       expect(context.memoryToolRouted).toBe(true);
       expect(observedContext).toMatchObject({
         agentId: "marketing-agent",
         agentSessionKey: "agent:marketing-agent:session-1",
+        sandboxed: true,
       });
       expect(context.memoryCollaborationInstructions).toContain(
         "agent=marketing-agent session=agent:marketing-agent:session-1",

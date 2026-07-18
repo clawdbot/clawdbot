@@ -5,9 +5,13 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import type { SessionEntry } from "../config/sessions.js";
+import {
+  isMainSessionRecoveryLifecycleEvent,
+  projectMainSessionRecoveryLifecycle,
+} from "../agents/main-session-recovery-lifecycle.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
@@ -46,6 +50,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "runtimeMs"
   | "abortedLastRun"
   | "restartRecoveryRuns"
+  | "mainRestartRecovery"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
@@ -192,37 +197,21 @@ function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
-  if (isRestartRecoveryLifecycleEvent(params)) {
-    return {};
-  }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
     session: params.entry ?? undefined,
     event: params.event,
   });
-  const patch: Partial<PersistedLifecycleSessionShape> = {
+  const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const restartRecoveryRuns = params.entry?.restartRecoveryRuns;
-  if (
-    resolveLifecyclePhase(params.event) !== "start" &&
-    runId &&
-    lifecycleGeneration &&
-    restartRecoveryRuns?.some(
-      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
-    )
-  ) {
-    const remainingRuns = restartRecoveryRuns.filter(
-      (run) => run.runId !== runId || run.lifecycleGeneration !== lifecycleGeneration,
-    );
-    if (remainingRuns.length > 0) {
-      return { restartRecoveryRuns: remainingRuns };
-    }
-    patch.restartRecoveryRuns = undefined;
-  }
-  return patch;
+  const projection = projectMainSessionRecoveryLifecycle({
+    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+    entry: params.entry,
+    event: params.event,
+    snapshotPatch,
+  });
+  return projection.action === "suppress" ? {} : projection.patch;
 }
 
 export function deriveGatewaySessionLifecycleProjectionPatch(params: {
@@ -238,21 +227,7 @@ export function isRestartRecoveryLifecycleEvent(params: {
   entry?: Pick<SessionEntry, "restartRecoveryRuns"> | null;
   event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration" | "data">;
 }): boolean {
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const phase = resolveLifecyclePhase(params.event);
-  const interrupted = params.event.data?.stopReason === "restart";
-  const matchesRecoveryRun = Boolean(
-    runId &&
-    lifecycleGeneration &&
-    params.entry?.restartRecoveryRuns?.some(
-      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
-    ),
-  );
-  return (
-    matchesRecoveryRun &&
-    (phase === "start" || ((phase === "end" || phase === "error") && interrupted))
-  );
+  return isMainSessionRecoveryLifecycleEvent(params);
 }
 
 /**

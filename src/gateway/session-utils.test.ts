@@ -1255,6 +1255,38 @@ describe("gateway session utils", () => {
     expect(row.effectiveResponseUsage).toBe("off");
   });
 
+  test("buildGatewaySessionRow projects the effective Control UI queue mode", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: { queue: { mode: "interrupt", byChannel: { webchat: "collect" } } },
+    } as OpenClawConfig;
+    const inheritedEntry = { sessionId: "s1", updatedAt: 1 } as SessionEntry;
+    const inheritedRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:main": inheritedEntry },
+      key: "agent:main:main",
+      entry: inheritedEntry,
+    });
+    expect(inheritedRow.queueMode).toBeUndefined();
+    expect(inheritedRow.effectiveQueueMode).toBe("collect");
+
+    const overriddenEntry = {
+      sessionId: "s2",
+      updatedAt: 1,
+      queueMode: "followup",
+    } as SessionEntry;
+    const overriddenRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:other": overriddenEntry },
+      key: "agent:main:other",
+      entry: overriddenEntry,
+    });
+    expect(overriddenRow.queueMode).toBe("followup");
+    expect(overriddenRow.effectiveQueueMode).toBe("followup");
+  });
+
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {
     const cfg = {
       session: { mainKey: "work" },

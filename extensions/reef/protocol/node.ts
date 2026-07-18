@@ -136,6 +136,8 @@ export class FileReplayStore implements ReplayStore {
     });
   }
 
+  async refresh(_peer: string, _id: string): Promise<void> {}
+
   async complete(
     peer: string,
     id: string,

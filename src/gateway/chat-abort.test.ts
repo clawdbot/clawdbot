@@ -562,6 +562,7 @@ describe("abortChatRunsForProvider", () => {
         state: "aborted",
         stopReason: "auth-revoked",
       }),
+      { sessionKeys: [sessionKey] },
     );
   });
 });
@@ -602,6 +603,7 @@ describe("resolveInFlightRunSnapshot", () => {
   const snap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
+    chatRunPlanSnapshots?: Parameters<typeof resolveInFlightRunSnapshot>[0]["chatRunPlanSnapshots"];
     sessionKey: string;
     canonicalSessionKey?: string;
     agentId?: string;
@@ -610,6 +612,7 @@ describe("resolveInFlightRunSnapshot", () => {
     resolveInFlightRunSnapshot({
       chatAbortControllers: p.chatAbortControllers,
       chatRunBuffers: p.chatRunBuffers,
+      chatRunPlanSnapshots: p.chatRunPlanSnapshots,
       requestedSessionKey: p.sessionKey,
       canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
       agentId: p.agentId,
@@ -623,6 +626,32 @@ describe("resolveInFlightRunSnapshot", () => {
       sessionKey: "agent:main:tui-x",
     });
     expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+  });
+
+  it("returns the active run plan snapshot with buffered text", () => {
+    const plan = {
+      explanation: "Current work",
+      steps: [{ step: "Implement replay", status: "in_progress" as const }],
+    };
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map([["run-1", "partial"]]),
+        chatRunPlanSnapshots: new Map([["run-1", plan]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-1", text: "partial", plan });
+  });
+
+  it("returns an explicit empty plan snapshot for dismissal", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map(),
+        chatRunPlanSnapshots: new Map([["run-1", { steps: [] }]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
   });
 
   it("is a no-op when chatAbortControllers is not a Map (unpopulated context)", () => {
@@ -807,23 +836,63 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-b", text: "b" });
   });
 
-  it("keeps in-flight text when it fits the chat history budget", () => {
+  it("keeps in-flight text and plan when they fit the chat history budget", () => {
+    const plan = {
+      steps: [{ step: "Keep this", status: "pending" as const }],
+    };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial" },
+        snapshot: { runId: "run-1", text: "partial", plan },
         messages: [],
         maxBytes: 1_000,
       }),
-    ).toEqual({ runId: "run-1", text: "partial" });
+    ).toEqual({ runId: "run-1", text: "partial", plan });
   });
 
   it("drops oversized in-flight text but keeps the run id for adoption", () => {
+    const plan = {
+      steps: [{ step: "Keep this", status: "pending" as const }],
+    };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000) },
+        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
         messages: [],
-        maxBytes: 100,
+        maxBytes: 200,
       }),
-    ).toEqual({ runId: "run-1", text: "" });
+    ).toEqual({ runId: "run-1", text: "", plan });
+  });
+
+  it("drops an oversized plan after dropping text", () => {
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "",
+          plan: {
+            steps: [{ step: "x".repeat(500), status: "pending" }],
+          },
+        },
+        messages: [{ role: "user", content: "near budget" }],
+        maxBytes: 160,
+      }),
+    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
+  });
+
+  it("keeps small buffered text and clears an oversized plan explicitly", () => {
+    // Absence means legacy-gateway unknown to clients; a budget drop must send
+    // an explicit empty plan so retained stale checklists cannot survive.
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "short answer",
+          plan: {
+            steps: [{ step: "x".repeat(500), status: "pending" }],
+          },
+        },
+        messages: [],
+        maxBytes: 200,
+      }),
+    ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
   });
 });

@@ -2,7 +2,10 @@ import { linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
+import {
+  resolveNextcloudTalkApiCredentials,
+  resolveNextcloudTalkApiCredentialsResult,
+} from "./api-credentials.js";
 
 const tempDirs: string[] = [];
 
@@ -60,6 +63,33 @@ describe("resolveNextcloudTalkApiCredentials", () => {
     expect(
       resolveNextcloudTalkApiCredentials({ apiUser: "admin", apiPasswordFile: emptyFile }),
     ).toBeUndefined();
+  });
+
+  it("treats a blank API password file path as missing", () => {
+    expect(
+      resolveNextcloudTalkApiCredentialsResult({ apiUser: "admin", apiPasswordFile: "   " }),
+    ).toEqual({ status: "missing" });
+  });
+
+  it("returns a typed redacted diagnostic for a missing explicit file", () => {
+    const missingFile = createFixtureFile("unused");
+    rmSync(missingFile);
+
+    const result = resolveNextcloudTalkApiCredentialsResult({
+      apiUser: "admin",
+      apiPasswordFile: missingFile,
+      configPath: "channels.nextcloud-talk.accounts.work.apiPasswordFile",
+    });
+
+    expect(result).toEqual({
+      status: "configured_unavailable",
+      diagnostic: {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.nextcloud-talk.accounts.work.apiPasswordFile",
+        reason: "not-found",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(missingFile);
   });
 
   it.runIf(process.platform !== "win32")("preserves symlinked API password files", () => {

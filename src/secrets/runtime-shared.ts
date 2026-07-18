@@ -4,12 +4,14 @@ import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
+import type { SecretAssignmentDisposition, SecretOwnerKind } from "./runtime-degraded-state.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
 export type SecretResolverWarningCode =
   | "SECRETS_REF_OVERRIDES_PLAINTEXT"
   | "SECRETS_REF_IGNORED_INACTIVE_SURFACE"
+  | "SECRETS_OWNER_UNAVAILABLE"
   | "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT"
   | "WEB_SEARCH_AUTODETECT_SELECTED"
   | "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
@@ -25,12 +27,21 @@ export type SecretResolverWarning = {
   message: string;
 };
 
-type SecretAssignment = {
+export type SecretAssignment = {
   ref: SecretRef;
   path: string;
   expected: "string" | "string-or-object";
+  ownerKind: SecretOwnerKind;
+  ownerId: string;
+  requiredForGateway: boolean;
+  disposition: SecretAssignmentDisposition;
   apply: (value: unknown) => void;
 };
+
+export type SecretAssignmentOwner = Pick<
+  SecretAssignment,
+  "ownerKind" | "ownerId" | "requiredForGateway" | "disposition"
+>;
 
 export type ResolverContext = {
   sourceConfig: OpenClawConfig;
@@ -111,6 +122,22 @@ export function collectSecretInputAssignment(params: {
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
+  owner?: SecretAssignmentOwner;
+  apply: (value: unknown) => void;
+}): void {
+  collectRuntimeSecretInputAssignment(params);
+}
+
+/** Internal owner-aware variant used while migrating runtime surfaces to isolation. */
+export function collectRuntimeSecretInputAssignment(params: {
+  value: unknown;
+  path: string;
+  expected: SecretAssignment["expected"];
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active?: boolean;
+  inactiveReason?: string;
+  owner?: SecretAssignmentOwner;
   apply: (value: unknown) => void;
 }): void {
   const ref = coerceSecretRef(params.value, params.defaults);
@@ -129,6 +156,10 @@ export function collectSecretInputAssignment(params: {
     ref,
     path: params.path,
     expected: params.expected,
+    ownerKind: params.owner?.ownerKind ?? "unknown",
+    ownerId: params.owner?.ownerId ?? params.path,
+    requiredForGateway: params.owner?.requiredForGateway ?? false,
+    disposition: params.owner?.disposition ?? "isolate",
     apply: params.apply,
   });
 }
@@ -140,6 +171,7 @@ export function applyResolvedAssignments(params: {
   assignments: SecretAssignment[];
   resolved: Map<string, unknown>;
 }): void {
+  const values: unknown[] = [];
   for (const assignment of params.assignments) {
     const key = secretRefKey(assignment.ref);
     if (!params.resolved.has(key)) {
@@ -154,7 +186,10 @@ export function applyResolvedAssignments(params: {
           ? `${assignment.path} resolved to a non-string or empty value.`
           : `${assignment.path} resolved to an unsupported value type.`,
     });
-    assignment.apply(value);
+    values.push(value);
+  }
+  for (const [index, assignment] of params.assignments.entries()) {
+    assignment.apply(values[index]);
   }
 }
 

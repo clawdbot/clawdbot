@@ -14,6 +14,7 @@ import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
 import { buildCodexMigrationProvider } from "./provider.js";
+import { discoverCodexSource } from "./source.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
 
@@ -200,6 +201,20 @@ describe("buildCodexMigrationProvider", () => {
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   });
 
+  it("preserves whitespace in nonempty CODEX_HOME values", async () => {
+    const root = await makeTempRoot();
+    const codexHome = path.join(root, " spaced ");
+    await writeFile(path.join(codexHome, "memories", "MEMORY.md"), "# Memory\n");
+    vi.stubEnv("CODEX_HOME", codexHome);
+
+    const source = await discoverCodexSource({ memoryOnly: true });
+
+    expect(source.codexHome).toBe(codexHome);
+    expect(source.memoryFiles.map((entry) => entry.path)).toEqual([
+      path.join(codexHome, "memories", "MEMORY.md"),
+    ]);
+  });
+
   it("plans and imports only consolidated Codex memory into the selected agent", async () => {
     const fixture = await createCodexFixture();
     const targetWorkspace = path.join(fixture.root, "workspace-research");
@@ -330,6 +345,33 @@ describe("buildCodexMigrationProvider", () => {
           }),
         ),
       ).rejects.toThrow("destination must stay in the selected workspace");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "marks a dangling Codex memory destination symlink as a conflict",
+    async () => {
+      const fixture = await createCodexFixture();
+      const target = path.join(fixture.workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+      await writeFile(path.join(fixture.codexHome, "memories", "MEMORY.md"), "# Memory\n");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.symlink(path.join(fixture.root, "missing-memory.md"), target);
+      const provider = buildCodexMigrationProvider();
+
+      const plan = await provider.plan(
+        makeContext({
+          source: fixture.codexHome,
+          stateDir: fixture.stateDir,
+          workspaceDir: fixture.workspaceDir,
+          itemKinds: ["memory"],
+          overwrite: true,
+        }),
+      );
+
+      expect(findItem(plan.items, "memory:codex:MEMORY.md")).toMatchObject({
+        status: "conflict",
+        reason: "target is not a regular file",
+      });
     },
   );
 

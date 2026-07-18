@@ -16,7 +16,6 @@ import {
   resolveQwenTokenPlanBaseUrl,
 } from "./api.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildQwenOAuthProvider } from "./provider-catalog.js";
 
 type QwenProvider = ReturnType<typeof buildQwenProvider>;
 
@@ -73,23 +72,6 @@ describe("qwen provider catalog", () => {
       contextWindow: 1_000_000,
       maxTokens: 65_536,
     });
-  });
-
-  it("keeps unsupported Qwen models out of the portal catalog", () => {
-    const portal = buildQwenOAuthProvider();
-    const portalQwen36 = portal.models.find((model) => model.id === "qwen3.6-plus");
-    const manifestQwen36 = manifest.modelCatalog.providers["qwen-oauth"].models.find(
-      (model) => model.id === "qwen3.6-plus",
-    );
-
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_36_FLASH_MODEL_ID);
-    expect(
-      manifest.modelCatalog.providers["qwen-oauth"].models.map((model) => model.id),
-    ).not.toContain(QWEN_36_FLASH_MODEL_ID);
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_37_MAX_MODEL_ID);
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_37_PLUS_MODEL_ID);
-    expect(portalQwen36?.reasoning).toBe(true);
-    expect(manifestQwen36?.reasoning).toBe(portalQwen36?.reasoning);
   });
 
   it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {

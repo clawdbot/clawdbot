@@ -122,6 +122,81 @@ xAI Responses.
 | [SearXNG](/tools/searxng-search)                 | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
 | [Tavily](/tools/tavily)                          | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
 
+## Result shape
+
+`web_search` normalizes every bundled and external plugin provider at the core
+tool boundary. Callers receive exactly one of these closed shapes:
+
+```typescript
+type WebSearchOutput =
+  | {
+      kind: "error";
+      provider: string;
+      error: "provider_error";
+      message: string;
+      docs?: string;
+    }
+  | {
+      kind: "results";
+      provider: string;
+      query: string;
+      count: number;
+      tookMs?: number;
+      results: Array<{
+        title: string;
+        url: string;
+        snippet?: string;
+        published?: string;
+        siteName?: string;
+      }>;
+      externalContent: {
+        untrusted: true;
+        source: "web_search";
+        wrapped: true;
+        provider: string;
+      };
+      cached?: true;
+    }
+  | {
+      kind: "answer";
+      provider: string;
+      query: string;
+      tookMs?: number;
+      content: string;
+      citations?: Array<{ url: string; title?: string }>;
+      externalContent: {
+        untrusted: true;
+        source: "web_search";
+        wrapped: true;
+        provider: string;
+      };
+      cached?: true;
+    }
+  | {
+      kind: "raw";
+      provider: string;
+      data: unknown;
+    };
+```
+
+Structured providers use `kind: "results"`; synthesized providers use
+`kind: "answer"`. External plugin providers whose payloads match neither shape
+pass through verbatim as `kind: "raw"` for compatibility. Provider-specific
+fields such as raw scores, excerpts, related searches, inline-citation
+offsets, model ids, or session metadata are not passed through on normalized
+branches. Use a provider's dedicated tool when its richer response is part of
+your workflow.
+
+`externalContent.wrapped: true` is a trust marker the boundary itself makes
+true: provider prose (`title`, `snippet`, `siteName`, `content`, citation
+titles, error `message`) is stripped of any pre-existing envelope lines and
+re-wrapped exactly once at the core boundary, so no provider metadata can spoof
+the marker. `query` is always the requested query, citation and result URLs
+must parse as http(s), `published` must be ISO-date shaped, URLs are emitted canonicalized, and a
+payload carrying an `error` key is always reported as `kind: "error"` with the
+raw provider code preserved inside the wrapped message. Raw passthrough
+payloads keep whatever markers the provider set.
+
 ## Auto-detection
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection uses a

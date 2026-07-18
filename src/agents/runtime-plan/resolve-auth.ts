@@ -1,5 +1,6 @@
 /** Resolves credentials for an immutable prepared runtime route. */
 import { toErrorObject } from "../../infra/errors.js";
+import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { getApiKeyForModel } from "../model-auth.js";
@@ -126,6 +127,9 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       // Model, physical route, and credential become active together.
       return { model, plan: resolved.plan, auth: resolved.auth };
     } catch (error) {
+      if (error instanceof SecretSurfaceUnavailableError) {
+        throw error;
+      }
       firstError ??= error;
     }
   }
@@ -319,6 +323,9 @@ export async function resolvePreparedRuntimeModelAuth(
         plan: applyResolvedAuthToPlan({ plan, auth, candidates: currentCandidates }),
       };
     } catch (error) {
+      if (error instanceof SecretSurfaceUnavailableError) {
+        throw error;
+      }
       firstError ??= error;
     }
   }

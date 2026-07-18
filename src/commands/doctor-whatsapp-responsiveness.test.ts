@@ -50,6 +50,11 @@ describe("doctor WhatsApp responsiveness", () => {
         { pid: 104, command: "openclaw tui --local" },
         { pid: 105, command: "/usr/bin/openclaw chat" },
       ]);
+      expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 1_000,
+      });
     }
   });
 

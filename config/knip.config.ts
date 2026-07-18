@@ -10,6 +10,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // setup-node-env invokes this helper from composite-action YAML.
+  ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -25,6 +27,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/codex-media-path/client.mjs!",
   "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs!",
   "scripts/e2e/lib/codex-media-path/write-config.mjs!",
+  "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs!",
   "scripts/e2e/lib/config-reload/assert-log.mjs!",
   "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
   "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
@@ -62,6 +65,8 @@ const repositoryScriptEntries = [
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
+  // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
+  "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mjs!",
   "scripts/pr-gates-lock.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
@@ -97,6 +102,8 @@ const rootEntries = [
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   "scripts/repro/code-mode-namespace-live.ts!",
+  "scripts/repro/tool-schema-hint-bench.ts!",
+  "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-sqlite-reliability.ts!",
@@ -104,6 +111,7 @@ const rootEntries = [
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/audit/audit-event-writer.worker.ts!",
+  "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagent-registry.runtime.ts!",
@@ -149,6 +157,7 @@ const rootEntries = [
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
   "apps/linux/ui/main.js!",
+  "apps/linux/ui/quickchat.js!",
   "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
@@ -156,8 +165,6 @@ const rootEntries = [
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
-  // Registry-dated deep-import compatibility surface; keep public until its removal windows pass.
-  "src/channels/plugins/target-parsing-loaded.ts!",
 ] as const;
 
 const bundledPluginEntries = [
@@ -200,7 +207,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@openai/codex",
   "@pierre/theme",
   "@tloncorp/tlon-skill",
-  "@zed-industries/codex-acp",
+  "@agentclientprotocol/codex-acp",
   "jiti",
   "json5",
   "lit",
@@ -421,22 +428,14 @@ const config = {
         "src/agent.ts!",
         "src/agent-loop.ts!",
         "src/llm.ts!",
-        "src/node.ts!",
         "src/runtime-deps.ts!",
         "src/validation.ts!",
         "src/types.ts!",
-        "src/harness/agent-harness.ts!",
-        "src/harness/types.ts!",
         "src/harness/messages.ts!",
         "src/harness/env/kill-tree.ts!",
-        "src/harness/session.ts!",
-        "src/harness/session/jsonl-storage.ts!",
-        "src/harness/session/memory-storage.ts!",
-        "src/harness/session/uuid.ts!",
         "src/harness/compaction.ts!",
         "src/harness/branch-summarization.ts!",
         "src/harness/prompt-template-arguments.ts!",
-        "src/harness/skills.ts!",
         "src/harness/utils/truncate.ts!",
       ],
       project: ["src/**/*.ts!"],
@@ -549,7 +548,10 @@ const config = {
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace([
+      // The plugin-SDK anthropic-cli facade resolves this shipped artifact by basename.
+      "cli-api.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic-vertex`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: bundledPluginWorkspace([
       // Copied as executable runtime internals by the package artifact manifest.
@@ -568,6 +570,10 @@ const config = {
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
       "chrome-extension/popup.js!",
+      "chrome-extension/sidepanel.js!",
+      "scripts/build-copilot-runtime.mjs!",
+      // esbuild receives this browser bootstrap by an assembled path.
+      "scripts/copilot-runtime-entry.ts!",
       "scripts/copy-chrome-extension.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([

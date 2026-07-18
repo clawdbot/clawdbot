@@ -82,6 +82,43 @@ describe("terminal panel readiness", () => {
     expect((panel as unknown as { open: boolean }).open).toBe(false);
   });
 
+  it("opens and co-attaches an agent terminal requested by ui.command", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.attach") {
+          return {
+            ...terminalOpenResult("agent-terminal-1"),
+            buffer: "ready",
+            seq: 5,
+          } as T;
+        }
+        return { ok: true } as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:terminal-toggle", {
+        detail: { open: true, terminalSessionId: "agent-terminal-1" },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.attach",
+        params: { sessionId: "agent-terminal-1" },
+      });
+      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
+    });
+  });
+
   it("shows a connecting animation while a terminal open is in flight", async () => {
     const open = deferred<{
       sessionId: string;

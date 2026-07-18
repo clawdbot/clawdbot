@@ -5,8 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type ApprovalGetResult,
+  type ApprovalHistoryResult,
   type ApprovalResolveResult,
   validateApprovalGetResult,
+  validateApprovalHistoryResult,
   validateApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -258,6 +260,9 @@ describe("operator approval gateway client e2e", () => {
     await expect(underscoped.request("approval.get", { id: approvalId })).rejects.toThrow(
       "missing scope: operator.approvals",
     );
+    await expect(underscoped.request("approval.history", {})).rejects.toThrow(
+      "missing scope: operator.approvals",
+    );
     await expect(
       underscoped.request("approval.resolve", { id: approvalId, kind: "exec", decision: "deny" }),
     ).rejects.toThrow("missing scope: operator.approvals");
@@ -303,5 +308,11 @@ describe("operator approval gateway client e2e", () => {
     const terminal = await requester.request<ApprovalGetResult>("approval.get", { id: approvalId });
     expect(validateApprovalGetResult(terminal)).toBe(true);
     expect(terminal.approval).toEqual(allowResult.approval);
+
+    const history = await reviewer.request<ApprovalHistoryResult>("approval.history", {
+      limit: 10,
+    });
+    expect(validateApprovalHistoryResult(history)).toBe(true);
+    expect(history.items).toContainEqual(allowResult.approval);
   }, 120_000);
 });

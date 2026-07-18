@@ -1,6 +1,7 @@
 // Verifies session status output across scoped stores, tasks, and runtime hooks.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
@@ -13,6 +14,7 @@ import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
+import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -37,6 +39,9 @@ const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
 );
 const getSessionStateVersionMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string) => 0),
+);
+const listAmbientGroupWatchTargetsMock = vi.hoisted(() =>
+  vi.fn((_watcherSessionKey: string) => new Set<string>()),
 );
 const listSessionStateEventsSinceMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string, _after: number, _limit: number) => ({
@@ -357,6 +362,8 @@ vi.mock("../tasks/task-owner-access.js", () => ({
 vi.mock("../sessions/session-state-events.js", () => ({
   getSessionStateVersion: (sessionKey: string, agentId: string) =>
     getSessionStateVersionMock(sessionKey, agentId),
+  listAmbientGroupWatchTargets: (watcherSessionKey: string) =>
+    listAmbientGroupWatchTargetsMock(watcherSessionKey),
   listSessionStateEventsSince: (
     sessionKey: string,
     agentId: string,
@@ -396,6 +403,8 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();
   getSessionStateVersionMock.mockReturnValue(0);
+  listAmbientGroupWatchTargetsMock.mockReset();
+  listAmbientGroupWatchTargetsMock.mockReturnValue(new Set());
   listSessionStateEventsSinceMock.mockReset();
   listSessionStateEventsSinceMock.mockReturnValue({
     events: [],
@@ -539,6 +548,11 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ changedModel: boolean; ok: true; sessionKey: string; stateVersion: number; statusText: string; active?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; deliveryContext?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; model?: string; modelOverride?: string | null; modelProvider?: string; origin?: { accountId?: string; provider?: string; threadId?: string | number }; stateChanges?: { earliestAvailableSequence: number; events: Array<{ actorType: "human" | "agent" | "system"; kind: string; occurredAt: number; sequence: number; summary: string; actorId?: string; payload?: { channel?: string; outcome?: "error" | "timeout" | "cancelled"; turns?: number }; runId?: string }>; historyGap: boolean; truncated: boolean } }',
+    );
   });
 
   it("returns read-only state changes and the signal-log head", async () => {
@@ -550,22 +564,91 @@ describe("session_status tool", () => {
     });
     getSessionStateVersionMock.mockReturnValue(12);
     listSessionStateEventsSinceMock.mockReturnValue({
-      events: [{ sequence: 12, kind: "upstream_missing", summary: "upstream missing via codex" }],
+      events: [
+        {
+          sequence: 12,
+          sessionKey: "main",
+          sessionId: "s1",
+          agentId: "main",
+          kind: "upstream_missing",
+          actorType: "system",
+          occurredAt: 100,
+          summary: "upstream missing via codex",
+          payload: { channel: "codex", catalogId: "internal-catalog", nested: { drop: true } },
+        },
+      ],
       truncated: false,
       earliestAvailableSequence: 12,
       historyGap: true,
     });
 
-    const result = await getSessionStatusTool().execute("call-state", { changesSince: 3 });
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-state", { changesSince: 3 });
     const details = result.details as Record<string, unknown>;
     const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
 
     expect(getSessionStateVersionMock).toHaveBeenCalledWith("main", "main");
     expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith("main", "main", 3, 200);
     expect(details.stateVersion).toBe(12);
-    expect(details.stateChanges).toMatchObject({ historyGap: true });
+    expect(details.stateChanges).toMatchObject({
+      historyGap: true,
+      events: [
+        {
+          sequence: 12,
+          kind: "upstream_missing",
+          actorType: "system",
+          occurredAt: 100,
+          summary: "upstream missing via codex",
+          payload: { channel: "codex" },
+        },
+      ],
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(JSON.stringify(details.stateChanges)).not.toContain("internal-catalog");
     expect(text).toContain("Session state changes:");
     expect(text).toContain('"kind": "upstream_missing"');
+  });
+
+  it("returns watched group changesSince under tree visibility", async () => {
+    const groupSessionKey = "agent:main:telegram:group:watched";
+    resetSessionStore({
+      "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
+      [groupSessionKey]: {
+        sessionId: "s-group",
+        updatedAt: 20,
+        chatType: "group",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      tools: {
+        sessions: { visibility: "tree" },
+        agentToAgent: { enabled: false },
+      },
+    };
+    listAmbientGroupWatchTargetsMock.mockReturnValue(new Set([groupSessionKey]));
+    getSessionStateVersionMock.mockReturnValue(9);
+    listSessionStateEventsSinceMock.mockReturnValue({
+      events: [
+        { sequence: 9, kind: "human_direct_message", summary: "human message via telegram" },
+      ],
+      truncated: false,
+      earliestAvailableSequence: 9,
+      historyGap: false,
+    });
+
+    const result = await getSessionStatusTool("agent:main:main").execute("call-group-state", {
+      sessionKey: groupSessionKey,
+      changesSince: 4,
+    });
+
+    expect(listAmbientGroupWatchTargetsMock).toHaveBeenCalledWith("agent:main:main");
+    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupSessionKey, "main", 4, 200);
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: groupSessionKey,
+      stateVersion: 9,
+    });
   });
 
   it("enables transcript usage fallback for session_status", async () => {

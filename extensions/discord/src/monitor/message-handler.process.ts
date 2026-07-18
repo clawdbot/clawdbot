@@ -8,10 +8,11 @@ import {
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  dispatchChannelInboundReply,
+  dispatchChannelInboundTurn,
   hasFinalInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
@@ -24,8 +25,6 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -36,7 +35,13 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { danger, logVerbose, shouldLogVerbose, sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+  sleep,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
@@ -57,15 +62,11 @@ import {
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import {
-  completeDiscordSessionConflict,
-  withDiscordSessionRetry,
-} from "./message-handler.retry.js";
+import { completeDiscordSessionConflict } from "./message-handler.retry.js";
 import { deliverDiscordReply, formatDiscordReplyDeliveryFailure } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 
-const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/reply-runtime"));
 const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
 } as APIAllowedMentions;
@@ -170,6 +171,7 @@ async function processDiscordMessageInner(
     threadBindings,
     route,
     abortSignal,
+    turnAdoptionLifecycle,
     preparedMedia: mediaList,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
@@ -185,7 +187,6 @@ async function processDiscordMessageInner(
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
-  const { dispatchReplyWithBufferedBlockDispatcher: dispatchReply } = await loadReplyRuntime();
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
     ctx: {
@@ -991,7 +992,11 @@ async function processDiscordMessageInner(
     );
   };
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
-  let dispatchResult: Awaited<ReturnType<typeof dispatchReply>> | null = null;
+  let dispatchResult: {
+    queuedFinal: boolean;
+    counts: Record<ReplyDispatchKind, number>;
+    failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
+  } | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
@@ -1015,17 +1020,18 @@ async function processDiscordMessageInner(
       dispatchAborted = true;
       return;
     }
-    const preparedResult = await dispatchChannelInboundReply({
+    const preparedResult = await dispatchChannelInboundTurn({
       cfg,
       channel: "discord",
       accountId: route.accountId,
-      agentId: route.agentId,
-      routeSessionKey: persistedSessionKey,
-      storePath: turn.storePath,
+      route: { agentId: route.agentId, sessionKey: persistedSessionKey },
       ctxPayload,
-      recordInboundSession,
       afterRecord: queueInitialAckReactionAfterRecord,
-      dispatchReplyWithBufferedBlockDispatcher: withDiscordSessionRetry(dispatchReply, abortSignal),
+      sessionInitRetry: {
+        delaysMs: [250, 1_000, 2_500],
+        signal: abortSignal,
+        sleep: sleepWithAbort,
+      },
       dispatcherOptions: {
         ...replyPipeline,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -1047,6 +1053,7 @@ async function processDiscordMessageInner(
             limit: historyLimit,
           },
       replyOptions: {
+        ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
         abortSignal,
         skillFilter: channelConfig?.skills,
         sourceReplyDeliveryMode,
@@ -1188,7 +1195,7 @@ async function processDiscordMessageInner(
           if (payload.phase !== "update") {
             return;
           }
-          await draftPreview.pushPlanProgress(payload.planSteps, {
+          await draftPreview.pushPlanProgress(payload.steps, {
             explanation: payload.explanation,
           });
         },

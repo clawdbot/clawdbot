@@ -9,6 +9,7 @@ export type UiCommandDetail = UiCommandParams;
 export type TerminalPanelToggleDetail = {
   dock?: "bottom" | "right";
   open?: boolean;
+  terminalSessionId?: string;
   catalog?: {
     catalogId: string;
     hostId: string;

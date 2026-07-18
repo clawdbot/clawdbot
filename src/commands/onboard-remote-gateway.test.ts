@@ -80,6 +80,8 @@ function detectResult() {
       },
     ],
     manualProviders: [],
+    authOptions: [],
+    recommendedInstalls: [],
     workspace: "/gateway/workspace",
     setupComplete: false,
   } as const;

@@ -203,6 +203,98 @@ bus.
   stays on the same diagnostic trace when the emitting runtime has trusted
   trace context.
 
+### Model-call observation units
+
+Every `openclaw.model.call` span identifies what its lifecycle measures through
+`openclaw.model_call.observation_unit`:
+
+- `request` - one observable model/provider request. Native embedded model
+  calls use this unit, and exporters treat a missing value as `request` for
+  compatibility with older or external emitters.
+- `turn` - one opaque agent CLI turn that may contain hidden model requests,
+  retries, tool work, or background work. Claude Code CLI and Codex app-server
+  calls use this unit.
+
+Both units remain model-call spans so trace backends can render model input,
+output, usage, and hierarchy. Request spans use the API-derived GenAI operation
+(`chat`, `generate_content`, or `text_completion`), while turn spans use
+`gen_ai.operation.name = invoke_agent`. Both contribute to
+`gen_ai.client.operation.duration`, where the operation name keeps direct
+request latency separate from full-turn latency. OpenClaw's OTEL model-call
+metrics also include `openclaw.model_call.observation_unit`; the Prometheus
+model-call metrics expose the equivalent `observation_unit` label.
+
+### Claude Code CLI model-call fidelity
+
+Claude Code CLI turns emit one synthetic, turn-level `openclaw.model.call`
+span. These are not Anthropic HTTP request spans. They use `openclaw.api =
+claude-code`, `openclaw.model_call.observation_unit = turn`, and identify
+the operation as `gen_ai.operation.name = invoke_agent`. They identify
+OpenClaw's CLI boundary through
+`openclaw.transport`:
+
+- `stdio` - one-shot local Claude Code process.
+- `stdio-live` - one turn on a managed persistent Claude stdio session.
+- `paired-node-cli` - one-shot Claude Code execution delegated to a paired
+  node.
+
+Claude CLI diagnostics are instantiated only while the process diagnostic
+dispatcher is enabled and an internal or trusted event listener is attached.
+With no observability plugin or other listener active, Claude CLI turns skip
+the synthetic trace hierarchy, content buffers, and diagnostic stream-byte
+accounting. When content capture is enabled, prompt and system-prompt fields
+are capped at 128 KiB each; assistant output is capped at 128 KiB across at
+most 200 envelopes, with 16 KiB and one item reserved for a final visible
+fallback response. A marker records truncation when the limit is reached.
+
+OpenClaw gives Claude CLI turns the same ownership hierarchy used by other
+agent runtimes: `openclaw.harness.run` (`openclaw.harness.id = claude-cli`)
+contains `openclaw.run`, which contains the Claude `openclaw.model.call`
+span. The harness and run spans are synthetic OpenClaw turn boundaries, not
+Claude Code internal phases. One-shot and managed stdio turns use the same
+hierarchy; a real fresh-session retry creates another model-call child inside
+the same OpenClaw run.
+
+The span starts when OpenClaw admits the prepared CLI turn and ends only after
+that turn succeeds or fails. For managed sessions, an interim success result
+does not end the span while Claude reports result-holding background agents or
+workflows; the final post-drain result does. Abort, timeout, process failure,
+output/parse failure, and other turn failures end the same span with an error.
+
+Claude Code reports per-assistant-message usage and may also report cumulative
+usage on its terminal result. OpenClaw reply accounting continues to use the
+last assistant message so existing cost semantics do not change; the
+turn-level model-call span uses terminal cumulative usage when available,
+including cache-read and cache-creation tokens.
+
+For these CLI spans, byte and timing fields describe the observable OpenClaw
+CLI boundary:
+
+- `openclaw.model_call.request_bytes` is the UTF-8 size of the prompt value
+  sent over one-shot stdin/argv, or the managed stdio JSONL user envelope. It
+  is not the size of Claude Code's hidden model request.
+- `openclaw.model_call.response_bytes` is the UTF-8 size of Claude CLI stdout
+  observed during the turn. It is not Anthropic HTTP response size.
+- `openclaw.model_call.time_to_first_byte_ms` is time to the first observable
+  Claude CLI stdout or stderr output. It is not network TTFB.
+
+With the matching granular `captureContent` fields enabled, the span exports
+the effective prompt OpenClaw sends to Claude Code, OpenClaw's appended system
+prompt, and visible assistant text/reasoning/tool-call identity through
+`gen_ai.input.messages`, `gen_ai.output.messages`, and
+`gen_ai.system_instructions`. Tool arguments, opaque thinking signatures, and
+tool results are omitted from the Claude assistant envelope. OpenClaw does not
+claim access to Claude Code's private system prompt, hidden resumed or
+compacted request payload, native internal tool schemas, raw Anthropic HTTP
+request, internal retries, upstream request id, or true network TTFB. Because
+Claude Code does not expose its effective native tool definitions accurately,
+these spans do not populate `gen_ai.tool.definitions`.
+
+External Claude harness tool spans remain metadata-only even when tool content
+capture is enabled. As with every model span, captured Claude CLI content uses
+the trusted listener-only path and the exporter's existing redaction and size
+bounds; content remains off by default.
+
 ## Exported metrics
 
 ### Model usage
@@ -212,11 +304,11 @@ bus.
 - `openclaw.run.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
 - `openclaw.context.tokens` (histogram, attrs: `openclaw.context`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
 - `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric, attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`)
-- `gen_ai.client.operation.duration` (histogram, seconds, GenAI semantic-conventions metric, attrs: `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`)
-- `openclaw.model_call.duration_ms` (histogram, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, plus `openclaw.errorCategory` and `openclaw.failureKind` on classified errors)
-- `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; no raw payload content)
-- `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed response chunk payloads; high-frequency text, thinking, and tool-call deltas count only incremental `delta` bytes; no raw response content)
-- `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
+- `gen_ai.client.operation.duration` (histogram, seconds, GenAI semantic-conventions metric for model requests and synthetic agent turns; attrs: `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`; turn observations use `gen_ai.operation.name = invoke_agent`)
+- `openclaw.model_call.duration_ms` (histogram, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit`, plus `openclaw.errorCategory` and `openclaw.failureKind` on classified errors)
+- `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; for Claude Code CLI, the observable prompt input/envelope described above; no raw payload content)
+- `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed response chunk payloads; high-frequency text, thinking, and tool-call deltas count only incremental `delta` bytes; for Claude Code CLI, observed stdout bytes; no raw response content)
+- `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event; for Claude Code CLI, first observable CLI output rather than network TTFB)
 - `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
 - `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
 
@@ -338,13 +430,13 @@ Liveness warnings also emit:
   - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`
 - `openclaw.model.call`
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
-  - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`
+  - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`)
   - `openclaw.errorCategory`, `error.type`, and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
-  - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the model-call result carries provider usage for that individual call
+  - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the result carries usage for that request or aggregate turn
   - Span event `openclaw.provider.request` with attribute `openclaw.upstreamRequestIdHash` (bounded, hash-based) when the upstream provider result exposes a request id; raw ids are never exported
-  - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, model-call spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}` and `CLIENT` span kind instead of `openclaw.model.call`.
+  - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, request spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}`. Turn spans use `invoke_agent` because OpenClaw does not claim a native agent name from the opaque CLI boundary. Both use `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
   - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
@@ -377,8 +469,12 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above. Plugins can also
-subscribe to them directly without OTLP export.
+The events below back the metrics and spans above or are available for direct
+plugin subscription. `run.progress` and `run.execution_phase` are direct-only
+lifecycle signals; the diagnostics-otel plugin does not export them as
+standalone OTLP signals. Event kinds and `run.execution_phase.phase` values are
+additive. TypeScript consumers should keep default branches instead of assuming
+either union is permanently exhaustive.
 
 **Model usage**
 
@@ -398,6 +494,7 @@ subscribe to them directly without OTLP export.
 - `queue.lane.enqueue` / `queue.lane.dequeue`
 - `session.state` / `session.long_running` / `session.stalled` / `session.stuck`
 - `run.attempt` / `run.progress`
+- `run.execution_phase` (public, session-correlated embedded-runner startup milestones)
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)
 
 **Harness lifecycle**

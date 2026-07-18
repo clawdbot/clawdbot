@@ -107,7 +107,7 @@ describe("provider public artifacts", () => {
     ).toBe("adaptive");
   });
 
-  it("loads Moonshot Kimi K2.7 thinking policy before runtime registration", () => {
+  it("loads Moonshot always-thinking policies before runtime registration", () => {
     const surface = resolveBundledProviderPolicySurface("moonshot");
 
     expect(
@@ -118,6 +118,34 @@ describe("provider public artifacts", () => {
     ).toEqual({
       levels: [{ id: "low", label: "on" }],
       defaultLevel: "low",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k3",
+      }),
+    ).toEqual({
+      levels: [{ id: "max", label: "max" }],
+      defaultLevel: "max",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("loads Kimi Code K3 thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("kimi");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "kimi",
+        modelId: "k3",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "max", label: "max" },
+      ],
+      defaultLevel: "max",
       preserveWhenCatalogReasoningFalse: true,
     });
   });

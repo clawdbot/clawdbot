@@ -86,6 +86,7 @@ export type AgentTurnParams = {
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
+  hookTrigger?: "heartbeat" | "user";
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;

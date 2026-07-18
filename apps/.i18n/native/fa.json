@@ -1104,11 +1104,6 @@
       "translated": "پیوست برای ارسال آماده نشد."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "پیام برای تحویل در آینده در صف قرار نگرفت."
-    },
-    {
       "id": "native.android.c3899241029d152c",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "translated": "صف آفلاین پر است ($OUTBOX_MAX_QUEUED پیام)؛ ابتدا موارد در صف را حذف کنید."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "وضعیت سلامت Gateway مطلوب نیست؛ ارسال ممکن نیست"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "پیام برای تحویل در آینده در صف قرار نگرفت."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",
@@ -7029,9 +7029,94 @@
       "translated": "این تصویر قابل رمزگشایی نبود."
     },
     {
+      "id": "native.android.e2004e8205154dd2",
+      "source": "Couldn’t load background tasks",
+      "translated": "بارگیری وظایف پس‌زمینه ممکن نشد"
+    },
+    {
+      "id": "native.android.bfa286f1b0a3c526",
+      "source": "Couldn’t load task details",
+      "translated": "بارگیری جزئیات وظیفه ممکن نشد"
+    },
+    {
+      "id": "native.android.6811e525782306c1",
+      "source": "Background tasks",
+      "translated": "وظایف پس‌زمینه"
+    },
+    {
+      "id": "native.android.754676bf2d2a50e7",
+      "source": "Refresh background tasks",
+      "translated": "تازه‌سازی وظایف پس‌زمینه"
+    },
+    {
+      "id": "native.android.99e93f4520a61356",
+      "source": "No background tasks for this agent.",
+      "translated": "هیچ وظیفه پس‌زمینه‌ای برای این عامل وجود ندارد."
+    },
+    {
+      "id": "native.android.26f0aae060212535",
+      "source": "Finished",
+      "translated": "پایان‌یافته"
+    },
+    {
+      "id": "native.android.6f4ef7e03dd153f5",
+      "source": "Back to background tasks",
+      "translated": "بازگشت به وظایف پس‌زمینه"
+    },
+    {
+      "id": "native.android.193a6c8583fe0dfb",
+      "source": "${statusLabel} · ${task.runtime}",
+      "translated": "${statusLabel} · ${task.runtime}"
+    },
+    {
+      "id": "native.android.c00ea0e2c7802a9f",
+      "source": "Prompt",
+      "translated": "درخواست"
+    },
+    {
+      "id": "native.android.4cdf83cd30fac87e",
+      "source": "Prompt unavailable",
+      "translated": "درخواست در دسترس نیست"
+    },
+    {
+      "id": "native.android.a093c342398c1d62",
+      "source": "No output yet",
+      "translated": "هنوز خروجی‌ای وجود ندارد"
+    },
+    {
+      "id": "native.android.3adeec85d4a8e797",
+      "source": "Output",
+      "translated": "خروجی"
+    },
+    {
+      "id": "native.android.e378f4d3069dc5f4",
+      "source": "Queued",
+      "translated": "در صف"
+    },
+    {
+      "id": "native.android.7e4ab752e691e19a",
+      "source": "Running",
+      "translated": "در حال اجرا"
+    },
+    {
+      "id": "native.android.c3b1223090fc9f15",
+      "source": "Completed",
+      "translated": "تکمیل‌شده"
+    },
+    {
+      "id": "native.android.7a5134f615d03ff9",
+      "source": "Failed",
+      "translated": "ناموفق"
+    },
+    {
       "id": "native.android.6384b9802cfdacfe",
       "source": "$text ",
       "translated": "$text "
+    },
+    {
+      "id": "native.android.d1712183ebf86197",
+      "source": "Widget unavailable",
+      "translated": "ویجت در دسترس نیست"
     },
     {
       "id": "native.android.cd2033b0a82a72dd",
@@ -7294,9 +7379,9 @@
       "translated": "آفلاین"
     },
     {
-      "id": "native.android.6b0f8ea129bca167",
-      "source": "More new chat options",
-      "translated": "گزینه‌های بیشتر چت جدید"
+      "id": "native.android.6c2e520fd54edeb4",
+      "source": "Chat actions",
+      "translated": "اقدامات گفت‌وگو"
     },
     {
       "id": "native.android.0066c3883e9eff15",
@@ -7304,9 +7389,24 @@
       "translated": "به‌روزرسانی گفتگو"
     },
     {
+      "id": "native.android.b57a1b542cff8f55",
+      "source": "Background tasks",
+      "translated": "وظایف پس‌زمینه"
+    },
+    {
       "id": "native.android.707eccff20a79f65",
       "source": "Chat",
       "translated": "گفتگو"
+    },
+    {
+      "id": "native.android.ec49cca2ed03f9f9",
+      "source": "Messages to recover",
+      "translated": "Messages to recover"
+    },
+    {
+      "id": "native.android.7983bb6667118aa1",
+      "source": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+      "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
     },
     {
       "id": "native.android.882cc14a58e7e105",
@@ -7452,6 +7552,21 @@
       "id": "native.android.98a0d4d5bba788c4",
       "source": "OpenClaw is preparing a response.",
       "translated": "OpenClaw در حال آماده‌سازی پاسخ است."
+    },
+    {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "جمع‌کردن فهرست بررسی برنامه"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "بازکردن فهرست بررسی برنامه"
     },
     {
       "id": "native.android.f3806d79e43f568f",
@@ -10179,6 +10294,111 @@
       "translated": "تأیید"
     },
     {
+      "id": "native.apple.013dc12863bed23b",
+      "source": "Background task",
+      "translated": "وظیفه پس‌زمینه"
+    },
+    {
+      "id": "native.apple.d33ca570a77c6d6f",
+      "source": "Queued",
+      "translated": "در صف"
+    },
+    {
+      "id": "native.apple.4e4498e6144974b7",
+      "source": "Completed",
+      "translated": "تکمیل‌شده"
+    },
+    {
+      "id": "native.apple.8773684d27996e83",
+      "source": "Failed",
+      "translated": "ناموفق"
+    },
+    {
+      "id": "native.apple.92f69cf86443d64d",
+      "source": "Subagent",
+      "translated": "عامل فرعی"
+    },
+    {
+      "id": "native.apple.924830db78883b2d",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.apple.d5433fcd3232cd16",
+      "source": "Task",
+      "translated": "وظیفه"
+    },
+    {
+      "id": "native.apple.0b972513797e7385",
+      "source": "Loading background tasks…",
+      "translated": "در حال بارگذاری وظایف پس‌زمینه…"
+    },
+    {
+      "id": "native.apple.fb3147cbc796dd3a",
+      "source": "Tasks for this agent will appear here.",
+      "translated": "وظایف این عامل در اینجا نمایش داده می‌شوند."
+    },
+    {
+      "id": "native.apple.336cf64ef5611816",
+      "source": "No running tasks",
+      "translated": "هیچ وظیفه‌ای در حال اجرا نیست"
+    },
+    {
+      "id": "native.apple.d5955a199881b73e",
+      "source": "Running",
+      "translated": "در حال اجرا"
+    },
+    {
+      "id": "native.apple.a3c63b936f7f31a9",
+      "source": "No finished tasks",
+      "translated": "هیچ وظیفه پایان‌یافته‌ای وجود ندارد"
+    },
+    {
+      "id": "native.apple.889ef61e5911c728",
+      "source": "Finished",
+      "translated": "پایان‌یافته"
+    },
+    {
+      "id": "native.apple.bb086e78b05fff33",
+      "source": "Background Tasks",
+      "translated": "وظایف پس‌زمینه"
+    },
+    {
+      "id": "native.apple.b109300cc5265643",
+      "source": "Refresh",
+      "translated": "تازه‌سازی"
+    },
+    {
+      "id": "native.apple.51dd4026b0e770aa",
+      "source": "Prompt",
+      "translated": "درخواست"
+    },
+    {
+      "id": "native.apple.e3268d00448fe1e3",
+      "source": "Loading…",
+      "translated": "در حال بارگذاری…"
+    },
+    {
+      "id": "native.apple.56b9f7324f04a28d",
+      "source": "Prompt unavailable.",
+      "translated": "درخواست در دسترس نیست."
+    },
+    {
+      "id": "native.apple.f8ed60c4d4b277ed",
+      "source": "Output",
+      "translated": "خروجی"
+    },
+    {
+      "id": "native.apple.f4545f1ff911f4e2",
+      "source": "No output yet.",
+      "translated": "هنوز خروجی‌ای وجود ندارد."
+    },
+    {
+      "id": "native.apple.e2c229b2828a7152",
+      "source": "Task Details",
+      "translated": "جزئیات وظیفه"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "امکان خروجی گرفتن از رونوشت وجود ندارد"
@@ -10219,9 +10439,24 @@
       "translated": "چت جدید در Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "نشست‌ها…"
+    },
+    {
+      "id": "native.apple.17c13312e7532c89",
+      "source": "Background Tasks",
+      "translated": "وظایف پس‌زمینه"
+    },
+    {
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "خروجی گرفتن از رونوشت"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "نمایش استدلال و فعالیت ابزارها"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -12884,6 +13119,11 @@
       "translated": "اجرای خودآزمایی اشتراک‌گذاری"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "سلامت اپل"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "گزارش‌های اشکال‌زدایی کشف"
@@ -13689,6 +13929,21 @@
       "translated": "پیش از ادامه، این درخواست اجرا را بررسی کنید. تصمیم شما به gateway ارسال خواهد شد."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "افزونه"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "ابزار"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "شدت"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "میزبان"
@@ -14059,6 +14314,36 @@
       "translated": "دیگر نشان نده"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "خلاصه‌های سلامت اپل"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "داده‌های سلامت اپل در این دستگاه در دسترس نیست."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "فقط زمانی که خلاصه‌ای درخواست شود، داده‌های مربوط به تعداد قدم‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را از Apple Health می‌خواند. فقط داده‌های تجمیعی از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده ارسال می‌شوند؛ نمونه‌های خام روی این دستگاه باقی می‌مانند و نتایج ممکن است در تاریخچه چت حفظ شوند."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "خلاصه‌های فقط‌خواندنی از برنامه سلامت اپل برای گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها ایجاد می‌کند. فقط خلاصه‌های درخواست‌شده از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده ارسال می‌شوند؛ نمونه‌های خام در این دستگاه باقی می‌مانند."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "خاموش کردن خلاصه‌ها"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "فعال کردن خلاصه‌های سلامت اپل"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها و زمینهٔ زمان‌بندی را نشان دهد."
@@ -14104,14 +14389,14 @@
       "translated": "OpenClaw ممکن است از داده‌های حرکت برای پشتیبانی از تعاملات و خودکارسازی‌های آگاه از دستگاه استفاده کند."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "پس از فعال‌کردن خلاصه‌های سلامت، OpenClaw گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را می‌خواند تا داده‌های تجمیعی درخواستی را با ارائه‌دهنده هوش مصنوعی پیکربندی‌شده شما به اشتراک بگذارد."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw اطلاعات گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌های شما را از برنامه سلامت اپل می‌خواند تا خلاصه‌های درخواستی شما را ایجاد کند و آن‌ها را از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده ارسال کند."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw داده‌های Health را نمی‌نویسد یا تغییر نمی‌دهد. Health Summaries گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را می‌خواند تا مجموعه‌های درخواستی را با ارائه‌دهنده AI پیکربندی‌شده‌تان به اشتراک بگذارد."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw چیزی در برنامه سلامت اپل نمی‌نویسد. این برنامه از داده‌های فقط‌خواندنی برای ایجاد خلاصه‌های درخواستی شما و ارسال آن‌ها از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده استفاده می‌کند."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15279,11 +15564,6 @@
       "translated": "فقط افزودن"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "خلاصه‌های سلامت"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "اجازه دادن"
@@ -15292,31 +15572,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "باز کردن تنظیمات"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "داده‌های سلامت در این دستگاه در دسترس نیست."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "فقط داده‌های تجمیعی درخواستی مربوط به گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را از طریق Gateway شما با ارائه‌دهنده هوش مصنوعی پیکربندی‌شده به اشتراک می‌گذارد. نتایج ممکن است در تاریخچه گفتگو باقی بمانند."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "به‌طور پیش‌فرض خاموش است. با فعال‌کردن، داده‌های تجمیعی درخواستی می‌توانند از طریق Gateway و ارائه‌دهنده هوش مصنوعی پیکربندی‌شده شما از این iPhone خارج شوند."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "غیرفعال کردن"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "فعال‌سازی و اشتراک‌گذاری خلاصه‌ها"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -18529,6 +18784,26 @@
       "translated": "چشمک‌زدن‌ها و تکان‌خوردن‌های حالت بی‌کاری را روی آیکون وضعیت فعال کنید."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "گفت‌وگوی سریع"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "یک کادر نوشتن شناور برای پیام‌های سریع نمایش دهید که با میان‌بر سراسری فراخوانی می‌شود."
+    },
+    {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "میان‌بر گفت‌وگوی سریع"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "میان‌بر سراسری که نوار گفت‌وگوی شناور را برای نشست اصلی باز می‌کند."
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "قابلیت‌ها"
@@ -19214,6 +19489,11 @@
       "translated": "باز کردن چت"
     },
     {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "گفت‌وگوی سریع"
+    },
+    {
       "id": "native.apple.5e3cd7734f27f447",
       "source": "Close Canvas",
       "translated": "بستن Canvas"
@@ -19609,9 +19889,19 @@
       "translated": "هیچ دسترسی قابل‌استفاده‌ای به هوش مصنوعی در این Gateway پیدا نشد"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "اشکالی ندارد — می‌توانید با یک کلید API یا توکن متصل شوید. همچنین می‌توانید وارد Claude Code یا Codex شوید، یا Ollama یا LM Studio را با یک مدل مناسب اجرا کنید و سپس «بررسی دوباره» را بزنید."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "یکی از ارائه‌دهندگان زیر را با یک کلید API یا توکن متصل کنید، سپس دوباره بررسی کنید."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "یکی از این ابزارها را نصب کنید، سپس دوباره بررسی کنید. همچنین می‌توانید یکی از ارائه‌دهندگان زیر را متصل کنید."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "نصب‌های پیشنهادی"
     },
     {
       "id": "native.apple.e2749739df556643",
@@ -19794,6 +20084,26 @@
       "translated": "کپی خطا"
     },
     {
+      "id": "native.apple.7dee24e5bf088dd5",
+      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
+      "translated": "وارد کردن \\(incomplete) \\(Self.memoryNoun(incomplete)) امکان‌پذیر نبود."
+    },
+    {
+      "id": "native.apple.84189c39ea5803c6",
+      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
+      "translated": "Gateway یک طرح ارائه‌دهنده ناسازگار برگرداند. دوباره برنامه‌ریزی کنید."
+    },
+    {
+      "id": "native.apple.4c9e75d64cbc5cc2",
+      "source": "The Gateway did not return a usable import plan. Try planning again.",
+      "translated": "Gateway طرح وارد کردن قابل‌استفاده‌ای برنگرداند. دوباره برنامه‌ریزی کنید."
+    },
+    {
+      "id": "native.apple.2070bf43a67680ee",
+      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
+      "translated": "Gateway نتوانست برای \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)) برنامه‌ریزی کند. دوباره تلاش کنید."
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<رمز محرمانه حذف‌شده>"
@@ -19837,6 +20147,106 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "بازگشت"
+    },
+    {
+      "id": "native.apple.7ca0977d5f73356d",
+      "source": "Bring your memories along",
+      "translated": "خاطراتتان را همراه بیاورید"
+    },
+    {
+      "id": "native.apple.b57ee4f83cff23f3",
+      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "OpenClaw می‌تواند زمینه مفیدی را از ابزارهای هوش مصنوعی که از قبل استفاده می‌کنید، به دستیار جدیدتان منتقل کند."
+    },
+    {
+      "id": "native.apple.46cab71d748860b8",
+      "source": "Looking for memories…",
+      "translated": "در حال جست‌وجوی خاطرات…"
+    },
+    {
+      "id": "native.apple.c9e5f1aebe85e201",
+      "source": "Checking supported AI tools on this Mac.",
+      "translated": "در حال بررسی ابزارهای هوش مصنوعی پشتیبانی‌شده در این Mac."
+    },
+    {
+      "id": "native.apple.77290f36f36f00e5",
+      "source": "No memories to import",
+      "translated": "خاطره‌ای برای وارد کردن وجود ندارد"
+    },
+    {
+      "id": "native.apple.e5cca7b9f082ace9",
+      "source": "You can import memories later from the dashboard.",
+      "translated": "می‌توانید بعداً خاطرات را از داشبورد وارد کنید."
+    },
+    {
+      "id": "native.apple.963add2f12fd18cb",
+      "source": "Import memories",
+      "translated": "وارد کردن خاطرات"
+    },
+    {
+      "id": "native.apple.9db369e036a38a29",
+      "source": "Importing memories…",
+      "translated": "در حال وارد کردن خاطرات…"
+    },
+    {
+      "id": "native.apple.71b8e38a5e7040ef",
+      "source": "Refresh plan",
+      "translated": "تازه‌سازی طرح"
+    },
+    {
+      "id": "native.apple.e87bec72cb9c9dbf",
+      "source": "Retry pending imports before refreshing the plan.",
+      "translated": "پیش از تازه‌سازی طرح، وارد کردن‌های در انتظار را دوباره امتحان کنید."
+    },
+    {
+      "id": "native.apple.f678888102fded6e",
+      "source": "You can skip this and import later from the dashboard’s Memory import page.",
+      "translated": "می‌توانید از این مرحله بگذرید و بعداً از صفحه وارد کردن خاطرات در داشبورد، آن‌ها را وارد کنید."
+    },
+    {
+      "id": "native.apple.36108528c6acc448",
+      "source": "\\(provider.alreadyImportedCount) already imported",
+      "translated": "\\(provider.alreadyImportedCount) مورد قبلاً وارد شده است"
+    },
+    {
+      "id": "native.apple.9b3444de8c9b2acc",
+      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
+      "translated": "\\(result.migrated) \\(self.memoryLabel(result.migrated)) وارد شد."
+    },
+    {
+      "id": "native.apple.3252fea4dac8669a",
+      "source": "Couldn’t check for memories",
+      "translated": "بررسی خاطرات امکان‌پذیر نبود"
+    },
+    {
+      "id": "native.apple.d371deb696de9e6b",
+      "source": "Retry",
+      "translated": "تلاش مجدد"
+    },
+    {
+      "id": "native.apple.406ae454540725d0",
+      "source": "You can do this later from the dashboard’s Memory import page.",
+      "translated": "می‌توانید این کار را بعداً از صفحه وارد کردن خاطرات در داشبورد انجام دهید."
+    },
+    {
+      "id": "native.apple.d1b5d99f67dae42e",
+      "source": "Your memories are ready",
+      "translated": "خاطرات شما آماده‌اند"
+    },
+    {
+      "id": "native.apple.6dbe5b174271b62a",
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
+      "translated": "\\(imported) \\(self.memoryLabel(imported)) به OpenClaw وارد شد."
+    },
+    {
+      "id": "native.apple.d47b887f98e13e24",
+      "source": "\\(result.migrated) imported",
+      "translated": "\\(result.migrated) مورد وارد شد"
+    },
+    {
+      "id": "native.apple.6ac3d513f0ec5da7",
+      "source": "You can manage imported memories anytime from the dashboard.",
+      "translated": "می‌توانید خاطرات واردشده را هر زمان از داشبورد مدیریت کنید."
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -20189,9 +20599,9 @@
       "translated": "باز کردن پنل نوار منو"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "برای گفت‌وگوی سریع و وضعیت، روی آیکن نوار منوی OpenClaw کلیک کنید."
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "برای مشاهده پنل فشرده گفت‌وگو و وضعیت، روی نماد OpenClaw در نوار منو کلیک کنید."
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20224,9 +20634,9 @@
       "translated": "از پنل + Canvas استفاده کنید"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "پنل فشرده گفت‌وگو را باز کنید؛ عامل می‌تواند پیش‌نمایش‌ها و جلوه‌های بصری غنی‌تری را در Canvas نمایش دهد."
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20379,6 +20789,11 @@
       "translated": "دسترسی سیستم"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "مکان"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "راه‌اندازی"
@@ -20492,46 +20907,6 @@
       "id": "native.apple.c8a3879230179938",
       "source": "Request access",
       "translated": "درخواست دسترسی"
-    },
-    {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "اتوماسیون (AppleScript)"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "اعلان‌ها"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "دسترس‌پذیری"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "ضبط صفحه"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "میکروفون"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "تشخیص گفتار"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "دوربین"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "مکان"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -20747,6 +21122,36 @@
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "ادامه"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "ارسال پیام به \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "ارسال تصویر صفحه از پنجره"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "ارسال پیام"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "به مجوزهای بیشتری نیاز دارد"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "اعطا"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "فعلاً نه"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22029,6 +22434,71 @@
       "translated": "بیدارباش صوتی تشخیص داده شد!"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "حالت مکالمه خاموش است"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "حالت مکالمه متوقف شده است"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "حالت مکالمه آماده است"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "در حال گوش دادن"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "در حال فکر کردن"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "در حال صحبت"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "مایلید روی چه چیزی کار کنید؟"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "بررسی وضعیت OpenClaw"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "وضعیت فعلی OpenClaw را خلاصه کن و بگو چه مواردی نیاز به توجه دارند."
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "چه کارهایی می‌توانی انجام دهی؟"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "نشان بده همین حالا در این Mac در چه زمینه‌هایی می‌توانی کمک کنی."
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "من را در جریان بگذار"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "اتفاقات جلسه‌هایم از دیروز تاکنون را خلاصه کن."
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": " (فیلترشده محلی)"
@@ -22084,9 +22554,49 @@
       "translated": "%@%% از زمینه استفاده شده است"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@ (بازنویسی)"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "در حال فکر کردن"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "کامل"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "میزان جزئیات"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "پیش‌فرض (ارث‌بری‌شده)"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "روشن"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "سریع"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "پاسخ‌های سریع"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22099,14 +22609,14 @@
       "translated": "اخیر"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "مدل‌ها"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "مدل"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "پیش‌فرض"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22274,6 +22784,46 @@
       "translated": "%@ توکن استفاده شده است"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "در حال بارگذاری پیام کامل…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "پیام کامل در دسترس نیست"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "پیام کامل"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "بستن"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "پیام کامل دیگر در دسترس نیست."
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "پیام کامل متن خوانایی ندارد."
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "پیام کامل بارگذاری نشد."
+    },
+    {
+      "id": "native.apple.2c865ac4a69645d3",
+      "source": "Widget unavailable",
+      "translated": "ویجت در دسترس نیست"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -22344,6 +22894,161 @@
       "translated": "در حال اجرای ابزارها…"
     },
     {
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "سایر"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "جمع‌کردن برنامه"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "بازکردن برنامه"
+    },
+    {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "کاربر"
+    },
+    {
+      "id": "native.apple.8ec708a3605a2cc3",
+      "source": "Search sessions",
+      "translated": "جستجوی نشست‌ها"
+    },
+    {
+      "id": "native.apple.23b069b4e7f97039",
+      "source": "No Sessions",
+      "translated": "هیچ نشستی وجود ندارد"
+    },
+    {
+      "id": "native.apple.2d4ee298bdd1c05d",
+      "source": "No Results",
+      "translated": "نتیجه‌ای یافت نشد"
+    },
+    {
+      "id": "native.apple.0058923f2ce8a3ec",
+      "source": "New Session",
+      "translated": "نشست جدید"
+    },
+    {
+      "id": "native.apple.66ba42960eb4135b",
+      "source": "New session",
+      "translated": "نشست جدید"
+    },
+    {
+      "id": "native.apple.36753ef2f1ed4264",
+      "source": "Rename Session",
+      "translated": "تغییر نام نشست"
+    },
+    {
+      "id": "native.apple.c9de0a1510ef475f",
+      "source": "Session name",
+      "translated": "نام نشست"
+    },
+    {
+      "id": "native.apple.6ec5a13c0e6c20d9",
+      "source": "Rename",
+      "translated": "تغییر نام"
+    },
+    {
+      "id": "native.apple.4c76665d89af4bec",
+      "source": "Cancel",
+      "translated": "لغو"
+    },
+    {
+      "id": "native.apple.afb4e6c99c63a28d",
+      "source": "Delete Session",
+      "translated": "حذف نشست"
+    },
+    {
+      "id": "native.apple.3d4ef32e42f136a4",
+      "source": "The session and its transcript are removed from the gateway.",
+      "translated": "نشست و رونوشت آن از Gateway حذف می‌شوند."
+    },
+    {
+      "id": "native.apple.90bcad5f067b4be1",
+      "source": "Delete “%@”?",
+      "translated": "«%@» حذف شود؟"
+    },
+    {
+      "id": "native.apple.9a7dca238fba628d",
+      "source": "Session running",
+      "translated": "نشست در حال اجرا است"
+    },
+    {
+      "id": "native.apple.fcfbfe5e97a95e9c",
+      "source": "Session failed",
+      "translated": "نشست ناموفق بود"
+    },
+    {
+      "id": "native.apple.ac85292b16a7465f",
+      "source": "Unread",
+      "translated": "خوانده‌نشده"
+    },
+    {
+      "id": "native.apple.a174cb1027a9b881",
+      "source": "Rename…",
+      "translated": "تغییر نام…"
+    },
+    {
+      "id": "native.apple.134d6bf84d58fb38",
+      "source": "Pin",
+      "translated": "سنجاق کردن"
+    },
+    {
+      "id": "native.apple.e7815cc4ba359513",
+      "source": "Unpin",
+      "translated": "برداشتن سنجاق"
+    },
+    {
+      "id": "native.apple.83f9f2db7eef6a19",
+      "source": "Fork",
+      "translated": "انشعاب"
+    },
+    {
+      "id": "native.apple.235614194dc19df2",
+      "source": "Mark Read",
+      "translated": "علامت‌گذاری به‌عنوان خوانده‌شده"
+    },
+    {
+      "id": "native.apple.bc71f0d20b7f72a0",
+      "source": "Mark Unread",
+      "translated": "علامت‌گذاری به‌عنوان خوانده‌نشده"
+    },
+    {
+      "id": "native.apple.c9e118f6aae18d97",
+      "source": "Archive",
+      "translated": "بایگانی"
+    },
+    {
+      "id": "native.apple.10365a351a1b58b3",
+      "source": "Restore",
+      "translated": "بازیابی"
+    },
+    {
+      "id": "native.apple.660f63319b89bd8e",
+      "source": "Copy Session Key",
+      "translated": "کپی کلید نشست"
+    },
+    {
+      "id": "native.apple.4aeb7c14c26dabac",
+      "source": "Delete Session…",
+      "translated": "حذف نشست…"
+    },
+    {
+      "id": "native.apple.6a3425ea2811ff88",
+      "source": "Gateway connected",
+      "translated": "Gateway متصل است"
+    },
+    {
+      "id": "native.apple.e3958d1053259f1d",
+      "source": "Connecting…",
+      "translated": "در حال اتصال…"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "سنجاق‌شده"
@@ -22399,6 +23104,16 @@
       "translated": "نشستی یافت نشد"
     },
     {
+      "id": "native.apple.f0e9d8f69c1d9190",
+      "source": "Restore",
+      "translated": "بازیابی"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "بایگانی"
+    },
+    {
       "id": "native.apple.05cb1fecc5844b69",
       "source": "Pinned",
       "translated": "سنجاق‌شده"
@@ -22419,14 +23134,34 @@
       "translated": "برداشتن سنجاق"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "بایگانی"
+      "id": "native.apple.6de479e9d780869a",
+      "source": "Fork",
+      "translated": "انشعاب"
     },
     {
-      "id": "native.apple.34b910911a05110e",
-      "source": "Unarchive",
-      "translated": "خروج از بایگانی"
+      "id": "native.apple.1398a2f69867f22d",
+      "source": "Mark Read",
+      "translated": "علامت‌گذاری به‌عنوان خوانده‌شده"
+    },
+    {
+      "id": "native.apple.4f259c4409cfcc75",
+      "source": "Mark Unread",
+      "translated": "علامت‌گذاری به‌عنوان خوانده‌نشده"
+    },
+    {
+      "id": "native.apple.946b677d8dbf0f37",
+      "source": "Hide talk transcript",
+      "translated": "پنهان کردن رونوشت مکالمه"
+    },
+    {
+      "id": "native.apple.cb1d1c999a859927",
+      "source": "Show talk transcript",
+      "translated": "نمایش رونوشت مکالمه"
+    },
+    {
+      "id": "native.apple.e7beeef6043ffd2a",
+      "source": "System Default",
+      "translated": "پیش‌فرض سیستم"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
@@ -22474,11 +23209,6 @@
       "translated": "گوش دادن"
     },
     {
-      "id": "native.apple.fe9f30f12f1dcfaf",
-      "source": "Copy Message",
-      "translated": "کپی پیام"
-    },
-    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "پرش به آخرین مورد"
@@ -22492,6 +23222,31 @@
       "id": "native.apple.9ab586b85834705c",
       "source": "Refresh",
       "translated": "تازه‌سازی"
+    },
+    {
+      "id": "native.apple.fe9f30f12f1dcfaf",
+      "source": "Copy Message",
+      "translated": "کپی پیام"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "باز کردن پیام کامل"
+    },
+    {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "پاسخ"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "شما"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "دستیار"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -22579,9 +23334,39 @@
       "translated": "با این کار مکالمه برای %@ بازنشانی می‌شود. کلید نشست بدون تغییر باقی می‌ماند."
     },
     {
+      "id": "native.apple.a92e96bed98bd553",
+      "source": "Rename Session",
+      "translated": "تغییر نام نشست"
+    },
+    {
+      "id": "native.apple.848e2388f3466f40",
+      "source": "Session name",
+      "translated": "نام نشست"
+    },
+    {
+      "id": "native.apple.8d636ca6b4764418",
+      "source": "Rename",
+      "translated": "تغییر نام"
+    },
+    {
+      "id": "native.apple.32b4a79f1b889aa6",
+      "source": "Cancel",
+      "translated": "لغو"
+    },
+    {
       "id": "native.apple.2ee7858b00a47c42",
       "source": "Export Transcript",
       "translated": "خروجی گرفتن رونوشت"
+    },
+    {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "جلسه‌ها"
+    },
+    {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@ (بازنویسی)"
     },
     {
       "id": "native.apple.b1f10b5e9113881d",
@@ -22594,6 +23379,41 @@
       "translated": "سطح تفکر"
     },
     {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "کامل"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "میزان جزئیات"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "پیش‌فرض (ارث‌بری‌شده)"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "روشن"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "سریع"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "پاسخ‌های سریع"
+    },
+    {
       "id": "native.apple.17ea1ddec4a7b7a8",
       "source": "Pinned",
       "translated": "سنجاق‌شده"
@@ -22604,14 +23424,19 @@
       "translated": "اخیر"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "مدل‌ها"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "مدل"
+    },
+    {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "پیش‌فرض"
+    },
+    {
+      "id": "native.apple.eb58552e43c8dde2",
+      "source": "New Session",
+      "translated": "نشست جدید"
     },
     {
       "id": "native.apple.5361129a24118af6",
@@ -22619,9 +23444,69 @@
       "translated": "بازخوانی"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "جلسه‌ها…"
+    },
+    {
+      "id": "native.apple.c36e008b051adb38",
+      "source": "Rename Session…",
+      "translated": "تغییر نام نشست…"
+    },
+    {
+      "id": "native.apple.ea0ef95a159bffe0",
+      "source": "Fork Session",
+      "translated": "انشعاب نشست"
+    },
+    {
+      "id": "native.apple.8768f9ed198edc54",
+      "source": "Unpin",
+      "translated": "برداشتن سنجاق"
+    },
+    {
+      "id": "native.apple.a8a2f4b248663f97",
+      "source": "Pin",
+      "translated": "سنجاق کردن"
+    },
+    {
+      "id": "native.apple.e53f1d7e094dc542",
+      "source": "Mark Read",
+      "translated": "علامت‌گذاری به‌عنوان خوانده‌شده"
+    },
+    {
+      "id": "native.apple.99579b05ec001672",
+      "source": "Mark Unread",
+      "translated": "علامت‌گذاری به‌عنوان خوانده‌نشده"
+    },
+    {
+      "id": "native.apple.b39c58e213137cc8",
+      "source": "Restore",
+      "translated": "بازیابی"
+    },
+    {
+      "id": "native.apple.6f5686f621b44307",
+      "source": "Archive",
+      "translated": "بایگانی"
+    },
+    {
+      "id": "native.apple.27ddbe5e4643b60f",
+      "source": "Copy Session Key",
+      "translated": "کپی کلید جلسه"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "خروجی گرفتن رونوشت…"
+    },
+    {
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "نمایش استدلال"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "نمایش فعالیت ابزار"
     },
     {
       "id": "native.apple.4b24d792545e5086",
@@ -22647,76 +23532,6 @@
       "id": "native.apple.f0a4720df5f5f403",
       "source": "Compact Session",
       "translated": "فشرده‌سازی نشست"
-    },
-    {
-      "id": "native.apple.0b9fc81ff2031799",
-      "source": "Search sessions",
-      "translated": "جستجوی نشست‌ها"
-    },
-    {
-      "id": "native.apple.f10d5ccfd0530fec",
-      "source": "No Results",
-      "translated": "نتیجه‌ای نیست"
-    },
-    {
-      "id": "native.apple.42b0ee4c8b3326b6",
-      "source": "No Sessions",
-      "translated": "نشستی نیست"
-    },
-    {
-      "id": "native.apple.eb58552e43c8dde2",
-      "source": "New Session",
-      "translated": "نشست جدید"
-    },
-    {
-      "id": "native.apple.247771e4350c006f",
-      "source": "New session",
-      "translated": "جلسه جدید"
-    },
-    {
-      "id": "native.apple.d9a72d07e8d95d35",
-      "source": "Delete Session",
-      "translated": "حذف جلسه"
-    },
-    {
-      "id": "native.apple.499537ec30a28ae0",
-      "source": "The session and its transcript are removed from the gateway.",
-      "translated": "جلسه و رونوشت آن از Gateway حذف می‌شوند."
-    },
-    {
-      "id": "native.apple.1bd1b747fd161df5",
-      "source": "Unread",
-      "translated": "خوانده‌نشده"
-    },
-    {
-      "id": "native.apple.a8a2f4b248663f97",
-      "source": "Pin",
-      "translated": "سنجاق کردن"
-    },
-    {
-      "id": "native.apple.8768f9ed198edc54",
-      "source": "Unpin",
-      "translated": "برداشتن سنجاق"
-    },
-    {
-      "id": "native.apple.27ddbe5e4643b60f",
-      "source": "Copy Session Key",
-      "translated": "کپی کلید جلسه"
-    },
-    {
-      "id": "native.apple.a994d072ab35cb35",
-      "source": "Delete Session…",
-      "translated": "حذف جلسه…"
-    },
-    {
-      "id": "native.apple.22d5ce71e22a7f73",
-      "source": "Connecting…",
-      "translated": "در حال اتصال…"
-    },
-    {
-      "id": "native.apple.8d0606ab1a2c0f44",
-      "source": "Gateway connected",
-      "translated": "Gateway متصل شد"
     },
     {
       "id": "native.apple.f74d150ce05205dd",

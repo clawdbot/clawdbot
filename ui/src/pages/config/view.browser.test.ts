@@ -61,7 +61,8 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
-    chatFollowUpMode: "steer" as const,
+    chatFollowUpMode: undefined,
+    serverQueueMode: "steer" as const,
     setChatFollowUpMode: vi.fn(),
     catalogOpenTarget: "viewer" as const,
     setCatalogOpenTarget: vi.fn(),
@@ -1307,17 +1308,38 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
-    expect(followUpSelect.value).toBe("steer");
+    expect(followUpSelect.value).toBe("server");
     expect(Array.from(followUpSelect.options, (option) => option.value)).toEqual([
+      "server",
       "steer",
       "queue",
     ]);
+    expect(container.textContent).toContain("Using server default (steer)");
     const microphoneSelect = queryRequired(
       container,
       "[data-settings-microphone]",
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+  });
+
+  it("marks browser follow-up overrides and resets them to the server", () => {
+    const setChatFollowUpMode = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      chatFollowUpMode: "queue",
+      serverQueueMode: "steer",
+      setChatFollowUpMode,
+    });
+
+    expect(container.textContent).toContain("Overriding server default (steer)");
+    const reset = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Reset to server default",
+    );
+    expect(reset).toBeDefined();
+    reset?.click();
+    expect(setChatFollowUpMode).toHaveBeenCalledWith(undefined);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -26,7 +26,7 @@ const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
 // Archived transcripts are the user's conversation history: retention keeps
 // them until the disk budget evicts oldest-first, never on a wall-clock timer.
 // The budget default below is what makes "keep archives" still bounded.
-const DEFAULT_SESSION_MAX_DISK_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_SESSION_MAX_DISK_BYTES = 10 * 1024 * 1024 * 1024;
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
@@ -531,14 +531,13 @@ function wouldCapActiveSession(params: {
  */
 export function capEntryCount(
   store: Record<string, SessionEntry>,
-  overrideMax?: number,
+  maxEntries: number,
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
   const preservedCount = Object.entries(store).filter(([key, entry]) =>
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;

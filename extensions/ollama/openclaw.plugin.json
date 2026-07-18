@@ -49,6 +49,8 @@
       "appGuidedDiscovery": true,
       "choiceLabel": "Ollama",
       "choiceHint": "Cloud and local open models",
+      "icon": "https://cdn.simpleicons.org/ollama",
+      "website": "https://ollama.com/download",
       "groupId": "ollama",
       "groupLabel": "Ollama",
       "groupHint": "Cloud and local open models"
@@ -60,6 +62,8 @@
       "appGuidedSecret": true,
       "choiceLabel": "Ollama Cloud",
       "choiceHint": "Hosted models via ollama.com",
+      "icon": "https://cdn.simpleicons.org/ollama",
+      "website": "https://ollama.com/download",
       "groupId": "ollama",
       "groupLabel": "Ollama",
       "groupHint": "Cloud and local open models",

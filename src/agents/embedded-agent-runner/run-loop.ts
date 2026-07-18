@@ -388,6 +388,7 @@ export async function runPreparedEmbeddedLoop(
         sessionIdUsed,
         sessionFileUsed,
         currentAttemptAssistant,
+        currentAttemptCompletedAssistant,
         attemptAssistant,
         terminalOutcome,
         terminalAborted,
@@ -516,8 +517,7 @@ export async function runPreparedEmbeddedLoop(
       } = prepareEmbeddedRunTerminal({
         runParams: params,
         attempt,
-        attemptAssistant,
-        currentAttemptAssistant,
+        currentAttemptCompletedAssistant,
         provider,
         model: model.id,
         activeErrorContext,

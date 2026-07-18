@@ -48,10 +48,7 @@ describe("scripts/test-live-shard", () => {
 
     expect(allFiles.length).toBeGreaterThan(0);
     expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
-    expect(duplicateFiles).toEqual([
-      "src/agents/zai.live.test.ts",
-      "extensions/music-generation-providers.live.test.ts",
-    ]);
+    expect(duplicateFiles).toEqual(["extensions/music-generation-providers.live.test.ts"]);
     expect(musicProviderFanout).toEqual([
       "native-live-extensions-media-music-google",
       "native-live-extensions-media-music-minimax",
@@ -91,6 +88,9 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
       "src/skills/workshop/experience-review.live.test.ts",
     );
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).not.toContain(
+      "src/agents/zai.live.test.ts",
+    );
     expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
       "src/agents/zai.live.test.ts",
     ]);
@@ -105,6 +105,7 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
       "src/gateway/gateway-trajectory-export.live.test.ts",
       "src/system-agent/rescue-channel.live.test.ts",
+      "src/system-agent/setup-app-recommendations.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
       "src/infra/push-apns-http2.live.test.ts",

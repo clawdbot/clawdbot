@@ -21,6 +21,7 @@ type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
     recorder?: UserTurnTranscriptRecorder,
   ) => Promise<"admitted" | "duplicate-source">;
+  beginBeforeAgentReply: () => Promise<boolean>;
   checkpointBeforeAgentReply: (params: {
     state: Exclude<RestartRecoveryBeforeAgentReplyState, "admitted" | "pending">;
     pendingFinalDelivery?: {
@@ -134,7 +135,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   admissionRunId?: unknown;
   getEntry: () => SessionEntry | undefined;
   getSessionId: () => string;
-  beforeAgentReplyState?: "pending" | "continue";
+  beforeAgentReplyState?: "admitted" | "pending" | "continue";
   isRestartAbort: () => boolean;
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
   requesterAccountId?: unknown;
@@ -246,11 +247,16 @@ export function createReplyRestartRecoveryClaimController(params: {
       if (entry.status !== "running" || entry.abortedLastRun === true) {
         throw new Error("restart recovery claim changed before agent adoption");
       }
+      const recoveredBeforeAgentReplyState =
+        activeClaimRunId === admissionRunId
+          ? entry.restartRecoveryBeforeAgentReplyState
+          : undefined;
       // Clear the retry verifier as the transcript-only claim crosses into execution.
       const adopted = await persistAdmissionPatch({
         entry,
         patch: {
-          restartRecoveryBeforeAgentReplyState: params.beforeAgentReplyState,
+          restartRecoveryBeforeAgentReplyState:
+            recoveredBeforeAgentReplyState ?? params.beforeAgentReplyState,
           restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryRequestFingerprint: undefined,
@@ -385,6 +391,46 @@ export function createReplyRestartRecoveryClaimController(params: {
       params.setEntry(persisted);
     };
 
+  const beginBeforeAgentReply: ReplyRestartRecoveryClaimController["beginBeforeAgentReply"] =
+    async () => {
+      if (!tracked || !params.sessionKey || !params.storePath) {
+        return true;
+      }
+      const current = loadSessionEntry({
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        clone: false,
+        hydrateSkillPromptRefs: false,
+      });
+      if (
+        current?.sessionId === params.getSessionId() &&
+        current.restartRecoveryDeliveryRunId === recoveryRunId &&
+        current.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
+        current.restartRecoveryBeforeAgentReplyState === "continue"
+      ) {
+        return false;
+      }
+      // `pending` is an unknown plugin side-effect window, not a retry state.
+      // Its CAS fails closed; startup recovery rejects it before runner dispatch.
+      const updatedAt = Date.now();
+      const persisted = await updateSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        (persistedCurrent) =>
+          persistedCurrent.sessionId === params.getSessionId() &&
+          persistedCurrent.restartRecoveryDeliveryRunId === recoveryRunId &&
+          persistedCurrent.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
+          persistedCurrent.restartRecoveryBeforeAgentReplyState === "admitted"
+            ? { restartRecoveryBeforeAgentReplyState: "pending", updatedAt }
+            : null,
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
+      if (!persisted) {
+        throw new Error("before_agent_reply start lost restart recovery ownership");
+      }
+      params.setEntry(persisted);
+      return true;
+    };
+
   const clear = async (): Promise<void> => {
     if (!tracked || !params.sessionKey || !params.storePath || params.isRestartAbort()) {
       return;
@@ -482,5 +528,5 @@ export function createReplyRestartRecoveryClaimController(params: {
     return persisted?.abortedLastRun === true || params.getEntry()?.abortedLastRun === true;
   };
 
-  return { admitUserTurn, checkpointBeforeAgentReply, clear, isArmed };
+  return { admitUserTurn, beginBeforeAgentReply, checkpointBeforeAgentReply, clear, isArmed };
 }

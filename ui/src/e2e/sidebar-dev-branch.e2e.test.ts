@@ -92,7 +92,7 @@ describeControlUiE2e("Control UI sidebar dev branch badge E2E", () => {
     try {
       const response = await page.goto(server.baseUrl);
       expect(response?.status()).toBe(200);
-      await page.locator(".sidebar-agent-chip").waitFor();
+      await page.locator(".sidebar-agent-card").waitFor();
       expect(await page.locator(".sidebar-footer-branch").count()).toBe(0);
     } finally {
       await context.close();

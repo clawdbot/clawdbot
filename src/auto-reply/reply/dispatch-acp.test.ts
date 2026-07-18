@@ -611,6 +611,45 @@ describe("tryDispatchAcpReply", () => {
     expect(routeCall().mirror).toBe(false);
   });
 
+  it("persists the failed turn so the bound transcript matches the channel reply", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(async () => {
+      throw new Error("acp exploded mid-turn");
+    });
+
+    await runDispatch({ bodyForAgent: "reply" });
+
+    // A failed bound turn used to deliver an error to the channel while writing
+    // nothing to the transcript, so the next resume replayed history that never
+    // mentioned the failure.
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledTimes(1);
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.sessionKey).toBe(sessionKey);
+    expect(transcript.promptText).toBe("reply");
+    expect(String(transcript.finalText)).toContain("acp exploded mid-turn");
+  });
+
+  it("keeps streamed output ahead of the error when a turn fails mid-stream", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(async (params: unknown) => {
+      const handler = params as { onEvent?: (event: unknown) => void };
+      handler.onEvent?.({ type: "text_delta", stream: "output", text: "partial answer" });
+      throw new Error("acp died after streaming");
+    });
+
+    await runDispatch({ bodyForAgent: "reply" });
+
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(String(transcript.finalText)).toContain("partial answer");
+    expect(String(transcript.finalText)).toContain("acp died after streaming");
+  });
+
   it("adds source delivery guidance to tool-only ACP turns", async () => {
     setReadyAcpResolution();
 

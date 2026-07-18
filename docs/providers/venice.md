@@ -78,38 +78,33 @@ openclaw models list --all --provider venice
 You can also run `openclaw configure` and pick **Model/auth provider > Venice AI**.
 
 <Tip>
-| Use case                 | Model                             | Why                                       |
-| ------------------------- | ---------------------------------- | ------------------------------------------ |
-| General chat (default)    | `kimi-k2-5`                        | Strong private reasoning plus vision       |
-| Best overall quality      | `claude-opus-4-6`                  | Strongest anonymized Venice option         |
-| Privacy + coding          | `qwen3-coder-480b-a35b-instruct`   | Private coding model with large context    |
-| Fast + cheap              | `qwen3-4b`                         | Lightweight reasoning model                |
-| Complex private tasks     | `deepseek-v3.2`                    | Strong reasoning; tool calling disabled    |
-| Uncensored                | `venice-uncensored`                | No content restrictions                    |
+| Use case              | Model                                        | Why                                    |
+| --------------------- | -------------------------------------------- | -------------------------------------- |
+| General chat (default) | `kimi-k2-5`                                  | Strong private reasoning plus vision   |
+| Best overall quality   | `claude-opus-4-6`                            | Strongest anonymized Venice option     |
+| Privacy + coding       | `qwen3-coder-480b-a35b-instruct-turbo`       | Private coding model with large context |
+| Fast + cheap           | `llama-3.2-3b`                               | Compact private model                  |
+| Complex private tasks  | `deepseek-v3.2`                              | Strong reasoning; tool calling disabled |
+| Uncensored             | `venice-uncensored-1-2`                      | Current uncensored Venice model        |
 </Tip>
 
-## Built-in catalog (38 models)
+## Built-in catalog (30 models)
 
 <AccordionGroup>
-  <Accordion title="Private models (26) — fully private, no logging">
+  <Accordion title="Private models (20) — fully private, no logging">
     | Model ID                               | Name                                 | Context | Notes                      |
     | -------------------------------------- | ------------------------------------- | ------- | --------------------------- |
     | `kimi-k2-5`                            | Kimi K2.5                             | 256k    | Default, reasoning, vision  |
-    | `kimi-k2-thinking`                     | Kimi K2 Thinking                      | 256k    | Reasoning                   |
     | `llama-3.3-70b`                        | Llama 3.3 70B                         | 128k    | General                     |
     | `llama-3.2-3b`                         | Llama 3.2 3B                          | 128k    | General                     |
     | `hermes-3-llama-3.1-405b`              | Hermes 3 Llama 3.1 405B               | 128k    | General, tools disabled     |
     | `qwen3-235b-a22b-thinking-2507`        | Qwen3 235B Thinking                   | 128k    | Reasoning                   |
     | `qwen3-235b-a22b-instruct-2507`        | Qwen3 235B Instruct                   | 128k    | General                     |
-    | `qwen3-coder-480b-a35b-instruct`       | Qwen3 Coder 480B                      | 256k    | Coding                      |
     | `qwen3-coder-480b-a35b-instruct-turbo` | Qwen3 Coder 480B Turbo                | 256k    | Coding                      |
     | `qwen3-5-35b-a3b`                      | Qwen3.5 35B A3B                       | 256k    | Reasoning, vision           |
     | `qwen3-next-80b`                       | Qwen3 Next 80B                        | 256k    | General                     |
     | `qwen3-vl-235b-a22b`                   | Qwen3 VL 235B (Vision)                | 256k    | Vision                      |
-    | `qwen3-4b`                             | Venice Small (Qwen3 4B)               | 32k     | Fast, reasoning              |
     | `deepseek-v3.2`                        | DeepSeek V3.2                         | 160k    | Reasoning, tools disabled    |
-    | `venice-uncensored`                    | Venice Uncensored (Dolphin-Mistral)   | 32k     | Uncensored, tools disabled   |
-    | `mistral-31-24b`                       | Venice Medium (Mistral)               | 128k    | Vision                       |
     | `google-gemma-3-27b-it`                | Google Gemma 3 27B Instruct           | 198k    | Vision                       |
     | `openai-gpt-oss-120b`                  | OpenAI GPT OSS 120B                   | 128k    | General                      |
     | `nvidia-nemotron-3-nano-30b-a3b`       | NVIDIA Nemotron 3 Nano 30B            | 128k    | General                      |
@@ -118,11 +113,10 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
     | `zai-org-glm-4.7`                      | GLM 4.7                               | 198k    | Reasoning                    |
     | `zai-org-glm-4.7-flash`                | GLM 4.7 Flash                         | 128k    | Reasoning                    |
     | `zai-org-glm-5`                        | GLM 5                                 | 198k    | Reasoning                    |
-    | `minimax-m21`                          | MiniMax M2.1                          | 198k    | Reasoning                    |
     | `minimax-m25`                          | MiniMax M2.5                          | 198k    | Reasoning                    |
   </Accordion>
 
-  <Accordion title="Anonymized models (12) — via Venice proxy">
+  <Accordion title="Anonymized models (10) — via Venice proxy">
     | Model ID                        | Name                           | Context | Notes                      |
     | -------------------------------- | -------------------------------- | ------- | ---------------------------- |
     | `claude-opus-4-6`               | Claude Opus 4.6 (via Venice)    | 1M      | Reasoning, vision            |
@@ -134,13 +128,11 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
     | `openai-gpt-4o-2024-11-20`      | GPT-4o (via Venice)             | 128k    | Vision                        |
     | `openai-gpt-4o-mini-2024-07-18` | GPT-4o Mini (via Venice)        | 128k    | Vision                        |
     | `gemini-3-1-pro-preview`        | Gemini 3.1 Pro (via Venice)     | 1M      | Reasoning, vision             |
-    | `gemini-3-pro-preview`          | Gemini 3 Pro (via Venice)       | 198k    | Reasoning, vision             |
     | `gemini-3-flash-preview`        | Gemini 3 Flash (via Venice)     | 256k    | Reasoning, vision             |
-    | `grok-41-fast`                  | Grok 4.1 Fast (via Venice)      | 1M      | Reasoning, vision             |
   </Accordion>
 </AccordionGroup>
 
-Grok-backed Venice models (`grok-41-fast` and similar) get the same tool-schema
+Grok-backed Venice models (`grok-4-3` and similar) get the same tool-schema
 compat patch as the native xAI provider, since they share the same upstream
 tool-call format.
 
@@ -150,6 +142,9 @@ The bundled catalog above is a manifest-backed seed list. At runtime OpenClaw
 refreshes it from the Venice `/models` API and falls back to the seed list if
 the API is unreachable. The `/models` endpoint is public (no auth needed for
 listing), but inference requires a valid API key.
+
+Venice may continue accepting retired model IDs as provider-owned aliases. The
+OpenClaw catalog advertises only the canonical model IDs returned by `/models`.
 
 ## DeepSeek V4 replay behavior
 
@@ -185,13 +180,13 @@ openclaw agent --model venice/kimi-k2-5 --message "Quick health check"
 openclaw agent --model venice/claude-opus-4-6 --message "Summarize this task"
 
 # Uncensored model
-openclaw agent --model venice/venice-uncensored --message "Draft options"
+openclaw agent --model venice/venice-uncensored-1-2 --message "Draft options"
 
 # Vision model with image
 openclaw agent --model venice/qwen3-vl-235b-a22b --message "Review attached image"
 
 # Coding model
-openclaw agent --model venice/qwen3-coder-480b-a35b-instruct --message "Refactor this function"
+openclaw agent --model venice/qwen3-coder-480b-a35b-instruct-turbo --message "Refactor this function"
 ```
 
 ## Troubleshooting

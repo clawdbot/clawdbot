@@ -574,8 +574,8 @@ const presentationCommandOrCallbackActionSchema = Type.Union([
   presentationCallbackActionSchema,
 ]);
 
-// Approval actions carry server-issued IDs and are runtime-authored only. The
-// message tool exposes the remaining button actions that models may safely author.
+// Approval and question actions carry server-issued IDs and are runtime-authored
+// only. The message tool exposes the remaining actions models may safely author.
 const presentationButtonActionSchema = Type.Union([
   presentationCommandActionSchema,
   presentationCallbackActionSchema,

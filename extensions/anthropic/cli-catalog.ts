@@ -9,6 +9,7 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-
 const CLAUDE_CLI_DEFAULT_CONTEXT_WINDOW = 200_000;
 const CLAUDE_CLI_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-5": 1_000_000,
+  "claude-fable-5": 1_000_000,
 };
 const CLAUDE_CLI_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
 const CLAUDE_CLI_MAX_OUTPUT_TOKENS: Record<string, number> = {
@@ -16,6 +17,7 @@ const CLAUDE_CLI_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-opus-4-7": 128_000,
   "claude-opus-4-6": 128_000,
   "claude-sonnet-5": 128_000,
+  "claude-fable-5": 128_000,
   "claude-sonnet-4-6": 128_000,
 };
 
@@ -24,12 +26,18 @@ const CLAUDE_CLI_MODEL_LABELS: Record<string, string> = {
   "claude-opus-4-7": "Claude Opus 4.7 (Claude CLI)",
   "claude-opus-4-6": "Claude Opus 4.6 (Claude CLI)",
   "claude-sonnet-5": "Claude Sonnet 5 (Claude CLI)",
+  "claude-fable-5": "Claude Fable 5 (Claude CLI)",
   "claude-sonnet-4-6": "Claude Sonnet 4.6 (Claude CLI)",
 };
 
 function resolveClaudeCliImageMediaInput(id: string): ModelCatalogEntry["mediaInput"] {
   const maxSidePx =
-    id === "claude-opus-4-8" || id === "claude-opus-4-7" || id === "claude-sonnet-5" ? 2576 : 1568;
+    id === "claude-opus-4-8" ||
+    id === "claude-opus-4-7" ||
+    id === "claude-sonnet-5" ||
+    id === "claude-fable-5"
+      ? 2576
+      : 1568;
   return {
     image: {
       maxSidePx,

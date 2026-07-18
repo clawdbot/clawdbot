@@ -858,6 +858,20 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
   return build;
 }
 
+/**
+ * Regenerates every Apple derived artifact (iOS catalog, contradiction report,
+ * InfoPlist strings). Shared by this CLI and native-app-i18n's sync so the
+ * inventory can never be rewritten without its derived catalogs.
+ */
+export async function syncAppleAppI18n(): Promise<{
+  build: AppleCatalogBuild;
+  infoPlistFiles: number;
+}> {
+  const build = await syncIosCatalog(true);
+  const infoPlistFiles = await syncIosInfoPlist(true);
+  return { build, infoPlistFiles };
+}
+
 export async function checkAppleAppI18n() {
   await validateRuntimeInterpolationPaths();
   for (const [sourcePath, contracts] of Object.entries(LOCALIZED_WRAPPER_CONTRACTS)) {
@@ -956,8 +970,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (command === "check") {
     await checkAppleAppI18n();
   } else if (command === "sync-ios" && flag === "--write") {
-    const build = await syncIosCatalog(true);
-    const infoPlistFiles = await syncIosInfoPlist(true);
+    const { build, infoPlistFiles } = await syncAppleAppI18n();
     process.stdout.write(
       `apple-app-i18n: synced iOS catalog and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length}\n`,
     );

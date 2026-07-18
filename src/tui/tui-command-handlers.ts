@@ -490,6 +490,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("Usage: /btw [side question]");
         }
         break;
+      case "queue":
+        await sendMessage(raw);
+        break;
       case "openclaw":
         chatLog.addSystem(
           args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",

@@ -2,16 +2,23 @@
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
+import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
 import type { SignalReactionMessage } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
 let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
 let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
-let resolveSignalReplyContextWithPersistence: typeof import("../reply-authors.js").resolveSignalReplyContextWithPersistence;
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
+  cfg?: OpenClawConfig;
+  dispatcher?: {
+    sendFinalReply: (payload: { text: string }) => void;
+    markComplete: () => void;
+    waitForIdle: () => Promise<void>;
+  };
   replyOptions?: {
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     allowToolLifecycleWhenProgressHidden?: boolean;
@@ -78,6 +85,86 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        eventClass,
+        "kind" in preflight ? { admission: preflight } : preflight,
+      );
+      if (!("route" in resolved) || !("delivery" in resolved)) {
+        throw new Error("expected assembled Signal channel turn plan");
+      }
+      const runPrepared = async () => {
+        const pendingDeliveries: Promise<unknown>[] = [];
+        const dispatcher = {
+          sendFinalReply: (payload: { text: string }) => {
+            pendingDeliveries.push(
+              Promise.resolve(resolved.delivery.deliver(payload, { kind: "final" })),
+            );
+          },
+          markComplete: () => {},
+          waitForIdle: async () => {
+            await Promise.all(pendingDeliveries);
+          },
+        };
+        return await actual.runPreparedInboundReply({
+          channel: resolved.channel,
+          accountId: resolved.accountId,
+          routeSessionKey: resolved.route.sessionKey,
+          storePath: "/tmp/openclaw/signal-sessions.json",
+          ctxPayload: resolved.ctxPayload,
+          recordInboundSession: recordInboundSessionMock,
+          afterRecord: resolved.afterRecord,
+          record: resolved.record,
+          history: resolved.history,
+          admission: resolved.admission,
+          botLoopProtection: resolved.botLoopProtection,
+          runDispatch: async () =>
+            await dispatchInboundMessageMock({
+              ctx: resolved.ctxPayload,
+              cfg: resolved.cfg,
+              dispatcher,
+              replyOptions: {
+                ...resolved.replyOptions,
+                onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
+              },
+            }),
+        });
+      };
+      let result;
+      try {
+        result = await runPrepared();
+      } catch (err) {
+        await params.adapter.onFinalize?.({
+          admission: resolved.admission ?? { kind: "dispatch" },
+          dispatched: false,
+          ctxPayload: resolved.ctxPayload,
+          routeSessionKey: resolved.route.sessionKey,
+        });
+        throw err;
+      }
+      await params.adapter.onFinalize?.(result);
+      return result;
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
     "openclaw/plugin-sdk/conversation-runtime",
@@ -124,18 +211,14 @@ function nextTimerTick(): Promise<void> {
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    [
-      { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
-      { createSignalEventHandler },
-      { resolveSignalReplyContextWithPersistence },
-    ] = await Promise.all([
-      import("./event-handler.test-harness.js"),
-      import("./event-handler.js"),
-      import("../reply-authors.js"),
-    ]);
+  beforeAll(async () => {
+    [{ createBaseSignalEventHandlerDeps, createSignalReceiveEvent }, { createSignalEventHandler }] =
+      await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
+  });
+
+  beforeEach(() => {
     vi.useRealTimers();
+    resetSignalReplyAuthorsForTests();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
@@ -307,7 +390,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     ).resolves.toEqual({ author: "+15550002222", body: "edited hello" });
   });
 
-  it("preserves the last debounced message body for native reply quote metadata", async () => {
+  it("joins debounced message bodies with newlines and preserves the last for replies", async () => {
     vi.useFakeTimers();
     const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockImplementationOnce(async (params: any) => {
@@ -357,7 +440,8 @@ describe("signal createSignalEventHandler inbound context", () => {
         expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
       });
       const context = requireCapturedContext();
-      expect(context.BodyForAgent).toBe("first debounced message\\nsecond debounced message");
+      expect(context.BodyForAgent).toBe("first debounced message\nsecond debounced message");
+      expect(context.CommandBody).toBe("first debounced message\nsecond debounced message");
       expect(context.ReplyToId).toBe("1700000000002");
       expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
       expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
@@ -2041,8 +2125,8 @@ describe("signal createSignalEventHandler inbound context", () => {
 
       const context = requireCapturedContext();
       expect(context.BodyForAgent).toContain("[signal attachment unavailable]");
-      expect(context.RawBody).toBe("first request\\nsecond request");
-      expect(context.CommandBody).toBe("first request\\nsecond request");
+      expect(context.RawBody).toBe("first request\nsecond request");
+      expect(context.CommandBody).toBe("first request\nsecond request");
     } finally {
       vi.useRealTimers();
     }

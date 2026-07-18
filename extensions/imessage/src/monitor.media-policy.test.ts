@@ -1,7 +1,8 @@
 // Imessage tests cover monitor.media policy plugin behavior.
-import type { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { stageIMessageAttachments } from "./monitor/media-staging.js";
@@ -13,8 +14,8 @@ const waitForTransportReadyMock = vi.hoisted(() =>
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const stageIMessageAttachmentsMock = vi.hoisted(() => vi.fn<typeof stageIMessageAttachments>());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
-const dispatchInboundMessageMock = vi.hoisted(() =>
-  vi.fn<typeof dispatchInboundMessage>(async () => ({
+const dispatchReplyWithBufferedBlockDispatcherMock = vi.hoisted(() =>
+  vi.fn<typeof dispatchReplyWithBufferedBlockDispatcher>(async () => ({
     queuedFinal: false,
     counts: { tool: 0, block: 0, final: 0 },
   })),
@@ -47,14 +48,6 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    dispatchInboundMessage: dispatchInboundMessageMock,
-  };
-});
-
 vi.mock("./client.js", () => ({
   createIMessageRpcClient: createIMessageRpcClientMock,
 }));
@@ -67,13 +60,78 @@ vi.mock("./monitor/media-staging.js", () => ({
   stageIMessageAttachments: stageIMessageAttachmentsMock,
 }));
 
+type RunChannelInboundEventParams = Parameters<typeof channelInbound.runChannelInboundEvent>[0];
+
+async function runChannelInboundEventForMediaPolicyTest(params: RunChannelInboundEventParams) {
+  const input = await params.adapter.ingest(params.raw);
+  if (!input) {
+    return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+  }
+  const eventClass = (await params.adapter.classify?.(input)) ?? {
+    kind: "message" as const,
+    canStartAgentTurn: true,
+  };
+  if (!eventClass.canStartAgentTurn) {
+    return {
+      admission: { kind: "handled" as const, reason: `event:${eventClass.kind}` },
+      dispatched: false,
+    };
+  }
+  const rawPreflight = await params.adapter.preflight?.(input, eventClass);
+  const preflight =
+    rawPreflight && "kind" in rawPreflight ? { admission: rawPreflight } : rawPreflight;
+  const preflightFacts = preflight ?? {};
+  const preflightAdmission = preflightFacts.admission;
+  if (
+    preflightAdmission &&
+    preflightAdmission.kind !== "dispatch" &&
+    preflightAdmission.kind !== "observeOnly"
+  ) {
+    return { admission: preflightAdmission, dispatched: false };
+  }
+  const turn = await params.adapter.resolveTurn(input, eventClass, preflightFacts);
+  if (!("route" in turn) || !("delivery" in turn)) {
+    throw new Error("expected assembled iMessage channel turn plan");
+  }
+  // Terminal admissions returned at preflight above; an assembled plan only
+  // carries dispatch/observeOnly, so no handled/drop branch exists here.
+  const admission = turn.admission ?? preflightAdmission ?? { kind: "dispatch" as const };
+  const result = {
+    admission,
+    dispatched: true as const,
+    ctxPayload: turn.ctxPayload,
+    routeSessionKey: turn.route.sessionKey,
+    dispatchResult: await dispatchReplyWithBufferedBlockDispatcherMock({
+      ctx: turn.ctxPayload,
+      cfg: turn.cfg,
+      dispatcherOptions: {
+        ...turn.dispatcherOptions,
+        deliver: turn.delivery.deliver,
+        onError: turn.delivery.onError,
+      },
+      toolsAllow: turn.toolsAllow,
+      replyOptions: turn.replyOptions,
+      replyResolver: turn.replyResolver,
+    }),
+  };
+  await params.adapter.onFinalize?.(result);
+  return result;
+}
+
 describe("iMessage monitor attachment policy", () => {
   beforeEach(() => {
+    vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation(
+      runChannelInboundEventForMediaPolicyTest as typeof channelInbound.runChannelInboundEvent,
+    );
     installIMessageStateRuntimeForTest();
     createIMessageRpcClientMock.mockReset();
     stageIMessageAttachmentsMock.mockReset();
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    dispatchInboundMessageMock.mockClear();
+    dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("does not stage local attachments for messages dropped by inbound policy", async () => {
@@ -92,6 +150,7 @@ describe("iMessage monitor attachment policy", () => {
           params: {
             message: {
               id: 1,
+              guid: "dropped-media-policy-guid-1",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,
@@ -235,7 +294,11 @@ describe("iMessage monitor attachment policy", () => {
 
     expect(runtime.error).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(stageIMessageAttachmentsMock).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
-    expect(dispatchInboundMessageMock.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(expectedBody);
+    await vi.waitFor(() =>
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(
+      expectedBody,
+    );
   });
 });

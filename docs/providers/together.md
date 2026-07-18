@@ -78,7 +78,7 @@ shared `video_generate` tool.
 | Property             | Value                                                                                     |
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | Default video model  | `Wan-AI/Wan2.2-T2V-A14B`                                                                  |
-| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/Hailuo-02`, `Kwai/Kling-2.1-Master`                    |
+| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/hailuo-02`, `kwaivgI/kling-2.1-master`                 |
 | Modes                | text-to-video; image-to-video only with `Wan-AI/Wan2.2-I2V-A14B` (single reference image) |
 | Duration             | 1-10 seconds                                                                              |
 | Supported parameters | `size` (parsed as `<width>x<height>`); `aspectRatio`/`resolution` are not read            |

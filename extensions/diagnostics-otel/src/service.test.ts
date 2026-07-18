@@ -2553,9 +2553,9 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("exports GenAI client operation duration histogram without diagnostic identifiers", async () => {
+  test("separates request and turn GenAI client duration by operation", async () => {
     const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);
 
     emitDiagnosticEvent({
@@ -2566,6 +2566,7 @@ describe("diagnostics-otel service", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4.6",
       api: "openai-completions",
+      observationUnit: "request",
       durationMs: 250,
     });
     emitDiagnosticEvent({
@@ -2579,6 +2580,29 @@ describe("diagnostics-otel service", () => {
       durationMs: 1250,
       errorCategory: "TimeoutError",
     });
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-3",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      api: "claude-code",
+      transport: "stdio-live",
+      observationUnit: "turn",
+      durationMs: 2500,
+    });
+    emitDiagnosticEvent({
+      type: "model.call.error",
+      runId: "run-1",
+      callId: "call-4",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-responses",
+      transport: "stdio",
+      observationUnit: "turn",
+      durationMs: 3000,
+      errorCategory: "TurnError",
+    });
     await flushDiagnosticEvents();
 
     const operationDurationOptions = histogramCreateOptions("gen_ai.client.operation.duration");
@@ -2590,7 +2614,7 @@ describe("diagnostics-otel service", () => {
     const genAiOperationDuration = telemetryState.histograms.get(
       "gen_ai.client.operation.duration",
     );
-    expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(2);
+    expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(4);
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(0.25, {
       "gen_ai.operation.name": "text_completion",
       "gen_ai.provider.name": "anthropic",
@@ -2602,6 +2626,49 @@ describe("diagnostics-otel service", () => {
       "gen_ai.request.model": "gemini-2.5-flash",
       "error.type": "TimeoutError",
     });
+    expect(genAiOperationDuration?.record).toHaveBeenCalledWith(2.5, {
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.request.model": "claude-opus-4-7",
+    });
+    expect(genAiOperationDuration?.record).toHaveBeenCalledWith(3, {
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-5.4",
+      "error.type": "TurnError",
+    });
+    const openClawModelCallDuration = telemetryState.histograms.get(
+      "openclaw.model_call.duration_ms",
+    );
+    expect(openClawModelCallDuration?.record).toHaveBeenCalledTimes(4);
+    expect(
+      openClawModelCallDuration?.record.mock.calls.map(
+        (call) => call[1]?.["openclaw.model_call.observation_unit"],
+      ),
+    ).toEqual(["request", "request", "turn", "turn"]);
+    const spanObservationUnits = telemetryState.tracer.startSpan.mock.calls
+      .filter((call) => call[0] === "openclaw.model.call")
+      .map(
+        (call) =>
+          (call[1] as { attributes?: Record<string, unknown> }).attributes?.[
+            "openclaw.model_call.observation_unit"
+          ],
+      );
+    expect(spanObservationUnits).toEqual(["request", "request", "turn", "turn"]);
+    const spanOperations = telemetryState.tracer.startSpan.mock.calls
+      .filter((call) => call[0] === "openclaw.model.call")
+      .map(
+        (call) =>
+          (call[1] as { attributes?: Record<string, unknown> }).attributes?.[
+            "gen_ai.operation.name"
+          ],
+      );
+    expect(spanOperations).toEqual([
+      "text_completion",
+      "generate_content",
+      "invoke_agent",
+      "invoke_agent",
+    ]);
     expect(JSON.stringify(genAiOperationDuration?.record.mock.calls)).not.toContain("session-key");
     expect(JSON.stringify(genAiOperationDuration?.record.mock.calls)).not.toContain("run-1");
     await service.stop?.(ctx);
@@ -3030,7 +3097,7 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("uses latest GenAI inference span shape only when semconv opt-in is set", async () => {
+  test("uses latest GenAI request and agent span shapes only when semconv opt-in is set", async () => {
     process.env.OTEL_SEMCONV_STABILITY_OPT_IN = "http,gen_ai_latest_experimental";
 
     const service = createDiagnosticsOtelService();
@@ -3045,6 +3112,17 @@ describe("diagnostics-otel service", () => {
       model: "gpt-5.4",
       api: "openai-completions",
       durationMs: 80,
+    });
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-2",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      api: "claude-code",
+      transport: "stdio-live",
+      observationUnit: "turn",
+      durationMs: 90,
     });
     emitDiagnosticEvent({
       type: "model.usage",
@@ -3063,6 +3141,13 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(modelCallOptions?.attributes ?? {}, "gen_ai.system")).toBe(false);
     expect(modelCallOptions?.startTime).toBeTypeOf("number");
     expect(modelCallOptions?.kind).toBe(2);
+    const agentTurnOptions = startedSpanOptions("invoke_agent");
+    expect(agentTurnOptions?.attributes?.["gen_ai.provider.name"]).toBe("anthropic");
+    expect(agentTurnOptions?.attributes?.["gen_ai.request.model"]).toBe("claude-opus-4-7");
+    expect(agentTurnOptions?.attributes?.["gen_ai.operation.name"]).toBe("invoke_agent");
+    expect(agentTurnOptions?.attributes?.["openclaw.model_call.observation_unit"]).toBe("turn");
+    expect(agentTurnOptions?.startTime).toBeTypeOf("number");
+    expect(agentTurnOptions?.kind).toBe(2);
     const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
     expect(modelUsageOptions?.attributes?.["gen_ai.provider.name"]).toBe("openai");
     expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe("gpt-5.4");
@@ -5082,6 +5167,76 @@ describe("diagnostics-otel service", () => {
     ]);
     expect(attrs?.["input.mime_type"]).toBe("application/json");
     expect(attrs?.["output.mime_type"]).toBe("application/json");
+    await service.stop?.(ctx);
+  });
+
+  test("exports Claude CLI turn content through the existing Phoenix GenAI keys", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: true,
+        systemPrompt: true,
+        toolDefinitions: true,
+      },
+    });
+    await service.start(ctx);
+
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-claude-cli",
+        callId: "call-claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        api: "claude-code",
+        transport: "stdio-live",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [{ role: "user", content: [{ type: "text", text: "trace this" }] }],
+        outputMessages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "trace complete" },
+              { type: "thinking", thinking: "checked the span" },
+              { type: "tool_call", id: "tool-1", name: "Read" },
+            ],
+            stopReason: "end_turn",
+          },
+        ],
+        systemPrompt: "OpenClaw appended instructions",
+      },
+    );
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    expect(attrs?.["openclaw.api"]).toBe("claude-code");
+    expect(attrs?.["openclaw.transport"]).toBe("stdio-live");
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))).toEqual([
+      { role: "user", parts: [{ type: "text", content: "trace this" }] },
+    ]);
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "text", content: "trace complete" },
+          { type: "reasoning", content: "checked the span" },
+          { type: "tool_call", id: "tool-1", name: "Read" },
+        ],
+        finish_reason: "end_turn",
+      },
+    ]);
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.system_instructions"))).toEqual([
+      { type: "text", content: "OpenClaw appended instructions" },
+    ]);
+    expect(Object.hasOwn(attrs ?? {}, "gen_ai.tool.definitions")).toBe(false);
     await service.stop?.(ctx);
   });
 

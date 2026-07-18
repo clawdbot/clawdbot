@@ -2185,6 +2185,8 @@ describe("loadChatHistory filtering", () => {
       sessionInfo: {
         key: "main",
         sessionId: "session-main",
+        effectiveQueueMode: "interrupt",
+        queueMode: "interrupt",
         thinkingLevel: "medium",
         modelProvider: "openai",
         model: "gpt-5",
@@ -2202,6 +2204,8 @@ describe("loadChatHistory filtering", () => {
     expect(state.currentSessionId).toBe("session-main");
     expect(state.chatThinkingLevel).toBe("medium");
     expect(state.chatVerboseLevel).toBe("full");
+    expect(state.chatQueueModeOverride).toBe("interrupt");
+    expect(state.chatEffectiveQueueMode).toBe("interrupt");
   });
 
   it("omits literal global agentId until selected/default agent is known", async () => {

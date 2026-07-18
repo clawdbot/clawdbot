@@ -10,12 +10,14 @@ import {
   CONFIG_SCHEMA_CHILDREN_MAX,
   applyPersistentOperation,
   assertConfigWriteDoesNotBypassInferenceVerification,
+  createNoExitRuntime,
   executePluginInstall,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
   formatConfigValidationLine,
   formatGatewayStatusLine,
+  isPluginBackingDefaultInferenceRoute,
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
@@ -303,12 +305,48 @@ export async function executeSystemAgentOperation(
     case "plugin-install":
       return await executePluginInstall(operation, runtime, opts);
     case "plugin-uninstall": {
-      const message = [
-        "OpenClaw cannot prove that uninstalling a plugin will preserve its own active inference route.",
-        `Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
-      ].join("\n");
-      runtime.log(message);
-      return { applied: false, message };
+      if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+        const message = [
+          `Uninstalling ${operation.pluginId} could remove the provider behind OpenClaw's own active inference route.`,
+          `Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+        ].join("\n");
+        runtime.log(message);
+        return { applied: false, message };
+      }
+      const result = await applyPersistentOperation({
+        auditOperation: "plugin.uninstall",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runPluginUninstall =
+            ctx.deps?.runPluginUninstall ??
+            (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
+              const { runPluginUninstallCommand } =
+                await import("../cli/plugins-uninstall-command.js");
+              await runPluginUninstallCommand(pluginId, {}, pluginRuntime);
+            });
+          await ctx.commit(async () => {
+            // A concurrent config write can retarget the default route between
+            // the pre-approval check and this commit; re-verify at the last
+            // moment so the destructive removal never hits the active route.
+            if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+              throw new Error(
+                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+              );
+            }
+            await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
+          });
+          return {
+            summary: `Uninstalled plugin ${operation.pluginId}`,
+            details: { pluginId: operation.pluginId },
+          };
+        },
+      });
+      if (result.applied) {
+        runtime.log("Restart the Gateway to apply plugin changes.");
+      }
+      return result;
     }
     case "create-agent": {
       if (isReservedSystemAgentId(operation.agentId)) {
@@ -318,7 +356,7 @@ export async function executeSystemAgentOperation(
       }
       if (operation.model?.trim()) {
         throw new Error(
-          "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent will inherit the already verified default model.",
+          "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent inherits the verified default, then use `set_default_model` with agentId to live-test and save its own model.",
         );
       }
       const workspace = resolveUserPath(operation.workspace ?? process.cwd());

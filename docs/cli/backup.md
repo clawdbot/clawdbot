@@ -107,6 +107,8 @@ SQLite databases under the state directory are compacted with `VACUUM INTO` so d
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 
+Installer-managed and rebuildable runtime roots under the state directory are also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, and `tools/`. These contain managed checkouts, package trees, and downloaded runtimes rather than authoritative user state; reinstall or update the corresponding runtime or plugin after restore. An explicitly configured config file, credentials directory, or workspace inside one of these roots remains included.
+
 ## Invalid config behavior
 
 `openclaw backup` bypasses the normal config preflight so it can still help during recovery. Workspace discovery depends on a valid config, so `openclaw backup create` fails fast when the config file exists but is invalid and workspace backup is still enabled.
@@ -117,7 +119,7 @@ For a partial backup in that situation, rerun with `--no-include-workspace`: it 
 
 ## Size and performance
 
-OpenClaw does not enforce a built-in maximum backup size or per-file size limit. Practical limits come from:
+OpenClaw does not enforce a built-in maximum backup size or per-file size limit. An archive write that produces no data for five minutes fails and removes its partial temporary file instead of hanging indefinitely. Practical limits otherwise come from:
 
 - Available space for the temporary archive write plus the final archive
 - Time to walk large workspace trees and compress them into a `.tar.gz`

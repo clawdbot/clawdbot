@@ -21,14 +21,17 @@ Diagnostics flags turn on extra logging for one subsystem without raising
 
 ## Known flags
 
-| Flag             | Enables                                                   |
-| ---------------- | --------------------------------------------------------- |
-| `telegram.http`  | Telegram Bot API HTTP error logging                       |
-| `brave.http`     | Brave Search request/response/cache logging               |
-| `profiler`       | Reply-stage profiler and Codex app-server profiler (both) |
-| `reply.profiler` | Reply-stage profiler only                                 |
-| `codex.profiler` | Codex app-server profiler only                            |
-| `timeline`       | Structured JSONL timeline artifact (see below)            |
+| Flag                  | Enables                                                   |
+| --------------------- | --------------------------------------------------------- |
+| `telegram.http`       | Telegram Bot API HTTP error logging                       |
+| `brave.http`          | Brave Search request/response/cache logging               |
+| `profiler`            | Reply-stage profiler and Codex app-server profiler (both) |
+| `reply.profiler`      | Reply-stage profiler only                                 |
+| `codex.profiler`      | Codex app-server profiler only                            |
+| `health`              | Gateway health probe/account/binding debug details        |
+| `ingress.timing`      | Session load, model selection, and model catalog timings  |
+| `plugin.load-profile` | Synchronous plugin module-load timings                    |
+| `timeline`            | Structured JSONL timeline artifact (see below)            |
 
 ## Enable via config
 

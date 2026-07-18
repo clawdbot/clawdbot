@@ -29,6 +29,7 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
   expiresAtMs: number;
@@ -201,6 +202,7 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
+  readOnly?: true;
   viewId?: string;
 }): Promise<
   | {
@@ -260,6 +262,7 @@ export async function fetchMcpAppView(params: {
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
         : {}),
+      ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,

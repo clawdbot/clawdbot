@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const execSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -12,6 +13,7 @@ let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGe
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
 let readCodexAuth: typeof import("./cli-auth.test-support.js").readCodexAuth;
 let resetCliAuthCaches: typeof import("./cli-auth.test-support.js").resetCliAuthCaches;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
   return readClaudeCliCredentialsCached({
@@ -386,6 +388,71 @@ describe("cli credentials", () => {
     });
     expect(withoutPrompt).toBeNull();
     expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("recognizes Claude Code user apiKeyHelper settings as CLI-managed auth", () => {
+    const tempDir = tempDirs.make("openclaw-claude-settings-");
+    const settingsDir = path.join(tempDir, ".claude");
+    fs.mkdirSync(settingsDir, { recursive: true });
+
+    const options = {
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux" as const,
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    };
+    expect(readClaudeCliCredentialsCached(options)).toBeNull();
+
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "test-api-key-helper" }),
+    );
+
+    const result = readClaudeCliCredentialsCached(options);
+
+    expect(result).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers Claude Code user apiKeyHelper settings over stored Claude credentials", () => {
+    const tempDir = tempDirs.make("openclaw-claude-helper-first-");
+    const settingsDir = path.join(tempDir, ".claude");
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "test-api-key-helper" }),
+    );
+    fs.writeFileSync(
+      path.join(settingsDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "test-access-token",
+          refreshToken: "test-refresh-token",
+          expiresAt: Date.parse("2099-01-01T00:00:00Z"),
+        },
+      }),
+    );
+    mockClaudeCliCredentialRead();
+
+    const result = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(result).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
   });
 
   it("reads Codex credentials from keychain when available", () => {

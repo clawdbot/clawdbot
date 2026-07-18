@@ -244,6 +244,23 @@ describe("memory_search unavailable payloads", () => {
     ]);
   });
 
+  it("passes the host SQLite lease hook to tool memory managers", async () => {
+    const withLease = vi.fn();
+    const tool = createMemorySearchTool({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      withLease,
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await tool.execute("sqlite-lease-hook", { query: "hello" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([expect.objectContaining({ withLease })]);
+  });
+
   it("returns explicit unavailable metadata for quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");

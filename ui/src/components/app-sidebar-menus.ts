@@ -9,8 +9,9 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { editorOpenUrl } from "../lib/editor-links.ts";
+import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import {
   canArchiveSessionRow,
@@ -435,10 +436,10 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 this.selectSession(session.key);
                 break;
               case "open-pr":
-                window.open(action.url, "_blank", "noopener");
+                openExternalUrlSafe(action.url);
                 break;
               case "open-in":
-                window.open(editorOpenUrl(action.editor, action.path));
+                openEditor(action.editor, action.path);
                 break;
               case "toggle-pin":
                 void this.patchSession(session, { pinned: !session.pinned });

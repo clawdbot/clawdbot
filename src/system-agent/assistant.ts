@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
-  SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
   buildSystemAgentAssistantUserPrompt,
   parseSystemAgentAssistantPlanText,
   type SystemAgentAssistantPlan,
   type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
+import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
@@ -43,6 +43,7 @@ export type SystemAgentConfiguredModelPlannerDeps = SystemAgentVerifiedInference
   runEmbeddedAgent?: RunEmbeddedAgentFn;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
+  resolveAssistantTimeoutMs?: typeof resolveSystemAgentAssistantTimeoutMs;
 };
 
 export async function planSystemAgentCommand(params: {
@@ -90,6 +91,9 @@ export async function planSystemAgentCommandWithConfiguredModel(params: {
   let plan: SystemAgentAssistantPlan | null;
   try {
     const runId = `openclaw-planner-${randomUUID()}`;
+    const timeoutMs = (
+      params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs
+    )(route);
     const shared = {
       sessionId: `${runId}-session`,
       agentId: "openclaw",
@@ -102,7 +106,8 @@ export async function planSystemAgentCommandWithConfiguredModel(params: {
       prompt,
       provider: route.provider,
       model: route.model,
-      timeoutMs: SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
+      timeoutMs,
+      thinkLevel: "off" as const,
       runId,
       extraSystemPrompt: SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
       extraSystemPromptStatic: SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,

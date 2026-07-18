@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  buildMattermostApiUrl,
   fetchMattermostChannel,
   fetchMattermostUser,
   sendMattermostTyping,
@@ -124,7 +125,7 @@ export function createMattermostMonitorResources(params: {
     for (const fileId of ids) {
       try {
         const saved = await saveRemoteMedia({
-          url: `${client.apiBaseUrl}/files/${fileId}`,
+          url: buildMattermostApiUrl(client.baseUrl, `/files/${fileId}`),
           requestInit: {
             headers: {
               Authorization: `Bearer ${client.token}`,

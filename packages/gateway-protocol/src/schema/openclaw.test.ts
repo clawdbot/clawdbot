@@ -1,7 +1,62 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { validateSystemAgentSetupVerifyParams } from "../index.js";
-import { SystemAgentSetupVerifyResultSchema } from "./openclaw.js";
+import {
+  SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyResultSchema,
+} from "./openclaw.js";
+
+describe("OpenClaw setup detection protocol", () => {
+  it("accepts additive presentation metadata and older results without installs", () => {
+    const result = {
+      candidates: [
+        {
+          kind: "provider-auto:ollama",
+          label: "Ollama",
+          detail: "available locally",
+          modelRef: "ollama/qwen3",
+          recommended: false,
+          icon: "https://cdn.simpleicons.org/ollama",
+          website: "https://ollama.com/download",
+        },
+      ],
+      manualProviders: [
+        {
+          id: "ollama",
+          label: "Ollama",
+          icon: "https://cdn.simpleicons.org/ollama",
+          website: "https://ollama.com/download",
+        },
+      ],
+      authOptions: [],
+      recommendedInstalls: [
+        {
+          id: "ollama",
+          label: "Ollama",
+          hint: "Run open models locally",
+          website: "https://ollama.com/download",
+          icon: "https://cdn.simpleicons.org/ollama",
+        },
+      ],
+      workspace: "/tmp/work",
+      setupComplete: false,
+    };
+
+    expect(Value.Check(SystemAgentSetupDetectResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SystemAgentSetupDetectResultSchema, {
+        ...result,
+        recommendedInstalls: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SystemAgentSetupDetectResultSchema, {
+        ...result,
+        recommendedInstalls: [{ ...result.recommendedInstalls[0], website: "http://example.test" }],
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("OpenClaw setup verification protocol", () => {
   it("accepts only an empty request", () => {

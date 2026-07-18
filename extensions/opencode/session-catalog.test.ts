@@ -86,6 +86,7 @@ function captureOpenCodeSessionRegistrations(pluginConfig: unknown = {}) {
 async function installFakeOpenCode(
   assistantText = "hi",
   sessionTitle = "Catalog session",
+  toolInput: unknown = { command: "pwd" },
 ): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-catalog-"));
   temporaryDirectories.push(directory);
@@ -125,7 +126,7 @@ async function installFakeOpenCode(
             id: "prt_tool",
             type: "tool",
             tool: "bash",
-            state: { status: "completed", input: { command: "pwd" }, output: "/workspace" },
+            state: { status: "completed", input: toolInput, output: "/workspace" },
           },
         ],
       },
@@ -296,6 +297,25 @@ describe("OpenCode session catalog", () => {
       const answer = transcript.items.find((item) => item.type === "agentMessage");
       expect(answer?.text?.endsWith("…")).toBe(true);
       expect(Buffer.byteLength(JSON.stringify(transcript), "utf8")).toBeLessThan(20 * 1024 * 1024);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps truncated tool input on a valid UTF-16 boundary",
+    async () => {
+      await installFakeOpenCode("hi", "Catalog session", {
+        value: `${"x".repeat(19_989)}🎉`,
+      });
+      const transcript = await readLocalOpenCodeTranscriptPage({
+        threadId: "ses_test",
+        limit: 20,
+      });
+      const toolCall = transcript.items.find((item) => item.type === "toolCall");
+
+      expect(toolCall?.text).toMatch(/…$/u);
+      expect(toolCall?.text).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
     },
   );
 

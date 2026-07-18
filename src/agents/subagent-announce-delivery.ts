@@ -25,6 +25,7 @@ import {
   releaseSessionDeliveryClaim,
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
+import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -1246,7 +1247,7 @@ function resolveGeneratedMediaDirectFallbackUrls(params: {
     return expected;
   }
   const delivered = new Set(
-    params.requiresMessageToolDelivery
+    (params.requiresMessageToolDelivery
       ? collectMessagingToolDeliveredMediaUrlsForTarget(result, params.deliveryTarget)
       : collectAutomaticCompletionDeliveredMediaUrls({
           result,
@@ -1254,9 +1255,10 @@ function resolveGeneratedMediaDirectFallbackUrls(params: {
           automaticDeliveryRequested: params.automaticDeliveryRequested,
           automaticDeliveryFailed: params.automaticDeliveryFailed === true,
           expectedMediaCount: expected.length,
-        }),
+        })
+    ).map(normalizeMediaReferenceForComparison),
   );
-  return expected.filter((url) => !delivered.has(url));
+  return expected.filter((url) => !delivered.has(normalizeMediaReferenceForComparison(url)));
 }
 
 function collectAutomaticCompletionDeliveredMediaUrls(params: {

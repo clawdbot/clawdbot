@@ -1273,9 +1273,10 @@ describe("dispatchReplyFromConfig", () => {
         cfg: emptyConfig,
         dispatcher,
         replyOptions: {
-          queuedFollowupLifecycle: {
-            onEnqueued: vi.fn(),
-            onComplete: vi.fn(),
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onDeferred: vi.fn(),
+            onSettled: vi.fn(),
           },
         },
         replyResolver,

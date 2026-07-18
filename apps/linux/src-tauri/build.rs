@@ -3,6 +3,7 @@ fn main() {
     // target's invoke handler, so keep the Linux-only command permission known.
     const COMMANDS: &[&str] = &[
         "bootstrap",
+        "build_info",
         "canvas_a2ui_action",
         "check_for_updates",
         "connect_discovered_gateway",

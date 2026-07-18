@@ -27,6 +27,8 @@ describe("config validation allowed-values metadata", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const issue = requireIssue(result.issues, "update.channel");
+      expect(issue.pathSegments).toEqual(["update", "channel"]);
+      expect(JSON.stringify(issue)).not.toContain("pathSegments");
       expect(issue.message).toContain('(allowed: "stable", "extended-stable", "beta", "dev")');
       expect(issue.allowedValues).toEqual(["stable", "extended-stable", "beta", "dev"]);
       expect(issue.allowedValuesHiddenCount).toBe(0);

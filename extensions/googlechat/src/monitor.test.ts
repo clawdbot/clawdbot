@@ -21,6 +21,19 @@ const routingMocks = vi.hoisted(() => ({
     | undefined,
 }));
 
+const inboundMocks = vi.hoisted(() => ({
+  buildEnvelope: vi.fn(({ body }: { body: string }) => body),
+  resolveChannelInboundRouteEnvelope: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
+  };
+});
+
 vi.mock("./api.js", () => ({
   downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
   sendGoogleChatMessage: apiMocks.sendGoogleChatMessage,
@@ -43,34 +56,29 @@ beforeEach(() => {
   apiMocks.downloadGoogleChatMedia.mockReset();
   apiMocks.sendGoogleChatMessage.mockReset();
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
+  inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
+  inboundMocks.resolveChannelInboundRouteEnvelope
+    .mockReset()
+    .mockImplementation(({ accountId }: { accountId: string }) => ({
+      route: {
+        agentId: "agent-1",
+        accountId,
+        sessionKey: "session-1",
+      },
+      buildEnvelope: inboundMocks.buildEnvelope,
+    }));
 });
 
 function createInboundClassificationHarness() {
-  const resolveAgentRoute = vi.fn(() => ({
-    agentId: "agent-1",
-    accountId: "work",
-    sessionKey: "session-1",
-  }));
   const buildContext = vi.fn((payload: unknown) => payload);
   const runTurn = vi.fn();
   const core = {
     logging: { shouldLogVerbose: () => false },
     channel: {
-      routing: { resolveAgentRoute },
-      session: {
-        resolveStorePath: () => "/tmp/openclaw-googlechat-test",
-        readSessionUpdatedAt: () => undefined,
-        recordInboundSession: vi.fn(),
-      },
-      reply: {
-        resolveEnvelopeFormatOptions: () => ({}),
-        formatAgentEnvelope: ({ body }: { body: string }) => body,
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-      },
       inbound: { buildContext, run: runTurn },
     },
   } as unknown as GoogleChatCoreRuntime;
-  return { buildContext, core, resolveAgentRoute, runTurn };
+  return { buildContext, core, runTurn };
 }
 
 async function processGoogleChatTestEvent(params: {
@@ -177,7 +185,7 @@ describe("googlechat monitor inbound space classification", () => {
   ] as const;
 
   it.each(cases)("$name uses the expected access and route branch", async ({ space, peerKind }) => {
-    const { buildContext, core, resolveAgentRoute, runTurn } = createInboundClassificationHarness();
+    const { buildContext, core, runTurn } = createInboundClassificationHarness();
     const account = {
       accountId: "work",
       config: {},
@@ -214,7 +222,7 @@ describe("googlechat monitor inbound space classification", () => {
     expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ isGroup }),
     );
-    expect(resolveAgentRoute).toHaveBeenCalledWith({
+    expect(inboundMocks.resolveChannelInboundRouteEnvelope).toHaveBeenCalledWith({
       cfg: {},
       channel: "googlechat",
       accountId: "work",
@@ -509,7 +517,6 @@ describe("googlechat monitor direct messages", () => {
   it("drops invalid event timestamps from inbound runtime payloads", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);
-    const formatAgentEnvelope = vi.fn(({ body }: { body: string }) => body);
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -527,7 +534,7 @@ describe("googlechat monitor direct messages", () => {
         },
         reply: {
           resolveEnvelopeFormatOptions: () => ({}),
-          formatAgentEnvelope,
+          formatAgentEnvelope: ({ body }: { body: string }) => body,
           dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
         },
         inbound: { buildContext, run: runTurn },
@@ -569,7 +576,7 @@ describe("googlechat monitor direct messages", () => {
       mediaMaxMb: 10,
     });
 
-    expect(formatAgentEnvelope).toHaveBeenCalledWith(
+    expect(inboundMocks.buildEnvelope).toHaveBeenCalledWith(
       expect.objectContaining({ timestamp: undefined }),
     );
     expect(buildContext).toHaveBeenCalledWith(expect.objectContaining({ timestamp: undefined }));

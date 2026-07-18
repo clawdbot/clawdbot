@@ -175,7 +175,7 @@ describe("searchSessionTranscripts", () => {
     expect(result.hits[0]?.messageId).toBe("m-new");
   });
 
-  it("only surfaces the active branch after a leaf-control rewind", async () => {
+  it("only surfaces the active branch after a deferred leaf-control rebuild", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
     await replaceSqliteTranscriptEvents(scope, [
       {
@@ -205,6 +205,33 @@ describe("searchSessionTranscripts", () => {
 
     expect(search("beta").hits).toHaveLength(0);
     expect(search("alpha").hits).toHaveLength(1);
+  });
+
+  it("streams large searchable projections to the writer in bounded chunks", async () => {
+    const scope = transcriptScope("session-1", "agent:main:main");
+    const largeText = "x".repeat(140 * 1024);
+    await replaceSqliteTranscriptEvents(
+      scope,
+      ["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) => ({
+        type: "message",
+        id: `m${index + 1}`,
+        parentId: index === 0 ? null : `m${index}`,
+        message: { role: "user", content: [{ type: "text", text: `${marker} ${largeText}` }] },
+      })) as unknown as TranscriptEvent[],
+    );
+    await appendSqliteTranscriptEvent(scope, {
+      type: "leaf",
+      id: "leaf-large",
+      parentId: "m3",
+      targetId: "m3",
+    } as unknown as TranscriptEvent);
+
+    expect(search("gamma-stream").indexing).toBe(true);
+    await waitForSearchReconcile("gamma-stream");
+
+    expect(search("alpha-stream").hits).toHaveLength(1);
+    expect(search("beta-stream").hits).toHaveLength(1);
+    expect(search("gamma-stream").hits).toHaveLength(1);
   });
 
   it("backfills transcripts that predate the index via reconcile", async () => {

@@ -43,6 +43,37 @@ const SessionsSearchToolSchema = Type.Object({
   limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
 });
 
+const SessionsSearchHitSchema = Type.Object(
+  {
+    sessionKey: Type.String(),
+    timestamp: Type.Number(),
+    role: Type.Union([Type.Literal("assistant"), Type.Literal("user")]),
+    snippet: Type.String(),
+    score: Type.Number(),
+    sessionId: Type.Optional(Type.String()),
+    messageId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsSearchOutputSchema = Type.Union([
+  Type.Object(
+    {
+      results: Type.Array(SessionsSearchHitSchema),
+      indexing: Type.Optional(Type.Literal(true)),
+      truncated: Type.Optional(Type.Literal(true)),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
+      error: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 type GatewayCaller = typeof callGateway;
 
 type GatewaySearchHit = {
@@ -299,6 +330,7 @@ export function createSessionsSearchTool(opts?: {
     displaySummary: SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSearchTool(),
     parameters: SessionsSearchToolSchema,
+    outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query")?.trim() ?? "";

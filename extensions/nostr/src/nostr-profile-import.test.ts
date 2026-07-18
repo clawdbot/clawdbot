@@ -119,6 +119,24 @@ describe("nostr-profile-import", () => {
         vi.useRealTimers();
       }
     });
+
+    it("rejects profile content that is not a JSON object", async () => {
+      mockState.subscribeMany.mockImplementation((_relays, _filter, params) => {
+        params.onevent?.(createProfileEvent({ content: "null" }));
+        params.oneose?.();
+      });
+
+      await expect(
+        importProfileFromRelays({
+          pubkey: "a".repeat(64),
+          relays: ["wss://relay.example"],
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "Profile event content must be a JSON object",
+        sourceRelay: "wss://relay.example",
+      });
+    });
   });
 
   describe("mergeProfiles", () => {

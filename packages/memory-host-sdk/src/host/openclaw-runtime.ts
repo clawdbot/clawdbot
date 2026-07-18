@@ -1,4 +1,6 @@
 // Agent/runtime helpers.
+import { readTranscriptStatsSync as readAccessorTranscriptStatsSync } from "../../../../src/config/sessions/session-accessor.js";
+
 export { resolveCronStyleNow } from "../../../../src/agents/current-time.js";
 export {
   resolveAgentContextLimits,
@@ -67,6 +69,25 @@ export {
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { parseSqliteSessionFileMarker } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
+
+/** Returns an opaque revision that changes for every canonical transcript mutation. */
+export function readTranscriptContentRevisionSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): string {
+  const stats = readAccessorTranscriptStatsSync(params);
+  return [
+    "sqlite",
+    stats.maxSeq,
+    stats.sizeBytes,
+    stats.eventCount,
+    stats.lastMutationAtMs ?? "",
+    stats.lastObservedMutationAtMs ?? "",
+  ].join(":");
+}
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
   MemoryBackend,

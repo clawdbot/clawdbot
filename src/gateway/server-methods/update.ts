@@ -12,6 +12,10 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
+import {
+  EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
@@ -48,6 +52,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
+const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
 function formatUpdateRunErrorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -164,9 +169,11 @@ export const updateHandlers: GatewayRequestHandlers = {
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     let handoff:
       | { status: "started"; pid?: number; command: string }
+      | { status: "already-running"; command: string; message: string }
       | { status: "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+    let ownsManagedServiceHandoff = true;
     const sentinelMeta: UpdateRestartSentinelMeta = {
       ...(sessionKey ? { sessionKey } : {}),
       ...(deliveryContext ? { deliveryContext } : {}),
@@ -197,7 +204,20 @@ export const updateHandlers: GatewayRequestHandlers = {
         : false;
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
-      if (configChannel === "extended-stable" && installSurface.kind === "git") {
+      if (isGatewayExternallySupervised()) {
+        const beforeVersion = installSurface.root
+          ? await readPackageVersion(installSurface.root)
+          : null;
+        result = {
+          status: "skipped",
+          mode: installSurface.mode,
+          ...(installSurface.root ? { root: installSurface.root } : {}),
+          reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+          ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+          steps: [],
+          durationMs: 0,
+        };
+      } else if (configChannel === "extended-stable" && installSurface.kind === "git") {
         result = {
           status: "error",
           mode: "git",
@@ -256,40 +276,56 @@ export const updateHandlers: GatewayRequestHandlers = {
               handoffId,
               supervisor,
             });
-            handoff = {
-              status: "started",
-              ...(started.pid ? { pid: started.pid } : {}),
-              command: started.command,
-            };
-            // Once the detached helper exists, arm its parent exit without an
-            // intervening await so persistence failures cannot orphan it.
-            managedHandoffRestart = scheduleGatewaySigusr1Restart({
-              delayMs: managedRestartDelayMs,
-              reason: "update.run",
-              skipDeferral: true,
-              skipCooldown: true,
-              audit: {
-                actor: actor.actor,
-                deviceId: actor.deviceId,
-                clientIp: actor.clientIp,
-                changedPaths: [],
-              },
-            });
+            ownsManagedServiceHandoff = started.status === "started";
+            sentinelMeta.handoffId = started.handoffId ?? handoffId;
+            // The owner pairs helper creation with parent exit before any
+            // persistence can fail. Joiners leave both to the active owner.
+            if (ownsManagedServiceHandoff) {
+              handoff = {
+                status: "started",
+                ...(started.pid ? { pid: started.pid } : {}),
+                command: started.command,
+              };
+              managedHandoffRestart = scheduleGatewaySigusr1Restart({
+                delayMs: managedRestartDelayMs,
+                reason: "update.run",
+                skipDeferral: true,
+                skipCooldown: true,
+                audit: {
+                  actor: actor.actor,
+                  deviceId: actor.deviceId,
+                  clientIp: actor.clientIp,
+                  changedPaths: [],
+                },
+              });
+            } else {
+              // A restart sentinel has one continuation owner. Reject this RPC
+              // instead of accepting metadata that the active handoff cannot persist.
+              handoff = {
+                status: "already-running",
+                command: started.command,
+                message: "Another managed update is already running; retry after it completes.",
+              };
+            }
             result = {
               status: "skipped",
               mode: installSurface.mode,
               root: installSurface.root,
-              reason: CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+              reason: ownsManagedServiceHandoff
+                ? CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON
+                : MANAGED_HANDOFF_ALREADY_RUNNING_REASON,
               ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-              steps: [
-                {
-                  name: "managed-service update handoff",
-                  command: started.command,
-                  cwd: root,
-                  durationMs: Date.now() - startedAt,
-                  exitCode: null,
-                },
-              ],
+              steps: ownsManagedServiceHandoff
+                ? [
+                    {
+                      name: "managed-service update handoff",
+                      command: started.command,
+                      cwd: root,
+                      durationMs: Date.now() - startedAt,
+                      exitCode: null,
+                    },
+                  ]
+                : [],
               durationMs: Date.now() - startedAt,
             };
           } catch (err) {
@@ -378,13 +414,15 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
-    let sentinelPersisted: boolean;
-    try {
-      await writeRestartSentinel(payload);
-      sentinelPersisted = true;
-      recordLatestUpdateRestartSentinel(payload);
-    } catch {
-      sentinelPersisted = false;
+    let sentinelPersisted = false;
+    if (ownsManagedServiceHandoff) {
+      try {
+        await writeRestartSentinel(payload);
+        sentinelPersisted = true;
+        recordLatestUpdateRestartSentinel(payload);
+      } catch {
+        // Best effort: the response still reports the update outcome.
+      }
     }
 
     // Only restart the gateway when the update actually succeeded.

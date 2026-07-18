@@ -301,6 +301,27 @@ describe("reconcileSlackUnknownSend", () => {
     expect(order).toEqual(["open", "dispatch", "post"]);
   });
 
+  it("uses the user-identity user token to open a durable DM target", async () => {
+    const client = createSlackReconcileTestClient();
+    slackClientMocks.getSlackWriteClient.mockReturnValue(client);
+    const userIdentityCfg = {
+      channels: {
+        slack: {
+          identity: "user",
+          userToken: "test-user-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageSlack("user:U123", "final answer", {
+      cfg: userIdentityCfg,
+      deliveryQueueId: "test-queue-id",
+    });
+
+    expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("test-user-token");
+    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U123" });
+  });
+
   it("preserves existing assistant metadata while adding the durable id", async () => {
     const client = createSlackReconcileTestClient();
     const metadata = await postWithDeliveryMetadata({

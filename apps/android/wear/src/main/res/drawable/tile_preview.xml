@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#07080A" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+    <item
+        android:width="88dp"
+        android:height="88dp"
+        android:gravity="center"
+        android:drawable="@drawable/ic_openclaw_launcher" />
+</layer-list>

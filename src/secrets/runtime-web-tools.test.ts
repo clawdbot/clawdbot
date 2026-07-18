@@ -281,19 +281,24 @@ function buildTestWebFetchProviders(): PluginWebFetchProviderEntry[] {
   ];
 }
 
-async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
+async function runRuntimeWebTools(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  allowUnavailableSecretOwners?: boolean;
+}) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
     sourceConfig,
     env: params.env ?? {},
   });
-  const metadata = await resolveRuntimeWebTools({
+  const result = await resolveRuntimeWebTools({
     sourceConfig,
     resolvedConfig,
     context,
+    allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
   });
-  return { metadata, resolvedConfig, context };
+  return { ...result, resolvedConfig, context };
 }
 
 function createProviderSecretRefConfig(
@@ -409,7 +414,7 @@ describe("runtime web tools resolution", () => {
             firecrawl: {
               config: {
                 webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY_REF" },
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
                 },
               },
             },
@@ -431,7 +436,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProvider).toBeUndefined();
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
@@ -892,6 +897,39 @@ describe("runtime web tools resolution", () => {
     expect(context.warnings.map((warning) => warning.code)).not.toContain(
       "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
     );
+  });
+
+  it("keeps unresolved auto-detected providers strict during cold-start isolation", async () => {
+    await expect(
+      runRuntimeWebTools({
+        config: asConfig({
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "MISSING_GEMINI_API_KEY_REF",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        allowUnavailableSecretOwners: true,
+      }),
+    ).rejects.toThrow("[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]");
   });
 
   it("auto-detects Gemini from the Google model provider key after env fallbacks", async () => {
@@ -1475,8 +1513,8 @@ describe("runtime web tools resolution", () => {
     expect(firstMockArg(resolvePluginWebFetchProvidersMock).sandboxed).toBe(true);
   });
 
-  it("uses env fallback for unresolved web fetch provider SecretRef when active", async () => {
-    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+  it("isolates an explicit web fetch provider instead of using env after its ref fails", async () => {
+    const { metadata, resolvedConfig, context, degradedOwners } = await runRuntimeWebTools({
       config: asConfig({
         plugins: {
           entries: {
@@ -1500,19 +1538,31 @@ describe("runtime web tools resolution", () => {
       env: {
         FIRECRAWL_API_KEY: "firecrawl-fallback-key", // pragma: allowlist secret
       },
+      allowUnavailableSecretOwners: true,
     });
 
-    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(metadata.fetch.providerConfigured).toBe("firecrawl");
+    expect(metadata.fetch.selectedProvider).toBeUndefined();
+    expect(metadata.fetch.selectedProviderKeySource).toBeUndefined();
     expect(
       (
         resolvedConfig.plugins?.entries?.firecrawl?.config as
           | { webFetch?: { apiKey?: unknown } }
           | undefined
       )?.webFetch?.apiKey,
-    ).toBe("firecrawl-fallback-key");
+    ).toEqual({ source: "env", provider: "default", id: "MISSING_FIRECRAWL_REF" });
+    expect(degradedOwners).toContainEqual(
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-fetch:firecrawl",
+        state: "unavailable",
+        paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+        reason: expect.stringContaining("MISSING_FIRECRAWL_REF"),
+      }),
+    );
+    expect(degradedOwners[0]?.refKeys).toEqual(["env:default:MISSING_FIRECRAWL_REF"]);
     expectDiagnostic(context.warnings, {
-      code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
+      code: "SECRETS_OWNER_UNAVAILABLE",
       path: "plugins.entries.firecrawl.config.webFetch.apiKey",
     });
   });

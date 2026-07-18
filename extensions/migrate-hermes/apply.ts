@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
+  copyMemoryMigrationFileItem,
   copyMigrationFileItem,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
@@ -33,6 +34,25 @@ import { applySecretItem } from "./secrets.js";
 import { resolveTargets } from "./targets.js";
 
 const HERMES_SQLITE_SNAPSHOT_PREFIX = "openclaw-migrate-hermes-sqlite-";
+
+function isHermesMemoryOnlyCopyItem(item: MigrationItem): boolean {
+  return (
+    item.kind === "memory" &&
+    item.action === "copy" &&
+    item.details?.sourceType === "hermes-memory" &&
+    item.details?.collectionId === "hermes"
+  );
+}
+
+function assertConsistentMemoryPlan(plan: MigrationPlan): void {
+  const hasMemoryOnlyCopy = plan.items.some(isHermesMemoryOnlyCopyItem);
+  const hasMemoryAppend = plan.items.some(
+    (item) => item.kind === "memory" && item.action === "append",
+  );
+  if (hasMemoryOnlyCopy && hasMemoryAppend) {
+    throw new Error("Hermes migration plan mixes memory-only copy and append items");
+  }
+}
 
 async function archiveHermesItem(item: MigrationItem, reportDir: string): Promise<MigrationItem> {
   if (!item.source || path.extname(item.source) !== ".db") {
@@ -124,6 +144,7 @@ export async function applyHermesPlan(params: {
   runtime?: MigrationProviderContext["runtime"];
 }): Promise<MigrationApplyResult> {
   const plan = params.plan ?? (await buildHermesPlan(params.ctx));
+  assertConsistentMemoryPlan(plan);
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
   const targets = resolveTargets(params.ctx);
   // Item ids are report labels, not unique execution keys. Preserve object identity so
@@ -169,6 +190,12 @@ export async function applyHermesPlan(params: {
       appliedItem = await applyAuthItem(applyCtx, item, targets);
     } else if (item.kind === "secret") {
       appliedItem = await applySecretItem(applyCtx, item, targets);
+    } else if (isHermesMemoryOnlyCopyItem(item)) {
+      // Route from the reviewed item shape; ctx.itemKinds is caller metadata and may be absent.
+      appliedItem = await copyMemoryMigrationFileItem(item, reportDir, {
+        workspaceDir: targets.workspaceDir,
+        overwrite: params.ctx.overwrite,
+      });
     } else if (item.action === "append") {
       appliedItem = await appendItem(item);
     } else {

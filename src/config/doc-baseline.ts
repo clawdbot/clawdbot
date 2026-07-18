@@ -105,12 +105,6 @@ function compareBaselineStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function logConfigDocBaselineDebug(message: string): void {
-  if (process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1") {
-    console.error(`[config-doc-baseline] ${message}`);
-  }
-}
-
 function resolveRepoRoot(): string {
   const fromPackage = resolveOpenClawPackageRootSync({
     cwd: path.dirname(fileURLToPath(import.meta.url)),
@@ -369,15 +363,11 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     config: {},
     bundledChannelConfigCollector: runtime.collectBundledChannelConfigs,
   });
-  logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
   const bundledRegistry = {
     ...manifestRegistry,
     plugins: manifestRegistry.plugins.filter((plugin) => plugin.origin === "bundled"),
   };
   const channelPlugins = runtime.collectChannelSchemaMetadata(bundledRegistry);
-  logConfigDocBaselineDebug(
-    `loaded ${channelPlugins.length} bundled channel entries from metadata`,
-  );
 
   return runtime.buildConfigSchema({
     plugins: runtime.collectPluginSchemaMetadata(bundledRegistry),
@@ -520,23 +510,15 @@ async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     return await cachedConfigDocBaselinePromise;
   }
   cachedConfigDocBaselinePromise = (async () => {
-    const start = Date.now();
-    logConfigDocBaselineDebug("build baseline start");
     const response = await loadBundledConfigSchemaResponse();
     const schemaRoot = asSchemaObject(response.schema);
     if (!schemaRoot) {
       throw new Error("config schema root is not an object");
     }
-    const collectStart = Date.now();
-    logConfigDocBaselineDebug("collect baseline entries start");
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
     );
     const { coreEntries, channelEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
-    logConfigDocBaselineDebug(
-      `collect baseline entries done count=${entries.length} elapsedMs=${Date.now() - collectStart}`,
-    );
-    logConfigDocBaselineDebug(`build baseline done elapsedMs=${Date.now() - start}`);
     return {
       generatedBy: GENERATED_BY,
       coreEntries,
@@ -567,8 +549,6 @@ function renderKindBaseline(
 export async function renderConfigDocBaselineArtifacts(
   baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
 ): Promise<ConfigDocBaselineArtifactsRender> {
-  const start = Date.now();
-  logConfigDocBaselineDebug("render artifacts start");
   const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
   const json: ConfigDocBaselineArtifacts = {
     combined: `${JSON.stringify(resolvedBaseline, null, 2)}\n`,
@@ -576,7 +556,6 @@ export async function renderConfigDocBaselineArtifacts(
     channel: renderKindBaseline("channel", resolvedBaseline.channelEntries),
     plugin: renderKindBaseline("plugin", resolvedBaseline.pluginEntries),
   };
-  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
   return {
     json,
     baseline: resolvedBaseline,
@@ -643,22 +622,16 @@ export async function writeConfigDocBaselineArtifacts(params?: {
   hashPath?: string;
   rendered?: ConfigDocBaselineArtifactsRender | Promise<ConfigDocBaselineArtifactsRender>;
 }): Promise<ConfigDocBaselineArtifactsWriteResult> {
-  const start = Date.now();
-  logConfigDocBaselineDebug("write artifacts start");
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const jsonPaths = resolveBaselineArtifactPaths(repoRoot, params);
   const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
   const rendered = params?.rendered
     ? await params.rendered
     : await renderConfigDocBaselineArtifacts();
-  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
 
   const nextHashContent = computeConfigBaselineHashFileContent(rendered.json);
   const currentHashContent = readFileIfExists(hashPath);
   const changed = currentHashContent !== nextHashContent;
-  logConfigDocBaselineDebug(
-    `compare hashes done changed=${changed} elapsedMs=${Date.now() - start}`,
-  );
 
   if (params?.check) {
     return {

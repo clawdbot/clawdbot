@@ -38,6 +38,7 @@ import {
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { withProfile } from "./plugin-load-profile.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -97,6 +98,7 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const pluginId = manifestRecord.id;
+    const policyId = normalizePluginPolicyId(pluginId);
     if (
       !matchesScopedPluginOrDreamingSidecar({
         onlyPluginIdSet,
@@ -153,7 +155,7 @@ export async function loadOpenClawPluginCliRegistry(
           enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
           activationSource: context.activationSource,
         });
-    const entry = context.normalized.entries[pluginId];
+    const entry = context.normalized.entries[policyId];
     const record = createManifestPluginRecord({
       candidate,
       manifestRecord,

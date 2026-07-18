@@ -11,9 +11,10 @@ import {
   type SecretInput,
   type SecretInputMode,
 } from "openclaw/plugin-sdk/provider-auth";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  selectPreferredLocalModelId,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { withAgentModelAliases } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -344,7 +345,9 @@ function selectDefaultLmstudioModelId(
   if (ids.length === 0) {
     return undefined;
   }
-  return ids.includes(LMSTUDIO_DEFAULT_MODEL_ID) ? LMSTUDIO_DEFAULT_MODEL_ID : ids[0];
+  return ids.includes(LMSTUDIO_DEFAULT_MODEL_ID)
+    ? LMSTUDIO_DEFAULT_MODEL_ID
+    : (selectPreferredLocalModelId(ids) ?? ids[0]);
 }
 
 function collectAppGuidedLmstudioModelIds(discovery: LmstudioDiscoveryResult): Set<string> {

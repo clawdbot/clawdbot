@@ -290,6 +290,23 @@ describe("streamSignalEvents", () => {
     expect(events).toEqual([{ id: "42", event: "message", data: '{"group":true}' }]);
   });
 
+  it("propagates receive-handler failures to the stream", async () => {
+    const appendError = new Error("durable append failed");
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: receive\ndata: {"envelope":{}}\n\n');
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl,
+        onEvent: async () => {
+          throw appendError;
+        },
+      }),
+    ).rejects.toBe(appendError);
+  });
+
   it("reports HTTP status failures from the event stream", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(503, "Unavailable");

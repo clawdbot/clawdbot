@@ -1,16 +1,11 @@
 // Line plugin module implements webhook node behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { webhook } from "@line/bot-sdk";
-import {
-  createMessageReceiveContext,
-  type MessageReceiveContext,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-  runDetachedWebhookWork,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -30,10 +25,6 @@ export async function readLineWebhookRequestBody(
 }
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
-
-function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
-  runtime?.error?.(danger(`line webhook dispatch failed: ${String(err)}`));
-}
 
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
@@ -67,7 +58,6 @@ export function createLineNodeWebhookHandler(params: {
       return;
     }
 
-    let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signatureHeader = req.headers["x-line-signature"];
       const signature =
@@ -109,33 +99,14 @@ export function createLineNodeWebhookHandler(params: {
       }
 
       params.onRequestAuthenticated?.();
-
-      receiveContext = createMessageReceiveContext({
-        id: `${Date.now()}:line:webhook`,
-        channel: "line",
-        message: body,
-        ackPolicy: "after_receive_record",
-        onAck: () => {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ status: "ok" }));
-        },
-      });
-
-      if (receiveContext.shouldAckAfter("receive_record")) {
-        await receiveContext.ack();
-      }
-
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        // Detach event processing from the request admission before the ack
-        // releases it; an inherited released admission refuses queue work.
-        void runDetachedWebhookWork(() => params.bot.handleWebhook(body)).catch((err: unknown) =>
-          logLineWebhookDispatchError(params.runtime, err),
-        );
+        await params.bot.handleWebhook(body);
       }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ status: "ok" }));
     } catch (err) {
-      await receiveContext?.nack(err);
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;
         res.setHeader("Content-Type", "application/json");

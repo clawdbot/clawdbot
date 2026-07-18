@@ -221,7 +221,7 @@ type MSTeamsReplyPolicy = {
 type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
 
 export function resolveMSTeamsAllowlistMatch(params: {
-  allowFrom: Array<string | number>;
+  allowFrom: ReadonlyArray<string | number>;
   senderId: string;
   senderName?: string | null;
   allowNameMatching?: boolean;

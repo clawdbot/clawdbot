@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -156,6 +157,7 @@ describe("ssh sandbox backend", () => {
   beforeEach(() => {
     envSnapshot = captureFullEnv();
     vi.clearAllMocks();
+    setActiveDegradedSecretOwners([]);
     sshMocks.createSshSandboxSessionFromSettings.mockResolvedValue(createSession());
     sshMocks.disposeSshSandboxSession.mockResolvedValue(undefined);
     sshMocks.runSshSandboxCommand.mockResolvedValue({
@@ -175,6 +177,7 @@ describe("ssh sandbox backend", () => {
   });
 
   afterEach(async () => {
+    setActiveDegradedSecretOwners([]);
     envSnapshot.restore();
     for (const dir of tempDirs.splice(0)) {
       await fs.rm(dir, { recursive: true, force: true });
@@ -211,6 +214,142 @@ describe("ssh sandbox backend", () => {
     expect(sessionSettings.workspaceRoot).toBe("/remote/openclaw");
     const commandParams = requireSshRunCommandParams();
     expect(commandParams.remoteCommand).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
+  });
+
+  it("uses the derived registry agent for both validation and SSH settings", async () => {
+    const config = createConfig();
+    config.agents!.defaults!.sandbox!.ssh!.identityData = {
+      source: "env",
+      provider: "default",
+      id: "UNMATERIALIZED_DEFAULT_IDENTITY",
+    };
+    config.agents!.list = [
+      {
+        id: "worker",
+        sandbox: {
+          ssh: {
+            identityData: "MATERIALIZED WORKER IDENTITY",
+          },
+        },
+      },
+    ];
+
+    await sshSandboxBackendManager.describeRuntime({
+      entry: {
+        containerName: "openclaw-ssh-worker-abcd1234",
+        backendId: "ssh",
+        runtimeLabel: "openclaw-ssh-worker-abcd1234",
+        sessionKey: "agent:worker",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "peter@example.com:2222",
+        configLabelKind: "Target",
+      },
+      config,
+    });
+
+    expect(
+      requireMockRecordArg(sshMocks.createSshSandboxSessionFromSettings, 0, "ssh session settings")
+        .identityData,
+    ).toBe("MATERIALIZED WORKER IDENTITY");
+  });
+
+  it("rejects a cold agent owner before opening an SSH management session", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "agent-sandbox:worker",
+        state: "unavailable",
+        paths: ["agents.defaults.sandbox.ssh.identityData"],
+        refKeys: ["env:default:MISSING_SSH_IDENTITY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    await expect(
+      sshSandboxBackendManager.describeRuntime({
+        entry: {
+          containerName: "openclaw-ssh-worker-abcd1234",
+          backendId: "ssh",
+          runtimeLabel: "openclaw-ssh-worker-abcd1234",
+          sessionKey: "agent:worker",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "peter@example.com:2222",
+          configLabelKind: "Target",
+        },
+        config: createConfig(),
+        agentId: "worker",
+      }),
+    ).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "agent-sandbox:worker",
+    });
+    expect(sshMocks.createSshSandboxSessionFromSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects unmaterialized shared SSH refs even when no active owner inherited them", async () => {
+    const config = createConfig();
+    config.agents!.defaults!.sandbox!.mode = "off";
+    config.agents!.defaults!.sandbox!.scope = "shared";
+    config.agents!.defaults!.sandbox!.ssh!.identityData = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_SHARED_SSH_IDENTITY",
+    };
+
+    await expect(
+      sshSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "openclaw-ssh-shared-abcd1234",
+          backendId: "ssh",
+          runtimeLabel: "openclaw-ssh-shared-abcd1234",
+          sessionKey: "shared",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "peter@example.com:2222",
+          configLabelKind: "Target",
+        },
+        config,
+      }),
+    ).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "agent-sandbox:shared",
+    });
+    expect(sshMocks.createSshSandboxSessionFromSettings).not.toHaveBeenCalled();
+  });
+
+  it("does not block shared SSH management for an unrelated cold agent override", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "agent-sandbox:cold",
+        state: "unavailable",
+        paths: ["agents.list.0.sandbox.ssh.identityData"],
+        refKeys: ["env:default:MISSING_AGENT_SSH_IDENTITY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    const config = createConfig();
+    config.agents!.defaults!.sandbox!.scope = "shared";
+
+    await sshSandboxBackendManager.removeRuntime({
+      entry: {
+        containerName: "openclaw-ssh-shared-abcd1234",
+        backendId: "ssh",
+        runtimeLabel: "openclaw-ssh-shared-abcd1234",
+        sessionKey: "shared",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "peter@example.com:2222",
+        configLabelKind: "Target",
+      },
+      config,
+    });
+
+    expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledTimes(1);
   });
 
   it("removes runtimes by deleting the remote scope root", async () => {

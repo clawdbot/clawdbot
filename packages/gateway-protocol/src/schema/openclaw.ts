@@ -31,6 +31,29 @@ export const SystemAgentChatParamsSchema = closedObject({
   ),
 });
 
+/**
+ * Structured choice attached to a chat reply. Card-capable clients render the
+ * options and send back `reply` (default: `label`) as the next message; text
+ * clients ignore this and use the reply prose, which always stands alone.
+ */
+export const SystemAgentChatQuestionSchema = closedObject({
+  id: NonEmptyString,
+  header: NonEmptyString,
+  question: NonEmptyString,
+  options: Type.Array(
+    closedObject({
+      label: NonEmptyString,
+      description: Type.Optional(Type.String()),
+      recommended: Type.Optional(Type.Boolean()),
+      /** Message text a client sends when this option is chosen; defaults to label. */
+      reply: Type.Optional(NonEmptyString),
+    }),
+    { minItems: 2, maxItems: 4 },
+  ),
+  /** Free-text answers are also accepted for this question. */
+  isOther: Type.Optional(Type.Boolean()),
+});
+
 /** One OpenClaw reply; `action` tells clients about conversation handoffs. */
 export const SystemAgentChatResultSchema = closedObject({
   sessionId: NonEmptyString,
@@ -46,6 +69,7 @@ export const SystemAgentChatResultSchema = closedObject({
   ]),
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
+  question: Type.Optional(SystemAgentChatQuestionSchema),
 });
 
 /**
@@ -59,6 +83,12 @@ export const SystemAgentSetupDetectParamsSchema = closedObject({});
 
 const ProviderAutoSetupInferenceKind = Type.TemplateLiteral("provider-auto:${string}", {
   pattern: "^provider-auto:.+$",
+});
+
+const SetupInferenceHttpsUrl = Type.String({
+  minLength: 1,
+  maxLength: 2048,
+  pattern: "^https://",
 });
 
 const SetupInferenceKind = Type.Union([
@@ -102,6 +132,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       recommended: Type.Boolean(),
       /** true: verified; false: definitively logged out; absent: unknown. */
       credentials: Type.Optional(Type.Boolean()),
+      icon: Type.Optional(SetupInferenceHttpsUrl),
+      website: Type.Optional(SetupInferenceHttpsUrl),
     }),
   ),
   unavailableCandidates: Type.Optional(
@@ -121,6 +153,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       id: NonEmptyString,
       label: NonEmptyString,
       hint: Type.Optional(Type.String()),
+      icon: Type.Optional(SetupInferenceHttpsUrl),
+      website: Type.Optional(SetupInferenceHttpsUrl),
     }),
   ),
   /** Provider-owned browser and device-code login methods. */
@@ -131,8 +165,21 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         label: NonEmptyString,
         hint: Type.Optional(Type.String()),
         groupLabel: Type.Optional(Type.String()),
+        icon: Type.Optional(SetupInferenceHttpsUrl),
+        website: Type.Optional(SetupInferenceHttpsUrl),
         kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
         featured: Type.Boolean(),
+      }),
+    ),
+  ),
+  recommendedInstalls: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        label: NonEmptyString,
+        hint: NonEmptyString,
+        website: SetupInferenceHttpsUrl,
+        icon: SetupInferenceHttpsUrl,
       }),
     ),
   ),
@@ -203,6 +250,7 @@ export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
+export type SystemAgentChatQuestion = Static<typeof SystemAgentChatQuestionSchema>;
 export type SystemAgentChatResult = Static<typeof SystemAgentChatResultSchema>;
 export type SystemAgentSetupDetectParams = Static<typeof SystemAgentSetupDetectParamsSchema>;
 export type SystemAgentSetupDetectResult = Static<typeof SystemAgentSetupDetectResultSchema>;

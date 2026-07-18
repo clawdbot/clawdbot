@@ -22,7 +22,6 @@ type PersistOptions = {
 export type CronRollbackSnapshot = {
   store: CronStoreFile | null;
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
-  pendingCatchupDeferralJobIds: Set<string>;
 };
 
 function durableNextRunsFromJobs(jobs: readonly CronJob[]) {
@@ -305,7 +304,6 @@ export function snapshotStoreForRollback(state: CronServiceState): CronRollbackS
   return {
     store: state.store ? structuredClone(state.store) : null,
     durableNextRunAtMsByJobId: new Map(state.durableNextRunAtMsByJobId),
-    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
   };
 }
 
@@ -332,7 +330,6 @@ export async function persistOrRestore(
   } catch (err) {
     state.store = snapshot.store;
     state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
-    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
     throw err;
   }
   for (const notify of opts.postPersistAutoDisableNotifications ?? []) {

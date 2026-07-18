@@ -465,7 +465,7 @@ export function createChangedCheckPlan(result, options = {}) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
   if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API baseline", ["plugin-sdk:api:check"]);
+    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
   }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
@@ -506,6 +506,9 @@ export function createChangedCheckPlan(result, options = {}) {
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+  if (lanes.scripts || lanes.tooling || lanes.testRoot) {
+    add("script declaration contracts", ["check:script-declarations"]);
+  }
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -545,7 +548,6 @@ export function createChangedCheckPlan(result, options = {}) {
   if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
-
   if (lanes.core) {
     addTypecheck("typecheck core", ["tsgo:core"]);
   }

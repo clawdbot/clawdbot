@@ -232,6 +232,8 @@ describe("runSystemAgentTurn", () => {
         authProfileId: "openai:p2",
         authProfileIdSource: "user",
         config: binding.execution.runConfig,
+        thinkLevel: "off",
+        timeoutMs: 120_000,
       }),
     );
 

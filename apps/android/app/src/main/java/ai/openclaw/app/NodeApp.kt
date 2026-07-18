@@ -6,6 +6,10 @@ import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.notifyNativeLocaleChanged
+import ai.openclaw.app.wear.GoogleWearMessageSender
+import ai.openclaw.app.wear.GoogleWearPeerResolver
+import ai.openclaw.app.wear.WearProxyBridge
+import ai.openclaw.app.wear.WearRealtimeChannelRegistry
 import android.app.Application
 import android.content.res.Configuration
 import android.os.StrictMode
@@ -30,6 +34,21 @@ class NodeApp : Application() {
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()
   private var runtimeInstance: NodeRuntime? = null
+
+  internal val wearProxyBridge: WearProxyBridge by lazy {
+    WearProxyBridge(
+      scope = runtimeScope,
+      sender = GoogleWearMessageSender(this),
+      peerResolver = GoogleWearPeerResolver(this),
+      handleRequest = { sourceNodeId, request ->
+        ensureBackgroundRuntime().handleWearProxyRequest(sourceNodeId, request)
+      },
+    )
+  }
+
+  internal val wearRealtimeChannels: WearRealtimeChannelRegistry by lazy {
+    WearRealtimeChannelRegistry(this, runtimeScope)
+  }
 
   /**
    * Returns the single NodeRuntime for this process, creating it on first use.
@@ -87,7 +106,8 @@ class NodeApp : Application() {
       runBlocking {
         database.withTransaction {
           database.dao().deleteMessages(gatewayId)
-          database.dao().deleteSessions(gatewayId)
+          database.dao().deleteSessionsForGateway(gatewayId)
+          database.dao().deleteGatewayOwner(gatewayId)
           // The outbox owns command/attachment cascade deletes; nested transactions join this one.
           RoomChatCommandOutbox(database).clearGateway(gatewayId)
         }

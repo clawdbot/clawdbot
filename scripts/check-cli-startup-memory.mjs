@@ -99,9 +99,9 @@ function resolveDefaultLimitsMb(platform = process.platform) {
     // Plugin discovery is heavier than help, but must stay below the doctor/channel
     // runtime graph that an empty metadata-only invocation must not import.
     pluginsList: platform === "darwin" ? 500 : 400,
-    // Node 24 status startup sits near 400 MB; retain regression signal without
-    // failing on sub-megabyte runner RSS variance.
-    statusJson: 425,
+    // Node 24 status startup reaches ~430 MB on current Linux runner images;
+    // retain useful regression headroom without failing on allocator variance.
+    statusJson: 450,
     gatewayStatus: 500,
   };
 }

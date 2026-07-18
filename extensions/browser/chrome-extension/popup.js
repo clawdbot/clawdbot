@@ -7,6 +7,7 @@ const pairingInput = document.getElementById("pairingString");
 const pairButton = document.getElementById("pairButton");
 const unpairButton = document.getElementById("unpairButton");
 const shareButton = document.getElementById("shareButton");
+const copilotButton = document.getElementById("copilotButton");
 const statusLine = document.getElementById("statusLine");
 const errorLine = document.getElementById("error");
 
@@ -35,8 +36,13 @@ async function refresh() {
   const tab = await activeTab();
   if (tab?.id === undefined) {
     shareButton.classList.add("hidden");
+    copilotButton.disabled = true;
     return;
   }
+  const panel = await chrome.runtime.sendMessage({ type: "prepareCopilotPanel", tabId: tab.id });
+  copilotButton.disabled = !panel?.ok;
+  copilotButton.dataset.tabId = String(tab.id);
+  copilotButton.dataset.path = panel?.path ?? "";
   const { shared } = await chrome.runtime.sendMessage({ type: "isTabShared", tabId: tab.id });
   shareButton.classList.remove("hidden");
   shareButton.textContent = shared ? "Stop sharing this tab" : "Share this tab with OpenClaw";
@@ -70,9 +76,21 @@ async function onToggleShare() {
   await refresh();
 }
 
+async function onOpenCopilot() {
+  const tabId = Number.parseInt(copilotButton.dataset.tabId ?? "", 10);
+  const path = copilotButton.dataset.path;
+  if (!Number.isInteger(tabId) || !path) {
+    return;
+  }
+  await chrome.sidePanel.setOptions({ tabId, path, enabled: true });
+  await chrome.sidePanel.open({ tabId });
+  window.close();
+}
+
 pairButton.addEventListener("click", () => void onPair());
 unpairButton.addEventListener("click", () => void onUnpair());
 shareButton.addEventListener("click", () => void onToggleShare());
+copilotButton.addEventListener("click", () => void onOpenCopilot());
 
 void refresh();
 setInterval(() => void refresh(), 2000);

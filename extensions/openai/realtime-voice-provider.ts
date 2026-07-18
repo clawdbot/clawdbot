@@ -174,7 +174,7 @@ type RealtimeGaSessionUpdate = {
         format: OpenAIRealtimeAudioFormatConfig;
         turn_detection: RealtimeTurnDetectionConfig;
         noise_reduction?: { type: "near_field" } | null;
-        transcription?: { model: string };
+        transcription?: { model: string; language?: string };
       };
       output: {
         format: OpenAIRealtimeAudioFormatConfig;
@@ -195,7 +195,7 @@ type RealtimeAzureDeploymentSessionUpdate = {
     voice: OpenAIRealtimeVoice;
     input_audio_format: "g711_ulaw" | "pcm16";
     output_audio_format: "g711_ulaw" | "pcm16";
-    input_audio_transcription?: { model: string };
+    input_audio_transcription?: { model: string; language?: string };
     turn_detection: RealtimeTurnDetectionConfig;
     temperature: number;
     tools?: RealtimeVoiceTool[];
@@ -936,7 +936,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           input: {
             format: this.resolveRealtimeAudioFormat(),
             noise_reduction: null,
-            transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+            transcription: {
+              model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+              ...(cfg.language ? { language: cfg.language } : {}),
+            },
             turn_detection: this.buildTurnDetectionConfig({ includeInterruptResponse: true }),
           },
           output: {
@@ -974,7 +977,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         voice: cfg.voice ?? "alloy",
         input_audio_format: format,
         output_audio_format: format,
-        input_audio_transcription: { model: "whisper-1" },
+        input_audio_transcription: {
+          model: "whisper-1",
+          ...(cfg.language ? { language: cfg.language } : {}),
+        },
         turn_detection: this.buildTurnDetectionConfig(),
         temperature: cfg.temperature ?? 0.8,
         ...(tools
@@ -1560,6 +1566,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       supportsBargeIn: true,
       handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
+      supportsVideoFrames: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ cfg, providerConfig }) => {

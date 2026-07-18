@@ -9,6 +9,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { loadLocalUserIdentity, saveLocalUserIdentity } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
@@ -26,7 +27,13 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import {
+  decideUsageRefresh,
+  USAGE_PAYLOAD_TTL_MS,
+  type UsageRefreshReason,
+} from "../usage/refresh-policy.ts";
 import "../../styles/profile.css";
+import { renderIdentitySection } from "./identity-section.ts";
 import {
   buildHeatmap,
   buildInsights,
@@ -45,10 +52,6 @@ const HEATMAP_GAP = 3;
 const HEATMAP_PITCH = HEATMAP_CELL + HEATMAP_GAP;
 const HEATMAP_LEFT = 30;
 const HEATMAP_TOP = 18;
-
-const CACHE_SETTLE_POLL_MS = 5000;
-const CACHE_SETTLE_SLOW_POLL_MS = 60_000;
-const MAX_FAST_SETTLE_POLLS = 24;
 
 // Fixed reference week (2024-01-01 is a Monday) for localized weekday labels.
 const WEEKDAY_LABEL_ROWS = [
@@ -96,17 +99,26 @@ export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 
-  @state() private loading = true;
+  @state() private loading = false;
   @state() private error: string | null = null;
   @state() private costSummary: CostUsageSummary | null = null;
   @state() private sessionsResult: SessionsUsageResult | null = null;
+  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private requestId = 0;
   private refreshTimer: number | null = null;
-  private refreshAttempts = 0;
+  private lastProfileLoadedAtMs: number | null = null;
+  private pendingAutomaticProfileRefresh = false;
+  // Set only when a disconnect invalidates active work. The shared refresh
+  // policy decides when the retry is allowed to run.
+  private profileReloadPending = false;
   private subscriptions: Array<() => void> = [];
+
+  private readonly handlePageActivation = () => {
+    this.requestProfileRefresh("focus");
+  };
 
   override connectedCallback() {
     super.connectedCallback();
@@ -115,6 +127,8 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.context.agents.subscribe(() => this.requestUpdate()),
       this.context.agentIdentity.subscribe(() => this.requestUpdate()),
     ];
+    document.addEventListener("visibilitychange", this.handlePageActivation);
+    globalThis.addEventListener("focus", this.handlePageActivation);
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
   }
 
@@ -123,9 +137,12 @@ export class ProfilePage extends OpenClawLightDomElement {
       unsubscribe();
     }
     this.subscriptions = [];
+    document.removeEventListener("visibilitychange", this.handlePageActivation);
+    globalThis.removeEventListener("focus", this.handlePageActivation);
     this.requestId += 1;
     this.clearRefreshTimer();
-    this.refreshAttempts = 0;
+    this.pendingAutomaticProfileRefresh = false;
+    this.profileReloadPending = false;
     this.client = null;
     this.connected = false;
     super.disconnectedCallback();
@@ -140,12 +157,17 @@ export class ProfilePage extends OpenClawLightDomElement {
       // Never keep one gateway's stats on screen while another gateway loads
       // (or fails to load); the render branches key off costSummary presence.
       this.clearRefreshTimer();
-      this.refreshAttempts = 0;
+      this.requestId += 1;
+      this.loading = false;
+      this.lastProfileLoadedAtMs = null;
+      this.pendingAutomaticProfileRefresh = false;
+      this.profileReloadPending = false;
       this.costSummary = null;
       this.sessionsResult = null;
       this.error = null;
     }
     if (!snapshot.connected || !snapshot.client) {
+      this.profileReloadPending ||= this.loading;
       this.requestId += 1;
       this.clearRefreshTimer();
       this.loading = false;
@@ -156,20 +178,18 @@ export class ProfilePage extends OpenClawLightDomElement {
         void this.context.agentIdentity.ensure([list.defaultId]);
       }
     });
-    if (
-      clientChanged ||
-      (becameConnected && (!this.costSummary || this.isCacheSettling())) ||
-      (!this.costSummary && !this.loading && !this.error)
-    ) {
-      void this.loadProfile();
+    if (clientChanged || becameConnected || (!this.costSummary && !this.loading && !this.error)) {
+      this.requestProfileRefresh("reconnect");
     }
   }
 
   private async loadProfile() {
     const client = this.client;
     if (!client || !this.connected) {
+      this.profileReloadPending = true;
       return;
     }
+    this.profileReloadPending = false;
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = null;
@@ -197,6 +217,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
       this.costSummary = costSummary;
       this.sessionsResult = sessionsResult;
+      this.lastProfileLoadedAtMs = Date.now();
       this.scheduleCacheSettleRefresh();
     } catch (error) {
       if (requestId !== this.requestId) {
@@ -206,6 +227,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     } finally {
       if (requestId === this.requestId) {
         this.loading = false;
+        this.flushPendingAutomaticProfileRefresh();
       }
     }
   }
@@ -224,20 +246,14 @@ export class ProfilePage extends OpenClawLightDomElement {
   private scheduleCacheSettleRefresh() {
     this.clearRefreshTimer();
     if (!this.isCacheSettling()) {
-      this.refreshAttempts = 0;
       return;
     }
-    // Large cold rebuilds can take many minutes; back off to a slow poll
-    // instead of stopping, so the page converges rather than freezing a
-    // partial snapshot as final.
-    const interval =
-      this.refreshAttempts < MAX_FAST_SETTLE_POLLS
-        ? CACHE_SETTLE_POLL_MS
-        : CACHE_SETTLE_SLOW_POLL_MS;
-    this.refreshAttempts += 1;
+    const loadedAtMs = this.lastProfileLoadedAtMs ?? Date.now();
+    const ageMs = Math.max(0, Date.now() - loadedAtMs);
+    const interval = Math.max(0, USAGE_PAYLOAD_TTL_MS - ageMs);
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
-      void this.loadProfile();
+      this.requestProfileRefresh("poll");
     }, interval);
   }
 
@@ -246,6 +262,55 @@ export class ProfilePage extends OpenClawLightDomElement {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
     }
+  }
+
+  private requestProfileRefresh(reason: UsageRefreshReason) {
+    if (this.loading && reason !== "manual") {
+      this.pendingAutomaticProfileRefresh = true;
+      return;
+    }
+    this.pendingAutomaticProfileRefresh = false;
+    const decision = decideUsageRefresh({
+      reason,
+      visible: document.visibilityState === "visible" && document.hasFocus(),
+      interrupted: this.profileReloadPending,
+      nowMs: Date.now(),
+      lastLoadedAtMs: this.lastProfileLoadedAtMs,
+    });
+    if (decision === "fetch") {
+      this.clearRefreshTimer();
+      void this.loadProfile();
+    } else if (decision === "skip" && this.isCacheSettling()) {
+      this.scheduleCacheSettleRefresh();
+    }
+  }
+
+  private flushPendingAutomaticProfileRefresh() {
+    if (!this.pendingAutomaticProfileRefresh) {
+      return;
+    }
+    this.pendingAutomaticProfileRefresh = false;
+    this.requestProfileRefresh("focus");
+  }
+
+  private setLocalUserAvatar(avatar: string | null) {
+    const identity = saveLocalUserIdentity({ ...loadLocalUserIdentity(), avatar });
+    this.userAvatar = identity.avatar;
+  }
+
+  private renderIdentity() {
+    const assistantIdentity = this.context.config.current.assistantIdentity;
+    return renderIdentitySection({
+      userAvatar: this.userAvatar,
+      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
+      assistantName: assistantIdentity.name,
+      assistantAvatar: assistantIdentity.avatar,
+      assistantAvatarUrl: assistantIdentity.avatar,
+      assistantAvatarSource: assistantIdentity.avatarSource,
+      assistantAvatarStatus: assistantIdentity.avatarStatus,
+      assistantAvatarReason: assistantIdentity.avatarReason,
+      basePath: this.context.basePath,
+    });
   }
 
   private featuredAgent() {
@@ -524,9 +589,9 @@ export class ProfilePage extends OpenClawLightDomElement {
         );
     return renderSettingsPage(
       hasActivity
-        ? html`${this.renderHero(insights)} ${this.renderStats(insights)} ${this.renderHeatmap()}
-          ${this.renderInsights(insights)}`
-        : html`${this.renderHero(insights)} ${emptyState}`,
+        ? html`${this.renderHero(insights)} ${this.renderStats(insights)} ${this.renderIdentity()}
+          ${this.renderHeatmap()} ${this.renderInsights(insights)}`
+        : html`${this.renderHero(insights)} ${this.renderIdentity()} ${emptyState}`,
     );
   }
 
@@ -536,6 +601,9 @@ export class ProfilePage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
         </div>
+        <button class="btn profile-refresh" @click=${() => this.requestProfileRefresh("manual")}>
+          ${this.loading ? t("common.refreshing") : t("common.refresh")}
+        </button>
       </section>
       ${renderSettingsWorkspace(this.renderBody())}
     `;

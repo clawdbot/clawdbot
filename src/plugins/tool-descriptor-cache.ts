@@ -165,6 +165,7 @@ export function capturePluginToolDescriptor(params: {
       ...(title ? { title } : {}),
       description: params.tool.description,
       inputSchema: asJsonObject(params.tool.parameters),
+      ...(params.tool.outputSchema ? { outputSchema: asJsonObject(params.tool.outputSchema) } : {}),
       owner: { kind: "plugin", pluginId: params.pluginId },
       executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
     },

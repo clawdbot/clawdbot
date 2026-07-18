@@ -678,7 +678,19 @@ export function createClaimableDedupe(
   };
 }
 
-/** Create an event-keyed replay guard whose claims own their settlement handles. */
+/**
+ * Create an event-keyed replay guard whose claims own their settlement handles.
+ *
+ * Layering contract vs the durable ingress drain (`src/channels/message/ingress-queue.ts`):
+ * the drain already rejects duplicate event ids durably — `complete()` tombstones the row
+ * and enqueue is `ON CONFLICT DO NOTHING` for the tombstone retention window. A replay
+ * guard on a drained channel is justified only when its identity or retention exceeds the
+ * queue's: a *logical* message key that differs from the transport delivery id (Telegram:
+ * `chat_id:message_id` vs `update_id` — debounce/media-group merges can re-surface a
+ * constituent message under a fresh update_id only the guard sees), or a window longer
+ * than the channel's tombstone retention. If the guard key would equal the drain event_id
+ * and retention fits the tombstone window, delete the guard when adopting the drain.
+ */
 export function createChannelReplayGuard<TEvent>(
   params: ChannelReplayGuardParams<TEvent>,
 ): ChannelReplayGuard<TEvent> {

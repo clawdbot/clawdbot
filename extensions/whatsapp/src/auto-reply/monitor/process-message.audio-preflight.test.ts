@@ -110,13 +110,19 @@ vi.mock("./inbound-dispatch.js", () => ({
     RawBody: params.rawBody ?? params.msg.payload.body,
     Transcript: params.transcript,
   }),
-  dispatchWhatsAppBufferedReply: vi.fn(async () => true),
+  createWhatsAppReplyPlan: vi.fn((params: { replyResolver?: unknown }) => ({
+    dispatcherOptions: {},
+    delivery: { deliver: async () => {} },
+    replyOptions: {},
+    replyResolver: params.replyResolver,
+    finalize: () => true,
+  })),
   resolveWhatsAppDmRouteTarget: () => "+15550000002",
   resolveWhatsAppResponsePrefix: () => undefined,
   updateWhatsAppMainLastRoute: () => {},
 }));
 
-import { dispatchWhatsAppBufferedReply } from "./inbound-dispatch.js";
+import { createWhatsAppReplyPlan } from "./inbound-dispatch.js";
 import { processMessage } from "./process-message.js";
 
 type WebInboundMsg = Parameters<typeof processMessage>[0]["msg"];
@@ -227,7 +233,7 @@ function firstTranscriptionContext(): Record<string, unknown> {
 }
 
 function firstDispatchContext(): Record<string, unknown> {
-  const calls = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls as unknown[][];
+  const calls = vi.mocked(createWhatsAppReplyPlan).mock.calls as unknown[][];
   const dispatch = calls[0]?.[0] as { context?: Record<string, unknown> } | undefined;
   if (!dispatch?.context) {
     throw new Error("expected WhatsApp dispatch context");
@@ -248,7 +254,7 @@ describe("processMessage audio preflight transcription", () => {
     maybeSendAckReactionMock.mockResolvedValue(null);
     shouldComputeCommandResult = false;
     shouldComputeCommandBodies = [];
-    vi.mocked(dispatchWhatsAppBufferedReply).mockClear();
+    vi.mocked(createWhatsAppReplyPlan).mockClear();
   });
 
   it("replaces <media:audio> body with transcript when transcription succeeds", async () => {
@@ -419,7 +425,13 @@ describe("processMessage audio preflight transcription", () => {
   it("keeps ack when no visible reply was delivered", async () => {
     const ackReaction = makeAckReactionHandle();
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
-    vi.mocked(dispatchWhatsAppBufferedReply).mockResolvedValueOnce(false);
+    vi.mocked(createWhatsAppReplyPlan).mockReturnValueOnce({
+      dispatcherOptions: {},
+      delivery: { deliver: async () => {} },
+      replyOptions: {},
+      replyResolver: vi.fn(),
+      finalize: () => false,
+    } as never);
 
     await processMessage(makeRemoveAckAfterReplyParams());
     await flushMicrotasks();

@@ -114,15 +114,12 @@ openclaw-chat-page {
   user-select: text;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--muted-strong) transparent;
-  /* The tall top inset is a titlebar band: it keeps the floating rail
-     openers (.chat-floating-toggles, 28px at top 10px) clear of the first
-     message and gives the native macOS app an empty strip that starts a
-     window drag (see the thread mousedown handler in chat-thread.ts).
-     No horizontal padding: macOS overlay scrollbars render inside the
+  /* The pane header owns the titlebar and native drag surface. No horizontal
+     padding: macOS overlay scrollbars render inside the
      scroll container's padding, which floats the thumb away from the pane
      edge (visible next to the sidebar divider). The side inset lives on
      .chat-thread-inner instead so the scrollbar hugs the edge. */
-  padding: clamp(44px, 5vh, 52px) 0 6px;
+  padding: clamp(20px, 3vh, 28px) 0 6px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -136,14 +133,6 @@ openclaw-chat-page {
 
 :root .chat-thread::-webkit-scrollbar-thumb:hover {
   background: var(--text);
-}
-
-/* Split panes spend their top row on the pane header (which is both the
-   toggle host and the drag surface), so their threads keep a compact inset.
-   The single-pane view is also an openclaw-chat-pane but renders no header,
-   hence the :has() guard. */
-openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
-  padding-top: clamp(20px, 3vh, 28px);
 }
 
 .chat-thread-inner > :first-child {
@@ -2276,6 +2265,25 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-send-btn--voice:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: none;
+}
+
+.agent-chat__video-preview {
+  align-self: flex-end;
+  width: min(240px, 45vw);
+  margin: 4px 8px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  background: #000;
+  box-shadow: var(--shadow-md);
+}
+
+.agent-chat__video-preview video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  transform: scaleX(-1);
 }
 
 /* Live voice input: the level meter itself is the control. Keeping it accent

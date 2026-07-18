@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -703,12 +704,22 @@ class WorktreesPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("worktrees")}</div>
+          <div class="page-title">${titleForRoute("sessions")}</div>
         </div>
+        ${renderSessionsHubTabs({
+          active: "worktrees",
+          onSelect: (tab) => {
+            if (tab !== "worktrees") {
+              this.context?.navigate(tab);
+            }
+          },
+        })}
       </section>
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(body, { id: "sessions-hub-panel" })}
     `;
   }
 }
 
-customElements.define("openclaw-worktrees-page", WorktreesPage);
+if (!customElements.get("openclaw-worktrees-page")) {
+  customElements.define("openclaw-worktrees-page", WorktreesPage);
+}

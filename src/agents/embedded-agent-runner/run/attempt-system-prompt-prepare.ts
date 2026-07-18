@@ -23,6 +23,7 @@ import {
 } from "../../channel-tools.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
+import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../../runtime-capabilities.js";
@@ -220,6 +221,17 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       runtimeHandle: params.getProviderRuntimeHandle(),
       context: promptContributionContext,
     });
+  const includeMemorySection =
+    !params.activeContextEngine || params.activeContextEngine.info.id === "legacy";
+  const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
+    enabled: effectivePromptMode === "full" && includeMemorySection,
+    toolNames: params.effectiveTools.map((tool) => tool.name),
+    capabilityToolNames: params.capabilityToolNames,
+    citationsMode: attempt.config?.memory?.citations,
+    agentId: runtimeInfo.agentId,
+    agentSessionKey: runtimeInfo.sessionKey,
+    sandboxed: sandboxInfo?.enabled === true,
+  });
 
   const attemptSystemPrompt = buildAttemptSystemPrompt({
     isRawModelRun: params.isRawModelRun,
@@ -271,8 +283,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(
         params.bootstrap.bootstrapPromptWarning.lines,
       ),
-      includeMemorySection:
-        !params.activeContextEngine || params.activeContextEngine.info.id === "legacy",
+      includeMemorySection,
+      preparedMemoryPrompt,
       promptContribution,
       continuationEnabled: attempt.config?.agents?.defaults?.continuation?.enabled === true,
     },

@@ -6,6 +6,7 @@ export * from "./sessions/goals.js";
 export * from "./sessions/artifacts.js";
 export * from "./sessions/metadata.js";
 export * from "./sessions/main-session.js";
+export type { MainRestartRecoveryState } from "./sessions/main-session-recovery.types.js";
 export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";

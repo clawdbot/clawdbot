@@ -25,6 +25,7 @@ struct OpenClawMascotAnimatorTests {
                 #expect((-45...45).contains(pose.leftClawDegrees), "\(mood)")
                 #expect((-45...45).contains(pose.rightClawDegrees), "\(mood)")
                 #expect((0...1).contains(pose.hardHat), "\(mood)")
+                #expect((0...1).contains(pose.accessoryAmount), "\(mood)")
                 #expect(abs(pose.gaze.width) <= 1.2 && abs(pose.gaze.height) <= 1.2, "\(mood)")
                 time += 1.0 / 30
             }
@@ -108,6 +109,96 @@ struct OpenClawMascotAnimatorTests {
             time += 1.0 / 30
         }
         #expect(wiped)
+    }
+
+    @Test func `sleepy mood wears the nightcap`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.sleepy, at: 1)
+        let animated = animator.pose(at: 4)
+        #expect(animated.accessory == .nightcap)
+        #expect(animated.accessoryAmount == 1)
+
+        let staticPose = OpenClawMascotPose.staticPose(for: .sleepy)
+        #expect(staticPose.accessory == .nightcap)
+        #expect(staticPose.accessoryAmount == 1)
+    }
+
+    @Test func `requested graduation cap eases into the pose`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setAccessory(.gradCap, at: 1)
+
+        let initial = animator.pose(at: 1)
+        #expect(initial.accessory == .gradCap)
+        #expect(initial.accessoryAmount == 0)
+        let entering = animator.pose(at: 1.25)
+        #expect((0..<1).contains(entering.accessoryAmount))
+        let settled = animator.pose(at: 1.5)
+        #expect(settled.accessory == .gradCap)
+        #expect(settled.accessoryAmount == 1)
+    }
+
+    @Test func `leaving working tips then removes the hard hat`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.working, at: 0.1)
+        _ = animator.pose(at: 2)
+        animator.setMood(.happy, at: 2)
+
+        var keptHat = false
+        var time: TimeInterval = 2
+        while time < 2.9 {
+            keptHat = keptHat || animator.pose(at: time).hardHat > 0.3
+            time += 1.0 / 30
+        }
+        #expect(keptHat)
+        #expect(animator.pose(at: 3.5).hardHat == 0)
+    }
+
+    @Test func `hard hat suppresses requested headwear until the tip finishes`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.working, at: 0)
+        animator.setAccessory(.gradCap, at: 0)
+
+        // While working (and through the hat-tip exit) the hard hat owns the
+        // crown: the requested cap must not co-render.
+        var time: TimeInterval = 0.2
+        while time < 3 {
+            let pose = animator.pose(at: time)
+            if pose.hardHat > 0.01 {
+                #expect(pose.accessoryAmount == 0, "two hats at t=\(time)")
+            }
+            time += 1.0 / 30
+        }
+        animator.setMood(.happy, at: 3)
+        while time < 4.4 {
+            let pose = animator.pose(at: time)
+            if pose.hardHat > 0.01 {
+                #expect(pose.accessoryAmount == 0, "two hats at t=\(time)")
+            }
+            time += 1.0 / 30
+        }
+        let after = animator.pose(at: 4.5)
+        #expect(after.hardHat == 0)
+        #expect(after.accessory == .gradCap)
+        #expect(after.accessoryAmount == 1)
+    }
+
+    @Test func `cancelled working exit skips the phantom hat tip`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.working, at: 0)
+        // The don is still in flight; the hat never seated.
+        _ = animator.pose(at: 0.15)
+        animator.setMood(.happy, at: 0.15)
+
+        var time: TimeInterval = 0.16
+        while time < 1.5 {
+            #expect(animator.pose(at: time).hardHat < 0.05, "phantom hat at t=\(time)")
+            time += 1.0 / 30
+        }
     }
 
     @Test func `affection taps trigger hearts`() {
@@ -207,6 +298,7 @@ struct OpenClawMascotAnimatorTests {
         pose.bodyTilt = -90
         pose.leftClawDegrees = 400
         pose.hardHat = 4
+        pose.accessoryAmount = 4
         pose.gaze = CGSize(width: 9, height: -9)
         pose.clampChannels()
         #expect(pose.floatOffset == -12)
@@ -214,6 +306,10 @@ struct OpenClawMascotAnimatorTests {
         #expect(pose.bodyTilt == -8)
         #expect(pose.leftClawDegrees == 45)
         #expect(pose.hardHat == 1)
+        #expect(pose.accessoryAmount == 1)
+        pose.accessoryAmount = -4
+        pose.clampChannels()
+        #expect(pose.accessoryAmount == 0)
         #expect(pose.gaze == CGSize(width: 1.2, height: -1.2))
     }
 }

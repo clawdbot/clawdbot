@@ -91,9 +91,16 @@ export function checkKnipUnusedFileScanResult(result) {
 }
 
 async function main() {
-  for (const scan of KNIP_SCANS) {
-    const ok = await runUnusedFileScan(scan);
-    if (!ok) {
+  // The scans are independent Knip child processes over separate configs;
+  // running them concurrently halves the lane's serial wall clock.
+  const results = await Promise.all(
+    KNIP_SCANS.map(async (scan) => ({
+      scan,
+      result: await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name }),
+    })),
+  );
+  for (const { scan, result } of results) {
+    if (!reportUnusedFileScan(scan, result)) {
       process.exitCode = 1;
       return;
     }
@@ -101,8 +108,7 @@ async function main() {
   console.log("[deadcode] Knip production and full-tree unused-file checks passed with 0 entries.");
 }
 
-async function runUnusedFileScan(scan) {
-  const result = await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name });
+function reportUnusedFileScan(scan, result) {
   const validation = checkKnipUnusedFileScanResult(result);
   if (validation.failureReason) {
     console.error(

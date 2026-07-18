@@ -10,7 +10,7 @@ import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-ru
 import type { AuthProfileStore } from "./types.js";
 
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
-  "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.";
+  "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current Qwen API key: openclaw onboard --auth-choice qwen-api-key.";
 
 function hasUnsupportedGithubCopilotEnterpriseDomain(
   store: AuthProfileStore,

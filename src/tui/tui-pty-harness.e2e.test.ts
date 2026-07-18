@@ -521,9 +521,41 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
 
 describe.sequential("TUI PTY harness", () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
+  let compactFooterFixture: Awaited<ReturnType<typeof startTuiFixture>>;
+  let slowStartupFixture: Awaited<ReturnType<typeof startTuiFixture>>;
 
   beforeAll(async () => {
-    fixture = await startTuiFixture();
+    // Boot every suite PTY concurrently: tsx+TUI startup dominates this file's
+    // wall time. The env-specific fixtures never receive input, so their tests
+    // only await readiness output and stay attributable to their own `it`.
+    // allSettled (not all) so a failed boot still assigns the survivors for
+    // afterAll cleanup instead of leaking their PTY processes.
+    const boots = await Promise.allSettled([
+      startTuiFixture(),
+      startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_MODEL: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+          OPENCLAW_TUI_PTY_THINKING_LEVEL: "high",
+        },
+      }),
+      startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
+      }),
+    ]);
+    const [mainBoot, compactBoot, slowBoot] = boots;
+    if (mainBoot.status === "fulfilled") {
+      fixture = mainBoot.value;
+    }
+    if (compactBoot.status === "fulfilled") {
+      compactFooterFixture = compactBoot.value;
+    }
+    if (slowBoot.status === "fulfilled") {
+      slowStartupFixture = slowBoot.value;
+    }
+    const failedBoot = boots.find((boot) => boot.status === "rejected");
+    if (failedBoot) {
+      throw failedBoot.reason;
+    }
     await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
   }, STARTUP_TEST_TIMEOUT_MS);
 
@@ -531,8 +563,9 @@ describe.sequential("TUI PTY harness", () => {
     for (const run of activeRuns.splice(0)) {
       run.dispose();
     }
-    const startedFixture = fixture as Awaited<ReturnType<typeof startTuiFixture>> | undefined;
-    await startedFixture?.cleanup();
+    for (const started of [fixture, compactFooterFixture, slowStartupFixture]) {
+      await (started as Awaited<ReturnType<typeof startTuiFixture>> | undefined)?.cleanup();
+    }
   });
 
   it("renders local ready on startup", () => {
@@ -543,18 +576,8 @@ describe.sequential("TUI PTY harness", () => {
   it(
     "renders a compact model and active thinking level in the footer",
     async () => {
-      const compactFooter = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_MODEL: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
-          OPENCLAW_TUI_PTY_THINKING_LEVEL: "high",
-        },
-      });
-      try {
-        await compactFooter.run.waitForOutput("gpt-5.6-sol high", STARTUP_TIMEOUT_MS);
-        expect(compactFooter.run.output()).not.toContain("openai:setup-64cddea3");
-      } finally {
-        await compactFooter.cleanup();
-      }
+      await compactFooterFixture.run.waitForOutput("gpt-5.6-sol high", STARTUP_TIMEOUT_MS);
+      expect(compactFooterFixture.run.output()).not.toContain("openai:setup-64cddea3");
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -562,15 +585,14 @@ describe.sequential("TUI PTY harness", () => {
   it(
     "shows startup activity while post-connect initialization is pending",
     async () => {
-      const slow = await startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
-      });
-      try {
-        await slow.run.waitForOutput("starting up", STARTUP_TIMEOUT_MS);
-        await slow.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
-      } finally {
-        await slow.cleanup();
-      }
+      const output = await slowStartupFixture.run.waitForOutput(
+        "local ready | idle",
+        STARTUP_TIMEOUT_MS,
+      );
+      // PTY output is append-only, so first-occurrence order proves the startup
+      // activity frame rendered before the delayed post-connect init completed.
+      expect(output.indexOf("starting up")).toBeGreaterThanOrEqual(0);
+      expect(output.indexOf("starting up")).toBeLessThan(output.indexOf("local ready | idle"));
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -793,9 +815,11 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "shows fast mode status",
+    "submits an exact argument completion with one Enter",
     async () => {
-      await fixture.run.write("/fast status\r", { delay: false });
+      await fixture.run.write("/fast status", { delay: false });
+      await fixture.run.waitForOutput("→ status");
+      await fixture.run.write("\r", { delay: false });
       await fixture.run.waitForOutput("fast mode: off");
     },
     TEST_TIMEOUT_MS,

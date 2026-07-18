@@ -1,6 +1,7 @@
 /**
  * Sanitizes and validates replayed session history before model calls.
  */
+import { isDeepStrictEqual } from "node:util";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,6 +52,7 @@ import {
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
 import {
+  hasNonzeroUsage,
   makeZeroUsageSnapshot,
   normalizeUsage,
   type AssistantUsageSnapshot,
@@ -259,6 +261,32 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   return { ...message, content: sanitizedContent } as AgentMessage;
 }
 
+function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
+  const previous = out.at(-1);
+  if (!previous || previous.role !== "assistant") {
+    return false;
+  }
+  const usage = (next as { usage?: unknown }).usage;
+  if (
+    !usage ||
+    typeof usage !== "object" ||
+    hasNonzeroUsage(normalizeUsage(usage as UsageLike)) ||
+    (next as { stopReason?: unknown }).stopReason !== "stop" ||
+    extractToolCallsFromAssistant(previous).length > 0 ||
+    extractToolCallsFromAssistant(next).length > 0
+  ) {
+    return false;
+  }
+  const previousContent = (previous as { content?: unknown }).content;
+  const nextContent = (next as { content?: unknown }).content;
+  return (
+    Array.isArray(previousContent) &&
+    previousContent.length > 0 &&
+    Array.isArray(nextContent) &&
+    isDeepStrictEqual(previousContent, nextContent)
+  );
+}
+
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
@@ -342,6 +370,13 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
         touched = true;
         continue;
       }
+    }
+    // Historical side-branch rebuilds could strip every mirror marker while
+    // retaining the zero-usage receipt immediately after its source reply.
+    // Keep this recovery shape narrow; ordinary repeated model turns survive.
+    if (isBareDeliveryMirrorDuplicate(out, assistantMessage)) {
+      touched = true;
+      continue;
     }
     out.push(assistantMessage);
   }

@@ -15,7 +15,7 @@ import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
 export type MattermostEventPayload = {
   event?: string;
   data?: {
-    post?: string | MattermostPost;
+    post?: unknown;
     reaction?: string | Record<string, unknown>;
     channel_id?: string;
     channel_name?: string;
@@ -58,7 +58,8 @@ const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   data: z
     .object({
-      post: z.union([z.string(), MattermostPostSchema]).optional(),
+      // Durable ingress validates the post only after claiming the raw envelope.
+      post: z.unknown().optional(),
       reaction: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
       channel_id: z.string().optional(),
       channel_name: z.string().optional(),
@@ -77,11 +78,11 @@ const MattermostEventPayloadSchema = z.object({
     .optional(),
 }) as z.ZodType<MattermostEventPayload>;
 
-function parseMattermostEventPayload(raw: string): MattermostEventPayload | null {
+export function parseMattermostEventPayload(raw: string): MattermostEventPayload | null {
   return safeParseJsonWithSchema(MattermostEventPayloadSchema, raw);
 }
 
-function parseMattermostPost(value: unknown): MattermostPost | null {
+export function parseMattermostPost(value: unknown): MattermostPost | null {
   if (typeof value === "string") {
     return safeParseJsonWithSchema(MattermostPostSchema, value);
   }
@@ -105,7 +106,7 @@ type CreateMattermostConnectOnceOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
   runtime: RuntimeEnv;
   nextSeq: () => number;
-  onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
+  onPosted: (rawEvent: string) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
   /**
@@ -128,23 +129,6 @@ const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url, opti
     ...(agent ? { agent } : {}),
   }) as MattermostWebSocketLike;
 };
-
-function parsePostedPayload(
-  payload: MattermostEventPayload,
-): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  if (payload.event !== "posted") {
-    return null;
-  }
-  const postData = payload.data?.post;
-  if (!postData) {
-    return null;
-  }
-  const post = parseMattermostPost(postData);
-  if (!post) {
-    return null;
-  }
-  return { payload, post };
-}
 
 export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
@@ -375,14 +359,17 @@ export function createMattermostConnectOnce(
           if (payload.event !== "posted") {
             return;
           }
-          const parsed = parsePostedPayload(payload);
-          if (!parsed) {
-            return;
-          }
           try {
-            await opts.onPosted(parsed.post, parsed.payload);
+            await opts.onPosted(raw);
           } catch (err) {
-            opts.runtime.error?.(`mattermost handler failed: ${String(err)}`);
+            // Durable admission failed after retries: this post is lost and the
+            // websocket cannot nack or replay. Tear the connection down loudly
+            // so the outage is operator-visible instead of silently dropping
+            // every subsequent post against a broken store.
+            opts.runtime.error?.(
+              `mattermost durable admission failed; terminating websocket: ${String(err)}`,
+            );
+            ws.terminate();
           }
         });
 

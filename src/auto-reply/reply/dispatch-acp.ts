@@ -595,6 +595,38 @@ export async function tryDispatchAcpReply(params: {
       error,
     });
   };
+  // Hoisted so the failure path can persist the same user turn the success path
+  // records: a bound ACP session must not silently diverge from the channel.
+  let transcriptPromptText = "";
+  // Set once the turn is actually dispatched. Attachment-only turns carry an
+  // empty prompt, so prompt text alone cannot stand in for "a turn happened".
+  let turnDispatched = false;
+  // Exactly one transcript record per turn: a failure after the success write
+  // (e.g. finalization throwing) must not append the same user turn twice.
+  let transcriptPersisted = false;
+  const persistTranscript = async (finalText: string): Promise<void> => {
+    if (transcriptPersisted) {
+      return;
+    }
+    transcriptPersisted = true;
+    try {
+      const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
+      await persistAcpDispatchTranscript({
+        cfg: params.cfg,
+        sessionKey: canonicalSessionKey,
+        promptText: transcriptPromptText,
+        finalText,
+        meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
+        threadId: params.ctx.MessageThreadId,
+      });
+    } catch (error) {
+      logVerbose(
+        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
+          error,
+        )}`,
+      );
+    }
+  };
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -694,6 +726,7 @@ export async function tryDispatchAcpReply(params: {
           images: resolvedTurnAttachments.recentHistoryImages,
         })
       : promptText;
+    transcriptPromptText = turnPromptText;
     if (!turnPromptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
@@ -709,6 +742,7 @@ export async function tryDispatchAcpReply(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
+    turnDispatched = true;
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
@@ -751,23 +785,6 @@ export async function tryDispatchAcpReply(params: {
       emitAuditEnd();
       return { queuedFinal, counts };
     }
-    try {
-      const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
-      await persistAcpDispatchTranscript({
-        cfg: params.cfg,
-        sessionKey: canonicalSessionKey,
-        promptText: turnPromptText,
-        finalText: delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
-        meta: acpResolution.meta,
-        threadId: params.ctx.MessageThreadId,
-      });
-    } catch (error) {
-      logVerbose(
-        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
-          error,
-        )}`,
-      );
-    }
     queuedFinal =
       (await finalizeAcpTurnOutput({
         cfg: params.cfg,
@@ -780,6 +797,12 @@ export async function tryDispatchAcpReply(params: {
         ttsAccountId: effectiveDispatchAccountId,
         shouldEmitResolvedIdentityNotice,
       })) || queuedFinal;
+
+    // Persist once the turn's outcome is settled. Writing before finalization
+    // would leave a finalizer failure recorded as a clean success.
+    await persistTranscript(
+      delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
+    );
 
     const result = finishAttempt({
       queuedFinal,
@@ -799,10 +822,21 @@ export async function tryDispatchAcpReply(params: {
       targetSessionKey: canonicalSessionKey,
       error: acpError,
     });
+    const errorText = formatAcpRuntimeErrorText(acpError);
+    // Snapshot streamed output before delivering the error: delivery accumulates
+    // what it sends, so reading after would fold the error text in twice.
+    const partialText = delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText();
     const delivered = await delivery.deliver("final", {
-      text: formatAcpRuntimeErrorText(acpError),
+      text: errorText,
       isError: true,
     });
+    // Record what the channel actually showed. Without this a failed bound turn
+    // leaves the ACP transcript empty while the user sees the reply, and the next
+    // turn resumes from history that never mentions it. Setup failures before
+    // dispatch have no user turn to attach the error to.
+    if (turnDispatched) {
+      await persistTranscript(partialText ? `${partialText}\n\n${errorText}` : errorText);
+    }
     queuedFinal = queuedFinal || delivered;
     return finishAttempt({
       queuedFinal,

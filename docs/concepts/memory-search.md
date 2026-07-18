@@ -166,10 +166,13 @@ Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
-Session hits obey `tools.sessions.visibility`: the default `"tree"` only
-exposes the current session and sessions it spawned. To recall an unrelated
-same-agent session from a different session (for example a gateway-dispatched
-session from a DM), widen visibility to `"agent"`.
+Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
+current session, sessions it spawned, and same-agent group sessions watched
+through ambient group awareness. With `session.dmScope: "main"`, a multi-user
+DM setup shares that main session, so users routed there can recall content
+from its watched groups. Use a per-peer `dmScope` for DM isolation, or set
+visibility to `"self"` to opt out of ambient watched-session reads. Other
+unrelated same-agent sessions still require `"agent"` visibility.
 
 When using the QMD backend, also set `memory.qmd.sessions.enabled: true` so
 transcripts get exported into the QMD collection; `experimental.sessionMemory`

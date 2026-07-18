@@ -350,6 +350,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
       dispatchSessionKey: effectiveSessionKey,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { listSetupMigrationOptions } from "./setup.migration-import.js";
 import {
+  assertFreshSetupMigrationTarget,
   inspectSetupMigrationFreshness,
   preserveSetupMigrationSecurityAcknowledgement,
 } from "./setup.migration-snapshot.js";
@@ -99,6 +100,9 @@ describe("setup migration import freshness", () => {
       "workspace MEMORY.md exists",
       "state agents/ exists",
     ]);
+    expect(() => assertFreshSetupMigrationTarget(result)).toThrow(
+      "Migration import during onboarding requires a fresh OpenClaw setup.",
+    );
   });
 });
 

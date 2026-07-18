@@ -2,6 +2,7 @@
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import { normalizeToolName } from "../agents/tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -11,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
   buildMcpToolSchema,
+  readMcpLoopbackToolName,
   type McpLoopbackTool,
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
@@ -69,6 +71,8 @@ type McpLoopbackScopeParams = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
+  /** Per-run grant allowlist of gateway tool names; unset keeps full scope. */
+  toolsAllow?: string[];
   senderIsOwner: boolean | undefined;
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
@@ -104,8 +108,28 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   });
   return {
     agentId: scoped.agentId,
-    tools: scoped.tools,
+    tools: applyGrantToolsAllow(scoped.tools, params.toolsAllow),
   };
+}
+
+/**
+ * Hard-enforces a per-run grant allowlist on the loopback surface. Both
+ * tools/list and tools/call consume this list, so a tool outside the
+ * allowlist can be neither discovered nor executed even when the CLI runs
+ * with a bypass permission mode. An empty allowlist fails closed.
+ */
+function applyGrantToolsAllow(
+  tools: McpLoopbackTool[],
+  toolsAllow: string[] | undefined,
+): McpLoopbackTool[] {
+  if (!toolsAllow) {
+    return tools;
+  }
+  const allowed = new Set(toolsAllow.map((name) => normalizeToolName(name)).filter(Boolean));
+  return tools.filter((tool) => {
+    const name = readMcpLoopbackToolName(tool);
+    return name !== undefined && allowed.has(normalizeToolName(name));
+  });
 }
 
 /** Short-lived cache for loopback tool lists keyed by session/channel context. */
@@ -134,6 +158,9 @@ export class McpLoopbackToolCache {
       params.sourceReplyDeliveryMode ?? "",
       params.taskSuggestionDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
+      // Unset (full scope) must never share a cache row with an empty
+      // allowlist (deny-all), so the marker distinguishes presence.
+      params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",
       params.execSession?.execSecurity ?? "",

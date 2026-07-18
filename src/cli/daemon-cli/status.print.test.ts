@@ -99,6 +99,34 @@ describe("printDaemonStatus", () => {
     isWSLEnvMock.mockClear();
   });
 
+  it("prints the applied Gateway heap limit and derivation", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          gatewayHeap: {
+            appliedMiB: 6144,
+            maxOldSpaceSizeMiB: 4096,
+            availableMemoryMiB: 8192,
+            memorySource: "constrained",
+            floorMiB: 2048,
+            capMiB: 8192,
+            headroomCapMiB: 6144,
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Gateway heap: 6144 MiB");
+    expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
+    expectMockLineContains(runtime.log, "8192 MiB constrained memory");
+  });
+
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
     printDaemonStatus(
       {

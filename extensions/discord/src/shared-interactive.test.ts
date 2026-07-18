@@ -271,6 +271,37 @@ describe("buildDiscordInteractiveComponents", () => {
     });
   });
 
+  it("renders question choices with compact option indices", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: ["Staging", "Production"].map((label) => ({
+              label,
+              action: { type: "question" as const, questionId, optionValue: label },
+            })),
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            { label: "Staging", style: "secondary", internalCustomId: `ocq:id=${questionId};i=0` },
+            {
+              label: "Production",
+              style: "secondary",
+              internalCustomId: `ocq:id=${questionId};i=1`,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("rejects malformed approval custom ids and compacts overlong canonical ids", () => {
     expect(
       parseExecApprovalData(parseCustomId("execapproval:kind=exec;id=%zz;action=allow-once").data),

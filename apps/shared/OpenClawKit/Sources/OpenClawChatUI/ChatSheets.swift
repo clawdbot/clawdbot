@@ -158,7 +158,10 @@ struct ChatSessionsSheet: View {
     }
 
     private func sessionRow(_ session: OpenClawChatSessionEntry) -> some View {
-        Button {
+        let archiveActionTitle = LocalizedStringKey(session.isArchived
+            ? String(localized: "Restore")
+            : String(localized: "Archive"))
+        return Button {
             if session.isArchived {
                 // Archived sessions reject new sends; opening one restores it
                 // first and only switches on success so the composer never
@@ -209,15 +212,20 @@ struct ChatSessionsSheet: View {
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button {
-                self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
-                self.refreshScopedSessionsSoon()
-            } label: {
-                self.actionLabel(
-                    session.isArchived ? "Unarchive" : "Archive",
-                    systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+            if session.isArchived || ChatSessionSidebarModel.canArchiveSession(
+                session,
+                mainSessionKey: self.viewModel.resolvedMainSessionKey)
+            {
+                Button {
+                    self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                    self.refreshScopedSessionsSoon()
+                } label: {
+                    self.actionLabel(
+                        archiveActionTitle,
+                        systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+                }
+                .tint(session.isArchived ? OpenClawChatTheme.accent : OpenClawChatTheme.danger)
             }
-            .tint(session.isArchived ? OpenClawChatTheme.accent : OpenClawChatTheme.danger)
         }
         .contextMenu {
             Button {
@@ -236,13 +244,35 @@ struct ChatSessionsSheet: View {
                         systemImage: session.isPinned ? "pin.slash" : "pin")
                 }
             }
+            if session.isArchived || ChatSessionSidebarModel.canArchiveSession(
+                session,
+                mainSessionKey: self.viewModel.resolvedMainSessionKey)
+            {
+                Button {
+                    self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                    self.refreshScopedSessionsSoon()
+                } label: {
+                    self.actionLabel(
+                        archiveActionTitle,
+                        systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+                }
+            }
             Button {
-                self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                Task { await self.viewModel.forkSession(key: session.key) }
+            } label: {
+                self.actionLabel(
+                    LocalizedStringKey(String(localized: "Fork")),
+                    systemImage: "arrow.triangle.branch")
+            }
+            Button {
+                self.viewModel.setSessionUnread(key: session.key, unread: session.unread != true)
                 self.refreshScopedSessionsSoon()
             } label: {
                 self.actionLabel(
-                    session.isArchived ? "Unarchive" : "Archive",
-                    systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+                    LocalizedStringKey(session.unread == true
+                        ? String(localized: "Mark Read")
+                        : String(localized: "Mark Unread")),
+                    systemImage: session.unread == true ? "envelope.open" : "envelope.badge")
             }
         }
     }

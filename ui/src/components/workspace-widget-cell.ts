@@ -132,7 +132,7 @@ function renderBuiltinWidget(
     return renderer(widget, value, ctx);
   }
   if (widget.kind.startsWith("custom:")) {
-    // Custom widgets are dispatched by renderWidgetBody BEFORE this builtin path;
+    // Custom widgets are dispatched by renderWorkspaceWidgetBody BEFORE this builtin path;
     // reaching here means no L5 host context was supplied (e.g. a unit test
     // rendering the builtin body in isolation). Neutral placeholder — never an
     // iframe without a manifest.
@@ -219,7 +219,7 @@ function renderCustomWidget(
  * broken widget, a bad binding) is caught and rendered as an error card in THIS
  * cell — siblings and the shell keep rendering (spec-30 acceptance criterion).
  */
-function renderWidgetBody(
+export function renderWorkspaceWidgetBody(
   widget: WorkspaceWidget,
   binding: WorkspaceBindingResult | null,
   ctx: BuiltinWidgetContext,
@@ -346,7 +346,7 @@ export function renderWidgetCell(props: WorkspaceWidgetCellProps): TemplateResul
         ? nothing
         : html`
             <div class="workspace-widget__body">
-              ${renderWidgetBody(
+              ${renderWorkspaceWidgetBody(
                 widget,
                 props.binding,
                 props.builtinContext,

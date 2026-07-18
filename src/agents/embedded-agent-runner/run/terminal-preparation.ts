@@ -21,8 +21,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export function prepareEmbeddedRunTerminal(input: {
   runParams: RunEmbeddedAgentParams;
   attempt: EmbeddedRunAttemptResult;
-  attemptAssistant?: AssistantMessage;
-  currentAttemptAssistant?: AssistantMessage;
+  currentAttemptCompletedAssistant?: AssistantMessage;
   provider: string;
   model: string;
   activeErrorContext: { provider: string; model: string };
@@ -54,12 +53,12 @@ export function prepareEmbeddedRunTerminal(input: {
   attemptToolSummary: ReturnType<typeof buildTraceToolSummary>;
   failureSignal: ReturnType<typeof resolveEmbeddedRunFailureSignal>;
 } {
-  const { runParams, attempt, attemptAssistant } = input;
+  const { runParams, attempt } = input;
   const timedOutDuringPrompt =
     input.terminalTimedOut && !input.timedOutDuringCompaction && !input.timedOutDuringToolExecution;
-  // A prior same-model assistant can remain in the session snapshot. Timeout
-  // recovery must project only output owned by the prompt that just timed out.
-  const terminalAssistant = timedOutDuringPrompt ? input.currentAttemptAssistant : attemptAssistant;
+  // Session transcript fallbacks can reference an earlier rewritten turn.
+  // Terminal delivery and metadata must stay scoped to this model attempt.
+  const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
     lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
@@ -90,15 +89,25 @@ export function prepareEmbeddedRunTerminal(input: {
         : undefined,
     compactionTokensAfter: input.contextRecoveryState.lastCompactionTokensAfter,
   };
-  const finalAssistantVisibleText = resolveFinalAssistantVisibleText(terminalAssistant);
-  const finalAssistantRawText = resolveFinalAssistantRawText(terminalAssistant);
+  const attemptFinalText = attempt.assistantTexts
+    .toReversed()
+    .map((text) => text.trim())
+    .find((text) => text.length > 0);
+  const finalAssistantVisibleText =
+    resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText;
+  const finalAssistantRawText = resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText;
+  // A yielded attempt ends before message_end. Its aborted tool-call assistant,
+  // not an earlier completed cycle, owns paused-turn classification.
+  const payloadAssistant = attempt.yieldDetected
+    ? attempt.lastAssistant
+    : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
     assistantTexts: attempt.assistantTexts,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     assistantTranscriptOwned: attempt.assistantTranscriptOwned,
     toolMetas: attempt.toolMetas,
-    lastAssistant: timedOutDuringPrompt ? input.currentAttemptAssistant : attempt.lastAssistant,
-    currentAssistant: input.currentAttemptAssistant ?? null,
+    lastAssistant: payloadAssistant,
+    currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     lastToolError: attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",

@@ -664,6 +664,127 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
+  it("allows cold startup snapshots with isolated SecretRef owners", async () => {
+    const sourceConfig = gatewayTokenConfig({
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+            },
+          },
+        },
+      },
+    });
+    const warning: SecretResolverWarning = {
+      code: "SECRETS_OWNER_UNAVAILABLE",
+      path: "messages.tts.providers.elevenlabs.apiKey",
+      message:
+        "Secret owner capability:tts is configured-unavailable; paths: messages.tts.providers.elevenlabs.apiKey; reason: secret reference was not found.",
+    };
+    const prepareRuntimeSecretsSnapshot = vi.fn(async () => ({
+      ...preparedSnapshot(sourceConfig),
+      config: structuredClone(sourceConfig),
+      warnings: [warning],
+    }));
+    const emitStateEvent = vi.fn();
+    const logSecrets = mockLogSecretsForTest();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      logSecrets,
+      prepareRuntimeSecretsSnapshot,
+    });
+
+    const result = await activateRuntimeSecrets(sourceConfig, {
+      reason: "startup",
+      activate: true,
+    });
+
+    expect(result.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual(
+      sourceConfig.messages?.tts?.providers?.elevenlabs?.apiKey,
+    );
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnavailableSecretOwners: true }),
+    );
+    expect(logSecrets.warn).toHaveBeenCalledWith(`[${warning.code}] ${warning.message}`);
+    expect(emitStateEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(["reload", "restart-check"] as const)(
+    "keeps unavailable SecretRef owners fail-closed during %s",
+    async (reason) => {
+      const missingSecretError = new Error(
+        'Environment variable "ELEVENLABS_API_KEY" is missing or empty.',
+      );
+      const prepareRuntimeSecretsSnapshot = vi.fn(async () => {
+        throw missingSecretError;
+      });
+      const activateRuntimeSecretsSnapshot = vi.fn();
+      const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot,
+      });
+
+      await expect(
+        activateRuntimeSecrets(gatewayTokenConfig({}), {
+          reason,
+          activate: true,
+        }),
+      ).rejects.toThrow(missingSecretError.message);
+
+      expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ allowUnavailableSecretOwners: false }),
+      );
+      expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+    },
+  );
+
+  it("enables cold-start owner isolation during non-activating startup preparation", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const activateRuntimeSecretsSnapshot = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot,
+    });
+
+    await activateRuntimeSecrets(gatewayTokenConfig({}), {
+      reason: "startup",
+      activate: false,
+    });
+
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnavailableSecretOwners: true }),
+    );
+    expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not enable cold-start degradation while a runtime snapshot is active", async () => {
+    activateSecretsRuntimeSnapshotForTest(preparedSnapshot(gatewayTokenConfig({})));
+    const missingSecretError = new Error(
+      'Environment variable "ELEVENLABS_API_KEY" is missing or empty.',
+    );
+    const prepareRuntimeSecretsSnapshot = vi.fn(async () => {
+      throw missingSecretError;
+    });
+    const activateRuntimeSecretsSnapshot = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot,
+    });
+
+    await expect(
+      activateRuntimeSecrets(gatewayTokenConfig({}), {
+        reason: "startup",
+        activate: false,
+      }),
+    ).rejects.toThrow("Startup failed: required secrets are unavailable.");
+
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnavailableSecretOwners: false }),
+    );
+    expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+  });
+
   it("uses persisted auth stores only for startup secret preflight", async () => {
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
     const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
@@ -685,9 +806,9 @@ describe("gateway startup config secret preflight", () => {
 
   it("does not emit degraded or recovered events for warning-only secret reloads", async () => {
     const warning: SecretResolverWarning = {
-      code: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
-      path: "plugins.entries.google.config.webSearch.apiKey",
-      message: "web search provider fell back to environment credentials",
+      code: "WEB_SEARCH_AUTODETECT_SELECTED",
+      path: "tools.web.search.provider",
+      message: "web search provider was auto-detected",
     };
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => ({
       ...preparedSnapshot(config),
@@ -723,7 +844,7 @@ describe("gateway startup config secret preflight", () => {
     expect(result.config).toBe(config);
     expect(result.warnings).toEqual([warning]);
     expect(logSecrets.warn).toHaveBeenCalledWith(
-      "[WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED] web search provider fell back to environment credentials",
+      "[WEB_SEARCH_AUTODETECT_SELECTED] web search provider was auto-detected",
     );
     expect(emitStateEvent).not.toHaveBeenCalled();
     const preflightInput = callArg<{ config?: unknown }>(prepareRuntimeSecretsSnapshot);

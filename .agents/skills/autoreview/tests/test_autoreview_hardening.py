@@ -2956,6 +2956,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             'token: "token-oversized"',
             'API_KEY = "clawrouter-e2e-secret"',
             'token: "very-long-browser-token-0123456789"',
+            'token: "config-token"',
         ):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))

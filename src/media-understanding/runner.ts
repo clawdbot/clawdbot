@@ -54,7 +54,11 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
-import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
+import {
+  resolveModelEntries,
+  resolveScopeDecision,
+  type ResolvedMediaModelEntry,
+} from "./resolve.js";
 import {
   buildModelDecision,
   formatDecisionSummary,
@@ -854,7 +858,7 @@ async function runAttachmentEntries(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   cache: MediaAttachmentCache;
-  entries: MediaUnderstandingModelConfig[];
+  entries: ResolvedMediaModelEntry[];
   config?: MediaUnderstandingConfig;
 }): Promise<{
   output: MediaUnderstandingOutput | null;
@@ -862,7 +866,8 @@ async function runAttachmentEntries(params: {
 }> {
   const { entries, capability } = params;
   const attempts: MediaUnderstandingModelDecision[] = [];
-  for (const entry of entries) {
+  for (const candidate of entries) {
+    const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
     try {
       const result =
@@ -887,6 +892,7 @@ async function runAttachmentEntries(params: {
               workspaceDir: params.workspaceDir,
               providerRegistry: params.providerRegistry,
               config: params.config,
+              secretOwnerId: candidate.secretOwnerId,
             });
       if (result) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
@@ -1042,17 +1048,19 @@ export async function runCapability(params: {
     config,
     providerRegistry: params.providerRegistry,
   });
-  let resolvedEntries = entries;
+  let resolvedEntries: ResolvedMediaModelEntry[] = entries;
   if (resolvedEntries.length === 0) {
-    resolvedEntries = await resolveAutoEntries({
-      cfg,
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      providerRegistry: params.providerRegistry,
-      capability,
-      activeModel: params.activeModel,
-    });
+    resolvedEntries = (
+      await resolveAutoEntries({
+        cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        providerRegistry: params.providerRegistry,
+        capability,
+        activeModel: params.activeModel,
+      })
+    ).map((entry) => ({ entry }));
   }
   if (resolvedEntries.length === 0) {
     return {

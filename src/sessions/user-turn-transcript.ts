@@ -229,6 +229,7 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   const openClawMeta = {
     ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
     ...senderMeta,
+    ...(params.transport ? { transport: params.transport } : {}),
   };
   const message = {
     role: "user",
@@ -385,6 +386,13 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     (message as unknown as { provenance?: unknown }).provenance,
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
+  const originalTransport = readOpenClawMessageMeta(message)?.transport;
+  // Hooks receive the original message object and may mutate nested metadata in
+  // place. Snapshot transport correlation before handing them that reference.
+  const transport =
+    originalTransport && typeof originalTransport === "object" && !Array.isArray(originalTransport)
+      ? { ...originalTransport }
+      : undefined;
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -396,20 +404,18 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
+  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport) {
     return nextUserMessage;
   }
+  const protectedMeta = {
+    ...readOpenClawMessageMeta(nextUserMessage),
+    ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
+    ...(transport ? { transport } : {}),
+  };
   return {
     ...(nextUserMessage as unknown as Record<string, unknown>),
     ...(idempotencyKey ? { idempotencyKey } : {}),
-    ...(typeof senderIsOwner === "boolean"
-      ? {
-          __openclaw: {
-            ...readOpenClawMessageMeta(nextUserMessage),
-            senderIsOwner,
-          },
-        }
-      : {}),
+    ...(Object.keys(protectedMeta).length > 0 ? { __openclaw: protectedMeta } : {}),
   } as unknown as PersistedUserTurnMessage;
 }
 

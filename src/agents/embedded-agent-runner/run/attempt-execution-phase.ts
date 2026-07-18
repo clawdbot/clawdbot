@@ -76,6 +76,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       isRawModelRun: input.isRawModelRun,
       ...(orphanRepair ? { orphanRepair } : {}),
       replayAllowedToolNames,
+      sandboxed: input.setup.sandbox?.enabled === true,
       sessionAgentId: input.setup.sessionAgentId,
       settingsManager,
       systemPromptText: sessionRuntimeState.systemPromptText,

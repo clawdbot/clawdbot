@@ -44,6 +44,12 @@ type LegacyAgentRuntimeIntent = {
   runtime: string;
 };
 
+const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
+  { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
+  { legacyKey: "chunkOverlap", parentKey: "chunking", canonicalKey: "overlap" },
+  { legacyKey: "maxResults", parentKey: "query", canonicalKey: "maxResults" },
+] as const;
+
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
@@ -89,6 +95,38 @@ const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
     match: hasAgentListMemorySearchStorePath,
   },
 ];
+
+const LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "memorySearch"],
+    message:
+      'agents.defaults.memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+    match: hasLegacyMemorySearchFlatKeys,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+    match: hasAgentListLegacyMemorySearchFlatKeys,
+  },
+];
+
+function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
+  const memorySearch = getRecord(value);
+  return Boolean(
+    memorySearch &&
+    LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS.some(({ legacyKey }) =>
+      Object.hasOwn(memorySearch, legacyKey),
+    ),
+  );
+}
+
+function hasAgentListLegacyMemorySearchFlatKeys(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((agent) => hasLegacyMemorySearchFlatKeys(getRecord(agent)?.memorySearch))
+  );
+}
 
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
@@ -423,6 +461,40 @@ function hasAgentListMemorySearchStorePath(value: unknown): boolean {
     Array.isArray(value) &&
     value.some((agent) => hasMemorySearchStorePath(getRecord(agent)?.memorySearch))
   );
+}
+
+function migrateLegacyMemorySearchFlatKeys(
+  memorySearch: Record<string, unknown> | null,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!memorySearch) {
+    return;
+  }
+  for (const { legacyKey, parentKey, canonicalKey } of LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS) {
+    if (!Object.hasOwn(memorySearch, legacyKey)) {
+      continue;
+    }
+    const legacyValue = memorySearch[legacyKey];
+    if (memorySearch[parentKey] === undefined) {
+      memorySearch[parentKey] = { [canonicalKey]: legacyValue };
+      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
+      delete memorySearch[legacyKey];
+      continue;
+    }
+    const canonicalParent = getRecord(memorySearch[parentKey]);
+    if (!canonicalParent) {
+      changes.push(`Removed ${pathLabel}.${legacyKey} (${pathLabel}.${parentKey} already set).`);
+    } else if (canonicalParent[canonicalKey] === undefined) {
+      canonicalParent[canonicalKey] = legacyValue;
+      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
+    } else {
+      changes.push(
+        `Removed ${pathLabel}.${legacyKey} (${pathLabel}.${parentKey}.${canonicalKey} already set).`,
+      );
+    }
+    delete memorySearch[legacyKey];
+  }
 }
 
 function removeLegacyMemorySearchStorePath(
@@ -1368,6 +1440,30 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
       });
       delete raw.memorySearch;
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "memorySearch.flat-fields->nested-fields",
+    describe: "Move legacy flat memory search fields to canonical nested fields",
+    legacyRules: LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      migrateLegacyMemorySearchFlatKeys(
+        getRecord(getRecord(agents?.defaults)?.memorySearch),
+        "agents.defaults.memorySearch",
+        changes,
+      );
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        migrateLegacyMemorySearchFlatKeys(
+          getRecord(getRecord(agent)?.memorySearch),
+          `agents.list.${index}.memorySearch`,
+          changes,
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({

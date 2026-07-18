@@ -293,6 +293,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         : undefined,
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
+    delegationCapability: params.delegationCapability,
     modelAuthMode: resolveModelAuthMode(
       params.model.provider,
       params.config,

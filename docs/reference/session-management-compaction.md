@@ -50,7 +50,7 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
 | `maxEntries`            | `500`                 | cap on session entries                                                                      |
 | `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
-| `maxDiskBytes`          | `2gb`                 | per-agent sessions disk budget; `false` disables                                            |
+| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false` disables                                            |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
 
 Archived transcripts are kept by default and compressed with zstd (`*.jsonl.<reason>.<timestamp>.zst`) when the runtime supports it, so deleting or resetting a session never silently discards conversation history. The disk budget evicts the oldest archives first, before touching live sessions.

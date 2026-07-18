@@ -2,6 +2,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
+import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
   normalizeChatFollowUpMode,
@@ -31,10 +32,17 @@ import {
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
+import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import {
+  LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
   renderSettingsStatus,
+  renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -166,10 +174,15 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  lobsterPetVisits?: boolean;
+  setLobsterPetVisits?: (enabled: boolean) => void;
+  lobsterPetSounds?: boolean;
+  setLobsterPetSounds?: (enabled: boolean) => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
-  chatFollowUpMode: ChatFollowUpMode;
-  setChatFollowUpMode: (value: ChatFollowUpMode) => void;
+  chatFollowUpMode: ChatFollowUpMode | undefined;
+  serverQueueMode: QueueMode | undefined;
+  setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
   catalogOpenTarget: CatalogOpenTarget;
   setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
   microphone?: SettingsMicrophoneState;
@@ -498,8 +511,12 @@ const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
     sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
   },
   {
+    id: "security",
+    sections: ["security", "approvals"],
+  },
+  {
     id: "automation",
-    sections: ["commands", "hooks", "bindings", "cron", "approvals", "plugins"],
+    sections: ["commands", "hooks", "bindings", "cron", "plugins"],
   },
   {
     id: "infrastructure",
@@ -1083,6 +1100,11 @@ function renderSettingsMicrophoneField(props: ConfigProps) {
 }
 
 function renderChatPreferencesSection(props: ConfigProps) {
+  const followUpSelection = props.chatFollowUpMode ?? "server";
+  const serverQueueMode = props.serverQueueMode ?? t("chat.followUpModeLoading");
+  const followUpDescription = props.chatFollowUpMode
+    ? t("chat.followUpModeOverriding", { mode: serverQueueMode })
+    : t("chat.followUpModeUsingServer", { mode: serverQueueMode });
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <div class="settings-section__header">
@@ -1100,15 +1122,44 @@ function renderChatPreferencesSection(props: ConfigProps) {
           ],
           onChange: (value) => props.setChatSendShortcut(normalizeChatSendShortcut(value)),
         })}
-        ${renderSettingsSelectRow({
+        ${renderSettingsRow({
           title: t("chat.followUpMode"),
-          value: props.chatFollowUpMode,
-          setting: "follow-up-mode",
-          options: [
-            { value: "steer", label: t("chat.followUpModeSteer") },
-            { value: "queue", label: t("chat.followUpModeQueue") },
-          ],
-          onChange: (value) => props.setChatFollowUpMode(normalizeChatFollowUpMode(value)),
+          description: followUpDescription,
+          control: html`
+            <select
+              class="settings-select"
+              data-settings-follow-up-mode
+              aria-label=${t("chat.followUpMode")}
+              .value=${followUpSelection}
+              @change=${(event: Event) => {
+                const value = (event.currentTarget as HTMLSelectElement).value;
+                props.setChatFollowUpMode(
+                  value === "server" ? undefined : normalizeChatFollowUpMode(value),
+                );
+              }}
+            >
+              <option value="server" ?selected=${followUpSelection === "server"}>
+                ${t("chat.followUpModeServer", { mode: serverQueueMode })}
+              </option>
+              <option value="steer" ?selected=${followUpSelection === "steer"}>
+                ${t("chat.followUpModeSteer")}
+              </option>
+              <option value="queue" ?selected=${followUpSelection === "queue"}>
+                ${t("chat.followUpModeQueue")}
+              </option>
+            </select>
+            ${props.chatFollowUpMode
+              ? html`
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    @click=${() => props.setChatFollowUpMode(undefined)}
+                  >
+                    ${t("chat.followUpModeReset")}
+                  </button>
+                `
+              : nothing}
+          `,
         })}
         ${renderSettingsSelectRow({
           title: t("chat.catalogOpenTarget"),
@@ -1121,6 +1172,77 @@ function renderChatPreferencesSection(props: ConfigProps) {
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
         ${renderSettingsMicrophoneField(props)}
+      </div>
+    </section>
+  `;
+}
+
+// Lobster pet toggles and the Lobsterdex live with the rest of the appearance
+// prefs; the toggles are browser-local (ui/src/app/settings.ts), so hosts that
+// do not wire them (embedded editors) simply omit the section.
+function renderLobsterPetSection(props: ConfigProps) {
+  if (!props.setLobsterPetVisits || !props.setLobsterPetSounds) {
+    return nothing;
+  }
+  const lobsterPetVisits = props.lobsterPetVisits === true;
+  const lobsterPetSounds = props.lobsterPetSounds === true;
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("quickSettings.appearance.lobsterdex")}</h2>
+      </div>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterVisits"),
+          description: lobsterPetVisits
+            ? t("quickSettings.appearance.lobsterVisitsOn")
+            : t("quickSettings.appearance.lobsterVisitsOff"),
+          checked: lobsterPetVisits,
+          onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
+        })}
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterSounds"),
+          description: lobsterPetSounds
+            ? t("quickSettings.appearance.lobsterSoundsOn")
+            : t("quickSettings.appearance.lobsterSoundsOff"),
+          checked: lobsterPetSounds,
+          onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+        })}
+        ${renderSettingsRow({
+          title: t("quickSettings.appearance.lobsterdex"),
+          description: t("quickSettings.appearance.lobsterdexSeen", {
+            seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+            total: String(LOBSTER_PET_PALETTES.length),
+          }),
+          stacked: true,
+          control: html`
+            <div class="lobsterdex">
+              ${LOBSTER_PET_PALETTES.map((palette) => {
+                const entry = getLobsterdexEntries().get(palette.id);
+                const seen = entry !== undefined;
+                const title = !seen
+                  ? "?"
+                  : entry.firstSeenAt !== null
+                    ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                        name: entry.name ?? palette.id,
+                        date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                      })
+                    : (entry.name ?? palette.id);
+                return html`
+                  <span
+                    class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                      ? ""
+                      : "lobsterdex__mini--unseen"}"
+                    style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                    title=${title}
+                  >
+                    ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                  </span>
+                `;
+              })}
+            </div>
+          `,
+        })}
       </div>
     </section>
   `;
@@ -1320,7 +1442,7 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </section>
 
-      ${renderChatPreferencesSection(props)}
+      ${renderLobsterPetSection(props)} ${renderChatPreferencesSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <div class="settings-section__header">

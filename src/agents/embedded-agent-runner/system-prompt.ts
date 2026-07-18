@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PreparedMemoryPromptSection } from "../../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
 import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
@@ -90,6 +91,7 @@ export function buildEmbeddedSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  preparedMemoryPrompt?: PreparedMemoryPromptSection;
   promptContribution?: ProviderSystemPromptContribution;
   /** Whether the continuation feature is enabled for this agent. */
   continuationEnabled?: boolean;
@@ -136,6 +138,7 @@ export function buildEmbeddedSystemPrompt(params: {
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
+    preparedMemoryPrompt: params.preparedMemoryPrompt,
     promptContribution: params.promptContribution,
     continuationEnabled: params.continuationEnabled,
   });

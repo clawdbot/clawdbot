@@ -42,7 +42,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
           onClick: () => globalThis.history.forward(),
           className: "macos-titlebar-controls__forward",
         })}
-        ${this.navCollapsed && !this.historyOnly
+        ${!this.historyOnly
           ? html`
               ${this.renderButton({
                 label: t("chat.openCommandPalette"),
@@ -52,6 +52,9 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                 className: "macos-titlebar-controls__search",
               })}
               ${this.renderButton({
+                // Deliberately not connection-gated: it mirrors the native
+                // ⌘N menu item (handleNativeNewSession), and the new-session
+                // route is offline-tolerant. Window chrome stays state-free.
                 label: t("chat.runControls.newSession"),
                 icon: icons.plus,
                 onClick: this.onOpenNewSession,

@@ -14,7 +14,6 @@ import type {
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../../api/types.ts";
-import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildQualifiedChatModelValue } from "../chat/model-ref.ts";
@@ -295,10 +294,6 @@ export function normalizeAgentLabel(agent: {
   return (
     normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
   );
-}
-
-export function assistantAvatarFallbackUrl(basePath: string): string {
-  return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
 }
 
 export function resolveAgentTextAvatar(

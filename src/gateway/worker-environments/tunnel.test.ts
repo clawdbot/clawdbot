@@ -19,6 +19,13 @@ import type {
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
@@ -192,7 +199,7 @@ async function git(root: string, ...args: string[]): Promise<string> {
 const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
 
 async function waitForStarts(starts: unknown[], count: number) {
-  await vi.waitFor(() => expect(starts).toHaveLength(count));
+  await waitForFast(() => expect(starts).toHaveLength(count));
 }
 
 describe("worker tunnel manager", () => {
@@ -812,7 +819,7 @@ describe("worker tunnel manager", () => {
       resolveIdentity,
     });
     const rejectedReplacement = expect(replacement).rejects.toThrow("stopped before connecting");
-    await vi.waitFor(() => expect(fake.starts[0]?.process.stopCount).toBe(1));
+    await waitForFast(() => expect(fake.starts[0]?.process.stopCount).toBe(1));
 
     const stopping = manager.stop("worker:replacement");
     releaseStop.resolve();

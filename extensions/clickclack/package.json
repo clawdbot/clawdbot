@@ -47,6 +47,10 @@
       },
       "cliAddOptions": [
         {
+          "flags": "--code <code>",
+          "description": "ClickClack one-time setup code or setup URL"
+        },
+        {
           "flags": "--workspace <workspace>",
           "description": "ClickClack workspace id, slug, or name"
         }

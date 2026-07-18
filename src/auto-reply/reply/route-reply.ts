@@ -31,6 +31,7 @@ import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
 
 const messageRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/message/runtime.js"),
@@ -103,6 +104,8 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Model/session context for response-prefix template interpolation. */
+  responsePrefixContext?: ResponsePrefixContext;
 };
 
 type RouteReplyResult = {
@@ -157,6 +160,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    responsePrefixContext: params.responsePrefixContext,
     transformReplyPayload: messaging?.transformReplyPayload
       ? (nextPayload) =>
           messaging.transformReplyPayload?.({

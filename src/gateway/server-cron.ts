@@ -24,6 +24,7 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { toPublicCronJob } from "../cron/public-job.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
@@ -525,6 +526,10 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        // Preserve ownership across this adapter so the wake does not self-block on
+        // the cron run that is awaiting it.
+        owningCronJobMarker: opts?.owningCronJobMarker,
+        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         heartbeat: resolveCronHeartbeatOverride({
           runtimeConfig,
           agentId,
@@ -727,7 +732,9 @@ export function buildGatewayCronService(params: {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).
       bumpSessionAutomationVersion();
-      params.broadcast("cron", evt, { dropIfSlow: true });
+      params.broadcast("cron", evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt, {
+        dropIfSlow: true,
+      });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
       // getJob() would return undefined. `delivery` and `usage` are

@@ -1,18 +1,47 @@
 // Slack tests cover auth.test token handling during provider boot.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  disposeSlackTestRuntime,
+  flush,
   getSlackClient,
+  getSlackHandlerOrThrow,
   getSlackTestState,
   resetSlackTestState,
-  runSlackMessageOnce,
-  startSlackMonitor,
+  startSlackMonitor as startSlackMonitorUntracked,
   stopSlackMonitor,
   useRealSlackStartupAuthClientOnce,
 } from "../monitor.test-helpers.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
+
+type StartedSlackMonitor = ReturnType<typeof startSlackMonitorUntracked>;
+
+const startedMonitors: StartedSlackMonitor[] = [];
+
+function trackSlackMonitor<T extends StartedSlackMonitor>(monitor: T): T {
+  startedMonitors.push(monitor);
+  return monitor;
+}
+
+function startSlackMonitor(...args: Parameters<typeof startSlackMonitorUntracked>) {
+  return trackSlackMonitor(startSlackMonitorUntracked(...args));
+}
+
+async function runTrackedSlackMessageOnce(
+  provider: Parameters<typeof startSlackMonitorUntracked>[0],
+  args: unknown,
+  opts?: Parameters<typeof startSlackMonitorUntracked>[1],
+) {
+  const monitor = startSlackMonitor(provider, opts);
+  try {
+    const handler = await getSlackHandlerOrThrow("message");
+    await handler(args);
+  } finally {
+    await stopSlackMonitor(monitor);
+  }
+}
 
 const PROXY_ENV_KEYS = [
   "ALL_PROXY",
@@ -62,8 +91,19 @@ beforeEach(() => {
   resetSlackTestState();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const monitors = startedMonitors.splice(0);
+  for (const monitor of monitors) {
+    monitor.controller.abort();
+  }
+  await Promise.allSettled(monitors.map((monitor) => monitor.run));
+  getSlackClient().auth.test.mockReset();
+  resetSlackTestState();
   vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  disposeSlackTestRuntime();
 });
 
 describe("auth.test boot call", () => {
@@ -139,7 +179,7 @@ describe("auth.test boot call", () => {
     const { replyMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "unexpected" });
 
-    await runSlackMessageOnce(
+    await runTrackedSlackMessageOnce(
       monitorSlackProvider,
       {
         event: {
@@ -293,6 +333,223 @@ describe("auth.test boot call", () => {
     const monitor = startSlackMonitor(monitorSlackProvider);
     await expect(monitor.run).rejects.toThrow(
       /supports DMs only with dm\.enabled=false.*dmPolicy="open"/,
+    );
+  });
+});
+
+describe("user identity provider transport", () => {
+  const userSocketConfig = () => ({
+    channels: {
+      slack: {
+        identity: "user",
+        userToken: "test-user-token",
+        appToken: "test-app-token",
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        groupPolicy: "open",
+      },
+    },
+  });
+
+  async function startWithoutBotToken(config: Record<string, unknown>) {
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      config: config as never,
+      abortSignal: controller.signal,
+    });
+    const monitor = trackSlackMonitor({ controller, run });
+    await vi.waitFor(() => expect(getSlackTestState().appConstructorArgs).toBeDefined());
+    return monitor;
+  }
+
+  it("starts socket transport with the user token and no bot token", async () => {
+    const config = userSocketConfig();
+    const client = getSlackClient();
+    const runtimeLog = vi.fn();
+    resetSlackTestState(config);
+    client.auth.test.mockResolvedValueOnce({
+      app_id: "A_TEST",
+      user_id: "U_SELF",
+      team_id: "T_TEST",
+      is_enterprise_install: false,
+    });
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      config: config as never,
+      abortSignal: controller.signal,
+      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+    });
+    const monitor = trackSlackMonitor({ controller, run });
+    await vi.waitFor(() => expect(getSlackTestState().appConstructorArgs).toBeDefined());
+
+    expect(getSlackTestState().appConstructorArgs).toMatchObject({
+      token: "test-user-token",
+      tokenVerificationEnabled: false,
+    });
+    expect(getSlackTestState().createSlackStartupAuthClientMock).toHaveBeenCalledWith(
+      "test-user-token",
+      expect.any(Object),
+    );
+    expect(client.auth.test).toHaveBeenCalledTimes(1);
+    expect(runtimeLog).not.toHaveBeenCalledWith(
+      expect.stringContaining("replace it with a Bot User OAuth Token"),
+    );
+
+    await stopSlackMonitor(monitor);
+  });
+
+  it("uses the authenticated human id as the mention target", async () => {
+    const config = {
+      channels: {
+        slack: {
+          ...userSocketConfig().channels.slack,
+          channels: { C1: { allow: true, requireMention: true } },
+        },
+      },
+    };
+    resetSlackTestState(config);
+    const client = getSlackClient();
+    client.auth.test.mockResolvedValueOnce({
+      app_id: "A_TEST",
+      user_id: "U_SELF",
+      team_id: "T_TEST",
+      is_enterprise_install: false,
+    });
+    client.conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+    const { replyMock, sendMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "acknowledged" });
+    const monitor = await startWithoutBotToken(config);
+    const handler = await getSlackHandlerOrThrow("message");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U_OTHER",
+        text: "<@U_SELF> status",
+        ts: "100.000",
+        channel: "C1",
+        channel_type: "channel",
+      },
+      context: { botUserId: "U_SELF" },
+      body: {},
+    });
+
+    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+    await stopSlackMonitor(monitor);
+  });
+
+  it("delivers another user's DM and drops a self-authored DM", async () => {
+    const config = userSocketConfig();
+    resetSlackTestState(config);
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      app_id: "A_TEST",
+      user_id: "U_SELF",
+      team_id: "T_TEST",
+      is_enterprise_install: false,
+    });
+    const { replyMock, sendMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "hello back" });
+    const monitor = await startWithoutBotToken(config);
+    const handler = await getSlackHandlerOrThrow("message");
+    const baseEvent = {
+      type: "message",
+      channel: "D1",
+      channel_type: "im",
+      text: "hello",
+    };
+
+    await handler({
+      event: { ...baseEvent, user: "U_OTHER", ts: "100.000" },
+      context: { botUserId: "U_SELF" },
+      body: {},
+    });
+    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+
+    await handler({
+      event: { ...baseEvent, user: "U_SELF", ts: "101.000" },
+      context: { botUserId: "U_SELF" },
+      body: {},
+    });
+    await flush();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    await stopSlackMonitor(monitor);
+  });
+
+  it("starts HTTP transport with a user token and signing secret", async () => {
+    const config = {
+      channels: {
+        slack: {
+          identity: "user",
+          mode: "http",
+          userToken: "test-user-token",
+          signingSecret: "test-signing-secret",
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+        },
+      },
+    };
+    resetSlackTestState(config);
+    const monitor = await startWithoutBotToken(config);
+
+    expect(getSlackTestState().appConstructorArgs).toMatchObject({
+      token: "test-user-token",
+      tokenVerificationEnabled: false,
+    });
+    expect(getSlackTestState().createSlackStartupAuthClientMock).toHaveBeenCalledWith(
+      "test-user-token",
+      expect.any(Object),
+    );
+
+    await stopSlackMonitor(monitor);
+  });
+
+  it("rejects user identity without a user token", async () => {
+    vi.stubEnv("SLACK_USER_TOKEN", "");
+    const config = {
+      channels: {
+        slack: {
+          identity: "user",
+          appToken: "test-app-token",
+        },
+      },
+    };
+
+    await expect(monitorSlackProvider({ config: config as never })).rejects.toThrow(
+      'Slack user token missing for account "default"',
+    );
+  });
+
+  it("rejects socket transport without an app token", async () => {
+    vi.stubEnv("SLACK_APP_TOKEN", "");
+    const config = {
+      channels: {
+        slack: {
+          identity: "user",
+          userToken: "test-user-token",
+        },
+      },
+    };
+
+    await expect(monitorSlackProvider({ config: config as never })).rejects.toThrow(
+      'Slack app token missing for user-identity socket mode account "default"',
+    );
+  });
+
+  it("rejects HTTP transport without a signing secret", async () => {
+    const config = {
+      channels: {
+        slack: {
+          identity: "user",
+          mode: "http",
+          userToken: "test-user-token",
+        },
+      },
+    };
+
+    await expect(monitorSlackProvider({ config: config as never })).rejects.toThrow(
+      'Slack signing secret missing for user-identity HTTP mode account "default"',
     );
   });
 });

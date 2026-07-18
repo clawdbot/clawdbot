@@ -21,6 +21,7 @@ const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "tool_search",
   "tool_search_code",
 ] as const;
+const CODEX_NATIVE_GOAL_TOOL_EXCLUDES = ["get_goal", "create_goal", "update_goal"] as const;
 const CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES = new Set(["exec", "process"]);
 
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
@@ -138,6 +139,9 @@ function filterCodexDynamicToolsWithOptions<T extends { name: string }>(
   options: { preserveOpenClawShell: boolean },
 ): T[] {
   const excludes = new Set<string>();
+  for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
+    excludes.add(name);
+  }
   if (!isForcedPrivateQaCodexRuntime(env)) {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
       if (options.preserveOpenClawShell && CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)) {

@@ -223,10 +223,6 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   return path || "root";
 }
 
-function allowsMissingProviderApiKey(auth: ProviderAuthMode | undefined): boolean {
-  return auth === "aws-sdk" || auth === "oauth";
-}
-
 /** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
 function stripJsonComments(input: string): string {
   return input
@@ -503,12 +499,6 @@ export class ModelRegistry {
           `Provider ${providerName}: "baseUrl" is required when defining custom models.`,
         );
       }
-      if (!providerConfig.apiKey && !allowsMissingProviderApiKey(providerConfig.auth)) {
-        throw new Error(
-          `Provider ${providerName}: "apiKey" is required when defining custom models.`,
-        );
-      }
-
       for (const modelDef of models) {
         const hasModelApi = Boolean(modelDef.api);
 
@@ -841,12 +831,6 @@ export class ModelRegistry {
     if (!config.baseUrl) {
       throw new Error(`Provider ${providerName}: "baseUrl" is required when defining models.`);
     }
-    if (!config.apiKey && !config.oauth && !allowsMissingProviderApiKey(config.auth)) {
-      throw new Error(
-        `Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`,
-      );
-    }
-
     for (const modelDef of config.models) {
       const api = modelDef.api || config.api;
       if (!api) {

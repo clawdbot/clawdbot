@@ -13,7 +13,7 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { getPluginRegistryState } from "../../plugins/runtime-state.js";
+import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
@@ -57,8 +57,8 @@ export function resolveSessionCatalogProvider(
 }
 
 function registrations() {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
-    left.provider.id.localeCompare(right.provider.id),
+  return (getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? []).toSorted(
+    (left, right) => left.provider.id.localeCompare(right.provider.id),
   );
 }
 
@@ -156,7 +156,7 @@ function catalogResult(
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond, context }) => {
+  "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -189,16 +189,35 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
+    const progressId = request.progressId;
+    const progressConnId = progressId && client?.connId ? client.connId : undefined;
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
+        const onHost = progressConnId
+          ? (host: SessionCatalog["hosts"][number]) => {
+              // Progressive frames are an optimization. The final RPC response remains
+              // authoritative when a slow client drops an intermediate host update.
+              context.broadcastToConnIds(
+                "sessions.catalog.host",
+                {
+                  progressId,
+                  agentId: resolvedAgent.agentId,
+                  catalog: catalogResult(provider, [host], undefined, createSession),
+                },
+                new Set([progressConnId]),
+                { dropIfSlow: true },
+              );
+            }
+          : undefined;
         try {
           const hosts = await provider.list({
             search,
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),
+            ...(onHost ? { onHost } : {}),
           });
           return catalogResult(provider, hosts, undefined, createSession);
         } catch (error) {

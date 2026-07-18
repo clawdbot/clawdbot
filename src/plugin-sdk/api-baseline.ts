@@ -75,15 +75,15 @@ export type PluginSdkApiBaselineRender = {
 
 /** Result returned when writing SDK API baseline artifacts. */
 export type PluginSdkApiBaselineWriteResult = {
-  /** True when any generated artifact content differs from disk. */
+  /** True when the generated contract manifest differs from disk. */
   changed: boolean;
-  /** True when changed artifacts were actually written. */
+  /** True when generated artifacts were actually written. */
   wrote: boolean;
   /** JSON baseline artifact path. */
   jsonPath: string;
   /** JSONL statefile artifact path. */
   statefilePath: string;
-  /** SHA-256 hash artifact path. */
+  /** Per-record SHA-256 contract manifest path. */
   hashPath: string;
 };
 
@@ -722,15 +722,16 @@ function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-/** Build the sha256 hash file content for plugin SDK API baseline artifacts. */
+/** Build a mergeable per-entrypoint sha256 manifest for the Plugin SDK API contract. */
 export function computePluginSdkApiBaselineHashFileContent(
   rendered: PluginSdkApiBaselineRender,
 ): string {
-  const lines = [
-    `${sha256(rendered.json)}  plugin-sdk-api-baseline.json`,
-    `${sha256(rendered.jsonl)}  plugin-sdk-api-baseline.jsonl`,
-  ];
-  return `${lines.join("\n")}\n`;
+  return `${rendered.baseline.modules
+    .map((moduleSurface) => {
+      const label = `module/${encodeURIComponent(moduleSurface.entrypoint)}`;
+      return `${sha256(JSON.stringify(moduleSurface))}  ${label}`;
+    })
+    .join("\n")}\n`;
 }
 
 function validateMetadata(): void {
@@ -745,8 +746,8 @@ function validateMetadata(): void {
   }
 }
 
-/** Write or check SDK API baseline artifacts used by docs and contract tests. */
-export async function writePluginSdkApiBaselineStatefile(params?: {
+/** Write or check SDK API contract artifacts used by CI and release checks. */
+export async function writePluginSdkApiBaselineArtifacts(params?: {
   repoRoot?: string;
   check?: boolean;
   jsonPath?: string;
@@ -758,7 +759,6 @@ export async function writePluginSdkApiBaselineStatefile(params?: {
   const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
   const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
   const rendered = await renderPluginSdkApiBaseline({ repoRoot });
-
   const nextHashContent = computePluginSdkApiBaselineHashFileContent(rendered);
   const currentHashContent = await loadCurrentFile(hashPath);
   const changed = currentHashContent !== nextHashContent;
@@ -773,11 +773,8 @@ export async function writePluginSdkApiBaselineStatefile(params?: {
     };
   }
 
-  // Write the hash file (tracked in git)
   await fs.mkdir(path.dirname(hashPath), { recursive: true });
   await fs.writeFile(hashPath, nextHashContent, "utf8");
-
-  // Write full JSON/JSONL artifacts locally (gitignored, useful for inspection)
   await fs.mkdir(path.dirname(jsonPath), { recursive: true });
   await fs.writeFile(jsonPath, rendered.json, "utf8");
   await fs.writeFile(statefilePath, rendered.jsonl, "utf8");

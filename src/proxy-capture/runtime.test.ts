@@ -528,6 +528,50 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
+  it("captures a spec-compliant null response body as empty", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.example.test/no-content",
+        method: "HEAD",
+        response: new Response(null, { status: 204 }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(response?.status).toBe(204);
+    expect(response?.dataText).toBe("");
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
+  it("captures a clone-only Response-like readable body", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    const headers = new Headers({ "content-type": "text/plain" });
+    const clone = vi.fn(() => new Response("captured", { headers }));
+    captureHttpExchange(
+      {
+        url: "https://api.example.test/clone-only",
+        method: "GET",
+        response: { status: 200, headers, clone } as unknown as Response,
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(clone).toHaveBeenCalledOnce();
+    expect(response?.dataText).toBe("captured");
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
   it("records metadata-only for non-cloneable Response-like objects", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     // Some seams hand capture a Response-like object that cannot be cloned. It

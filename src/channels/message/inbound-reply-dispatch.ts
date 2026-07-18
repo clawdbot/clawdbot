@@ -20,6 +20,7 @@ import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   deliverInboundReplyWithMessageSendContext,
+  dispatchChannelInboundTurn as dispatchChannelInboundTurnCore,
   dispatchChannelInboundReply as dispatchChannelInboundReplyCore,
   isDurableInboundReplyDeliveryHandled,
   resolveChannelTurnDispatchCounts,
@@ -35,6 +36,7 @@ import type {
 } from "../turn/kernel.js";
 import type {
   AssembledChannelTurn,
+  ChannelTurnPlan,
   PreparedChannelTurn,
   RunChannelTurnParams,
 } from "../turn/types.js";
@@ -62,6 +64,7 @@ export type ChannelInboundEventRunnerParams<
 > = RunChannelTurnParams<TRaw, TDispatchResult>;
 export type PreparedInboundReply<TDispatchResult> = PreparedChannelTurn<TDispatchResult>;
 export type AssembledInboundReply = AssembledChannelTurn;
+export type ChannelInboundTurnPlan = ChannelTurnPlan;
 export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 
 /** Run an already prepared inbound reply through shared session-record + dispatch ordering. */
@@ -123,6 +126,10 @@ export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromCo
 
 export async function dispatchChannelInboundReply(params: AssembledInboundReply) {
   return await dispatchChannelInboundReplyCore(params);
+}
+
+export async function dispatchChannelInboundTurn(params: ChannelInboundTurnPlan) {
+  return await dispatchChannelInboundTurnCore(params);
 }
 
 export {

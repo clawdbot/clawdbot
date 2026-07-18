@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -46,11 +47,18 @@ import {
 } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+  resolveSafeExternalUrl,
+} from "../../../lib/open-external-url.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { PlanStatus } from "../tool-stream.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { renderChatQuestionCard } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -86,6 +94,7 @@ const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachment
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
@@ -256,7 +265,68 @@ type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
+const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+
+function readManagedImageBlobUrl(cacheKey: string): string | undefined {
+  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  managedImageBlobUrlResolvedCache.delete(cacheKey);
+  managedImageBlobUrlResolvedCache.set(cacheKey, cached);
+  return cached;
+}
+
+function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
+  const previous = managedImageBlobUrlResolvedCache.get(cacheKey);
+  managedImageBlobUrlResolvedCache.delete(cacheKey);
+  managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  if (previous && previous !== blobUrl) {
+    URL.revokeObjectURL(previous);
+  }
+
+  // Blob URLs retain browser-managed image data. Keep recent previews reusable,
+  // but revoke evicted URLs so long-lived chat sessions cannot retain them forever.
+  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const oldest = managedImageBlobUrlResolvedCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    const evicted = managedImageBlobUrlResolvedCache.get(oldest.value);
+    managedImageBlobUrlResolvedCache.delete(oldest.value);
+    if (evicted) {
+      URL.revokeObjectURL(evicted);
+    }
+  }
+}
+
+function hasRecentManagedImageBlobUrlMiss(cacheKey: string): boolean {
+  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
+  if (missAt === undefined) {
+    return false;
+  }
+  if (Date.now() - missAt >= MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
+    managedImageBlobUrlMissCache.delete(cacheKey);
+    return false;
+  }
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  managedImageBlobUrlMissCache.set(cacheKey, missAt);
+  return true;
+}
+
+function cacheManagedImageBlobUrlMiss(cacheKey: string) {
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+  while (managedImageBlobUrlMissCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const oldest = managedImageBlobUrlMissCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    managedImageBlobUrlMissCache.delete(oldest.value);
+  }
+}
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -556,14 +626,36 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<
+  ChatItem,
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
+>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   basePath?: string;
   authToken?: string | null;
+  planStatus?: PlanStatus | null;
+  planActive?: boolean;
+  questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
+  onQuestionChange?: () => void;
+  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
 };
+
+function renderQuestionStreamPart(
+  part: Extract<StreamGroupPart, { kind: "question" }>,
+  opts: StreamGroupOptions,
+) {
+  const prompt = opts.questionPrompts?.get(part.questionId);
+  return prompt
+    ? renderChatQuestionCard(prompt, {
+        nowMs: Date.now(),
+        onChange: opts.onQuestionChange ?? (() => {}),
+        onSubmit: (answers) => opts.onQuestionSubmit?.(prompt.id, answers),
+      })
+    : nothing;
+}
 
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
@@ -578,14 +670,14 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part.
-  const indicatorOnly = parts.every((part) => part.kind === "reading-indicator");
-  const avatar = indicatorOnly
+  const workingOnly = parts.every((part) => part.kind !== "stream");
+  const avatar = workingOnly
     ? nothing
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
     <div
-      class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}"
+      class="chat-group assistant ${workingOnly ? "chat-group--working" : ""}"
       data-chat-row-key=${parts[0]?.key ?? nothing}
     >
       ${avatar}
@@ -593,16 +685,23 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${parts.map((part) =>
           part.kind === "reading-indicator"
             ? renderChatWorkingIndicator(part)
-            : renderGroupedMessage(
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: part.text }],
-                  timestamp: part.startedAt,
-                },
-                part.key,
-                { isStreaming: part.isStreaming, showReasoning: false },
-                onOpenSidebar,
-              ),
+            : part.kind === "question"
+              ? renderQuestionStreamPart(part, opts)
+              : part.kind === "plan"
+                ? renderChatPlanChecklist(opts.planStatus, {
+                    active: opts.planActive === true,
+                    variant: "card",
+                  })
+                : renderGroupedMessage(
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: part.text }],
+                      timestamp: part.startedAt,
+                    },
+                    part.key,
+                    { isStreaming: part.isStreaming, showReasoning: false },
+                    onOpenSidebar,
+                  ),
         )}
         ${footerStartedAt !== null
           ? html`
@@ -1270,8 +1369,34 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
     return nothing;
   }
 
-  const openImage = (url: string) => {
-    openExternalUrlSafe(url, { allowDataImage: true });
+  const openImage = (img: RenderableImageBlock, previewUrl: string) => {
+    if (
+      !isManagedOutgoingImageSource(img.displayUrl) ||
+      readManagedOutgoingImageBlobUrl(img.displayUrl, opts) === previewUrl
+    ) {
+      openExternalUrlSafe(previewUrl, { allowDataImage: true });
+      return;
+    }
+
+    // Reserve the tab during the click's user activation. An evicted Blob URL
+    // must be refetched before navigation, after popup permission has expired.
+    const pendingWindow = reserveExternalWindowForDeferredNavigation();
+    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
+      .then((freshUrl) => {
+        const safeUrl = freshUrl
+          ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
+          : null;
+        if (!safeUrl) {
+          pendingWindow?.close();
+          return;
+        }
+        if (pendingWindow) {
+          pendingWindow.location.replace(safeUrl);
+          return;
+        }
+        openExternalUrlSafe(safeUrl, { allowDataImage: true });
+      })
+      .catch(() => pendingWindow?.close());
   };
 
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
@@ -1281,7 +1406,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
       class="chat-message-image"
       width=${img.width ?? nothing}
       height=${img.height ?? nothing}
-      @click=${() => openImage(previewUrl)}
+      @click=${() => openImage(img, previewUrl)}
     />
   `;
 
@@ -1511,19 +1636,34 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
+function resolveManagedOutgoingImageBlobUrlCacheKey(
+  source: string,
+  opts?: ImageRenderOptions,
+): string {
+  const authToken = opts?.authToken?.trim() ?? "";
+  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
+  return `${fetchUrl}::${authToken}`;
+}
+
+function readManagedOutgoingImageBlobUrl(
+  source: string,
+  opts?: ImageRenderOptions,
+): string | undefined {
+  return readManagedImageBlobUrl(resolveManagedOutgoingImageBlobUrlCacheKey(source, opts));
+}
+
 async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
   const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  const cacheKey = `${fetchUrl}::${authToken}`;
-  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts);
+  const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
     return cached;
   }
-  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
-  if (missAt && Date.now() - missAt < MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
+  if (hasRecentManagedImageBlobUrlMiss(cacheKey)) {
     return null;
   }
   let pending = managedImageBlobUrlCache.get(cacheKey);
@@ -1543,17 +1683,16 @@ async function resolveManagedOutgoingImageBlobUrl(
         credentials: "same-origin",
       });
       if (!res.ok) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
       }
       const blob = await res.blob();
       if (!blob.type.startsWith("image/")) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
       }
       const blobUrl = URL.createObjectURL(blob);
-      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-      managedImageBlobUrlMissCache.delete(cacheKey);
+      cacheManagedImageBlobUrl(cacheKey, blobUrl);
       return blobUrl;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);
@@ -1650,10 +1789,19 @@ function resolveAssistantAttachmentAvailability(
     if (normalizedAuthToken) {
       headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
     }
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("assistant attachment metadata fetch timed out", "TimeoutError"),
+        ),
+      ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS,
+    );
     void fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
       method: "GET",
       headers,
       credentials: "same-origin",
+      signal: controller.signal,
     })
       .then(async (res) => {
         const payload = (await res.json().catch(() => null)) as {
@@ -1698,6 +1846,7 @@ function resolveAssistantAttachmentAvailability(
         });
       })
       .finally(() => {
+        clearTimeout(timeout);
         onRequestUpdate?.();
       });
   }

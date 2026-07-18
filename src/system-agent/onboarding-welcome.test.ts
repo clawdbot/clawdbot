@@ -55,18 +55,24 @@ describe("buildOnboardingWelcome", () => {
       noteAssistantMessage,
     };
 
-    const welcome = await buildOnboardingWelcome({ engine: engine as never });
+    const { text: welcome, question } = await buildOnboardingWelcome({ engine: engine as never });
 
     expect(propose).toHaveBeenCalledWith({
       kind: "setup",
       workspace: "/existing/workspace",
+    });
+    expect(question.id).toBe("onboarding-apply-setup");
+    expect(question.options[0]).toMatchObject({
+      label: "Yes — set it up",
+      reply: "yes",
+      recommended: true,
     });
     expect(welcome).toContain("Workspace: /existing/workspace");
     expect(welcome).toContain("AI: openai/gpt-5.5 — already verified with a real reply");
   });
 
   it("advertises only the route that passed the inference gate", async () => {
-    const welcome = await buildOnboardingWelcome({
+    const { text: welcome } = await buildOnboardingWelcome({
       engine: {
         loadOverview: vi.fn(async () => ({
           config: {
@@ -117,7 +123,7 @@ describe("buildOnboardingWelcome", () => {
   it("honors an explicit workspace override on an authored setup", async () => {
     mocks.sourceConfig.gateway = { auth: { mode: "token", token: "existing-token" } };
     const propose = vi.fn();
-    const welcome = await buildOnboardingWelcome({
+    const { text: welcome } = await buildOnboardingWelcome({
       workspace: "/requested/workspace",
       engine: {
         loadOverview: vi.fn(async () => ({
@@ -179,7 +185,7 @@ describe("buildOnboardingWelcome", () => {
   ])("treats $label consistently with the app gate", async ({ auth, configured }) => {
     mocks.sourceConfig.gateway = { auth };
     const propose = vi.fn();
-    const welcome = await buildOnboardingWelcome({
+    const { text: welcome, question } = await buildOnboardingWelcome({
       engine: {
         loadOverview: vi.fn(async () => ({
           config: {
@@ -198,6 +204,7 @@ describe("buildOnboardingWelcome", () => {
     });
 
     expect(propose).toHaveBeenCalledTimes(configured ? 0 : 1);
+    expect(question.id).toBe(configured ? "onboarding-next-step" : "onboarding-apply-setup");
     expect(welcome.includes("Say **yes**")).toBe(!configured);
   });
 });

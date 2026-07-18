@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -118,7 +118,7 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
   });
 }
 
-test("sessions.delete removes clean session worktrees and keeps dirty ones", async () => {
+test("sessions.delete snapshots and removes session worktrees", async () => {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-delete-worktree-"),
   );
@@ -131,9 +131,12 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
   let dirtyWorktreeId: string | undefined;
   try {
     const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+    await fs.writeFile(path.join(workspace, "local-base.txt"), "inherited local commit\n");
+    await execFileAsync("git", ["-C", workspace, "add", "local-base.txt"]);
+    await execFileAsync("git", ["-C", workspace, "commit", "-m", "local base"]);
     const clean = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(clean.ok).toBe(true);
     const cleanKey = clean.payload?.key;
@@ -148,10 +151,26 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
       removedAt: expect.any(Number),
       snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
     });
+    const registered = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
+    expect(registered.stdout).not.toContain(cleanWorktree!.path);
+    const branch = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "branch",
+      "--list",
+      cleanWorktree!.branch,
+    ]);
+    expect(branch.stdout.trim()).toBe("");
 
     const dirty = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(dirty.ok).toBe(true);
     const dirtyKey = dirty.payload?.key;
@@ -161,8 +180,12 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
 
     await expectSessionDeleteSucceeds({ key: dirtyKey! });
 
-    await expect(fs.access(dirtyWorktree!.path)).resolves.toBeUndefined();
-    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)?.removedAt).toBeUndefined();
+    await expect(fs.access(dirtyWorktree!.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    dirtyWorktreeId = undefined;
   } finally {
     if (
       dirtyWorktreeId &&
@@ -914,6 +937,33 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   expect((context as { agentId?: string } | undefined)?.agentId).toBe("main");
 });
 
+test("sessions.delete sessions.changed event always carries the resolved owner", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-side", "hello");
+  await writeSessionStore({ entries: { "agent:main:side": sessionStoreEntry("sess-side") } });
+  const broadcastToConnIds = vi.fn();
+
+  const deleted = await directSessionReq<{ deleted: boolean }>(
+    "sessions.delete",
+    { key: "agent:main:side", deleteTranscript: true },
+    {
+      client: { connect: { scopes: ["operator.admin"] } } as never,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      },
+    },
+  );
+
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(broadcastToConnIds).toHaveBeenCalledWith(
+    "sessions.changed",
+    expect.objectContaining({ sessionKey: "agent:main:side", agentId: "main", reason: "delete" }),
+    new Set(["conn-1"]),
+    { dropIfSlow: true },
+  );
+});
+
 test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -985,6 +1035,11 @@ test("sessions.delete returns unavailable when active run does not stop", async 
 
   embeddedRunMock.activeIds.add("sess-active");
   embeddedRunMock.waitResults.set("sess-active", false);
+  const waitCallCountsAtRetirement: number[] = [];
+  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+    waitCallCountsAtRetirement.push(embeddedRunMock.waitCalls.length);
+    return true;
+  });
 
   const { ws } = await openClient();
 
@@ -999,6 +1054,15 @@ test("sessions.delete returns unavailable when active run does not stop", async 
     ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
     "sess-active",
   );
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledWith({
+    sessionId: "sess-active",
+    reason: "gateway-session-cleanup",
+    preserveActiveLeases: true,
+    retainAcrossReuse: true,
+    onError: expect.any(Function),
+  });
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(2);
+  expect(waitCallCountsAtRetirement).toEqual([0, 1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
   const storedEntry = loadSessionEntry({

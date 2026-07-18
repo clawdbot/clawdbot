@@ -16,6 +16,7 @@ const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 export type NativeHookRelayCliOptions = {
   provider?: string;
   relayId?: string;
+  stateDb?: string;
   generation?: string;
   event?: string;
   preToolUseUnavailable?: string;
@@ -94,6 +95,7 @@ export async function runNativeHookRelayCli(
         invokeBridge({
           provider,
           relayId,
+          stateDbPath: opts.stateDb?.trim() || undefined,
           generation,
           event,
           rawPayload,

@@ -27,6 +27,10 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import {
+  CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+  CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+} from "./control-ui-contract.js";
+import {
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
@@ -96,6 +100,10 @@ const getManagedImageAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
 
+const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
+
+const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
+
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
@@ -126,6 +134,14 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/ready", "ready"],
   ["/readyz", "ready"],
 ]);
+
+function isControlUiCatalogIconRequest(pathname: string, basePath: string): boolean {
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  return [CONTROL_UI_PLUGIN_ICON_PATH_PREFIX, CONTROL_UI_CATALOG_ICON_PATH_PREFIX].some((prefix) =>
+    pathname.startsWith(`${normalizedBasePath}${prefix}/`),
+  );
+}
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
   Promise<ReadonlySet<string>>
@@ -167,6 +183,10 @@ function getCachedPluginGatewayAuthBypassPaths(
 
 function isOpenAiModelsPath(pathname: string): boolean {
   return pathname === "/v1/models" || pathname.startsWith("/v1/models/");
+}
+
+function isMcpAppStandalonePath(pathname: string): boolean {
+  return pathname === "/__openclaw__/mcp-app" || pathname === "/__openclaw__/mcp-app/view";
 }
 
 function isEmbeddingsPath(pathname: string): boolean {
@@ -775,6 +795,16 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
+      if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
+        requestStages.push({
+          name: "mcp-app-standalone",
+          run: async () =>
+            (await getMcpAppStandaloneModule()).handleMcpAppStandaloneHttpRequest(req, res, {
+              sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+              sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+            }),
+        });
+      }
       // Plugin routes run before the general Control UI SPA catch-all so
       // explicitly registered endpoints stay reachable. Core routes and the
       // plugin recovery surface staged above keep precedence.
@@ -811,6 +841,20 @@ export function createGatewayHttpServer(opts: {
         });
       }
 
+      if (controlUiEnabled && isControlUiCatalogIconRequest(scopedRequestPath, controlUiBasePath)) {
+        requestStages.push({
+          name: "control-ui-catalog-icon",
+          run: async () =>
+            (await getPluginIconHttpModule()).handlePluginIconHttpRequest(req, res, {
+              basePath: controlUiBasePath,
+              config: configSnapshot,
+              auth: resolvedAuthValue,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-assistant-media",

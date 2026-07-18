@@ -326,6 +326,20 @@ export function isSessionWorkAdmissionActive(
   );
 }
 
+/** Whether another admitted turn currently owns any of these session identities. */
+export function isCompetingSessionWorkAdmissionActive(
+  scope: string,
+  identities: Iterable<string | undefined>,
+): boolean {
+  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+  return normalizeSessionIdentities(scope, identities).some((identity) =>
+    Array.from(
+      ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? [],
+      (admission) => !currentAdmissions?.has(admission),
+    ).some(Boolean),
+  );
+}
+
 /** Active session identities for one store/lifecycle scope. */
 export function collectActiveSessionWorkAdmissionIdentities(scope: string): Set<string> {
   const normalizedScope = scope.trim();
@@ -428,6 +442,7 @@ export async function beginSessionWorkAdmission(params: {
           return createSessionWorkAdmissionHandoff(admission, lease);
         },
         release,
+        released: admission.released,
         run: async <T>(run: () => Promise<T>) => {
           const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
           current.add(admission);

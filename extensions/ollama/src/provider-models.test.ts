@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaProvider,
   buildOllamaModelDefinition,
+  capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
@@ -20,6 +21,22 @@ describe("ollama provider models", () => {
   it("strips /v1 when resolving the Ollama API base", () => {
     expect(resolveOllamaApiBase("http://127.0.0.1:11434/v1")).toBe("http://127.0.0.1:11434");
     expect(resolveOllamaApiBase("http://127.0.0.1:11434///")).toBe("http://127.0.0.1:11434");
+  });
+
+  it("caps local discovered runtime context while preserving native metadata", () => {
+    const provider = capLocalOllamaProviderContext({
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      models: [
+        buildOllamaModelDefinition("qwen3.5:4b", 262_144),
+        buildOllamaModelDefinition("small", 16_384),
+      ],
+    });
+
+    expect(provider.models).toEqual([
+      expect.objectContaining({ contextWindow: 262_144, contextTokens: 32_768 }),
+      expect.objectContaining({ contextWindow: 16_384, contextTokens: 16_384 }),
+    ]);
   });
 
   it("sets discovered models with context windows from /api/show", async () => {

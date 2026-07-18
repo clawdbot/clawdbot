@@ -112,7 +112,8 @@ const TALK_AGENT_RE = new RegExp(
   String.raw`^(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent(?:\s+(?:for|in|workspace)\s+(?<workspace>${ARG_WORD}))?$`,
   "i",
 );
-const SET_MODEL_RE = /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)$/i;
+const SET_MODEL_RE =
+  /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)(?:\s+for\s+agent\s+(?<agent>\S+))?$/i;
 const GATEWAY_RE =
   /^(?:gateway\s+(?<sub>status|start|stop|restart)|(?<verb>start|stop|restart)\s+(?:the\s+)?gateway)$/i;
 const PLUGIN_LIST_RE = /^(?:(?:plugins?|clawhub)\s+list|list\s+plugins?)$/i;
@@ -317,7 +318,12 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   const setModelMatch = trimmed.match(SET_MODEL_RE);
   if (setModelMatch?.groups?.model) {
-    return { kind: "set-default-model", model: setModelMatch.groups.model };
+    const agent = setModelMatch.groups.agent?.trim();
+    return {
+      kind: "set-default-model",
+      model: setModelMatch.groups.model,
+      ...(agent ? { agentId: normalizeAgentId(agent) } : {}),
+    };
   }
   return { kind: "none", message: NO_MATCH_MESSAGE };
 }
@@ -360,6 +366,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
+    operation.kind === "plugin-uninstall" ||
     (operation.kind === "create-agent" &&
       !operation.model?.trim() &&
       !isReservedSystemAgentId(operation.agentId)) ||
@@ -373,7 +380,9 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
 export function describeSystemAgentPersistentOperation(operation: SystemAgentOperation): string {
   switch (operation.kind) {
     case "set-default-model":
-      return `set agents.defaults.model.primary to ${operation.model}`;
+      return operation.agentId
+        ? `set agent ${operation.agentId}'s model to ${operation.model}`
+        : `set agents.defaults.model.primary to ${operation.model}`;
     case "config-set":
       return `set config ${operation.path} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":

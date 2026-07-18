@@ -21,19 +21,21 @@ import {
 import pMap, { pMapSkip } from "p-map";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
+import {
+  loadMemoryWikiCompiledCache,
+  type MemoryWikiCompiledClaim,
+  type MemoryWikiCompiledDigestPage,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
 import {
   parseWikiMarkdown,
   toWikiPageSummary,
   type WikiClaim,
   type WikiPageSummary,
-  type WikiRelationship,
 } from "./markdown.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
-const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
 const QUERY_PAGE_READ_CONCURRENCY = 16;
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
@@ -104,45 +106,8 @@ export const WIKI_SEARCH_MODES = [
 
 export type WikiSearchMode = (typeof WIKI_SEARCH_MODES)[number];
 
-type QueryDigestPage = {
-  id?: string;
-  title: string;
-  kind: WikiPageSummary["kind"];
-  path: string;
-  pageType?: string;
-  entityType?: string;
-  canonicalId?: string;
-  aliases?: string[];
-  sourceIds: string[];
-  questions: string[];
-  contradictions: string[];
-  privacyTier?: string;
-  personCard?: WikiPageSummary["personCard"];
-  bestUsedFor?: string[];
-  notEnoughFor?: string[];
-  relationshipCount?: number;
-  topRelationships?: WikiRelationship[];
-};
-
-type QueryDigestClaim = {
-  id?: string;
-  pageId?: string;
-  pageTitle: string;
-  pageKind: WikiPageSummary["kind"];
-  pagePath: string;
-  pageType?: string;
-  entityType?: string;
-  canonicalId?: string;
-  aliases?: string[];
-  text: string;
-  status?: string;
-  confidence?: number;
-  sourceIds?: string[];
-  evidenceKinds?: string[];
-  privacyTiers?: string[];
-  freshnessLevel?: string;
-  lastTouchedAt?: string;
-};
+type QueryDigestPage = MemoryWikiCompiledDigestPage;
+type QueryDigestClaim = MemoryWikiCompiledClaim;
 
 type QueryDigestBundle = {
   pages: QueryDigestPage[];
@@ -285,51 +250,11 @@ async function readQueryableWikiPagesByPaths(
   );
 }
 
-function parseClaimsDigest(raw: string): QueryDigestClaim[] {
-  return raw.split(/\r?\n/).flatMap((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return [];
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as QueryDigestClaim;
-      if (!parsed || typeof parsed !== "object" || typeof parsed.pagePath !== "string") {
-        return [];
-      }
-      return [parsed];
-    } catch {
-      return [];
-    }
-  });
-}
-
-async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle | null> {
-  const [agentDigestRaw, claimsDigestRaw] = await Promise.all([
-    fs.readFile(path.join(rootDir, AGENT_DIGEST_PATH), "utf8").catch(() => null),
-    fs.readFile(path.join(rootDir, CLAIMS_DIGEST_PATH), "utf8").catch(() => null),
-  ]);
-  if (!agentDigestRaw && !claimsDigestRaw) {
-    return null;
-  }
-
-  const pages = (() => {
-    if (!agentDigestRaw) {
-      return [];
-    }
-    try {
-      const parsed = JSON.parse(agentDigestRaw) as { pages?: QueryDigestPage[] };
-      return Array.isArray(parsed.pages) ? parsed.pages : [];
-    } catch {
-      return [];
-    }
-  })();
-  const claims = claimsDigestRaw ? parseClaimsDigest(claimsDigestRaw) : [];
-
-  if (pages.length === 0 && claims.length === 0) {
-    return null;
-  }
-
-  return { pages, claims };
+async function readQueryDigestBundle(
+  config: ResolvedMemoryWikiConfig,
+): Promise<QueryDigestBundle | null> {
+  const snapshot = await loadMemoryWikiCompiledCache(config);
+  return snapshot ? { pages: snapshot.digest.pages, claims: snapshot.claims } : null;
 }
 
 function buildSnippet(raw: string, query: string): string {
@@ -1407,12 +1332,13 @@ function canReadSessionMemoryPath(params: {
 }
 
 async function searchWikiCorpus(params: {
-  rootDir: string;
+  config: ResolvedMemoryWikiConfig;
   query: string;
   maxResults: number;
   mode: WikiSearchMode;
 }): Promise<WikiSearchResult[]> {
-  const digest = await readQueryDigestBundle(params.rootDir);
+  const digest = await readQueryDigestBundle(params.config);
+  const rootDir = params.config.vault.path;
   const candidatePaths = digest
     ? buildDigestCandidatePaths({
         digest,
@@ -1424,8 +1350,8 @@ async function searchWikiCorpus(params: {
   const seenPaths = new Set<string>();
   const candidatePages =
     candidatePaths.length > 0
-      ? await readQueryableWikiPagesByPaths(params.rootDir, candidatePaths)
-      : await readQueryableWikiPages(params.rootDir);
+      ? await readQueryableWikiPagesByPaths(rootDir, candidatePaths)
+      : await readQueryableWikiPages(rootDir);
   for (const page of candidatePages) {
     seenPaths.add(page.relativePath);
   }
@@ -1437,10 +1363,10 @@ async function searchWikiCorpus(params: {
     return results;
   }
 
-  const remainingPaths = (await listWikiMarkdownFiles(params.rootDir)).filter(
+  const remainingPaths = (await listWikiMarkdownFiles(rootDir)).filter(
     (relativePath) => !seenPaths.has(relativePath),
   );
-  const remainingPages = await readQueryableWikiPagesByPaths(params.rootDir, remainingPaths);
+  const remainingPages = await readQueryableWikiPagesByPaths(rootDir, remainingPaths);
   return [
     ...results,
     ...remainingPages
@@ -1499,7 +1425,7 @@ export async function searchMemoryWiki(params: {
 
   const wikiResults = shouldSearchWiki(effectiveConfig)
     ? await searchWikiCorpus({
-        rootDir: effectiveConfig.vault.path,
+        config: effectiveConfig,
         query: params.query,
         maxResults,
         mode,
@@ -1568,7 +1494,7 @@ export async function getMemoryWikiPage(params: {
   const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
-    const digest = await readQueryDigestBundle(effectiveConfig.vault.path);
+    const digest = await readQueryDigestBundle(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath
       ? ((

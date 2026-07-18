@@ -9,6 +9,7 @@ import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snap
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
@@ -88,6 +89,7 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
 type GatewayConfigReloader = {
   stop: () => Promise<void>;
   hotReloadStatus: () => GatewayHotReloadStatus;
+  notifyPluginMetadataChanged: () => void;
 };
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
@@ -847,7 +849,7 @@ export function startGatewayConfigReloader(opts: {
     );
   }
 
-  const scheduleFromWatcher = () => {
+  const scheduleExternalRefresh = () => {
     opts.onConfigCandidateObserved?.();
     // Revoke the transaction synchronously. The debounced reread owns this new
     // epoch; a slow prior reload must not publish after a newer disk write.
@@ -911,9 +913,15 @@ export function startGatewayConfigReloader(opts: {
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling,
     });
-    next.on("add", scheduleFromWatcher);
-    next.on("change", scheduleFromWatcher);
-    next.on("unlink", scheduleFromWatcher);
+    // A file event proves this watcher recovered. Reset only here so plugin
+    // metadata refreshes and consecutive watcher errors cannot refill the budget.
+    const scheduleFromWatcherEvent = () => {
+      watcherRecreateRetries = 0;
+      scheduleExternalRefresh();
+    };
+    next.on("add", scheduleFromWatcherEvent);
+    next.on("change", scheduleFromWatcherEvent);
+    next.on("unlink", scheduleFromWatcherEvent);
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
@@ -971,6 +979,14 @@ export function startGatewayConfigReloader(opts: {
   createWatcher();
 
   return {
+    notifyPluginMetadataChanged: () => {
+      // The signal carries a metadata change while config bytes stay identical.
+      // Clear both metadata and config-echo caches before scheduling the shared diff path.
+      clearLoadInstalledPluginIndexInstallRecordsCache();
+      startupInternalWriteHash = null;
+      lastAppliedWriteHash = null;
+      scheduleExternalRefresh();
+    },
     stop: async () => {
       stopped = true;
       if (debounceTimer) {

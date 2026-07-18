@@ -1089,6 +1089,12 @@ function renderAttendanceMarkdown(result: GoogleMeetAttendanceResult): string {
   return `${lines.join("\n")}\n`;
 }
 
+function neutralizeSpreadsheetFormulaCell(text: string): string {
+  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(text) || /^[\t\r\n]/.test(text)
+    ? `'${text}`
+    : text;
+}
+
 function csvCell(value: unknown): string {
   const text =
     value === undefined || value === null
@@ -1096,7 +1102,8 @@ function csvCell(value: unknown): string {
       : typeof value === "string" || typeof value === "number" || typeof value === "boolean"
         ? String(value)
         : JSON.stringify(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  const safeText = neutralizeSpreadsheetFormulaCell(text);
+  return /[",\r\n]/.test(safeText) ? `"${safeText.replaceAll('"', '""')}"` : safeText;
 }
 
 function renderAttendanceCsv(result: GoogleMeetAttendanceResult): string {

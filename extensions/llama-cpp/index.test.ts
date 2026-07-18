@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -47,6 +48,31 @@ afterEach(() => {
 });
 
 describe("llama.cpp provider plugin", () => {
+  it("registers the local text-inference provider", () => {
+    const registerProvider = vi.fn();
+
+    llamaCppPlugin.register(
+      createTestPluginApi({
+        id: "llama-cpp",
+        name: "llama.cpp Provider",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerProvider,
+      }),
+    );
+
+    expect(registerProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "llama-cpp",
+        label: "Local model (llama.cpp)",
+        createStreamFn: expect.any(Function),
+        auth: [expect.objectContaining({ id: "local" })],
+      }),
+    );
+  });
+
   it("registers the local embedding provider through the generic SDK contract", () => {
     const { config, registry } = createPluginRegistryFixture();
 

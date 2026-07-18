@@ -40,7 +40,7 @@ class ChatControllerModelSelectionTest {
       assertEquals(listOf("anthropic/claude-opus-4"), recents)
       assertEquals("anthropic/claude-opus-4", controller.selectedModelRef.value)
       assertEquals(
-        "sessions.patch" to "{\"key\":\"main\",\"model\":\"anthropic/claude-opus-4\"}",
+        "sessions.patch" to "{\"key\":\"main\",\"agentId\":\"main\",\"model\":\"anthropic/claude-opus-4\"}",
         requests.single(),
       )
     }
@@ -194,7 +194,7 @@ class ChatControllerModelSelectionTest {
       assertTrue(controller.setSessionModelAwait("main", null))
 
       assertEquals(emptyList<String>(), recents)
-      assertEquals("{\"key\":\"main\",\"model\":null}", requests.single())
+      assertEquals("{\"key\":\"main\",\"agentId\":\"main\",\"model\":null}", requests.single())
     }
 
   @Test

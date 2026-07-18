@@ -615,6 +615,17 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
+/* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
+   Document rules beat `:host`, so restore the chrome arrow here — and re-add
+   the disabled cue this override would otherwise clobber. */
+wa-dropdown-item {
+  cursor: default;
+}
+
+wa-dropdown-item[disabled] {
+  cursor: not-allowed;
+}
+
 button,
 input,
 textarea,

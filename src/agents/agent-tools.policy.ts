@@ -57,6 +57,9 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "cron",
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
 ];
 
 /** Tools that only make sense for orchestrator sub-agents that can spawn children. */

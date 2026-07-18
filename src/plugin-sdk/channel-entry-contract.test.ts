@@ -248,7 +248,7 @@ async function expectBuiltArtifactNodeRequireFastPath(
   scope: string,
   artifactRoot = "dist",
 ): Promise<void> {
-  vi.stubEnv("OPENCLAW_PLUGIN_LOAD_PROFILE", "1");
+  vi.stubEnv("OPENCLAW_DIAGNOSTICS", "plugin.load-profile");
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
   try {
@@ -346,7 +346,7 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, ["--import", "tsx", probePath], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, OPENCLAW_PLUGIN_LOAD_PROFILE: "1" },
+    env: { ...process.env, OPENCLAW_DIAGNOSTICS: "plugin.load-profile" },
   });
 }
 

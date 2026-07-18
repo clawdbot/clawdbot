@@ -18,7 +18,7 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import { type EditorId, editorOpenUrl } from "../../../lib/editor-links.ts";
+import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
@@ -937,8 +937,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       return;
     }
     this.fileEditorMenuOpen = false;
-    // A custom-scheme window hands off to the OS without navigating this page.
-    window.open(editorOpenUrl(editor, absPath, content.line));
+    openEditor(editor, absPath, content.line);
   };
 
   private readonly copyFileContents = () => {

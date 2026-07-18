@@ -775,6 +775,7 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
     port: params.port,
+    existingNodeOptions: params.existingEnvironment?.NODE_OPTIONS,
     launchdLabel:
       platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)

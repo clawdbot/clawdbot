@@ -2,10 +2,15 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const claimClickClackSetupCode = vi.hoisted(() => vi.fn());
 const verifyClickClackAccountAfterSetup = vi.hoisted(() => vi.fn());
 
+vi.mock("./setup-claim.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-claim.js")>()),
+  claimClickClackSetupCode,
+}));
 vi.mock("./setup-verify.js", () => ({
   verifyClickClackAccountAfterSetup,
 }));
@@ -14,6 +19,12 @@ import {
   clickClackSetupAdapter,
   normalizeClickClackBaseUrl,
 } from "./setup-core.js";
+
+// Structural stand-in for the internal claim error: the setup formatter
+// duck-types on a numeric `status`, so tests need only that shape.
+function makeClaimError(status: number, detail: string): Error {
+  return Object.assign(new Error(`claim failed (${status}): ${detail}`), { status });
+}
 
 function validate(params: {
   cfg?: OpenClawConfig;
@@ -27,7 +38,24 @@ function validate(params: {
   });
 }
 
+async function prepare(
+  input: Parameters<
+    NonNullable<typeof clickClackSetupAdapter.prepareAccountConfigInput>
+  >[0]["input"],
+) {
+  return await clickClackSetupAdapter.prepareAccountConfigInput?.({
+    cfg: {},
+    accountId: DEFAULT_ACCOUNT_ID,
+    input,
+    runtime: createNonExitingRuntimeEnv(),
+  });
+}
+
 describe("ClickClack setup adapter", () => {
+  beforeEach(() => {
+    claimClickClackSetupCode.mockReset();
+  });
+
   it("normalizes http(s) base URLs and rejects other schemes", () => {
     expect(normalizeClickClackBaseUrl(" https://clickclack.example.com/// ")).toBe(
       "https://clickclack.example.com",
@@ -35,6 +63,174 @@ describe("ClickClack setup adapter", () => {
     expect(normalizeClickClackBaseUrl("http://localhost:3000/")).toBe("http://localhost:3000");
     expect(normalizeClickClackBaseUrl("ssh://clickclack.example.com")).toBeUndefined();
     expect(normalizeClickClackBaseUrl("not-a-url")).toBeUndefined();
+  });
+
+  it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {
+        defaultTo: "channel:general",
+        allowFrom: ["*"],
+        agentActivity: true,
+      },
+    });
+
+    await expect(
+      prepare({
+        code: "https://clickclack.example/#abcd-efgh-jkmn",
+        name: "Primary",
+      }),
+    ).resolves.toEqual({
+      name: "Primary",
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      workspace: "wsp_1",
+      defaultTo: "channel:general",
+      allowFrom: ["*"],
+      agentActivity: true,
+    });
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      baseUrl: "https://clickclack.example",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
+  it("claims a bare setup code with an explicit HTTPS base URL", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {},
+    });
+
+    await expect(
+      prepare({
+        code: "abcd efgh jkmn",
+        baseUrl: "https://clickclack.example/",
+      }),
+    ).resolves.toMatchObject({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      workspace: "wsp_1",
+    });
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      baseUrl: "https://clickclack.example",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
+  it("accepts setup-code URLs for local HTTP installations", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {},
+    });
+
+    await expect(
+      prepare({
+        code: "http://localhost:3000/#abcd-efgh-jkmn",
+      }),
+    ).resolves.toMatchObject({
+      baseUrl: "http://localhost:3000",
+      token: "test-token",
+      workspace: "wsp_1",
+    });
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:3000",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
+  it("rejects conflicting credentials before claiming a setup code", async () => {
+    for (const input of [
+      { code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example", token: "test-token" },
+      {
+        code: "ABCD-EFGH-JKMN",
+        baseUrl: "https://clickclack.example",
+        tokenFile: "test-token-file",
+      },
+      { code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example", useEnv: true },
+    ]) {
+      await expect(prepare(input)).rejects.toThrow(
+        "ClickClack --code cannot be combined with --token, --token-file, or --use-env.",
+      );
+    }
+    expect(claimClickClackSetupCode).not.toHaveBeenCalled();
+  });
+
+  it("rejects mismatched and malformed setup-code inputs before claiming", async () => {
+    await expect(prepare({ code: "ftp://clickclack.example/#ABCD-EFGH-JKMN" })).rejects.toThrow(
+      "HTTP(S)",
+    );
+    await expect(
+      prepare({
+        code: "https://clickclack.example/#ABCD-EFGH-JKMN",
+        baseUrl: "https://other.example",
+      }),
+    ).rejects.toThrow("does not match");
+    await expect(
+      prepare({ code: "not-a-code", baseUrl: "https://clickclack.example" }),
+    ).rejects.toThrow("12 valid base32 characters");
+    expect(claimClickClackSetupCode).not.toHaveBeenCalled();
+  });
+
+  it("maps invalid and rate-limited claims to actionable errors", async () => {
+    claimClickClackSetupCode.mockRejectedValueOnce(makeClaimError(404, "not found"));
+    await expect(
+      prepare({ code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example" }),
+    ).rejects.toThrow("invalid, expired, or already used");
+
+    claimClickClackSetupCode.mockRejectedValueOnce(makeClaimError(429, "retry later"));
+    await expect(
+      prepare({ code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example" }),
+    ).rejects.toThrow("Too many ClickClack setup code attempts");
+  });
+
+  it("writes setup-code defaults through the existing account patch", () => {
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          token: "test-token",
+          baseUrl: "https://clickclack.example",
+          workspace: "wsp_1",
+          defaultTo: " channel:general ",
+          allowFrom: ["*"],
+          agentActivity: true,
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          token: "test-token",
+          baseUrl: "https://clickclack.example",
+          workspace: "wsp_1",
+          defaultTo: "channel:general",
+          allowFrom: ["*"],
+          agentActivity: true,
+        },
+      },
+    });
   });
 
   it("requires token, base URL, and workspace for explicit setup", () => {

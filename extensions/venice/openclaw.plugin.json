@@ -101,17 +101,6 @@
             }
           },
           {
-            "id": "qwen3-coder-480b-a35b-instruct",
-            "name": "Qwen3 Coder 480B",
-            "reasoning": false,
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 65536,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
             "id": "qwen3-coder-480b-a35b-instruct-turbo",
             "name": "Qwen3 Coder 480B Turbo",
             "reasoning": false,
@@ -156,17 +145,6 @@
             }
           },
           {
-            "id": "qwen3-4b",
-            "name": "Venice Small (Qwen3 4B)",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 32000,
-            "maxTokens": 4096,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
             "id": "deepseek-v3.2",
             "name": "DeepSeek V3.2",
             "reasoning": true,
@@ -176,29 +154,6 @@
             "compat": {
               "supportsUsageInStreaming": false,
               "supportsTools": false
-            }
-          },
-          {
-            "id": "venice-uncensored",
-            "name": "Venice Uncensored (Dolphin-Mistral)",
-            "reasoning": false,
-            "input": ["text"],
-            "contextWindow": 32000,
-            "maxTokens": 4096,
-            "compat": {
-              "supportsUsageInStreaming": false,
-              "supportsTools": false
-            }
-          },
-          {
-            "id": "mistral-31-24b",
-            "name": "Venice Medium (Mistral)",
-            "reasoning": false,
-            "input": ["text", "image"],
-            "contextWindow": 128000,
-            "maxTokens": 4096,
-            "compat": {
-              "supportsUsageInStreaming": false
             }
           },
           {
@@ -296,28 +251,6 @@
             "input": ["text", "image"],
             "contextWindow": 256000,
             "maxTokens": 65536,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
-            "id": "kimi-k2-thinking",
-            "name": "Kimi K2 Thinking",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 65536,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
-            "id": "minimax-m21",
-            "name": "MiniMax M2.1",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 198000,
-            "maxTokens": 32768,
             "compat": {
               "supportsUsageInStreaming": false
             }
@@ -422,17 +355,6 @@
             }
           },
           {
-            "id": "gemini-3-pro-preview",
-            "name": "Gemini 3 Pro (via Venice)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 198000,
-            "maxTokens": 32768,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
             "id": "gemini-3-1-pro-preview",
             "name": "Gemini 3.1 Pro (via Venice)",
             "reasoning": true,
@@ -450,17 +372,6 @@
             "input": ["text", "image"],
             "contextWindow": 256000,
             "maxTokens": 65536,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
-            "id": "grok-41-fast",
-            "name": "Grok 4.1 Fast (via Venice)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 1000000,
-            "maxTokens": 30000,
             "compat": {
               "supportsUsageInStreaming": false
             }

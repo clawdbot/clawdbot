@@ -16,11 +16,15 @@ because it does not provide `node:sqlite`.
 
 The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 
-- installs the OpenClaw CLI and managed Node runtime when they are missing
+- installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens their Control UI from the resolved service endpoint
 - opens the Gateway-served Control UI with its resolved authentication URL
+- opens the Control UI in onboarding mode after its first-run install, which
+  offers to import detected Claude Code, Codex, or Hermes memories into the
+  agent workspace (the same import stays available later under
+  Settings → Import Memory)
 - renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 
@@ -44,6 +48,18 @@ The `Linux App` CI workflow uploads the same bundles as the
 `openclaw-linux-companion` artifact for pull requests touching the app and for
 manual runs. See `apps/linux/README.md` in the repository for Linux build
 dependencies and development commands.
+
+### Quick Chat
+
+Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
+chip shows the configured avatar, emoji, or monogram; select it to switch agents.
+Messages use the selected agent's main session and honor global session scope.
+
+On X11, use the gear in Quick Chat to record or reset a custom shortcut. The
+**Quick Chat shortcut** tray toggle enables or disables it without disabling the
+plain **Quick Chat** tray item. Global shortcuts are not available on Wayland, so
+the shortcut settings are hidden and the tray item remains the entry point.
+Replies remain in the normal session; open the dashboard to read them.
 
 ### Canvas
 

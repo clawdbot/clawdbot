@@ -492,6 +492,30 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("disables an inherited Node compile cache for every Vitest child", () => {
+    expect(
+      resolveRunVitestSpawnEnv(
+        {
+          NODE_COMPILE_CACHE: "/tmp/node-compile",
+          NODE_COMPILE_CACHE_PORTABLE: "1",
+          PATH: "/usr/bin",
+        },
+        ["run"],
+      ),
+    ).toEqual({
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ NODE_COMPILE_CACHE: "/tmp/node-compile", PATH: "/usr/bin" }, [
+        "run",
+        "--coverage=false",
+      ]),
+    ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
+  });
+
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
     const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
     const extraLongTimeout = String(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);

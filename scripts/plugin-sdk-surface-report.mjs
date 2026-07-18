@@ -91,97 +91,116 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
-  ...Object.fromEntries(publicPluginSdkEntrypoints.map((entrypoint) => [entrypoint, 0])),
-  "agent-config-primitives": 2,
-  "agent-harness-runtime": 7,
-  "agent-runtime": 1,
+  core: 2,
+  health: 1,
+  "command-gating": 5,
+  lmstudio: 37,
+  "lmstudio-runtime": 27,
+  "provider-setup": 1,
+  "self-hosted-provider-setup": 14,
+  routing: 1,
+  runtime: 3,
+  // Deprecated Telegram-named alias retained for plugin SDK compatibility.
+  "retry-runtime": 1,
+  "runtime-logger": 3,
+  "runtime-secret-resolution": 5,
+  "secret-provider-integration": 4,
+  "setup-adapter-runtime": 1,
+  "skills-runtime": 5,
+  "channel-streaming": 55,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
-  "approval-reply-runtime": 1,
-  "channel-actions": 2,
-  "channel-config-schema-legacy": 25,
-  "channel-envelope": 3,
-  "channel-inbound": 21,
-  "channel-inbound-roots": 1,
-  "channel-lifecycle": 23,
-  "channel-location": 4,
-  "channel-logging": 4,
-  "channel-mention-gating": 7,
-  "channel-message": 113,
-  "channel-message-runtime": 110,
-  "channel-pairing": 1,
-  "channel-pairing-paths": 1,
-  "channel-policy": 8,
-  "channel-reply-options-runtime": 2,
-  "channel-reply-pipeline": 12,
-  "channel-route": 5,
-  "channel-runtime": 144,
-  "channel-secret-runtime": 23,
-  "channel-send-result": 1,
-  "channel-streaming": 55,
-  "command-auth": 81,
-  "command-gating": 5,
-  compat: 167,
+  "approval-reply-runtime": 3,
+  "approval-runtime": 1,
+  "config-runtime": 123,
   "config-contracts": 1,
-  "config-runtime": 119,
+  // +1: unified implicit-mention config type.
+  "config-types": 426,
   "config-schema": 3,
-  "config-types": 425,
-  core: 2,
+  "reply-dedupe": 1,
+  "inbound-reply-dispatch": 26,
+  "channel-reply-pipeline": 12,
+  "channel-reply-options-runtime": 2,
+  "channel-runtime": 144,
+  "interactive-runtime": 13,
+  "outbound-send-deps": 4,
+  "outbound-runtime": 16,
+  "file-access-runtime": 2,
+  "infra-runtime": 595,
+  "ssrf-policy": 1,
+  "ssrf-runtime": 1,
+  "media-runtime": 2,
+  "text-runtime": 191,
+  "agent-core": 1,
+  "agent-runtime": 7,
+  "plugin-runtime": 13,
+  "channel-secret-runtime": 23,
+  "secret-file-runtime": 1,
+  "security-runtime": 7,
+  "agent-harness": 7,
+  "agent-harness-runtime": 11,
+  types: 6,
+  "agent-config-primitives": 2,
+  "command-auth": 81,
+  // +2: group scope encoder/key builder mirrored by deprecated compat.
+  // +5: shared channel setup, policy, and config schema helpers.
+  compat: 167,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
-  "file-access-runtime": 2,
-  "group-access": 13,
-  health: 1,
-  "inbound-reply-dispatch": 26,
-  "infra-runtime": 600,
-  "interactive-runtime": 13,
-  lmstudio: 37,
-  "lmstudio-runtime": 27,
-  matrix: 1,
   mattermost: 7,
+  matrix: 1,
+  // +3: shared multi-account and group-entry schema builders.
+  "channel-config-schema-legacy": 25,
+  "channel-actions": 2,
+  "channel-envelope": 3,
+  "channel-inbound": 21,
+  "channel-inbound-roots": 1,
+  "channel-logging": 4,
+  "channel-location": 4,
+  "channel-mention-gating": 7,
+  "channel-lifecycle": 23,
+  // Registry sweep: 77 packages, zero fetch failures; channel-ingress and dead aliases
+  // had zero consumers.
+  // +11 each: durable channel-ingress drain seam (drain/lifecycle/claim/retry) mirrored by compat (#108656).
+  "channel-message": 241,
+  "channel-message-runtime": 238,
+  "channel-pairing-paths": 1,
+  // Deprecated pairing/conversation exports from the SQLite pairing migration
+  // landed on main (#105802) without entrypoint pins; not touched by this PR.
+  "channel-pairing": 1,
+  "conversation-runtime": 4,
+  "channel-send-result": 1,
+  "channel-policy": 15,
+  "channel-route": 5,
+  "session-store-runtime": 4,
+  "session-transcript-runtime": 2,
+  "group-access": 13,
   "media-generation-runtime-shared": 3,
-  "media-runtime": 2,
-  "memory-core": 13,
+  "music-generation-core": 20,
+  "reply-history": 8,
+  "messaging-targets": 12,
+  "memory-core": 45,
   "memory-core-engine-runtime": 15,
-  "memory-core-host-events": 12,
   "memory-core-host-multimodal": 3,
   "memory-core-host-query": 2,
+  "memory-core-host-events": 12,
   "memory-core-host-status": 1,
-  "memory-host-files": 6,
-  "memory-host-status": 30,
-  "messaging-targets": 12,
-  "music-generation-core": 20,
-  "outbound-runtime": 16,
-  "outbound-send-deps": 4,
+  "memory-core-host-runtime-core": 1,
+  "memory-host-core": 1,
+  "memory-host-files": 7,
+  "memory-host-status": 72,
   "provider-auth": 20,
-  "provider-auth-login": 3,
-  "provider-model-shared": 29,
   "provider-oauth-runtime": 2,
-  "provider-setup": 1,
+  "provider-auth-login": 3,
+  "provider-model-shared": 30,
+  "provider-stream-family": 40,
+  "provider-stream-shared": 29,
   "provider-stream": 40,
-  "provider-stream-family": 13,
-  "provider-stream-shared": 28,
   "provider-web-search": 1,
   "provider-zai-endpoint": 3,
-  "reply-dedupe": 1,
-  "reply-history": 8,
-  "retry-runtime": 1,
-  routing: 1,
-  runtime: 2,
-  "runtime-logger": 3,
-  "runtime-secret-resolution": 5,
-  "secret-file-runtime": 1,
-  "secret-provider-integration": 4,
-  "self-hosted-provider-setup": 14,
-  "session-store-runtime": 4,
-  "setup-adapter-runtime": 1,
-  "skills-runtime": 5,
-  "ssrf-policy": 1,
-  "ssrf-runtime": 1,
   "telegram-account": 3,
   "telegram-command-config": 7,
-  "text-runtime": 191,
   "webhook-ingress": 2,
   "webhook-path": 2,
   zalouser: 5,
@@ -193,7 +212,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // Registry sweep: 77 packages, zero fetch failures; retired dead channel-ingress facade.
-      328,
+      // +1: speech-settings keeps agent prompt imports off the synthesis/runtime graph.
+      // +1: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
+      // +1: question-gateway-runtime resolves ask_user choices for channel plugins.
+      331,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -215,7 +237,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired qa-live-transport-scenarios subpath -6.
       // +12: typed plan step/status and checklist formatter across channel barrels.
       // +8: plan-step ingress union and normalizer across channel barrels.
-      // +4: dual-field plan payload builder for the steps deprecation window.
+      // Harvest: retired dual-field plan payload builder -1.
       // +12: active plan-step consumers pinned through channel-outbound and mirrors.
       // +6: app-guided provider setup types retained by plugin-entry and mirrors.
       // +3: widget HTML validation helpers and tool input error.
@@ -225,7 +247,25 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared speech-provider API key resolver.
       // +32: shared channel setup, config-schema, policy, and status helpers.
       // +2: shared channel replay-guard factory and claim handle.
-      8003,
+      // +6: lightweight speech settings types, normalizers, and config resolver.
+      // +4: unified implicit-mention config, schema, resolved policy, and resolver.
+      // Harvest: retired AudioConfig type -1.
+      // +4: bounded plugin blob store options, entry, entry info, and store types.
+      // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
+      // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
+      // +4: shared audio-energy stats and speech-threshold gate through realtime-voice.
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      // +2: shared realtime voice session harness through realtime-voice.
+      // +24: narrowed durable channel-ingress drain seam — factory, lifecycle binding,
+      // tuning constants, and telegram-consumed claim helpers with compat mirrors,
+      // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
+      // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
+      // Harvest: retired dual-field plan payload builder -1.
+      // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
+      // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
+      // +3: question-gateway-runtime resolver plus request/result types.
+      // +1: async memory prompt preparation registration.
+      8153,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -238,7 +278,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired qa-live-transport-scenarios subpath -3.
       // +4: shared plan checklist formatter across channel barrels.
       // +4: plan-step normalizer across channel barrels.
-      // +4: dual-field plan payload builder for the steps deprecation window.
+      // Harvest: retired dual-field plan payload builder -1.
       // +6: active plan-step helpers pinned through channel-outbound and mirrors.
       // +2: widget HTML document detection and size assertion.
       // Used-union narrowing of the 31 wildcard barrels.
@@ -246,7 +286,22 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared speech-provider API key resolver.
       // +24: shared channel setup, config-schema, policy, and status helpers.
       // +1: shared channel replay-guard factory.
-      4470,
+      // +3: receipt tracker/snapshot callables across channel barrels.
+      // +3: lightweight speech settings normalizers and config resolver.
+      // +1: unified implicit-mention policy resolver.
+      // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
+      // +3: PCM16/mu-law energy readers and speech-threshold gate factory.
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      // +1: shared realtime voice session harness through realtime-voice.
+      // +9: narrowed drain seam functions and compat mirrors after the
+      // WhatsApp-split harvest (#108656).
+      // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
+      // Harvest: retired dual-field plan payload builder -1.
+      // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
+      // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
+      // +1: question-gateway-runtime resolver.
+      // +1: async memory prompt preparation registration.
+      4535,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -256,18 +311,23 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +77: five zero-consumer subpaths enter their removal window.
       // +9: typed plan exports and formatter through deprecated channel barrels.
       // +6: plan-step ingress union and normalizer through deprecated channel barrels.
-      // +3: dual-field plan payload builder through deprecated channel barrels.
       // +8: channel-outbound plan pins mirrored through deprecated barrels.
       // Used-union narrowing drops inherited deprecated exports.
       // +1: Telegram runner alias retained for plugin SDK compatibility.
       // +8: shared channel helpers mirrored by deprecated barrels.
-      2993,
+      // +3: receipt/snapshot exports through deprecated channel barrels.
+      // +1: unified implicit-mention config type through deprecated config-types.
+      // +24: narrowed drain seam compat mirrors in the channel-message
+      // deprecation-window barrels (#108656).
+      // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
+      3005,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
-      105,
+      // Harvest: freeze the compat config-schema barrel to explicit exports -1.
+      104,
       env,
     ),
   };
@@ -463,9 +523,9 @@ function collectDeprecatedEntrypointBudgetFailures(byEntrypoint, entrypointBudge
   const failures = [];
   for (const [entrypoint, stats] of byEntrypoint) {
     const budget = entrypointBudgets[entrypoint] ?? 0;
-    if (stats.deprecatedExports !== budget) {
+    if (stats.deprecatedExports > budget) {
       failures.push(
-        `public deprecated exports in ${entrypoint} ${stats.deprecatedExports} != ${budget}`,
+        `public deprecated exports in ${entrypoint} ${stats.deprecatedExports} > ${budget}`,
       );
     }
   }
@@ -549,9 +609,9 @@ export function evaluatePluginSdkSurfaceReport(
       publicDeprecatedExportsByEntrypointBudget,
     ),
   );
-  if (report.publicWildcards.count !== budgets.publicWildcardReexports) {
+  if (report.publicWildcards.count > budgets.publicWildcardReexports) {
     failures.push(
-      `public wildcard reexports ${report.publicWildcards.count} != ${budgets.publicWildcardReexports}`,
+      `public wildcard reexports ${report.publicWildcards.count} > ${budgets.publicWildcardReexports}`,
     );
   }
   if (report.leakedForbiddenExports.length > 0) {

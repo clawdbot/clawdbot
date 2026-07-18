@@ -1674,6 +1674,7 @@ describe("launchd install", () => {
       OPENCLAW_GATEWAY_PORT: "19004",
     };
     const stdout = new PassThrough();
+    const onMutation = vi.fn();
     let output = "";
     stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
@@ -1687,10 +1688,11 @@ describe("launchd install", () => {
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
 
-    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout })).rejects.toThrow(
+    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, onMutation })).rejects.toThrow(
       "gateway port 19004 is still busy after LaunchAgent stop\nPort 19004 is held by pid 4242.",
     );
 
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19004);
     expect(inspectPortUsage).toHaveBeenCalledWith(19004);
     expect(output).not.toContain("Stopped LaunchAgent");
@@ -1819,6 +1821,7 @@ describe("launchd install", () => {
       OPENCLAW_GATEWAY_PORT: "19008",
     };
     const stdout = new PassThrough();
+    const onMutation = vi.fn();
     let output = "";
     state.disableError = "Operation not permitted";
     stdout.on("data", (chunk: Buffer) => {
@@ -1833,10 +1836,13 @@ describe("launchd install", () => {
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
 
-    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true })).rejects.toThrow(
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true, onMutation }),
+    ).rejects.toThrow(
       "gateway port 19008 is still busy after LaunchAgent stop\nPort 19008 is held by pid 4242.",
     );
 
+    expect(onMutation).toHaveBeenCalledWith({ mode: "disable-bootout" });
     expect(launchctlCommandNames()).toContain("bootout");
     expect(output).toContain("used bootout fallback");
     expect(output).not.toContain("Stopped LaunchAgent");
@@ -1922,6 +1928,21 @@ describe("launchd install", () => {
     );
   });
 
+  it("audits disable when stop and its bootout fallback both fail", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.stopError = "stop failed";
+    state.bootoutError = "bootout failed";
+
+    await expect(
+      stopLaunchAgent({ env, stdout: new PassThrough(), disable: true, onMutation }),
+    ).rejects.toThrow("launchctl stop failed; used bootout fallback");
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "disable" });
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "disable-stop" });
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "disable-bootout" });
+  });
+
   it("throws when default bootout fails", async () => {
     const env = createDefaultLaunchdEnv();
     state.bootoutError = "launchctl bootout permission denied";
@@ -1955,9 +1976,11 @@ describe("launchd install", () => {
       ...createDefaultLaunchdEnv(),
       OPENCLAW_GATEWAY_PORT: "18789",
     };
+    const onMutation = vi.fn();
     const result = await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
+      onMutation,
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
@@ -1971,6 +1994,24 @@ describe("launchd install", () => {
     ]);
     expect(launchctlCommandNames()).not.toContain("bootout");
     expect(launchctlCommandNames()).not.toContain("bootstrap");
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
+  });
+
+  it("audits kickstart before a later output failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    const onMutation = vi.fn();
+    const stdout = {
+      write: vi.fn(() => {
+        throw new Error("output failed");
+      }),
+    } as unknown as NodeJS.WritableStream;
+
+    await expect(restartLaunchAgent({ env, stdout, onMutation })).rejects.toThrow("output failed");
+
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
   });
 
   it("reloads launchd after rewriting an existing plist", async () => {
@@ -1999,9 +2040,11 @@ describe("launchd install", () => {
       ].join("\n"),
     );
 
+    const onMutation = vi.fn();
     await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
+      onMutation,
     });
 
     const plist = state.files.get(plistPath) ?? "";
@@ -2010,6 +2053,63 @@ describe("launchd install", () => {
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootout" }],
+      [{ mode: "enable" }],
+      [{ mode: "bootstrap" }],
+    ]);
+  });
+
+  it("audits reload bootout before a later bootstrap failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    state.bootstrapError = "Operation not permitted";
+    state.bootstrapCode = 5;
+    const onMutation = vi.fn();
+
+    await expect(
+      restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
+    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootout" }],
+      [{ mode: "enable" }],
+    ]);
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("completes reload when the mutation observer fails after bootout", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    const onMutation = vi.fn(({ mode }: { mode: string }) => {
+      if (mode === "bootout") {
+        throw new Error("audit failed");
+      }
+    });
+
+    await expect(
+      restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
+    ).resolves.toEqual({ outcome: "completed" });
+
+    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
   });
 
   it("treats a concurrent launchd bootstrap as success when the service is loaded", async () => {
@@ -2097,6 +2197,25 @@ describe("launchd install", () => {
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007);
     expect(inspectPortUsage).toHaveBeenCalledWith(19007);
+  });
+
+  it("uses the final repeated LaunchAgent port flag for restart stale cleanup", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: [...defaultProgramArguments, "--port", "18789", "--port=19008"],
+      environment: {},
+    });
+    state.launchctlCalls.length = 0;
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19008);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19008);
   });
 
   it("ignores invalid stored LaunchAgent environment ports for stale cleanup", async () => {

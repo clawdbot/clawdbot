@@ -221,8 +221,8 @@ const broadUnitFastCandidateGlobs = [
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
 ];
-const ownerRoutedUnitTestFiles = [
-  "src/agents/openai-transport-stream.test.ts",
+const ownerRoutedUnitTestPatterns = [
+  "src/agents/openai-transport-stream.*.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
 ];
 const broadUnitFastCandidateSkipGlobs = [
@@ -233,9 +233,8 @@ const broadUnitFastCandidateSkipGlobs = [
   // Explicit bundled ownership outranks content-based discovery. Otherwise extracting
   // a test body can silently move its entry to a config with the wrong mocked setup.
   ...bundledPluginDependentUnitTestFiles,
-  // These entries register tests from imported utility modules. Their tiny entry files
-  // cannot carry the stateful-content signals that keep them in their owner configs.
-  ...ownerRoutedUnitTestFiles,
+  // Keep these suites in owner configs even when content-based discovery changes.
+  ...ownerRoutedUnitTestPatterns,
   "src/agents/sandbox.resolveSandboxContext.test.ts",
   "src/acp/runtime/session-meta.test.ts",
   "src/channels/plugins/contracts/**/*.test.ts",

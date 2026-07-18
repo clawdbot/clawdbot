@@ -65,6 +65,13 @@ export function createSessionMcpRuntimeManagerInstall(
   lifecycle: SessionMcpRuntimeManagerLifecycle,
 ): SessionMcpRuntimeManagerInstall {
   const { store } = lifecycle;
+  const cancelReusableRetirement = (sessionId: string) => {
+    if (store.requiredRetirementSessionIds.has(sessionId)) {
+      store.deferredRetirementSessionIds.add(sessionId);
+      return;
+    }
+    store.deferredRetirementSessionIds.delete(sessionId);
+  };
 
   /** Static/session runtime get-or-create (createInFlight dedup for bare keys only). */
   const getOrCreateRuntimeEntry = async (
@@ -97,7 +104,7 @@ export function createSessionMcpRuntimeManagerInstall(
         store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
         await existing.dispose();
       } else {
-        store.deferredRetirementSessionIds.delete(params.sessionId);
+        cancelReusableRetirement(params.sessionId);
         existing.markUsed();
         store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
         return existing;
@@ -139,7 +146,7 @@ export function createSessionMcpRuntimeManagerInstall(
         configFingerprint: nextFingerprint,
       }),
     ).then((runtime) => {
-      store.deferredRetirementSessionIds.delete(params.sessionId);
+      cancelReusableRetirement(params.sessionId);
       runtime.markUsed();
       store.runtimesBySessionId.set(params.runtimeKey, runtime);
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
@@ -199,7 +206,7 @@ export function createSessionMcpRuntimeManagerInstall(
         candidate: existing,
       })
     ) {
-      store.deferredRetirementSessionIds.delete(params.sessionId);
+      cancelReusableRetirement(params.sessionId);
       existing.markUsed();
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
@@ -282,7 +289,7 @@ export function createSessionMcpRuntimeManagerInstall(
         candidate: existing,
       })
     ) {
-      store.deferredRetirementSessionIds.delete(params.sessionId);
+      cancelReusableRetirement(params.sessionId);
       existing.markUsed();
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       return existing;

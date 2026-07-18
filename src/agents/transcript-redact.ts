@@ -310,7 +310,7 @@ function resolveTranscriptAssistantRoute(
     ? findNormalizedProviderValue(cfg?.models?.providers, provider)
     : undefined;
   const modelConfig = model
-    ? providerConfig?.models.find((candidate) => candidate.id === model)
+    ? providerConfig?.models?.find((candidate) => candidate.id === model)
     : undefined;
   const baseUrl = modelConfig?.baseUrl ?? providerConfig?.baseUrl;
   const endpointClass = baseUrl ? resolveProviderEndpoint(baseUrl).endpointClass : undefined;

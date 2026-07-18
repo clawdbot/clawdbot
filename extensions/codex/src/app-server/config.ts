@@ -239,6 +239,7 @@ export type CodexAppServerRuntimeOptions = {
   loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
+  turnAssistantCompletionIdleTimeoutMs?: number;
   postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
@@ -281,6 +282,7 @@ export type CodexPluginConfig = {
     loopDetectionPreToolUseRelay?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
+    turnAssistantCompletionIdleTimeoutMs?: number;
     postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
@@ -465,6 +467,7 @@ const codexPluginConfigSchema = z
         loopDetectionPreToolUseRelay: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
+        turnAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
@@ -788,6 +791,10 @@ export function resolveCodexAppServerRuntimeOptions(
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
       config.turnCompletionIdleTimeoutMs,
       60_000,
+    ),
+    turnAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
+      config.turnAssistantCompletionIdleTimeoutMs,
+      10_000,
     ),
     ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
       ? {

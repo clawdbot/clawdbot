@@ -2,6 +2,7 @@ import type { ContextEngineSessionTarget } from "../../../context-engine/types.j
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
@@ -230,6 +231,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     requestedModelId: runtime.requestedModelId,
     fallbackActive: runtime.fallbackActive,
     fallbackReason: runtime.fallbackReason,
+    delegationCapability: resolveDelegationCapability({
+      fallbackActive: runtime.fallbackActive,
+      inputProvenance: params.inputProvenance,
+    }),
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     agentHarnessId: runtime.agentHarnessId,
     agentHarnessRuntimeOverride: runtime.agentHarnessId,
@@ -316,8 +321,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onToolResult: control.onToolResult,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: control.onAgentEvent,
+    // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
-    deferTerminalLifecycleEnd: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

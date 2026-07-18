@@ -15,6 +15,11 @@ extension OnboardingAISetupModel {
         }
     }
 
+    struct CandidatePresentation: Equatable {
+        let icon: String?
+        let website: String?
+    }
+
     struct UnavailableCandidate: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -57,6 +62,8 @@ extension OnboardingAISetupModel {
         let id: String
         let label: String
         let hint: String?
+        let icon: String?
+        let website: String?
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
@@ -64,8 +71,18 @@ extension OnboardingAISetupModel {
         let label: String
         let hint: String?
         let groupLabel: String?
+        let icon: String?
+        let website: String?
         let kind: String
         let featured: Bool
+    }
+
+    struct RecommendedInstall: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String
+        let website: String
+        let icon: String
     }
 
     static func canAcceptProviderAuthReconciliation(

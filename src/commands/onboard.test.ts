@@ -192,6 +192,15 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it("keeps --tui on guided onboarding", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ tui: true }, runtime);
+
+    expect(mocks.runGuidedOnboarding).toHaveBeenCalledWith({ tui: true }, runtime);
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["--classic", { classic: true }],
     ["--flow quickstart", { flow: "quickstart" as const }],

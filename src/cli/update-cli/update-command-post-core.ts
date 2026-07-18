@@ -6,7 +6,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
@@ -231,7 +230,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       nonInteractive: true,
       repair: true,
       yes: opts.yes === true,
-      crossStateDirImports: false,
     });
     configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     if (requestedChannel) {
@@ -520,7 +518,6 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel

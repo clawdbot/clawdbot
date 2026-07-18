@@ -51,6 +51,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
@@ -700,14 +701,7 @@ export async function createGatewaySession(params: {
         }
         return {
           ...initialized,
-          entry: {
-            ...entry,
-            sessionId: fork.sessionId,
-            sessionFile: fork.sessionFile,
-            forkedFromParent: true,
-            totalTokens: undefined,
-            totalTokensFresh: false,
-          },
+          entry: buildForkedGatewaySessionEntry(entry, fork),
         };
       },
       params.initialEntry

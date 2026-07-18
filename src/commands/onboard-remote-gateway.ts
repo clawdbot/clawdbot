@@ -48,6 +48,8 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
       label: candidate.label,
       detail: candidate.detail,
       modelRef: candidate.modelRef,
+      ...(candidate.icon !== undefined ? { icon: candidate.icon } : {}),
+      ...(candidate.website !== undefined ? { website: candidate.website } : {}),
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
@@ -57,6 +59,8 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
       id: provider.id,
       label: provider.label,
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
+      ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
+      ...(provider.website !== undefined ? { website: provider.website } : {}),
     })),
     authOptions: (result.authOptions ?? []).map((option) =>
       Object.assign(
@@ -68,8 +72,11 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
         },
         option.hint !== undefined ? { hint: option.hint } : {},
         option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
+        option.icon !== undefined ? { icon: option.icon } : {},
+        option.website !== undefined ? { website: option.website } : {},
       ),
     ),
+    recommendedInstalls: result.recommendedInstalls ?? [],
     unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
       id: candidate.id,
       label: candidate.label,
@@ -244,6 +251,10 @@ export async function runRemoteGatewayInferenceOnboarding(
   await runGuidedOnboarding({}, runtime, {
     detect,
     activate,
+    // Setup applies on the remote gateway through its chat; the local
+    // custodian flow (question zero, local setup apply, local hatch) is wrong here.
+    handoffMode: "chat",
+    runSetupMemoryImportStep: async () => {},
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
       const prompter = await (deps.createPrompter?.() ??

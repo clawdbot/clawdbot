@@ -33,6 +33,7 @@ import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildCheckpointSessionResetPatch } from "./session-compaction-checkpoint-entry.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
@@ -587,15 +588,11 @@ function cloneCheckpointSessionEntry(params: {
 }): SessionEntry {
   return {
     ...params.currentEntry,
-    sessionId: params.nextSessionId,
-    sessionFile: params.nextSessionFile,
-    updatedAt: Date.now(),
-    systemSent: false,
-    abortedLastRun: false,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    status: undefined,
+    ...buildCheckpointSessionResetPatch({
+      entry: params.currentEntry,
+      sessionId: params.nextSessionId,
+      sessionFile: params.nextSessionFile,
+    }),
     inputTokens: undefined,
     outputTokens: undefined,
     cacheRead: undefined,

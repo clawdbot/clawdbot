@@ -34,7 +34,7 @@ const slackSetupConfigAdapter = createScopedChannelConfigAdapter<
   resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
   resolveAccessorAccount: resolveSlackConfigAccessorAccount,
   defaultAccountId: resolveDefaultSlackAccountId,
-  clearBaseFields: ["botToken", "appToken", "name"],
+  clearBaseFields: ["botToken", "appToken", "userToken", "signingSecret", "name"],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account) => account.defaultTo,

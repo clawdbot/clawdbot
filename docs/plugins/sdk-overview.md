@@ -197,6 +197,7 @@ advertised node command.
 | `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
 | `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
 | `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
 | `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
@@ -307,6 +308,15 @@ agent-owned storage should resolve that storage for each call instead of
 capturing one global path during registration. If an agent id is required but
 missing in a multi-agent operation, fail closed rather than choosing an
 arbitrary agent.
+
+Use `registerMemoryPromptPreparation(...)` when prompt text depends on async
+plugin state. The callback runs once before each full agent prompt and receives
+the same tool, agent, session, and sandbox context as synchronous memory prompt
+builders. Validate the current storage-owner instance before loading persisted
+state, then return only lines for that run. OpenClaw freezes those lines and
+hands the immutable result to synchronous prompt assembly. Keep persistence,
+atomic replacement, and owner-removal deletion inside the owning plugin; do not
+poll or read files from a prompt builder.
 
 Telegram interactive handlers can return `{ submitText }` to route text through
 Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps

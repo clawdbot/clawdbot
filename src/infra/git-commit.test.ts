@@ -288,6 +288,45 @@ describe("git commit resolution", () => {
     expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
+  it.each([
+    { name: "successful", result: "abcdef0" },
+    { name: "failed", result: null },
+  ])("bounds $name git probe entries with LRU eviction", async ({ result }) => {
+    const temp = await makeTempDir(`git-commit-${result ? "success" : "failure"}-lru`);
+    const coldDir = path.join(temp, "cold");
+    const hotDir = path.join(temp, "hot");
+    const newestDir = path.join(temp, "newest");
+    const readGitCommit = vi.fn((_searchDir: string, _packageRoot: string | null) => result);
+    const resolve = (cwd: string) =>
+      resolveCommitHash({
+        cwd,
+        env: {},
+        readers: {
+          readGitCommit,
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit: () => null,
+        },
+      });
+    const callsFor = (cwd: string) =>
+      readGitCommit.mock.calls.filter(([searchDir]) => searchDir === cwd).length;
+
+    expect(resolve(coldDir)).toBe(result);
+    expect(resolve(hotDir)).toBe(result);
+    for (let index = 0; index < 254; index += 1) {
+      expect(resolve(path.join(temp, `filler-${index}`))).toBe(result);
+    }
+
+    expect(resolve(hotDir)).toBe(result);
+    expect(resolve(newestDir)).toBe(result);
+    expect(resolve(newestDir)).toBe(result);
+    expect(resolve(hotDir)).toBe(result);
+    expect(resolve(coldDir)).toBe(result);
+
+    expect(callsFor(newestDir)).toBe(1);
+    expect(callsFor(hotDir)).toBe(1);
+    expect(callsFor(coldDir)).toBe(2);
+  });
+
   it("formats env-provided commit strings consistently", async () => {
     const temp = await makeTempDir("git-commit-env");
     expect(resolveCommitHash({ cwd: temp, env: { GIT_COMMIT: "ABCDEF0123456789" } })).toBe(

@@ -22,6 +22,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
@@ -155,23 +156,44 @@ async function getCodeSafetySummary(params: {
     dirPath: params.dirPath,
     includeFiles: params.includeFiles,
   });
-  const cache = params.summaryCache;
-  if (cache) {
-    const hit = cache.get(cacheKey);
-    if (hit) {
-      return (await hit) as SkillScanSummary;
-    }
+  const scan = async () => {
     const skillScanner = await loadSkillScannerModule();
-    const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
+    return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
       includeFiles: params.includeFiles,
     });
-    cache.set(cacheKey, pending);
-    return await pending;
-  }
-  const skillScanner = await loadSkillScannerModule();
-  return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
-    includeFiles: params.includeFiles,
-  });
+  };
+  return params.summaryCache
+    ? ((await getOrCreatePromise(params.summaryCache, cacheKey, scan)) as SkillScanSummary)
+    : await scan();
+}
+
+async function getSkillCodeSafetySummary(params: {
+  dirPath: string;
+  skillFilePath: string;
+  summaryCache?: CodeSafetySummaryCache;
+}): Promise<SkillScanSummary> {
+  const [summary, skillContent, skillScanner] = await Promise.all([
+    getCodeSafetySummary({
+      dirPath: params.dirPath,
+      summaryCache: params.summaryCache,
+    }),
+    fs.readFile(params.skillFilePath, "utf-8"),
+    loadSkillScannerModule(),
+  ]);
+  const skillFindings = [
+    ...skillScanner.scanSkillContent(skillContent, params.skillFilePath),
+    ...skillScanner.scanSource(skillContent, params.skillFilePath),
+  ];
+
+  return {
+    ...summary,
+    scannedFiles: summary.scannedFiles + 1,
+    critical:
+      summary.critical + skillFindings.filter((finding) => finding.severity === "critical").length,
+    warn: summary.warn + skillFindings.filter((finding) => finding.severity === "warn").length,
+    info: summary.info + skillFindings.filter((finding) => finding.severity === "info").length,
+    findings: [...summary.findings, ...skillFindings],
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -884,8 +906,9 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await getCodeSafetySummary({
+      const summary = await getSkillCodeSafetySummary({
         dirPath: skillDir,
+        skillFilePath: entry.skill.filePath,
         summaryCache: params.summaryCache,
       }).catch((err: unknown) => {
         findings.push({

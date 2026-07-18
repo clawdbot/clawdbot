@@ -32,6 +32,10 @@ import {
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import {
+  findActiveDegradedSecretOwner,
+  SecretSurfaceUnavailableError,
+} from "../secrets/runtime-degraded-state.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
@@ -644,6 +648,9 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       },
     };
   } catch (err) {
+    if (err instanceof SecretSurfaceUnavailableError) {
+      throw err;
+    }
     return { kind: "profile-unresolved", profileId: reference.profileId, error: err };
   }
 }
@@ -852,6 +859,31 @@ function resolveManagedSecretRefRuntimeProviderAuth(params: {
         })
       : resolved.apiKey,
   };
+}
+
+function assertRuntimeProviderSecretOwnerAvailable(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): void {
+  const provider = normalizeProviderId(params.provider);
+  const degraded = findActiveDegradedSecretOwner("provider", provider);
+  if (!degraded) {
+    return;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  const usesRuntimeProvider =
+    !params.cfg ||
+    params.cfg === runtimeConfig ||
+    params.cfg === runtimeSourceConfig ||
+    providerConfigMatchesRuntimeSnapshot({
+      inputConfig: params.cfg,
+      runtimeConfig,
+      provider,
+    });
+  if (usesRuntimeProvider) {
+    throw new SecretSurfaceUnavailableError(degraded);
+  }
 }
 
 /** True when a custom local provider can use a synthetic no-auth placeholder. */
@@ -1183,6 +1215,9 @@ export async function resolveApiKeyForProvider(params: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
+  // silently switch credentials while this configured owner is cold.
+  assertRuntimeProviderSecretOwnerAvailable({ cfg, provider });
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   let scopedStore: AuthProfileStore | undefined = params.store;
 
@@ -1520,6 +1555,9 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
+      if (err instanceof SecretSurfaceUnavailableError) {
+        throw err;
+      }
       if (
         !refreshFailure &&
         err instanceof OAuthRefreshFailureError &&

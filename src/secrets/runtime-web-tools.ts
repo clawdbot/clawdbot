@@ -20,14 +20,18 @@ import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
+import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
+import { warnDegradedSecretOwner } from "./runtime-owner-assignments.js";
 import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
+import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
 import {
   ensureObject,
   hasConfiguredSecretRef,
   isRecord,
   resolveRuntimeWebProviderSurface,
   resolveRuntimeWebProviderSelection,
+  type RuntimeWebProviderSelectionResult,
   type SecretResolutionResult,
 } from "./runtime-web-tools.shared.js";
 import type {
@@ -59,6 +63,33 @@ type FetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
 type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
+
+type ResolvedRuntimeWebTools = {
+  metadata: RuntimeWebToolsMetadata;
+  degradedOwners: DegradedSecretOwner[];
+};
+
+function collectUnavailableWebProvider(params: {
+  kind: "search" | "fetch";
+  result: RuntimeWebProviderSelectionResult;
+  context: ResolverContext;
+  degradedOwners: DegradedSecretOwner[];
+}): void {
+  const unavailable = params.result.unavailableProvider;
+  if (!unavailable) {
+    return;
+  }
+  const owner: DegradedSecretOwner = {
+    ownerKind: "capability",
+    ownerId: runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
+    state: "unavailable",
+    paths: [unavailable.path],
+    refKeys: [unavailable.refKey],
+    reason: unavailable.reason,
+  };
+  params.degradedOwners.push(owner);
+  warnDegradedSecretOwner(params.context, owner);
+}
 
 function needsRuntimeWebFetchProviderDiscovery(params: {
   fetch: FetchConfig;
@@ -230,7 +261,6 @@ async function resolveSecretInputWithEnvFallback(params: {
         value: configValue,
         source: "config",
         secretRefConfigured: false,
-        fallbackUsedAfterRefFailure: false,
       };
     }
     const fallback = readNonEmptyEnvValue(params.context.env, params.envVars);
@@ -240,13 +270,11 @@ async function resolveSecretInputWithEnvFallback(params: {
         source: "env",
         fallbackEnvVar: fallback.envVar,
         secretRefConfigured: false,
-        fallbackUsedAfterRefFailure: false,
       };
     }
     return {
       source: "missing",
       secretRefConfigured: false,
-      fallbackUsedAfterRefFailure: false,
     };
   }
 
@@ -299,29 +327,15 @@ async function resolveSecretInputWithEnvFallback(params: {
       value: resolvedFromRef,
       source: "secretRef",
       secretRefConfigured: true,
-      fallbackUsedAfterRefFailure: false,
-    };
-  }
-
-  const fallback = readNonEmptyEnvValue(params.context.env, params.envVars);
-  if (fallback.value) {
-    // Provider env vars remain the explicit recovery path for unresolved refs so startup can
-    // continue while diagnostics still report which configured SecretRef failed.
-    return {
-      value: fallback.value,
-      source: "env",
-      fallbackEnvVar: fallback.envVar,
-      unresolvedRefReason,
-      secretRefConfigured: true,
-      fallbackUsedAfterRefFailure: true,
+      secretRefKey: secretRefKey(ref),
     };
   }
 
   return {
     source: "missing",
+    secretRefKey: secretRefKey(ref),
     unresolvedRefReason,
     secretRefConfigured: true,
-    fallbackUsedAfterRefFailure: false,
   };
 }
 
@@ -521,9 +535,15 @@ export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
-}): Promise<RuntimeWebToolsMetadata> {
+  allowUnavailableSecretOwners?: boolean;
+}): Promise<ResolvedRuntimeWebTools> {
   const defaults = params.sourceConfig.secrets?.defaults;
   const diagnostics: RuntimeWebDiagnostic[] = [];
+  const degradedOwners: DegradedSecretOwner[] = [];
+  const finish = (metadata: RuntimeWebToolsMetadata): ResolvedRuntimeWebTools => ({
+    metadata,
+    degradedOwners,
+  });
   const env = { ...process.env, ...params.context.env };
 
   const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
@@ -578,7 +598,7 @@ export async function resolveRuntimeWebTools(params: {
   const hasPluginWebSearchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webSearch");
   const hasPluginWebFetchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webFetch");
   if (!sourceWeb && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
-    return {
+    return finish({
       search: {
         providerSource: "none",
         diagnostics: [],
@@ -588,12 +608,12 @@ export async function resolveRuntimeWebTools(params: {
         diagnostics: [],
       },
       diagnostics,
-    };
+    });
   }
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
   const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
-    return {
+    return finish({
       search: {
         providerSource: "none",
         diagnostics: [],
@@ -603,7 +623,7 @@ export async function resolveRuntimeWebTools(params: {
         diagnostics: [],
       },
       diagnostics,
-    };
+    });
   }
   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   let configuredBundledWebSearchPluginIdHint: string | undefined;
@@ -661,7 +681,7 @@ export async function resolveRuntimeWebTools(params: {
       normalizeConfiguredProviderAgainstActiveProviders: true,
     });
 
-    await resolveRuntimeWebProviderSelection({
+    const searchSelection = await resolveRuntimeWebProviderSelection({
       scopePath: "tools.web.search",
       toolConfig: search,
       enabled: searchSurface.enabled,
@@ -675,7 +695,7 @@ export async function resolveRuntimeWebTools(params: {
       defaults,
       allowKeylessAutoSelect: false,
       deferKeylessFallback: true,
-      fallbackUsedCode: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+      allowUnavailableExplicitProvider: params.allowUnavailableSecretOwners,
       noFallbackCode: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
       autoDetectSelectedCode: "WEB_SEARCH_AUTODETECT_SELECTED",
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
@@ -728,6 +748,12 @@ export async function resolveRuntimeWebTools(params: {
         );
       },
     });
+    collectUnavailableWebProvider({
+      kind: "search",
+      result: searchSelection,
+      context: params.context,
+      degradedOwners,
+    });
   }
 
   const rawFetchProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
@@ -774,7 +800,7 @@ export async function resolveRuntimeWebTools(params: {
         }),
     });
 
-    await resolveRuntimeWebProviderSelection({
+    const fetchSelection = await resolveRuntimeWebProviderSelection({
       scopePath: "tools.web.fetch",
       toolConfig: fetch,
       enabled: fetchSurface.enabled,
@@ -788,7 +814,7 @@ export async function resolveRuntimeWebTools(params: {
       defaults,
       allowKeylessAutoSelect: true,
       deferKeylessFallback: false,
-      fallbackUsedCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
+      allowUnavailableExplicitProvider: params.allowUnavailableSecretOwners,
       noFallbackCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
       autoDetectSelectedCode: "WEB_FETCH_AUTODETECT_SELECTED",
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
@@ -842,12 +868,18 @@ export async function resolveRuntimeWebTools(params: {
         );
       },
     });
+    collectUnavailableWebProvider({
+      kind: "fetch",
+      result: fetchSelection,
+      context: params.context,
+      degradedOwners,
+    });
   }
 
-  return {
+  return finish({
     search: searchMetadata,
     fetch: fetchMetadata,
     diagnostics,
-  };
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

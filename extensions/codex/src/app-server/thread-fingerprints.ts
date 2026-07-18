@@ -131,12 +131,22 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
   return stable;
 }
 
-export function readActiveCodexTurnIds(thread: unknown): string[] {
+function readActiveCodexTurnIds(thread: unknown): string[] {
   const turns = (thread as { turns?: Array<{ id?: unknown; status?: unknown }> }).turns;
   return (turns ?? [])
     .filter((turn) => turn.status === "inProgress")
     .map((turn) => (typeof turn.id === "string" ? turn.id : ""))
     .filter((turnId) => turnId.trim().length > 0);
+}
+
+export function readActiveCodexTurnIdsFromResume(response: {
+  thread: unknown;
+  initialTurnsPage?: { data?: unknown[] } | null;
+}): string[] {
+  const pagedTurns = response.initialTurnsPage?.data;
+  return readActiveCodexTurnIds(
+    Array.isArray(pagedTurns) ? { turns: pagedTurns } : response.thread,
+  );
 }
 
 const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);

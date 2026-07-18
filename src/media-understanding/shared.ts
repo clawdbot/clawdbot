@@ -33,6 +33,7 @@ import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   executeProviderOperationWithRetry,
+  isTransientProviderHttpStatus,
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
@@ -639,10 +640,6 @@ async function postGuardedRequest(params: {
     retry: params.retry,
     operation,
   });
-}
-
-function isTransientProviderHttpStatus(status: number): boolean {
-  return status === 500 || status === 502 || status === 503 || status === 504;
 }
 
 export async function postJsonRequest(params: GuardedPostRequestParams<unknown>) {

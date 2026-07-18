@@ -14,8 +14,6 @@ export const QWEN_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
 export const QWEN_STANDARD_CN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 export const QWEN_STANDARD_GLOBAL_BASE_URL =
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
-export const QWEN_OAUTH_PROVIDER_ID = "qwen-oauth";
-export const QWEN_OAUTH_BASE_URL = "https://portal.qwen.ai/v1";
 export const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
 export const QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID = "bailian-token-plan";
 export const QWEN_TOKEN_PLAN_GLOBAL_BASE_URL =
@@ -35,7 +33,6 @@ export const QWEN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 export const QWEN_DEFAULT_MODEL_REF = `qwen/${QWEN_DEFAULT_MODEL_ID}`;
-export const QWEN_OAUTH_DEFAULT_MODEL_REF = `qwen-oauth/${QWEN_DEFAULT_MODEL_ID}`;
 export const QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID = QWEN_37_PLUS_MODEL_ID;
 export const QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF = `${QWEN_TOKEN_PLAN_PROVIDER_ID}/${QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID}`;
 
@@ -347,12 +344,6 @@ const QWEN_STANDARD_ONLY_MODEL_IDS = new Set<string>([
   QWEN_37_MAX_MODEL_ID,
 ]);
 
-const QWEN_OAUTH_UNSUPPORTED_MODEL_IDS = new Set<string>([
-  QWEN_36_FLASH_MODEL_ID,
-  QWEN_37_MAX_MODEL_ID,
-  QWEN_37_PLUS_MODEL_ID,
-]);
-
 export function isQwenStandardOnlyModelId(modelId: string): boolean {
   return QWEN_STANDARD_ONLY_MODEL_IDS.has(modelId);
 }
@@ -405,12 +396,6 @@ export function buildQwenModelDefinition(params: {
 
 export function buildQwenDefaultModelDefinition(): ModelDefinitionConfig {
   return buildQwenModelDefinition({ id: QWEN_DEFAULT_MODEL_ID });
-}
-
-export function buildQwenOAuthModelCatalog(): ReadonlyArray<ModelDefinitionConfig> {
-  return QWEN_MODEL_CATALOG.filter((model) => !QWEN_OAUTH_UNSUPPORTED_MODEL_IDS.has(model.id)).map(
-    (model) => Object.assign({}, model, { maxTokens: 65_536 }),
-  );
 }
 
 /** @deprecated Use QWEN_BASE_URL. */

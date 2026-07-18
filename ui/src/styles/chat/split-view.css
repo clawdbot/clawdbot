@@ -134,16 +134,111 @@ openclaw-chat-pane {
   -webkit-user-select: none;
 }
 
-.chat-pane__header--active {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
+/* The title hugs its text so the workspace chip sits right after it (the
+   header's shared 8px gap provides the spacing); it may shrink with ellipsis
+   when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--text);
   font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__session-title-button {
+  display: block;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: text;
+}
+
+.chat-pane__session-title-button:hover,
+.chat-pane__session-title-button:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  outline: none;
+}
+
+.chat-pane__session-title-input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Where supported, the rename input hugs its text too, so the workspace chip
+   tracks the title while typing; elsewhere editing falls back to full width. */
+@supports (field-sizing: content) {
+  .chat-pane__session-title-input {
+    flex: 0 1 auto;
+    field-sizing: content;
+    max-width: min(60ch, 100%);
+  }
+}
+
+.chat-pane__cloud {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-pane__cloud svg,
+.chat-pane__workspace-chip svg {
+  width: 14px;
+  height: 14px;
+  /* Lucide outline icons: without this the paths render browser-default
+     black fill, which reads as a solid dark blob on the chip. */
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-pane__workspace-menu {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__workspace-chip {
+  display: inline-flex;
+  max-width: 180px;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-pane__workspace-chip:hover,
+.chat-pane__workspace-chip:focus-visible {
+  border-color: var(--muted-strong);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__workspace-chip span {
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -153,6 +248,45 @@ openclaw-chat-pane {
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
+  /* With the title text-hugging, this claims the leftover width so the
+     action cluster stays pinned to the right edge (and doubles as the
+     native window-drag surface between chip and actions). */
+  margin-left: auto;
+}
+
+@media (max-width: 480px) {
+  .chat-pane__workspace-chip {
+    width: 28px;
+    padding: 0 6px;
+    justify-content: center;
+  }
+
+  .chat-pane__workspace-chip span {
+    display: none;
+  }
+}
+
+/* Plain web with the nav collapsed: the floating sidebar-expand pill
+   (.shell-nav-expand, fixed 10px/10px, 32px wide) overlays the first pane
+   header's left edge; 52px clears it so the session title stays readable.
+   Native shells below reserve larger insets for their own window chrome. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 52px;
+}
+
+/* Native macOS desktop shells: the pane header is the window's top surface,
+   so it adopts the app titlebar height (52px injected by
+   DashboardWindowController; the 50px fallback mirrors
+   .macos-titlebar-controls for older app builds). The web 48px default would
+   center the session title/actions 2px above the traffic-light/hosted-button
+   centerline. Drawer layouts instead fold titlebar clearance into their 58px
+   topbar row (layout.mobile.css). */
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) .chat-pane__header {
+  min-height: var(--openclaw-native-titlebar-height, 50px);
 }
 
 /* Native macOS: with the nav column collapsed the top-left pane header is the

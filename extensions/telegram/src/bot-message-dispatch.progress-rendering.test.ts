@@ -37,7 +37,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       await replyOptions?.onPlanUpdate?.({
         phase: "update",
         explanation: "Implementing the change.",
-        planSteps: [
+        steps: [
           { step: "Inspect", status: "completed" },
           { step: "Patch", status: "in_progress" },
           { step: "Test", status: "pending" },
@@ -66,7 +66,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onPlanUpdate?.({
         phase: "update",
-        planSteps: [
+        steps: [
           { step: "Patch", status: "in_progress" },
           { step: "Test", status: "pending" },
         ],

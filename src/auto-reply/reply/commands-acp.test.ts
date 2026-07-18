@@ -36,6 +36,7 @@ const hoisted = vi.hoisted(() => {
   const setModeMock = vi.fn();
   const setConfigOptionMock = vi.fn();
   const updateSessionRuntimeOptionsMock = vi.fn();
+  const updateSessionEntryMock = vi.fn();
   const doctorMock = vi.fn();
   return {
     callGatewayMock,
@@ -60,6 +61,7 @@ const hoisted = vi.hoisted(() => {
     setModeMock,
     setConfigOptionMock,
     updateSessionRuntimeOptionsMock,
+    updateSessionEntryMock,
     doctorMock,
   };
 });
@@ -128,6 +130,16 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
+    "../../config/sessions/session-accessor.js",
+  );
+  return {
+    ...actual,
+    updateSessionEntry: (...args: unknown[]) => hoisted.updateSessionEntryMock(...args),
   };
 });
 
@@ -932,6 +944,7 @@ describe("/acp command", () => {
       storePath: "/tmp/sessions-acp.json",
     });
     hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
+    hoisted.updateSessionEntryMock.mockReset().mockResolvedValue(null);
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
       .mockReturnValue(createSessionBindingCapabilities());
@@ -1294,13 +1307,36 @@ describe("/acp command", () => {
     });
   });
 
-  it("persists ACP spawn labels without a nested gateway self-call", async () => {
+  it("persists ACP spawn labels to the target store without a gateway self-call", async () => {
     const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
+    params.storePath = "/tmp/requester-sessions.json";
+    hoisted.resolveSessionStorePathForAcpMock.mockReturnValue({
+      cfg: baseCfg,
+      storePath: "/tmp/codex-sessions.json",
+    });
 
     const result = await handleAcpCommand(params, true);
 
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expectGatewayMethodNotCalled("sessions.patch");
+    const spawnedSessionKey = (
+      hoisted.ensureSessionMock.mock.calls[0]?.[0] as { sessionKey?: string } | undefined
+    )?.sessionKey;
+    expect(spawnedSessionKey).toMatch(/^agent:codex:acp:/);
+    const updateCall = hoisted.updateSessionEntryMock.mock.calls[0] as
+      | [
+          { storePath: string; sessionKey: string },
+          (entry: Record<string, unknown>) => Record<string, unknown>,
+        ]
+      | undefined;
+    expect(updateCall?.[0]).toEqual({
+      storePath: "/tmp/codex-sessions.json",
+      sessionKey: spawnedSessionKey,
+    });
+    expect(updateCall?.[1]({ sessionId: "target", updatedAt: 1 })).toEqual({
+      label: "inbox",
+      updatedAt: expect.any(Number),
+    });
   });
 
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {

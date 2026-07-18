@@ -21,6 +21,8 @@ const rootManagedVpsUpgradeCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade";
 const updateRestartAuthCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth";
+const updateRunPackageSelfUpgradeCommand =
+  "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 
 const LIVE_RETRY_PATTERNS = [
@@ -163,6 +165,12 @@ function createPackageUpdateMaintenanceLanes() {
     npmLane("update-restart-auth", updateRestartAuthCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
+    npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
+      resources: ["service"],
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 45 * 60 * 1000,
       weight: 3,
     }),
   ];

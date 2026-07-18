@@ -129,6 +129,20 @@ button.workspace-tab:hover {
   min-height: 0;
 }
 
+.workspace-fullbleed {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-fullbleed > .workspace-widget__custom,
+.workspace-fullbleed > .workspace-embed__frame {
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+}
+
 /* --- Widget cell --------------------------------------------------------- */
 
 .workspace-widget {
@@ -526,6 +540,31 @@ button.workspace-tab:hover {
   white-space: nowrap;
 }
 
+.workspace-custom-widget-approvals__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.workspace-custom-widget-approvals__actions {
+  display: flex;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  gap: 6px;
+}
+
+.workspace-custom-widget-approvals__requested-by,
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  white-space: normal;
+}
+
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
 /* Live-run / health status dot. */
 .workspace-dot {
   flex: none;
@@ -571,6 +610,61 @@ button.workspace-tab:hover {
 .workspace-badge--muted {
   background: var(--bg-muted);
   color: var(--text-muted, var(--text));
+}
+
+/* Chart widget: dependency-free responsive SVG visuals. */
+.workspace-chart {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 40px;
+}
+
+.workspace-chart__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.workspace-chart__line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-chart__point {
+  fill: var(--accent);
+}
+
+.workspace-chart__area {
+  fill: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.workspace-chart__bars rect {
+  fill: var(--accent);
+}
+
+.workspace-chart__gauge-track,
+.workspace-chart__gauge-fill {
+  stroke-width: 3;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-chart__gauge-track {
+  stroke: var(--bg-muted);
+}
+
+.workspace-chart__gauge-fill {
+  stroke: var(--accent);
+}
+
+.workspace-chart__gauge-needle {
+  stroke: var(--text);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 /* Usage mini-summary. */
@@ -662,12 +756,76 @@ button.workspace-tab:hover {
 
 /* iframe-embed widget. */
 .workspace-embed__frame {
+  display: block;
   width: 100%;
   height: 100%;
   min-height: 120px;
   border: none;
   border-radius: var(--radius-sm);
   background: var(--bg-muted);
+}
+
+.workspace-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.workspace-preview__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-preview__viewports {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.workspace-preview__viewport,
+.workspace-preview__reload {
+  padding: 2px 8px;
+  font-size: var(--font-size-xs, 12px);
+  color: var(--text-muted, var(--text));
+  background: var(--bg-muted);
+  border: 1px solid var(--border, var(--bg-muted));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.workspace-preview__viewport:hover,
+.workspace-preview__reload:hover,
+.workspace-preview__viewport[aria-pressed="true"] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.workspace-preview__viewport:focus-visible,
+.workspace-preview__reload:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.workspace-preview__frame-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: center;
+  min-height: 120px;
+}
+
+.workspace-preview__frame-wrap--tablet .workspace-preview__frame {
+  width: 768px;
+  max-width: 100%;
+}
+
+.workspace-preview__frame-wrap--mobile .workspace-preview__frame {
+  width: 375px;
+  max-width: 100%;
 }
 
 /* --- Responsive: single column below ~900px ------------------------------ */

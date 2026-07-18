@@ -111,6 +111,7 @@ If a bootstrap file is missing, OpenClaw injects a "missing file" marker into th
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
 
 - `~/.openclaw/openclaw.json` (config)
+- `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
 - `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (model auth profiles: OAuth + API keys)
 - `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
@@ -119,6 +120,12 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 - `~/.openclaw/skills/` (managed skills)
 
 If you need to migrate sessions or config, copy them separately and keep them out of version control.
+
+Older OpenClaw releases wrote `openclaw-workspace-state.json`,
+`.openclaw/workspace-state.json`, and `.attested` workspace sidecars. Current
+runtime uses only the shared SQLite database for that state. If Doctor reports
+one of these files, run `openclaw doctor --fix`; Doctor imports valid legacy
+state and deletes a source only after verifying the database rows.
 
 ## Git backup (recommended, private)
 

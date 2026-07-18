@@ -1,4 +1,8 @@
-import type { PromptTemplate } from "./types.js";
+export interface PromptTemplate {
+  name: string;
+  description?: string;
+  content: string;
+}
 
 /** Parse an argument string using simple shell-style single and double quotes. */
 export function parseCommandArgs(argsString: string): string[] {

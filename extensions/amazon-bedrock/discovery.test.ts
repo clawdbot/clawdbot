@@ -283,14 +283,14 @@ describe("bedrock discovery", () => {
       .mockResolvedValueOnce({
         inferenceProfileSummaries: [
           {
-            inferenceProfileId: "jp.anthropic.claude-sonnet-4-6-v1:0",
+            inferenceProfileId: "jp.anthropic.claude-sonnet-4-6",
             inferenceProfileName: "JP Claude Sonnet 4.6",
             status: "ACTIVE",
             type: "SYSTEM_DEFINED",
             models: [
               {
                 modelArn:
-                  "arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-sonnet-4-6-v1:0",
+                  "arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-sonnet-4-6",
               },
             ],
           },
@@ -300,7 +300,7 @@ describe("bedrock discovery", () => {
     const models = await discoverBedrockModels({ region: "ap-northeast-1", clientFactory });
 
     expectModelFields(models[0], {
-      id: "jp.anthropic.claude-sonnet-4-6-v1:0",
+      id: "jp.anthropic.claude-sonnet-4-6",
       contextWindow: 1_000_000,
     });
   });
@@ -729,7 +729,7 @@ describe("bedrock discovery", () => {
             models: [
               {
                 modelArn:
-                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-6-v1:0",
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-6-v1",
               },
             ],
           },
@@ -743,7 +743,7 @@ describe("bedrock discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 4096,
       input: ["text"],
-      params: { canonicalModelId: "claude-opus-4-6-v1:0" },
+      params: { canonicalModelId: "claude-opus-4-6-v1" },
       thinkingLevelMap: { xhigh: null, max: "max" },
     });
   });

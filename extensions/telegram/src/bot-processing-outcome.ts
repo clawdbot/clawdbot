@@ -10,8 +10,18 @@ type TelegramUpdateProcessingFrame = {
   result?: TelegramMessageProcessingResult;
 };
 
+type TelegramSpooledReplayLifecycle = {
+  abortSignal: AbortSignal;
+  onAdopted: () => void | Promise<void>;
+  onDeferred: () => void;
+  /** Clears pre-adoption stall while durable adoption finalization is held. */
+  onAdoptionFinalizing?: () => void;
+  onAbandoned: () => void | Promise<void>;
+};
+
 type TelegramSpooledReplayFrame = {
   deferredWork?: TelegramSpooledReplayDeferredParticipant;
+  lifecycle?: TelegramSpooledReplayLifecycle;
 };
 
 export type TelegramSpooledReplayDeferredParticipant = {
@@ -95,6 +105,9 @@ export function createTelegramSpooledReplayParticipant(
         return undefined;
       }
       settlementHeld = true;
+      // Timeout settlement must wait for durable adoption finalization: pause
+      // the drain stall watchdog while the hold is active.
+      telegramSpooledReplayFrames.getStore()?.lifecycle?.onAdoptionFinalizing?.();
       let released = false;
       return {
         release: (mode) => {
@@ -145,8 +158,9 @@ export function getTelegramSpooledReplayDeferredParticipant():
 export async function runWithTelegramSpooledReplayUpdate<T>(
   update: object,
   fn: () => Promise<T>,
+  lifecycle?: TelegramSpooledReplayLifecycle,
 ): Promise<{ value: T; deferredWork?: TelegramSpooledReplayDeferredParticipant }> {
-  const frame: TelegramSpooledReplayFrame = {};
+  const frame: TelegramSpooledReplayFrame = lifecycle ? { lifecycle } : {};
   telegramSpooledReplayUpdates.add(update);
   try {
     const value = await telegramSpooledReplayFrames.run(frame, fn);
@@ -154,6 +168,11 @@ export async function runWithTelegramSpooledReplayUpdate<T>(
   } finally {
     telegramSpooledReplayUpdates.delete(update);
   }
+}
+
+/** Drain lifecycle for the active spooled-replay ALS frame, if any. */
+export function getTelegramSpooledReplayLifecycle(): TelegramSpooledReplayLifecycle | undefined {
+  return telegramSpooledReplayFrames.getStore()?.lifecycle;
 }
 
 export function isTelegramSpooledReplayUpdate(update: unknown): boolean {

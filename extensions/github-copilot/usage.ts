@@ -38,6 +38,7 @@ export async function fetchCopilotUsage(
   );
 
   if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
     return buildUsageHttpErrorSnapshot({
       provider: "github-copilot",
       status: res.status,

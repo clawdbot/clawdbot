@@ -689,7 +689,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3.5-flash" },
       { provider: "cohere", id: "command-a-plus-05-2026" },
-      { provider: "moonshot", id: "kimi-k2.7-code" },
+      { provider: "moonshot", id: "kimi-k3" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },

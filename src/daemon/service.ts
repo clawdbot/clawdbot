@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
@@ -213,6 +214,13 @@ export async function startGatewayService(
     };
   }
 
+  if (state.loaded && state.running) {
+    return {
+      outcome: "already-running",
+      state,
+    };
+  }
+
   if (repairIssues.length > 0) {
     return {
       outcome: "repair-required",
@@ -336,28 +344,46 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
-function withFutureConfigGuard(service: GatewayService): GatewayService {
+function assertGatewayServiceMutationOwnedByOpenClaw(
+  action: string,
+  env?: GatewayServiceEnv,
+): void {
+  assertGatewayServiceMutationAllowed(action, process.env);
+  if (env && env !== process.env) {
+    assertGatewayServiceMutationAllowed(action, env);
+  }
+}
+
+function withGatewayServiceMutationGuards(service: GatewayService): GatewayService {
   return {
     ...service,
     stage: async (args) => {
       // Service mutations rewrite durable launchd/systemd/schtasks files, so
       // block them when config was produced by a newer OpenClaw.
+      assertGatewayServiceMutationOwnedByOpenClaw("rewrite the gateway service", args.env);
       await assertFutureConfigActionAllowed("rewrite the gateway service");
       return await service.stage(args);
     },
     install: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw(
+        "install or rewrite the gateway service",
+        args.env,
+      );
       await assertFutureConfigActionAllowed("install or rewrite the gateway service");
       return await service.install(args);
     },
     uninstall: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("uninstall the gateway service", args.env);
       await assertFutureConfigActionAllowed("uninstall the gateway service");
       return await service.uninstall(args);
     },
     stop: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("stop the gateway service", args.env);
       await assertFutureConfigActionAllowed("stop the gateway service");
       return await service.stop(args);
     },
     restart: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("restart the gateway service", args.env);
       await assertFutureConfigActionAllowed("restart the gateway service");
       return await service.restart(args);
     },
@@ -372,7 +398,7 @@ function isSupportedGatewayServicePlatform(
 
 export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
-    return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
+    return withGatewayServiceMutationGuards(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   return createUnsupportedGatewayService();
 }

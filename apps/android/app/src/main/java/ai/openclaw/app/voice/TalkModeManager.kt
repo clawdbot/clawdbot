@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.gateway.ChatSendAck
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
@@ -109,6 +110,19 @@ internal data class RealtimeToolRun(
 
 private const val REALTIME_AGENT_CONSULT_TOOL = "openclaw_agent_consult"
 private const val REALTIME_AGENT_CONTROL_TOOL = "openclaw_agent_control"
+
+internal suspend fun requestPhoneRealtimeSessionWithLanguageFallback(
+  language: String?,
+  request: suspend (language: String?) -> String,
+): String =
+  try {
+    request(language)
+  } catch (err: GatewayRequestRejected) {
+    if (language == null || !err.gatewayError.isUnsupportedSessionLanguageParam()) {
+      throw err
+    }
+    request(null)
+  }
 
 private data class RealtimeToolCompletion(
   val state: String,
@@ -284,6 +298,7 @@ class TalkModeManager internal constructor(
   // TTS creates an audio session conflict on some OEMs. Can be enabled via gateway talk config.
   private var interruptOnSpeech: Boolean = false
   private var mainSessionKey: String = "main"
+  private var speechLocale: String? = null
 
   @Volatile private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
@@ -399,6 +414,7 @@ class TalkModeManager internal constructor(
     configLoaded = false
     silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
     interruptOnSpeech = false
+    speechLocale = null
   }
 
   private suspend fun requestGateway(
@@ -855,6 +871,15 @@ class TalkModeManager internal constructor(
     reloadConfig()
   }
 
+  internal suspend fun resolveRealtimeLanguageHint(requestedLanguage: String?): String? {
+    ensureConfigLoaded()
+    return resolveRealtimeTranscriptionLanguageHint(
+      configuredLocaleTag = speechLocale,
+      requestedLanguage = requestedLanguage,
+      deviceLocaleTag = Locale.getDefault().toLanguageTag(),
+    )
+  }
+
   /** Speaks a chat assistant reply when playback is enabled. */
   suspend fun speakAssistantReply(text: String) {
     if (!playbackEnabled) return
@@ -971,14 +996,19 @@ class TalkModeManager internal constructor(
     }
 
     setStatus(nativeText("Connecting…"), awaitingAgent = true)
-    val params =
-      buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
-        put("mode", JsonPrimitive("realtime"))
-        put("transport", JsonPrimitive("gateway-relay"))
-        put("brain", JsonPrimitive("agent-consult"))
+    val language = realtimeTranscriptionLanguage(resolvedSpeechLocaleTag())
+    val payload =
+      requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
+        val params =
+          buildJsonObject {
+            put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+            put("mode", JsonPrimitive("realtime"))
+            put("transport", JsonPrimitive("gateway-relay"))
+            put("brain", JsonPrimitive("agent-consult"))
+            requestedLanguage?.let { put("language", JsonPrimitive(it)) }
+          }
+        requestGateway("talk.session.create", params.toString(), timeoutMs = 15_000)
       }
-    val payload = requestGateway("talk.session.create", params.toString(), timeoutMs = 15_000)
     val root = json.parseToJsonElement(payload).asObjectOrNull()
     val relaySession = root?.get("relaySessionId").asStringOrNull()
     val sessionId = relaySession ?: root?.get("sessionId").asStringOrNull()
@@ -2065,6 +2095,7 @@ class TalkModeManager internal constructor(
     val intent =
       Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, resolvedSpeechLocaleTag())
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
@@ -2556,15 +2587,16 @@ class TalkModeManager internal constructor(
         engine.stop()
       }
       val locale =
-        TalkModeRuntime.validatedLanguage(directive?.language)?.let { Locale.forLanguageTag(it) }
-      if (locale != null) {
-        val localeResult = engine.setLanguage(locale)
-        if (
-          localeResult == TextToSpeech.LANG_MISSING_DATA ||
-          localeResult == TextToSpeech.LANG_NOT_SUPPORTED
-        ) {
-          throw IllegalStateException("Language unavailable on this device")
-        }
+        TalkModeRuntime
+          .validatedLanguage(directive?.language)
+          ?.let(Locale::forLanguageTag)
+          ?: Locale.getDefault()
+      val localeResult = engine.setLanguage(locale)
+      if (
+        localeResult == TextToSpeech.LANG_MISSING_DATA ||
+        localeResult == TextToSpeech.LANG_NOT_SUPPORTED
+      ) {
+        throw IllegalStateException("Language unavailable on this device")
       }
       engine.setSpeechRate((TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm) ?: 1.0).toFloat())
       engine.setAudioAttributes(
@@ -2843,14 +2875,18 @@ class TalkModeManager internal constructor(
       val parsed = TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull())
       if (generation != gatewayGeneration.get()) return
       silenceWindowMs = parsed.silenceTimeoutMs
+      speechLocale = parsed.speechLocale
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
       configLoaded = true
     } catch (_: Throwable) {
       if (generation != gatewayGeneration.get()) return
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
+      speechLocale = null
       configLoaded = false
     }
   }
+
+  private fun resolvedSpeechLocaleTag(): String = speechLocale ?: Locale.getDefault().toLanguageTag()
 
   private fun parseRunId(jsonString: String): String? {
     val obj = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return null
@@ -3000,3 +3036,9 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? {
     else -> null
   }
 }
+
+private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =
+  code == "INVALID_REQUEST" &&
+    message
+      .lowercase(Locale.ROOT)
+      .contains("invalid talk.session.create params")

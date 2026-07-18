@@ -3,6 +3,8 @@ import {
   validateApprovalAllowDecision,
   validateApprovalGetParams,
   validateApprovalGetResult,
+  validateApprovalHistoryParams,
+  validateApprovalHistoryResult,
   validateApprovalDecision,
   validateApprovalKind,
   validateApprovalPresentation,
@@ -215,6 +217,32 @@ describe("unified approval protocol validators", () => {
         audienceSessionKeys: ["agent:worker:subagent:123", "agent:main"],
       }),
     ).toBe(false);
+  });
+
+  it("validates terminal history pages and optional attribution", () => {
+    const terminal = {
+      ...pluginRecord,
+      status: "denied",
+      decision: "deny",
+      resolvedAtMs: pluginRecord.createdAtMs + 1_000,
+      reason: "user",
+      source: { agentId: "release", sessionKey: "agent:release:main" },
+      resolver: { kind: "device", id: "reviewer-device" },
+    } as const;
+
+    expect(validateApprovalHistoryParams({})).toBe(true);
+    expect(validateApprovalHistoryParams({ cursor: "cursor", limit: 50, kind: "plugin" })).toBe(
+      true,
+    );
+    expect(validateApprovalHistoryParams({ limit: 0 })).toBe(false);
+    expect(validateApprovalHistoryParams({ limit: 101 })).toBe(false);
+    expect(validateApprovalHistoryParams({ kind: "tool" })).toBe(false);
+
+    expect(validateApprovalHistoryResult({ items: [terminal], nextCursor: "next" })).toBe(true);
+    expect(validateApprovalHistoryResult({ items: [{ ...execRecord, status: "pending" }] })).toBe(
+      false,
+    );
+    expect(validateApprovalHistoryResult({ items: [terminal], extra: true })).toBe(false);
   });
 
   it("returns the canonical recorded snapshot to losing resolvers", () => {

@@ -13,12 +13,16 @@ import {
   type AnyAgentTool,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateLeaseRunner,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
@@ -31,6 +35,7 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
 };
 
 const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
@@ -143,7 +148,7 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
 
 function resolveMemoryToolOptions(
   ctx: OpenClawPluginToolContext,
-  acquireLocalService?: MemoryCoreAcquireLocalService,
+  host: MemoryCoreRuntimeHost,
 ): MemoryToolOptions {
   const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
   return {
@@ -153,17 +158,16 @@ function resolveMemoryToolOptions(
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
-    ...(acquireLocalService ? { acquireLocalService } : {}),
+    ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+    ...(host.withLease ? { withLease: host.withLease } : {}),
   };
 }
 
-function createLazyMemoryRuntime(
-  acquireLocalService?: MemoryCoreAcquireLocalService,
-): MemoryPluginRuntime {
+function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
     async getMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
-      return await createMemoryRuntime(acquireLocalService).getMemorySearchManager(params);
+      return await createMemoryRuntime(host).getMemorySearchManager(params);
     },
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
@@ -186,6 +190,8 @@ export default definePluginEntry({
   kind: "memory",
   register(api) {
     const acquireLocalService = api.runtime.llm?.acquireLocalService;
+    const withLease = api.runtime.state.withLease.bind(api.runtime.state);
+    const host = { acquireLocalService, withLease } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options),
     );
@@ -193,7 +199,7 @@ export default definePluginEntry({
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
-      runtime: createLazyMemoryRuntime(acquireLocalService),
+      runtime: createLazyMemoryRuntime(host),
       publicArtifacts: {
         async listArtifacts(params) {
           const { listMemoryCorePublicArtifacts } = await import("./src/public-artifacts.js");
@@ -202,19 +208,13 @@ export default definePluginEntry({
       },
     });
 
-    api.registerTool(
-      (ctx) => createLazyMemorySearchTool(resolveMemoryToolOptions(ctx, acquireLocalService)),
-      {
-        names: ["memory_search"],
-      },
-    );
+    api.registerTool((ctx) => createLazyMemorySearchTool(resolveMemoryToolOptions(ctx, host)), {
+      names: ["memory_search"],
+    });
 
-    api.registerTool(
-      (ctx) => createLazyMemoryGetTool(resolveMemoryToolOptions(ctx, acquireLocalService)),
-      {
-        names: ["memory_get"],
-      },
-    );
+    api.registerTool((ctx) => createLazyMemoryGetTool(resolveMemoryToolOptions(ctx, host)), {
+      names: ["memory_get"],
+    });
 
     api.registerCommand({
       name: "dreaming",
@@ -230,7 +230,7 @@ export default definePluginEntry({
     api.registerCli(
       async ({ program }) => {
         const { registerMemoryCli } = await import("./cli.js");
-        registerMemoryCli(program, { acquireLocalService });
+        registerMemoryCli(program, host);
       },
       {
         descriptors: [

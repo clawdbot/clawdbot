@@ -41,7 +41,7 @@ const COMMAND_ALIASES: Record<string, string> = {
 // These shared commands have explicit local TUI routing but no same-named
 // built-in autocomplete entry. Other shared commands require the Gateway and
 // must stay out of local autocomplete and model prompts.
-const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "stop"]);
+const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "queue", "stop"]);
 
 function createLevelCompletion(
   levels: string[],
@@ -204,6 +204,28 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   }
 
   return commands;
+}
+
+export function shouldSubmitExactArgumentCompletion(
+  input: string,
+  commands: SlashCommand[],
+): boolean {
+  const match = /^\/([^\s]+)\s+(.+)$/u.exec(input);
+  if (!match) {
+    return false;
+  }
+  const [, commandName, argumentText] = match;
+  if (argumentText === undefined) {
+    return false;
+  }
+  const command = commands.find((candidate) => candidate.name === commandName);
+  if (!command?.getArgumentCompletions) {
+    return false;
+  }
+  const completions = command.getArgumentCompletions(argumentText);
+  return (
+    Array.isArray(completions) && completions.length === 1 && completions[0]?.value === argumentText
+  );
 }
 
 export function helpText(options: SlashCommandOptions = {}): string {

@@ -67,8 +67,8 @@ export async function appendTranscriptEvent(
 export function appendTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
-): void {
-  appendSqliteTranscriptEventSync(scope, event);
+): boolean {
+  return appendSqliteTranscriptEventSync(scope, event);
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */

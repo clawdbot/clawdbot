@@ -112,7 +112,7 @@ function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
   );
 }
 
-function hasUsableSessionEntry(entry: unknown): boolean {
+export function hasUsableSessionEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") {
     return false;
   }

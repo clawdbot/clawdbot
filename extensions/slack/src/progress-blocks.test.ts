@@ -46,6 +46,10 @@ function taskUpdate(
   return { type: "task_update", id, title, status };
 }
 
+function contentTaskId(prefix: string) {
+  return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
+}
+
 function legacyHeadingBlock(text: string) {
   return {
     type: "section",
@@ -67,7 +71,7 @@ function expectLegacyLineBlock(block: unknown, title: string, detail: string) {
   expect(block).toEqual(legacyLineBlock(title, detail));
 }
 
-function expectTaskUpdate(task: unknown, fields: { id: string; title: string; status: string }) {
+function expectTaskUpdate(task: unknown, fields: { id: unknown; title: string; status: string }) {
   expect(task).toEqual({
     type: "task_update",
     id: fields.id,
@@ -321,6 +325,65 @@ describe("native Slack progress stream chunks", () => {
     expect(tasks[1]).toMatchObject({ status: "complete" });
   });
 
+  it("keeps content-derived task ids stable when a rolling line window shifts", () => {
+    const first = reconcileSlackNativeTaskChunks({
+      previousTasks: new Map(),
+      chunks: buildSlackProgressStreamStartChunks({
+        lines: [itemLine("first task"), itemLine("shared task")],
+      }),
+    });
+    const shifted = reconcileSlackNativeTaskChunks({
+      previousTasks: first.tasks,
+      chunks: buildSlackProgressStreamUpdateChunks({
+        lines: [itemLine("shared task"), itemLine("new task")],
+      }),
+    });
+    const firstShared = [...first.tasks].find(([, task]) => task.title === "shared task");
+    const shiftedShared = [...shifted.tasks].find(([, task]) => task.title === "shared task");
+
+    expect(firstShared?.[0]).toBeDefined();
+    expect(shiftedShared?.[0]).toBe(firstShared?.[0]);
+    expect(shifted.chunks).toContainEqual(
+      taskUpdate(contentTaskId("item"), "first task", "complete"),
+    );
+  });
+
+  it("keeps a singleton content-derived task id when an identical line joins", () => {
+    const singletonChunks = buildSlackProgressStreamStartChunks({
+      lines: [itemLine("same task")],
+    });
+    const duplicateChunks = buildSlackProgressStreamUpdateChunks({
+      lines: [itemLine("same task"), itemLine("same task")],
+    });
+    const singletonTasks = (singletonChunks ?? []).filter((chunk) => chunk.type === "task_update");
+    const duplicateTasks = (duplicateChunks ?? []).filter((chunk) => chunk.type === "task_update");
+
+    expect(singletonTasks).toHaveLength(1);
+    expect(singletonTasks[0]).toEqual(
+      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_1$/u), "same task", "in_progress"),
+    );
+    expect(duplicateTasks).toHaveLength(2);
+    expect(duplicateTasks[0]?.id).toBe(singletonTasks[0]?.id);
+    expect(duplicateTasks[1]).toEqual(
+      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_2$/u), "same task", "in_progress"),
+    );
+  });
+
+  it("suffixes duplicate content-derived task ids within one snapshot", () => {
+    const chunks = buildSlackProgressStreamStartChunks({
+      lines: [itemLine("same task"), itemLine("same task")],
+    });
+    const tasks = (chunks ?? []).filter((chunk) => chunk.type === "task_update");
+
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toEqual(
+      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_1$/u), "same task", "in_progress"),
+    );
+    expect(tasks[1]).toEqual(
+      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_2$/u), "same task", "in_progress"),
+    );
+  });
+
   it("keeps chunks untouched when no previous tasks are orphaned", () => {
     const chunks = buildSlackProgressStreamUpdateChunks({
       title: "Implementation",
@@ -342,8 +405,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("tool two"),
-      taskUpdate("item_1", "tool one", "in_progress"),
-      taskUpdate("item_2", "tool two", "in_progress"),
+      taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
+      taskUpdate(contentTaskId("item"), "tool two", "in_progress"),
     ]);
   });
 
@@ -365,7 +428,7 @@ describe("native Slack progress stream chunks", () => {
     ).toEqual([
       planUpdate("Shelling..."),
       taskUpdate(
-        "tool_1",
+        contentTaskId("tool"),
         "Exec — run tests in /Users/example/P…aw/packages/very/deep/path/example",
         "in_progress",
       ),
@@ -397,8 +460,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Shelling..."),
-      taskUpdate("exec_1", "Exec — command finished", "complete"),
-      taskUpdate("exec_2", "Exec — command failed · exit 1", "error"),
+      taskUpdate(contentTaskId("exec"), "Exec — command finished", "complete"),
+      taskUpdate(contentTaskId("exec"), "Exec — command failed · exit 1", "error"),
     ]);
   });
 
@@ -410,12 +473,12 @@ describe("native Slack progress stream chunks", () => {
     expect(chunksWithTitle).toHaveLength(51);
     expect(chunksWithTitle?.[0]).toEqual(planUpdate("Shelling..."));
     expectTaskUpdate(chunksWithTitle?.[1], {
-      id: "tool_1",
+      id: contentTaskId("tool"),
       title: "Exec 10 — run 10",
       status: "in_progress",
     });
     expectTaskUpdate(chunksWithTitle?.at(-1), {
-      id: "tool_50",
+      id: contentTaskId("tool"),
       title: "Exec 59 — run 59",
       status: "in_progress",
     });
@@ -426,12 +489,12 @@ describe("native Slack progress stream chunks", () => {
     expect(chunksWithoutTitle).toHaveLength(51);
     expect(chunksWithoutTitle?.[0]).toEqual(planUpdate("Exec 59 — run 59"));
     expectTaskUpdate(chunksWithoutTitle?.[1], {
-      id: "tool_1",
+      id: contentTaskId("tool"),
       title: "Exec 10 — run 10",
       status: "in_progress",
     });
     expectTaskUpdate(chunksWithoutTitle?.at(-1), {
-      id: "tool_50",
+      id: contentTaskId("tool"),
       title: "Exec 59 — run 59",
       status: "in_progress",
     });
@@ -444,8 +507,17 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Exec — run tests"),
-      taskUpdate("exec_1", "Exec — run tests", "in_progress"),
+      taskUpdate(contentTaskId("exec"), "Exec — run tests", "in_progress"),
     ]);
+  });
+
+  it("keeps a native status headline when no task rows are visible", () => {
+    expect(
+      buildSlackProgressStreamStartChunks({
+        title: "Checking the workspace",
+        lines: [],
+      }),
+    ).toEqual([planUpdate("Checking the workspace")]);
   });
 
   it("caps explicit native plan titles to Slack chunk limits", () => {
@@ -469,8 +541,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Exec — run tests"),
-      taskUpdate("item_1", "prepare the workspace", "in_progress"),
-      taskUpdate("exec_2", "Exec — run tests", "in_progress"),
+      taskUpdate(contentTaskId("item"), "prepare the workspace", "in_progress"),
+      taskUpdate(contentTaskId("exec"), "Exec — run tests", "in_progress"),
     ]);
   });
 
@@ -545,10 +617,9 @@ describe("native Slack progress stream chunks", () => {
     });
   });
 
-  it("does not emit native stream chunks when there are no tasks", () => {
+  it("does not emit native stream chunks when there are no tasks or title", () => {
     expect(
       buildSlackProgressStreamStartChunks({
-        title: "Shelling...",
         lines: [],
       }),
     ).toBeUndefined();
@@ -562,8 +633,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Shelling"),
-      taskUpdate("item_1", "tool one", "in_progress"),
-      taskUpdate("item_2", "tool two", "in_progress"),
+      taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
+      taskUpdate(contentTaskId("item"), "tool two", "in_progress"),
     ]);
   });
 
@@ -583,8 +654,8 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Exec — command failed · exit 1"),
-      taskUpdate("item_1", "tool one", "complete"),
-      taskUpdate("command_output_2", "Exec — command failed · exit 1", "error"),
+      taskUpdate(contentTaskId("item"), "tool one", "complete"),
+      taskUpdate(contentTaskId("command_output"), "Exec — command failed · exit 1", "error"),
     ]);
   });
 });

@@ -44,6 +44,7 @@ extension OnboardingView {
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
         self.maybeStartAISetup(for: pageIndex)
+        self.updateMemoryImportMonitoring(for: pageIndex)
     }
 
     func maybeInstallCLI(for pageIndex: Int) {

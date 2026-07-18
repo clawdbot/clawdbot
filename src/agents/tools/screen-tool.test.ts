@@ -1,5 +1,8 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { createScreenTool } from "./screen-tool.js";
 
@@ -16,6 +19,16 @@ function createGatewayRecorder() {
 }
 
 describe("screen tool", () => {
+  it("declares the exact ui.command result contract", async () => {
+    const { callGateway } = createGatewayRecorder();
+    const tool = createScreenTool({ callGateway });
+    const result = await tool.execute("contract", { action: "sidebar_show" });
+
+    expect(tool.outputSchema).toBe(UiCommandResultSchema);
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe("{ ok: boolean }");
+  });
+
   it("uses a flat action enum and requires the UI capability", () => {
     const tool = createScreenTool();
     expect(tool.requiredClientCaps).toEqual([GATEWAY_CLIENT_CAPS.UI_COMMANDS]);

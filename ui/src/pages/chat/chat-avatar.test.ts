@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderChatAvatar } from "./chat-avatar.ts";
-
-vi.unmock("../../lib/agents/display.ts");
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   const container = document.createElement("div");

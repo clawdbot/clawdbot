@@ -40,12 +40,28 @@ describe("registerChannelsCli", () => {
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
   });
 
-  it("registers workspace before an external channel plugin is installed", async () => {
+  it("registers ClickClack setup options before an external channel plugin is installed", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "clickclack",
+        cliAddOptions: [
+          {
+            flags: "--code <code>",
+            description: "ClickClack one-time setup code or setup URL",
+          },
+          {
+            flags: "--workspace <workspace>",
+            description: "ClickClack workspace id, slug, or name",
+          },
+        ],
+      },
+    ]);
     process.argv = ["node", "openclaw", "channels", "add", "--help"];
     const program = new Command().name("openclaw");
 
     await registerChannelsCli(program);
 
+    expect(getChannelAddOptionFlags(program)).toContain("--code <code>");
     expect(getChannelAddOptionFlags(program)).toContain("--workspace <workspace>");
   });
 

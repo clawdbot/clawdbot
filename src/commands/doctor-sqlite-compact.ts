@@ -17,7 +17,6 @@ type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
   before: DoctorSqliteCompactSnapshot;
   integrityCheck: "ok";
-  quickCheck: "ok";
   reclaimedBytes: number;
 };
 
@@ -56,7 +55,7 @@ export function compactDoctorSqliteFile(
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     database.exec("VACUUM;");
     checkpointTruncate(database, options.sqlitePath);
-    const { quickCheck, integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
     const afterBytes = after.dbSizeBytes + after.walSizeBytes;
@@ -64,7 +63,6 @@ export function compactDoctorSqliteFile(
       after,
       before,
       integrityCheck,
-      quickCheck,
       reclaimedBytes: Math.max(0, beforeBytes - afterBytes),
     };
   } catch (error) {

@@ -25,10 +25,6 @@
       "types": "./dist/llm.d.ts",
       "default": "./dist/llm.js"
     },
-    "./node": {
-      "types": "./dist/node.d.ts",
-      "default": "./dist/node.js"
-    },
     "./runtime-deps": {
       "types": "./dist/runtime-deps.d.ts",
       "default": "./dist/runtime-deps.js"
@@ -41,14 +37,6 @@
       "types": "./dist/types.d.ts",
       "default": "./dist/types.js"
     },
-    "./harness/agent-harness": {
-      "types": "./dist/harness/agent-harness.d.ts",
-      "default": "./dist/harness/agent-harness.js"
-    },
-    "./harness/types": {
-      "types": "./dist/harness/types.d.ts",
-      "default": "./dist/harness/types.js"
-    },
     "./harness/messages": {
       "types": "./dist/harness/messages.d.ts",
       "default": "./dist/harness/messages.js"
@@ -56,22 +44,6 @@
     "./harness/env/kill-tree": {
       "types": "./dist/harness/env/kill-tree.d.ts",
       "default": "./dist/harness/env/kill-tree.js"
-    },
-    "./harness/session": {
-      "types": "./dist/harness/session.d.ts",
-      "default": "./dist/harness/session.js"
-    },
-    "./harness/session/jsonl-storage": {
-      "types": "./dist/harness/session/jsonl-storage.d.ts",
-      "default": "./dist/harness/session/jsonl-storage.js"
-    },
-    "./harness/session/memory-storage": {
-      "types": "./dist/harness/session/memory-storage.d.ts",
-      "default": "./dist/harness/session/memory-storage.js"
-    },
-    "./harness/session/uuid": {
-      "types": "./dist/harness/session/uuid.d.ts",
-      "default": "./dist/harness/session/uuid.js"
     },
     "./harness/compaction": {
       "types": "./dist/harness/compaction.d.ts",
@@ -85,10 +57,6 @@
       "types": "./dist/harness/prompt-template-arguments.d.ts",
       "default": "./dist/harness/prompt-template-arguments.js"
     },
-    "./harness/skills": {
-      "types": "./dist/harness/skills.d.ts",
-      "default": "./dist/harness/skills.js"
-    },
     "./harness/utils/truncate": {
       "types": "./dist/harness/utils/truncate.d.ts",
       "default": "./dist/harness/utils/truncate.js"
@@ -96,6 +64,7 @@
   },
   "dependencies": {
     "@openclaw/ai": "workspace:*",
+    "@openclaw/llm-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
     "typebox": "1.3.3"
   }

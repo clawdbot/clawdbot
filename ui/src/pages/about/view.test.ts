@@ -56,6 +56,7 @@ describe("renderAbout", () => {
       "https://docs.openclaw.ai",
       "https://github.com/openclaw/openclaw",
       "https://discord.gg/clawd",
+      "https://x.com/openclaw",
       "https://docs.openclaw.ai/releases",
     ]);
     for (const link of links) {

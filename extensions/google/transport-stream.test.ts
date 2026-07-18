@@ -1111,6 +1111,36 @@ describe("google transport stream", () => {
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
 
+  it("bounds Google Vertex ADC files before google-auth-library reads them", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-file-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    const credentials = {
+      type: "service_account",
+      client_email: "vertex@example.iam.gserviceaccount.com",
+    };
+    const json = JSON.stringify(credentials);
+    await writeFile(credentialsPath, `${json}${" ".repeat(1024 * 1024 - json.length)}`, "utf8");
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.file-token");
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(vi.fn())).resolves.toEqual({
+      Authorization: "Bearer ya29.file-token",
+    });
+    expect(googleAuthMock).toHaveBeenCalledWith({
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+      credentials,
+      clientOptions: { transporterOptions: { timeout: 30_000 } },
+    });
+
+    resetGoogleVertexAdcState();
+    await writeFile(credentialsPath, `${json}${" ".repeat(1024 * 1024 + 1 - json.length)}`, "utf8");
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(vi.fn())).rejects.toMatchObject({
+      name: "FsSafeError",
+      code: "too-large",
+      message: `Google Vertex ADC credentials file at ${credentialsPath} exceeds 1048576 bytes.`,
+    });
+  });
+
   it("bounds google-auth-library ADC token resolution at the Vertex owner", async () => {
     const tempDir = await mkdtemp(
       path.join(os.tmpdir(), "openclaw-google-vertex-authlib-timeout-"),

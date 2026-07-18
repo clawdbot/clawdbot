@@ -1169,7 +1169,8 @@ describe("marketplace plugins", () => {
       expect(result.error).toContain(
         "failed to download https://***:***@example.com/frontend-design.tgz:",
       );
-      expect(result.error).toContain("Authorization: Bearer sk-123…mnop");
+      expect(result.error).toContain("Authorization: Bearer sk-123…");
+      expect(result.error).not.toContain("abcdefghijklmnop");
       expect(result.error).not.toContain("user:pass@");
       let hasControlChars = false;
       for (const char of result.error) {

@@ -2,6 +2,17 @@
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+
+const withTrustedWebSearchEndpointMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
+  return {
+    ...actual,
+    withTrustedWebSearchEndpoint: withTrustedWebSearchEndpointMock,
+  };
+});
+
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
 import { testing } from "./perplexity-web-search-provider.runtime.js";
 
@@ -136,6 +147,44 @@ describe("perplexity web search provider", () => {
       baseUrl: "https://api.perplexity.ai",
       model: "perplexity/sonar-pro",
       transport: "search_api",
+    });
+  });
+
+  it("sends official date filter fields in the Search API request body", async () => {
+    withTrustedWebSearchEndpointMock.mockImplementationOnce(
+      async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
+        await run(
+          new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+    );
+
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await tool.execute({
+          query: "OpenClaw releases",
+          date_after: "2024-01-01",
+          date_before: "2024-06-30",
+        });
+      },
+    );
+
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
+    expect(JSON.parse(request.init.body as string)).toEqual({
+      query: "OpenClaw releases",
+      max_results: 5,
+      search_after_date_filter: "1/1/2024",
+      search_before_date_filter: "6/30/2024",
     });
   });
 

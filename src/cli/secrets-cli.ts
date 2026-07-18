@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -46,14 +46,59 @@ const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
   () => import("../secrets/apply.js"),
 );
 
+class SecretsPlanFileNotFoundError extends Error {}
+
+const SECRETS_PLAN_MAX_BYTES = 16 * 1024 * 1024;
+
+function serializePlanFile(plan: SecretsApplyPlan, pathname: string): string {
+  const raw = `${JSON.stringify(plan, null, 2)}\n`;
+  if (Buffer.byteLength(raw, "utf8") > SECRETS_PLAN_MAX_BYTES) {
+    throw new RangeError(
+      `Secrets plan exceeds ${SECRETS_PLAN_MAX_BYTES} bytes and cannot be written: ${pathname}`,
+    );
+  }
+  return raw;
+}
+
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
-  const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
+  const [fsModule, { readFileDescriptorBounded }, { isSecretsApplyPlan }] = await Promise.all([
     fsModuleLoader.load(),
+    import("../infra/file-descriptor-read.js"),
     import("../secrets/plan.js"),
   ]);
-  const raw = readFileSync(pathname, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
+  const fsConstants = fsModule.constants as typeof fsModule.constants & { O_NONBLOCK?: number };
+  // Non-blocking open lets descriptor stat reject special files without a FIFO stalling first.
+  const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+  const file = await fsModule.promises.open(pathname, openFlags).catch((err: unknown) => {
+    if (hasErrnoCode(err, "ENOENT")) {
+      throw new SecretsPlanFileNotFoundError(`Secrets plan file not found: ${pathname}`, {
+        cause: err,
+      });
+    }
+    throw err;
+  });
+  let raw: string;
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Secrets plan path is not a regular file: ${pathname}`);
+    }
+    if (stat.size > SECRETS_PLAN_MAX_BYTES) {
+      throw new RangeError(
+        `Secrets plan file exceeds ${SECRETS_PLAN_MAX_BYTES} bytes: ${pathname}`,
+      );
+    }
+    raw = (await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES)).toString("utf8");
+  } finally {
+    await file.close();
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Malformed JSON in secrets plan file: ${pathname}`, { cause: err });
+  }
   if (!isSecretsApplyPlan(parsed)) {
     throw new Error(
       `Invalid secrets plan file: ${pathname}. Generate a fresh plan with ${formatCliCommand("openclaw secrets configure --plan-out <path>")}.`,
@@ -181,7 +226,7 @@ export function registerSecretsCli(program: Command): void {
       "Allow exec SecretRef preflight checks (may execute provider commands)",
       false,
     )
-    .option("--plan-out <path>", "Write generated plan JSON to a file")
+    .option("--plan-out <path>", "Write generated plan JSON to a file (max 16 MiB)")
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
       try {
@@ -194,7 +239,7 @@ export function registerSecretsCli(program: Command): void {
         });
         if (opts.planOut) {
           const { writeFileSync } = await fsModuleLoader.load();
-          writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+          writeFileSync(opts.planOut, serializePlanFile(configured.plan, opts.planOut), "utf8");
         }
 
         let shouldApply = Boolean(opts.apply || opts.yes);
@@ -290,7 +335,7 @@ export function registerSecretsCli(program: Command): void {
   secrets
     .command("apply")
     .description("Apply a previously generated secrets plan")
-    .requiredOption("--from <path>", "Path to plan JSON")
+    .requiredOption("--from <path>", "Path to plan JSON (max 16 MiB)")
     .option("--dry-run", "Validate/preflight only", false)
     .option("--allow-exec", "Allow exec SecretRef checks (may execute provider commands)", false)
     .option("--json", "Output JSON", false)
@@ -328,9 +373,13 @@ export function registerSecretsCli(program: Command): void {
             : "Secrets apply: no changes.",
         );
       } catch (err) {
+        // The missing-plan wrapper already carries a user-facing message. Keep its
+        // ENOENT cause available to diagnostics without rendering the raw filesystem error.
+        const message =
+          err instanceof SecretsPlanFileNotFoundError ? err.message : formatErrorMessage(err);
         defaultRuntime.error(
           danger(
-            `Secrets apply failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+            `Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
           ),
         );
         defaultRuntime.exit(1);

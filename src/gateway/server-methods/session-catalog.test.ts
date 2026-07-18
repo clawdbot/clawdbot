@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: { sessionCatalogs: [] as unknown[] },
+  pinnedSessionExtensionRegistry: undefined as { sessionCatalogs: unknown[] } | undefined,
   recordSessionStateEvent: vi.fn(),
   upsertSessionUpstreamLink: vi.fn(),
 }));
@@ -14,11 +17,13 @@ const conversationBindingMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../../plugins/runtime-state.js", () => ({
-  getPluginRegistryState: () => ({ activeRegistry: hoisted.activeRegistry }),
+vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginSessionExtensionRegistry: () =>
+    hoisted.pinnedSessionExtensionRegistry ?? hoisted.activeRegistry,
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({
+  listAmbientGroupWatchTargets: () => new Set<string>(),
   recordSessionStateEvent: hoisted.recordSessionStateEvent,
 }));
 
@@ -49,14 +54,15 @@ async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] } },
+  client?: { connect?: { scopes?: string[] }; connId?: string },
+  contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
     client,
-    context: { getRuntimeConfig: () => config },
+    context: { getRuntimeConfig: () => config, ...contextOverrides },
   } as never);
   return respond;
 }
@@ -64,6 +70,7 @@ async function call(
 describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     hoisted.activeRegistry.sessionCatalogs = [];
+    hoisted.pinnedSessionExtensionRegistry = undefined;
     hoisted.recordSessionStateEvent.mockClear();
     hoisted.upsertSessionUpstreamLink.mockClear();
     conversationBindingMocks.bindPluginSessionConversation.mockClear();
@@ -91,6 +98,83 @@ describe("session catalog Gateway methods", () => {
         expect.objectContaining({ id: "zeta", hosts: [] }),
       ],
     });
+  });
+
+  it("streams completed hosts to only the requesting connection", async () => {
+    const broadcastToConnIds = vi.fn();
+    const host = {
+      hostId: "node:fast",
+      label: "Fast node",
+      kind: "node" as const,
+      connected: true,
+      nodeId: "fast",
+      sessions: [],
+    };
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", {
+          list: vi.fn(async ({ onHost }) => {
+            onHost?.(host);
+            return [host];
+          }),
+        }),
+      },
+    ];
+
+    const respond = await call(
+      "sessions.catalog.list",
+      { progressId: "progress-1" },
+      {},
+      { connId: "requester", connect: {} },
+      { broadcastToConnIds },
+    );
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      {
+        progressId: "progress-1",
+        agentId: "main",
+        catalog: expect.objectContaining({ id: "codex", hosts: [host] }),
+      },
+      new Set(["requester"]),
+      { dropIfSlow: true },
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+    });
+  });
+
+  it("uses the pinned Gateway catalog runtime after active registry churn", async () => {
+    const previousNodesRuntime = gatewaySubagentState.nodes;
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    gatewaySubagentState.nodes = {
+      list: listNodes,
+      invoke: vi.fn(async () => undefined),
+    };
+    try {
+      const gatewayRuntime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+      const standaloneRuntime = createPluginRuntime();
+      const catalogUsing = (runtime: ReturnType<typeof createPluginRuntime>) =>
+        provider("codex", {
+          list: async () => {
+            await runtime.nodes.list();
+            return [];
+          },
+        });
+      hoisted.pinnedSessionExtensionRegistry = {
+        sessionCatalogs: [{ provider: catalogUsing(gatewayRuntime) }],
+      };
+      hoisted.activeRegistry.sessionCatalogs = [{ provider: catalogUsing(standaloneRuntime) }];
+
+      const respond = await call("sessions.catalog.list", { catalogId: "codex" });
+
+      expect(listNodes).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "codex", hosts: [] })],
+      });
+    } finally {
+      gatewaySubagentState.nodes = previousNodesRuntime;
+    }
   });
 
   it("normalizes search once before dispatching every provider", async () => {

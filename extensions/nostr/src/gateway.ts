@@ -163,11 +163,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             return;
           }
 
-          const { dispatchInboundDirectDmWithRuntime } =
-            await import("./inbound-direct-dm-runtime.js");
-          await dispatchInboundDirectDmWithRuntime({
+          const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
+          await dispatchInboundDirectDm({
             cfg: ctx.cfg,
-            runtime,
             channel: "nostr",
             channelLabel: "Nostr",
             accountId: account.accountId,
@@ -325,10 +323,10 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
     });
     const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
     const normalizedTo = normalizePubkey(to);
-    await bus.sendDm(normalizedTo, message);
+    const eventId = await bus.sendDm(normalizedTo, message);
     return attachChannelToResult("nostr", {
       to: normalizedTo,
-      messageId: `nostr-${Date.now()}`,
+      messageId: eventId,
     });
   },
 };

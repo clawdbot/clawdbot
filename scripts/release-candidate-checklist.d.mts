@@ -73,6 +73,14 @@ export function buildTelegramArtifactInputs(params: {
   sourceSha: string;
 }): Record<string, string | number>;
 /**
+ * Detects whether the checklist module is being executed directly.
+ */
+export function isDirectReleaseCandidateExecution(
+  directPath: string | undefined,
+  modulePath: string,
+  resolveRealPath?: (path: string) => string,
+): boolean;
+/**
  * Calls the GitHub REST API with the gh-auth token and a bounded timeout.
  */
 export function githubApi(path: unknown, options?: Record<string, unknown>): Promise<unknown>;

@@ -3,7 +3,6 @@ import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
 import { mergeAnnotationSpans, type MarkdownAnnotationSpan } from "./ir-spans.js";
 import {
-  chunkMarkdownIR,
   sliceMarkdownIR,
   type MarkdownIR,
   type MarkdownLinkSpan,
@@ -77,7 +76,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
   // The initial reverse keeps the final order stable while avoiding shift/unshift
   // moving every remaining chunk for long messages.
-  const pending = chunkMarkdownIR(options.ir, normalizedLimit).toReversed();
+  const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
   const finalized: MarkdownIR[] = [];
 
   while (pending.length > 0) {

@@ -16,6 +16,7 @@ import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
@@ -196,6 +197,7 @@ export function registerSlackMessageEvents(params: {
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
   }) => {
+    const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
     try {
       const eventScope = resolveEventScope({ body, context, client });
       if (eventScope === null) {
@@ -224,7 +226,9 @@ export function registerSlackMessageEvents(params: {
       if (assistantChangedInbound) {
         await handleSlackMessage(assistantChangedInbound, {
           source: "message",
-          ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+          ...(eventScope ? { eventScope } : {}),
+          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
         return;
       }
@@ -264,9 +268,14 @@ export function registerSlackMessageEvents(params: {
 
       await handleSlackMessage(message, {
         source: "message",
-        ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+        ...(eventScope ? { eventScope } : {}),
+        ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+        ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
       });
     } catch (err) {
+      if (turnAdoptionLifecycle) {
+        throw err;
+      }
       ctx.runtime.error?.(danger(`slack handler failed: ${formatErrorMessage(err)}`));
     }
   };
@@ -288,6 +297,7 @@ export function registerSlackMessageEvents(params: {
     "app_mention",
     async (args: SlackEventMiddlewareArgs<"app_mention"> & AllMiddlewareArgs) => {
       const { event, body, context, client } = args;
+      const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
       try {
         const eventScope = resolveEventScope({ body, context, client });
         if (eventScope === null) {
@@ -328,9 +338,14 @@ export function registerSlackMessageEvents(params: {
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
           wasMentioned: true,
-          ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+          ...(eventScope ? { eventScope } : {}),
+          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
       } catch (err) {
+        if (turnAdoptionLifecycle) {
+          throw err;
+        }
         ctx.runtime.error?.(danger(`slack mention handler failed: ${formatErrorMessage(err)}`));
       }
     },

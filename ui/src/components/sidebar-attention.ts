@@ -10,12 +10,11 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
-import { isCronJobActiveFailure } from "../lib/cron-status.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
-import { isMonitoredAuthProvider, loadModelAuthStatus } from "../lib/model-auth.ts";
+import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { icons, type IconName } from "./icons.ts";
+import { icons } from "./icons.ts";
 import {
   addDismissal,
   dismissalStoreKey,
@@ -23,109 +22,18 @@ import {
   pruneDismissals,
   saveDismissals,
   type SidebarAttentionDismissals,
-  type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
+import {
+  buildSidebarAttentionItems,
+  type SidebarAttentionItem,
+} from "./sidebar-attention-items.ts";
 
-// A cron job counts as overdue when its next planned run is this far in the
-// past; mirrors the threshold the Overview attention list used.
-const CRON_OVERDUE_GRACE_MS = 300_000;
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // Always-visible windows (the macOS app) never fire visibilitychange, so a
 // slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
-
-type SidebarAttentionItem = {
-  kind: SidebarAttentionKind;
-  severity: "error" | "warning";
-  icon: IconName;
-  label: string;
-  routeId: NavigationRouteId;
-  // Sorted identities of the entities behind the chip. A dismissal stores
-  // this signature so the chip stays hidden only while the same incident set
-  // is affected; any change (new job/provider, new overdue run) resurfaces
-  // it. Failed-cron and auth chips key on entity ids alone on purpose: a
-  // persistently failing job gets a new lastRunAtMs every schedule tick, and
-  // short-lived OAuth tokens (e.g. Copilot) roll expiry continuously — either
-  // in the signature would resurface a dismissed chip within minutes. The
-  // cost is that a recover-then-recur cycle nobody observed stays snoozed;
-  // pruneAfterRefresh re-arms as soon as any tab sees the cleared state.
-  signature: string;
-};
-
-function buildSidebarAttentionItems(params: {
-  cronJobs: readonly CronJob[];
-  modelAuthStatus: ModelAuthStatusResult | null;
-  now: number;
-}): SidebarAttentionItem[] {
-  const items: SidebarAttentionItem[] = [];
-  const signatureOf = (ids: readonly string[]) => ids.toSorted().join("\n");
-
-  const failedCron = params.cronJobs.filter(isCronJobActiveFailure);
-  if (failedCron.length > 0) {
-    items.push({
-      kind: "cronFailed",
-      severity: "error",
-      icon: "clock",
-      label: t("attention.cronFailed", { count: String(failedCron.length) }),
-      routeId: "cron",
-      signature: signatureOf(failedCron.map((job) => job.id)),
-    });
-  }
-  const overdueCron = params.cronJobs.filter(
-    (job) =>
-      job.enabled &&
-      job.state?.nextRunAtMs != null &&
-      params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
-  );
-  if (overdueCron.length > 0) {
-    items.push({
-      kind: "cronOverdue",
-      severity: "warning",
-      icon: "clock",
-      label: t("attention.cronOverdue", { count: String(overdueCron.length) }),
-      routeId: "cron",
-      // nextRunAtMs is the incident identity: stable while a job stays stuck,
-      // new once it runs again and later goes overdue anew — so a fresh
-      // overdue episode resurfaces even if no tab observed the recovery.
-      signature: signatureOf(overdueCron.map((job) => `${job.id}@${job.state?.nextRunAtMs}`)),
-    });
-  }
-
-  const monitored = (params.modelAuthStatus?.providers ?? []).filter(isMonitoredAuthProvider);
-  const expired = monitored.filter(
-    (provider) => provider.status === "expired" || provider.status === "missing",
-  );
-  if (expired.length > 0) {
-    items.push({
-      kind: "modelAuthExpired",
-      severity: "error",
-      icon: "plug",
-      label: t("attention.modelAuthExpired", {
-        providers: expired.map((provider) => provider.displayName).join(", "),
-      }),
-      routeId: "model-providers",
-      signature: signatureOf(expired.map((provider) => provider.provider)),
-    });
-  }
-  const expiring = monitored.filter((provider) => provider.status === "expiring");
-  if (expiring.length > 0) {
-    items.push({
-      kind: "modelAuthExpiring",
-      severity: "warning",
-      icon: "plug",
-      label: t("attention.modelAuthExpiring", {
-        providers: expiring
-          .map((provider) => `${provider.displayName} (${provider.expiry?.label ?? "soon"})`)
-          .join(", "),
-      }),
-      routeId: "model-providers",
-      signature: signatureOf(expiring.map((provider) => provider.provider)),
-    });
-  }
-  return items;
-}
 
 class SidebarAttention extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -136,19 +44,25 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @state() private dismissed: SidebarAttentionDismissals = {};
 
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
+  @property({ attribute: false }) onOpenApprovals?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
 
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.gateway,
-    (gateway) => {
-      this.synchronize(gateway);
-      return gateway.subscribe(() => this.synchronize(gateway));
-    },
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        this.synchronize(gateway);
+        return gateway.subscribe(() => this.synchronize(gateway));
+      },
+    )
+    .watch(
+      () => this.context?.overlays,
+      (overlays, notify) => overlays.subscribe(() => notify()),
+    );
 
   // Cross-tab sync: another tab's dismiss/prune fires "storage" here, so this
   // tab re-reads instead of rendering (or later writing) a stale snapshot.
@@ -253,6 +167,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const items = buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
+      approvalQueue: this.context?.overlays.snapshot.approvalQueue ?? [],
       now: Date.now(),
     });
     const stored = loadDismissals(this.dismissedScope);
@@ -270,6 +185,14 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.dismissed = addDismissal(this.dismissedScope, item.kind, item.signature);
   }
 
+  private open(item: SidebarAttentionItem) {
+    if (item.action.kind === "openApprovals") {
+      this.onOpenApprovals?.();
+      return;
+    }
+    this.onNavigate?.(item.action.routeId);
+  }
+
   override render() {
     if (!this.context?.gateway.snapshot.connected) {
       return nothing;
@@ -277,6 +200,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const items = buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
+      approvalQueue: this.context.overlays.snapshot.approvalQueue,
       now: Date.now(),
     }).filter((item) => this.dismissed[item.kind] !== item.signature);
     if (items.length === 0) {
@@ -291,7 +215,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
                 type="button"
                 class="sidebar-attention__open"
                 title=${item.label}
-                @click=${() => this.onNavigate?.(item.routeId)}
+                @click=${() => this.open(item)}
               >
                 <span class="sidebar-attention__icon" aria-hidden="true">${icons[item.icon]}</span>
                 <span class="sidebar-attention__label">${item.label}</span>

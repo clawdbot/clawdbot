@@ -130,7 +130,7 @@
     },
     "timeoutMs": {
       "label": "Timeout (ms)",
-      "help": "Recall work budget on the main lane. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
+      "help": "Recall work budget on the main lane. Defaults to 15000 ms, or 45000 ms when the recall is eligible for CLI-backend dispatch on subscription-only claude-cli auth (CLI-backed recalls include process startup); API-key routes keep 15000 ms. Explicit values always win. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
     },
     "setupGraceTimeoutMs": {
       "label": "Setup Grace Timeout (ms)",

@@ -7,6 +7,10 @@ on:
         description: Existing OpenClaw release tag to receive Linux companion bundles, for example v2026.7.1
         required: true
         type: string
+      desktop-test-bundles:
+        description: Also build unsigned macOS/Windows test bundles
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -19,12 +23,14 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  build_and_attach:
-    name: Build and attach Linux companion bundles
-    # Oldest supported build base: bundles link against this glibc, so newer
-    # runners would silently drop Ubuntu 22.04/Debian 12 users.
+  validate_release:
+    name: Validate release tag
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 10
+    # Build jobs check out this exact SHA so a tag force-moved mid-run cannot
+    # swap in code the ancestry guard never validated.
+    outputs:
+      tag_sha: ${{ steps.ancestry.outputs.tag_sha }}
     steps:
       - name: Validate tag input format
         env:
@@ -47,22 +53,38 @@ jobs:
           persist-credentials: false
 
       - name: Ensure tag commit is reachable from main
+        id: ancestry
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          git fetch --quiet origin main
+          timeout --signal=TERM --kill-after=10s 120s git fetch --quiet origin main
           tag_sha=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
           if ! git merge-base --is-ancestor "${tag_sha}" origin/main; then
             echo "Tag ${RELEASE_TAG} (${tag_sha}) is not reachable from main; Linux bundles ship for main-based releases only."
             exit 1
           fi
+          echo "tag_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Ensure matching GitHub release exists
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName
+
+  build_linux:
+    name: Build Linux companion bundles
+    needs: validate_release
+    # Oldest supported build base: bundles link against this glibc, so newer
+    # runners would silently drop Ubuntu 22.04/Debian 12 users.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout selected tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.validate_release.outputs.tag_sha }}
+          persist-credentials: false
 
       - name: Install Tauri system dependencies
         run: |
@@ -104,51 +126,266 @@ jobs:
           pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
             --config "{\"version\":\"${version}\"}"
 
-      - name: Verify and rename bundles for the release tag
+      - name: Verify and rename Linux bundles
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
           version="${RELEASE_TAG#v}"
-          deb=$(ls apps/linux/src-tauri/target/release/bundle/deb/*.deb)
-          deb_version=$(dpkg-deb -f "${deb}" Version)
+          debs=(apps/linux/src-tauri/target/release/bundle/deb/*.deb)
+          appimages=(apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [[ ${#debs[@]} -ne 1 || ${#appimages[@]} -ne 1 || ! -f "${appimages[0]}.sig" ]]; then
+            echo "Expected one deb, one AppImage, and its updater signature"
+            exit 1
+          fi
+          deb_version=$(dpkg-deb -f "${debs[0]}" Version)
           if [[ "${deb_version}" != "${version}"* ]]; then
             echo "Debian package version '${deb_version}' does not match release version '${version}'"
             exit 1
           fi
-          mkdir -p dist/linux-app
-          cp "${deb}" "dist/linux-app/OpenClaw-${version}-amd64.deb"
-          cp apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage \
-            "dist/linux-app/OpenClaw-${version}-amd64.AppImage"
-          (cd dist/linux-app && sha256sum ./* > SHA256SUMS.linux-app.txt)
-          cat dist/linux-app/SHA256SUMS.linux-app.txt
+          mkdir -p dist/linux-app/release dist/linux-app/signatures
+          cp "${debs[0]}" "dist/linux-app/release/OpenClaw-${version}-amd64.deb"
+          cp "${appimages[0]}" "dist/linux-app/release/OpenClaw-${version}-amd64.AppImage"
+          cp "${appimages[0]}.sig" \
+            "dist/linux-app/signatures/OpenClaw-${version}-amd64.AppImage.sig"
 
-      - name: Generate updater manifest (latest.json)
+      - name: Upload Linux bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-app-release
+          path: dist/linux-app
+          if-no-files-found: error
+
+  # TEST-ONLY bundles: no Apple codesigning/notarization or Authenticode.
+  # Users must bypass Gatekeeper or SmartScreen before running them.
+  build_macos:
+    name: Build unsigned macOS test bundles
+    if: ${{ inputs['desktop-test-bundles'] }}
+    needs: validate_release
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout selected tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.validate_release.outputs.tag_sha }}
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Build macOS test bundles
+        working-directory: apps/linux/src-tauri
         env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          pnpm dlx @tauri-apps/cli@2.11.4 build --bundles app,dmg \
+            --config "{\"version\":\"${version}\"}"
+
+      - name: Verify and rename macOS bundles
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          version="${RELEASE_TAG#v}"
+          apps=(apps/linux/src-tauri/target/release/bundle/macos/*.app)
+          archives=(apps/linux/src-tauri/target/release/bundle/macos/*.app.tar.gz)
+          dmgs=(apps/linux/src-tauri/target/release/bundle/dmg/*.dmg)
+          if [[ ${#apps[@]} -ne 1 || ${#archives[@]} -ne 1 || ${#dmgs[@]} -ne 1 || ! -f "${archives[0]}.sig" ]]; then
+            echo "Expected one app, updater archive, updater signature, and dmg"
+            exit 1
+          fi
+          bundle_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            "${apps[0]}/Contents/Info.plist")
+          if [[ "${bundle_version}" != "${version}" ]]; then
+            echo "macOS bundle version '${bundle_version}' does not match release version '${version}'"
+            exit 1
+          fi
+          mkdir -p dist/macos-app/release dist/macos-app/signatures
+          cp "${dmgs[0]}" "dist/macos-app/release/OpenClaw-${version}-darwin-aarch64.dmg"
+          cp "${archives[0]}" \
+            "dist/macos-app/release/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
+          cp "${archives[0]}.sig" \
+            "dist/macos-app/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig"
+
+      - name: Upload macOS test bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-app-release
+          path: dist/macos-app
+          if-no-files-found: error
+
+  build_windows:
+    name: Build unsigned Windows test bundle
+    if: ${{ inputs['desktop-test-bundles'] }}
+    needs: validate_release
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout selected tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.validate_release.outputs.tag_sha }}
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Build Windows test bundle
+        working-directory: apps/linux/src-tauri
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis \
+            --config "{\"version\":\"${version}\"}"
+
+      - name: Verify and rename Windows bundle
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:RELEASE_TAG.Substring(1)
+          $installers = @(Get-ChildItem "apps/linux/src-tauri/target/release/bundle/nsis/*.exe")
+          if ($installers.Count -ne 1) {
+            throw "Expected one NSIS installer; found $($installers.Count)"
+          }
+          $installer = $installers[0]
+          $signature = "$($installer.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signature)) {
+            throw "Missing NSIS updater signature: $signature"
+          }
+          if (-not $installer.VersionInfo.ProductVersion.StartsWith($version)) {
+            throw "Windows bundle version '$($installer.VersionInfo.ProductVersion)' does not match release version '$version'"
+          }
+          New-Item -ItemType Directory -Force -Path "dist/windows-app/release", "dist/windows-app/signatures" | Out-Null
+          Copy-Item -LiteralPath $installer.FullName -Destination "dist/windows-app/release/OpenClaw-$version-windows-x86_64.exe"
+          Copy-Item -LiteralPath $signature -Destination "dist/windows-app/signatures/OpenClaw-$version-windows-x86_64.exe.sig"
+
+      - name: Upload Windows test bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-app-release
+          path: dist/windows-app
+          if-no-files-found: error
+
+  publish:
+    name: Publish companion bundles and updater manifest
+    if: >-
+      ${{
+        always() &&
+        needs.build_linux.result == 'success' &&
+        (!inputs['desktop-test-bundles'] ||
+          (needs.build_macos.result == 'success' && needs.build_windows.result == 'success'))
+      }}
+    needs:
+      - validate_release
+      - build_linux
+      - build_macos
+      - build_windows
+    # One shared desktop-test channel asset must not race across release tags.
+    concurrency:
+      group: linux-app-release-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Download Linux bundles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: linux-app-release
+          path: dist/input/linux
+
+      - name: Download macOS test bundles
+        if: ${{ inputs['desktop-test-bundles'] }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: macos-app-release
+          path: dist/input/macos
+
+      - name: Download Windows test bundle
+        if: ${{ inputs['desktop-test-bundles'] }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: windows-app-release
+          path: dist/input/windows
+
+      - name: Assemble release assets and updater manifest
+        env:
+          DESKTOP_TEST_BUNDLES: ${{ inputs['desktop-test-bundles'] }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          # The signature is over the AppImage bytes, so renaming the file does
-          # not invalidate it. The committed pubkey verifies it in the app.
-          sig_file=$(ls apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage.sig)
-          signature=$(cat "${sig_file}")
+          mkdir -p dist/release
+          cp dist/input/linux/release/* dist/release/
+          if [[ "${DESKTOP_TEST_BUNDLES}" == "true" ]]; then
+            cp dist/input/macos/release/* dist/release/
+            cp dist/input/windows/release/* dist/release/
+          fi
+
+          # Generate this before latest.json so it covers only downloadable bundles.
+          (cd dist/release && sha256sum ./* > SHA256SUMS.linux-app.txt)
+          cat dist/release/SHA256SUMS.linux-app.txt
+
+          linux_signature=$(cat "dist/input/linux/signatures/OpenClaw-${version}-amd64.AppImage.sig")
+          url_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
           pub_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # Capture the full body (no early-closing pipe under pipefail), then
           # truncate to 2000 Unicode chars inside jq so we never split a
           # multibyte character or SIGPIPE the release-view command.
           notes=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body // ""')
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/OpenClaw-${version}-amd64.AppImage"
+          # latest.json is always the stable Linux channel. Desktop test builds
+          # use a separate manifest that Linux-only releases leave untouched.
           jq -n \
             --arg version "${version}" \
             --arg notes "${notes}" \
             --arg pub_date "${pub_date}" \
-            --arg signature "${signature}" \
-            --arg url "${url}" \
-            '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"linux-x86_64": {signature: $signature, url: $url}}}' \
-            > dist/linux-app/latest.json
-          cat dist/linux-app/latest.json
+            --arg linux_signature "${linux_signature}" \
+            --arg linux_url "${url_base}/OpenClaw-${version}-amd64.AppImage" \
+            '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"linux-x86_64": {signature: $linux_signature, url: $linux_url}}}' \
+            > dist/release/latest.json
+          cat dist/release/latest.json
+
+          if [[ "${DESKTOP_TEST_BUNDLES}" == "true" ]]; then
+            macos_signature=$(cat "dist/input/macos/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig")
+            windows_signature=$(cat "dist/input/windows/signatures/OpenClaw-${version}-windows-x86_64.exe.sig")
+            jq -n \
+              --arg version "${version}" \
+              --arg notes "${notes}" \
+              --arg pub_date "${pub_date}" \
+              --arg macos_signature "${macos_signature}" \
+              --arg macos_url "${url_base}/OpenClaw-${version}-darwin-aarch64.app.tar.gz" \
+              --arg windows_signature "${windows_signature}" \
+              --arg windows_url "${url_base}/OpenClaw-${version}-windows-x86_64.exe" \
+              '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"darwin-aarch64": {signature: $macos_signature, url: $macos_url}, "windows-x86_64": {signature: $windows_signature, url: $windows_url}}}' \
+              > dist/release/latest-desktop-test.json
+            cat dist/release/latest-desktop-test.json
+          fi
 
       - name: Attach bundles to the release
         env:
@@ -159,4 +396,47 @@ jobs:
           gh release upload "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --clobber \
-            dist/linux-app/*
+            dist/release/*
+
+      - name: Publish desktop test update channel
+        if: ${{ inputs['desktop-test-bundles'] }}
+        env:
+          DESKTOP_TEST_CHANNEL_TAG: desktop-test
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
+        run: |
+          set -euo pipefail
+          channel_dir="${RUNNER_TEMP}/desktop-test-channel"
+          candidate_version="${RELEASE_TAG#v}"
+          mkdir -p "${channel_dir}"
+
+          if gh release view "${DESKTOP_TEST_CHANNEL_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            has_manifest=$(gh release view "${DESKTOP_TEST_CHANNEL_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '[.assets[].name] | index("latest-desktop-test.json") != null')
+            if [[ "${has_manifest}" == "true" ]]; then
+              gh release download "${DESKTOP_TEST_CHANNEL_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --pattern latest-desktop-test.json \
+                --dir "${channel_dir}"
+              current_version=$(jq -er '.version | strings' "${channel_dir}/latest-desktop-test.json")
+              newest_version=$(printf '%s\n' "${current_version}" "${candidate_version}" | LC_ALL=C sort -V | tail -n 1)
+              if [[ "${newest_version}" != "${candidate_version}" ]]; then
+                echo "Desktop test channel is already newer (${current_version}); leaving it unchanged."
+                exit 0
+              fi
+            fi
+          else
+            gh release create "${DESKTOP_TEST_CHANNEL_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${TAG_SHA}" \
+              --prerelease \
+              --title "OpenClaw desktop test update channel" \
+              --notes "Opt-in updater manifest for unsigned macOS and Windows Tauri test builds."
+          fi
+          gh release upload "${DESKTOP_TEST_CHANNEL_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            dist/release/latest-desktop-test.json

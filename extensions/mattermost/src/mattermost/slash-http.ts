@@ -6,10 +6,12 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -830,7 +832,7 @@ async function handleSlashCommandAsync(params: {
   }
 
   // Build inbound context — the command text is the body
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
+  const ctxPayload = finalizeInboundContext({
     Body: commandText,
     BodyForAgent: commandText,
     RawBody: commandText,
@@ -886,14 +888,16 @@ async function handleSlashCommandAsync(params: {
       },
     },
   });
-  const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
+  const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
   const deliveryBarrier = createMattermostReplyDeliveryBarrier({
     isDirect: kind === "direct",
     dmRetryOptions: account.config.dmChannelRetry,
   });
 
-  const { dispatcher, replyOptions, markDispatchIdle } =
-    core.channel.reply.createReplyDispatcherWithTyping({
+  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+    ctx: ctxPayload,
+    cfg,
+    dispatcherOptions: {
       ...replyPipeline,
       resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
       onDeliverySettled: deliveryBarrier.markDeliverySettled,
@@ -918,26 +922,13 @@ async function handleSlashCommandAsync(params: {
           `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
         );
       },
-      onReplyStart: typingCallbacks?.onReplyStart,
-    });
-
-  await core.channel.reply.withReplyDispatcher({
-    dispatcher,
-    onSettled: () => {
-      markDispatchIdle();
+      typingCallbacks,
     },
-    run: () =>
-      core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
-        dispatcher,
-        replyOptions: {
-          ...replyOptions,
-          disableBlockStreaming:
-            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-          onModelSelected,
-        },
-      }),
+    replyOptions: {
+      disableBlockStreaming:
+        typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+      onModelSelected,
+    },
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

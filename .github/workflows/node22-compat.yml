@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -23,6 +24,77 @@ jobs:
           node-version: "22.22.3"
           install-bun: "false"
 
+      - name: Resolve trusted declaration cache artifact
+        id: declaration_cache
+        env:
+          ARTIFACT_NAME: build-all-cache-v1-Linux-X64-node-22.22.3
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! runs_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/node22-compat.yml/runs?branch=main&status=success&per_page=5" \
+              2>/dev/null
+          )"; then
+            echo "::warning::Unable to list trusted Node 22 runs; continuing cold."
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r run_id source_sha; do
+            [[ "$run_id" =~ ^[1-9][0-9]*$ && "$source_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+            if ! artifacts_json="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=10" \
+                2>/dev/null
+            )"; then
+              continue
+            fi
+            artifact_id="$(
+              jq -r \
+                --arg name "$ARTIFACT_NAME" \
+                --arg run_id "$run_id" \
+                'first(.artifacts[] | select(
+                  .expired == false and
+                  .name == $name and
+                  (.workflow_run.id | tostring) == $run_id
+                ) | .id) // empty' \
+                <<<"$artifacts_json"
+            )"
+            if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+              continue
+            fi
+            echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+            exit 0
+          done < <(
+            jq -r '
+              .workflow_runs[] |
+              select(
+                .status == "completed" and
+                .conclusion == "success" and
+                .head_branch == "main" and
+                (.path | split("@")[0]) == ".github/workflows/node22-compat.yml" and
+                (.event == "schedule" or .event == "workflow_dispatch")
+              ) |
+              [.id, .head_sha] |
+              @tsv
+            ' <<<"$runs_json"
+          )
+
+      - name: Restore trusted declaration cache artifact
+        if: steps.declaration_cache.outputs.artifact_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.declaration_cache.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: .artifacts/build-all-cache
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.declaration_cache.outputs.run_id }}
+
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 
@@ -35,3 +107,15 @@ jobs:
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
+
+      - name: Publish trusted declaration cache artifact
+        if: success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          compression-level: 1
+          if-no-files-found: error
+          include-hidden-files: true
+          name: build-all-cache-v1-${{ runner.os }}-${{ runner.arch }}-node-22.22.3
+          overwrite: true
+          path: .artifacts/build-all-cache
+          retention-days: 14

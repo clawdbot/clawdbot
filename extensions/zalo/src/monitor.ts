@@ -1,15 +1,17 @@
 // Zalo plugin module implements monitor behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
-import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatInboundMediaUnavailableText,
+  resolveChannelInboundRouteEnvelope,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
@@ -568,7 +570,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   const { isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } = authorization;
   const agentBody = agentBodyOverride ?? rawBody;
 
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
@@ -576,8 +578,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       kind: isGroup ? ("group" as const) : ("direct" as const),
       id: chatId,
     },
-    runtime: core.channel,
-    sessionStore: config.session?.store,
   });
 
   if (
@@ -591,7 +591,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
   const timestamp = resolveZaloTimestampMs(date);
-  const { storePath, body } = buildEnvelope({
+  const body = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
     timestamp,
@@ -615,6 +615,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },
@@ -673,17 +674,12 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
   };
 
-  await core.channel.inbound.dispatchReply({
+  await core.channel.inbound.dispatch({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       preparePayload: (payload) =>
         prepareZaloDurableReplyPayload({

@@ -217,12 +217,15 @@ is bundled and enabled by default; a native macOS node advertises the read-only
 Claude session commands when the local `~/.claude/projects/` directory exists.
 Approve the node pairing upgrade when those commands first appear.
 
-The sidebar groups rows by their Gateway or paired-node host, starts with the
-newest bounded page from each host, and refreshes on the normal 30-second
-cadence. Use **Load more sessions** below a catalog group to append the next page
-for every host that has more history; appended rows stay visible and are
-re-fetched to the same depth across refreshes. Catalog clients use
-`sessions.catalog.list`; opening a row uses `sessions.catalog.read`.
+The sidebar groups rows by their Gateway or paired-node host and shows each
+host's newest bounded page as soon as that computer answers. It reconciles again
+after host-connectivity changes, when the page regains focus, and at most every
+30 seconds while visible, so Claude sessions created outside OpenClaw appear
+without a reload. A changed catalog gets a faster follow-up pass. Use **Load more
+sessions** below a catalog group to append the next page for every host that has
+more history; appended rows stay visible and are re-fetched to the same depth
+across refreshes. Catalog clients use `sessions.catalog.list`; opening a row uses
+`sessions.catalog.read`.
 
 Terminal takeover resolves `claude` from the owning host user's login-shell
 PATH before the service/daemon PATH. This keeps app-launched sessions aligned

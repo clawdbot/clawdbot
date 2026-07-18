@@ -26,6 +26,8 @@ export type TaskSummary = {
   progressSummary?: string;
   terminalSummary?: string;
   error?: string;
+  /** Bounded task input returned by tasks.get, not tasks.list. */
+  prompt?: string;
 };
 
 type TaskEventPayload =
@@ -103,6 +105,7 @@ function normalizeTaskSummary(value: unknown): TaskSummary | null {
   const progressSummary = optionalString(value.progressSummary);
   const terminalSummary = optionalString(value.terminalSummary);
   const error = optionalString(value.error);
+  const prompt = optionalString(value.prompt);
   return {
     id,
     taskId,
@@ -123,6 +126,7 @@ function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(prompt ? { prompt } : {}),
   };
 }
 
@@ -228,6 +232,13 @@ export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
   return sortTasks(
     value.tasks.map(normalizeTaskSummary).filter((task): task is TaskSummary => task !== null),
   );
+}
+
+export function normalizeTasksGetResult(value: unknown): TaskSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return normalizeTaskSummary(value.task);
 }
 
 // The ledger pages newest-first, so one page can hide long-running tasks behind

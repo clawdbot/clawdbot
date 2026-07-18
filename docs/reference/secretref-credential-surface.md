@@ -61,6 +61,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
+- `plugins.entries.webhooks.config.routes.*.secret`
 - `tools.web.search.*.apiKey`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`
@@ -135,7 +136,9 @@ Notes:
 - In `openclaw.json`, SecretRefs must use structured objects such as `{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}`. Legacy `secretref-env:<ENV_VAR>` marker strings are rejected on SecretRef credential paths; run `openclaw doctor --fix` to migrate valid markers.
 - OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.
 - For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces. Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
+- Cold Gateway startup can isolate resolution failures for mapped owners. The initial mapped owners are `models.providers.*` and the built-in TTS capability (`messages.tts.providers.*`, `agents.list[].tts.providers.*`, and channel voice TTS provider keys). Startup keeps each failed owner's explicit refs in the runtime snapshot, reports the owner through status and doctor, and rejects requests for that owner without trying environment or profile credentials. Gateway ingress auth remains required. Structurally invalid refs or values and currently unmapped owners fail startup. Reload and config-write preflight remain strict and retain the last-known-good snapshot.
 - For web search: in explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active. In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active, and non-selected provider refs are treated as inactive until selected. Legacy `tools.web.search.*` provider paths still resolve during the compatibility window, but the canonical SecretRef surface is `plugins.entries.<plugin>.config.webSearch.*`.
+- Slack `identity: "user"` uses `channels.slack.userToken` with `channels.slack.appToken` for Socket Mode or `channels.slack.signingSecret` for HTTP mode. The same pairing applies under `channels.slack.accounts.*`; no bot token is required for this identity.
 
 ## Unsupported credentials
 

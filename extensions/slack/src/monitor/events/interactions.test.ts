@@ -32,6 +32,13 @@ const resolveApprovalOverGatewayMock = vi.hoisted(() =>
     approval: { status: "allowed", decision: "allow-once" },
   })),
 );
+const resolveQuestionOverGatewayMock = vi.hoisted(() =>
+  vi.fn(async (_arg: unknown) => ({
+    status: "answered" as const,
+    questionId: "target",
+    optionValue: "Production",
+  })),
+);
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
 
@@ -53,6 +60,10 @@ vi.mock("openclaw/plugin-sdk/heartbeat-runtime", async (importOriginal) => {
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: (arg: unknown) => resolveApprovalOverGatewayMock(arg),
+}));
+
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
+  resolveQuestionOverGateway: (arg: unknown) => resolveQuestionOverGatewayMock(arg),
 }));
 
 vi.mock("../../interactive-dispatch.js", () => ({
@@ -424,6 +435,12 @@ describe("registerSlackInteractionEvents", () => {
     resolveApprovalOverGatewayMock.mockResolvedValue({
       applied: true,
       approval: { status: "allowed", decision: "allow-once" },
+    });
+    resolveQuestionOverGatewayMock.mockClear();
+    resolveQuestionOverGatewayMock.mockResolvedValue({
+      status: "answered",
+      questionId: "target",
+      optionValue: "Production",
     });
     dispatchPluginInteractiveHandlerMock.mockResolvedValue({
       matched: false,
@@ -1283,6 +1300,46 @@ describe("registerSlackInteractionEvents", () => {
       ],
     });
     expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("resolves typed question buttons without enqueueing an agent interaction", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await getHandler()({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: { ts: "100.200", text: "Question", blocks: [] },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:question_button:1:2",
+        block_id: "openclaw_reply_buttons_1",
+        value: `slq1:${questionId}:1`,
+        text: { type: "plain_text", text: "Production" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(resolveQuestionOverGatewayMock).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      questionId,
+      optionIndex: 1,
+      senderId: "U123",
+      clientDisplayName: "Slack question (default)",
+    });
+    expect(respond).toHaveBeenCalledWith({
+      text: "Answer submitted.",
+      response_type: "ephemeral",
+    });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("cleans stale typed buttons and shows the canonical first-answer winner", async () => {

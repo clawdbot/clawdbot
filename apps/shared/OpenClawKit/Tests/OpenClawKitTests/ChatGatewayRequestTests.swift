@@ -78,18 +78,38 @@ struct ChatGatewayRequestTests {
         #expect(request.params["agentId"] == nil)
     }
 
-    @Test func `settings patch request encodes model and thinking atomically`() {
+    @Test func `settings patch request encodes model thinking and verbosity atomically`() {
         let request = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: "global",
             agentID: "reviewer",
             model: .some("openai/gpt-5.6-sol"),
-            thinkingLevel: .some("ultra"))
+            thinkingLevel: .some("ultra"),
+            verboseLevel: .some("full"))
 
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
         #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
         #expect(request.params["thinkingLevel"]?.value as? String == "ultra")
+        #expect(request.params["verboseLevel"]?.value as? String == "full")
+    }
+
+    @Test func `settings patch request encodes fast values and explicit resets`() {
+        let reset = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "main",
+            agentID: nil,
+            thinkingLevel: .some(nil),
+            fastMode: .some(nil),
+            verboseLevel: .some(nil))
+        let automatic = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "main",
+            agentID: nil,
+            fastMode: .some(.automatic))
+
+        #expect(reset.params["thinkingLevel"]?.value is NSNull)
+        #expect(reset.params["fastMode"]?.value is NSNull)
+        #expect(reset.params["verboseLevel"]?.value is NSNull)
+        #expect(automatic.params["fastMode"]?.value as? String == "auto")
     }
 
     @Test func `fork and create requests preserve routing identity`() {
@@ -111,6 +131,34 @@ struct ChatGatewayRequestTests {
         #expect(create.params["agentId"]?.value as? String == "reviewer")
         #expect(create.params["parentSessionKey"]?.value as? String == "global")
         #expect(create.params["worktree"]?.value as? Bool == true)
+    }
+
+    @Test func `rename clear archive and fork use session mutation contracts`() {
+        let rename = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:child",
+            agentID: nil,
+            label: .some(nil),
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unread: nil)
+        let archive = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:child",
+            agentID: nil,
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: true,
+            unread: nil)
+        let fork = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: "agent:main:child",
+            agentID: nil)
+
+        #expect(rename.params["label"]?.value is NSNull)
+        #expect(archive.params["archived"]?.value as? Bool == true)
+        #expect(fork.method == "sessions.create")
+        #expect(fork.params["parentSessionKey"]?.value as? String == "agent:main:child")
+        #expect(fork.params["fork"]?.value as? Bool == true)
     }
 
     @Test func `commands request selects session agent before fallback`() {

@@ -799,6 +799,39 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(sleep).toHaveBeenCalledWith(0, undefined);
   });
 
+  it("retries read JSON POST 429 rate limit responses", async () => {
+    fetchWithSsrFGuardMock.mockReset();
+    const firstRelease = vi.fn(async () => undefined);
+    const secondRelease = vi.fn(async () => undefined);
+    const sleep = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response("rate limited", { status: 429, statusText: "Too Many Requests" }),
+        finalUrl: "https://api.example.com",
+        release: firstRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(null, { status: 200 }),
+        finalUrl: "https://api.example.com",
+        release: secondRelease,
+      });
+
+    const result = await postJsonRequest({
+      url: "https://api.example.com/v1/analyze",
+      headers: new Headers(),
+      body: { media: "base64" },
+      fetchFn: fetch,
+      retryStage: "read",
+      retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
+    });
+
+    expect(result.response.status).toBe(200);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(firstRelease).toHaveBeenCalledOnce();
+    expect(secondRelease).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledWith(0, undefined);
+  });
+
   it("forwards explicit pinDns overrides to transcription requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),

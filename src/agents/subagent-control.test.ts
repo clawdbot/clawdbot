@@ -1409,7 +1409,8 @@ describe("killAllControlledSubagentRuns", () => {
   });
 
   it("continues bulk cancellation after one registry persistence failure", async () => {
-    let persistenceAttempts = 0;
+    let failNextPersistence = true;
+    let persistedAfterFailure = false;
     subagentRegistryTesting.setDepsForTest({
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
       ensureContextEnginesInitialized: () => {},
@@ -1417,10 +1418,11 @@ describe("killAllControlledSubagentRuns", () => {
       getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {
-        persistenceAttempts += 1;
-        if (persistenceAttempts === 1) {
+        if (failNextPersistence) {
+          failNextPersistence = false;
           throw new Error("sqlite busy");
         }
+        persistedAfterFailure = true;
       },
       restoreSubagentRunsFromDisk: () => 0,
       resolveContextEngine: async () => ({
@@ -1464,7 +1466,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     expect(result).toEqual({ status: "ok", killed: 1, labels: ["second bulk task"] });
-    expect(persistenceAttempts).toBe(2);
+    expect(persistedAfterFailure).toBe(true);
     expect(getSubagentRunByChildSessionKey(first.childSessionKey)?.endedAt).toBeUndefined();
     expect(getSubagentRunByChildSessionKey(second.childSessionKey)?.endedAt).toBeTypeOf("number");
   });

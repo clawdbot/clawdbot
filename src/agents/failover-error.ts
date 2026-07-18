@@ -23,6 +23,14 @@ const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 
+export type CliTimeoutContext = {
+  mode: "overall" | "no-output";
+  timeoutSeconds: number;
+  observedActivity: boolean;
+  activeToolCount: number;
+  backgroundTaskCount: number;
+};
+
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -41,6 +49,7 @@ export class FailoverError extends Error {
   readonly sessionId?: string;
   readonly lane?: string;
   readonly suspend?: boolean;
+  readonly cliTimeout?: CliTimeoutContext;
 
   constructor(
     message: string,
@@ -58,6 +67,7 @@ export class FailoverError extends Error {
       lane?: string;
       cause?: unknown;
       suspend?: boolean;
+      cliTimeout?: CliTimeoutContext;
     },
   ) {
     super(message, { cause: params.cause });
@@ -74,6 +84,7 @@ export class FailoverError extends Error {
     this.sessionId = params.sessionId;
     this.lane = params.lane;
     this.suspend = params.suspend;
+    this.cliTimeout = params.cliTimeout;
   }
 }
 
@@ -111,6 +122,50 @@ export function findCliMaxTurnsError(
   ];
   for (const value of nested) {
     const found = findCliMaxTurnsError(value, seen);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+function hasCliTimeoutContext(error: FailoverError): error is FailoverError & {
+  cliTimeout: CliTimeoutContext;
+} {
+  const context = error.cliTimeout;
+  return Boolean(
+    context &&
+    (context.mode === "overall" || context.mode === "no-output") &&
+    Number.isFinite(context.timeoutSeconds) &&
+    context.timeoutSeconds >= 0 &&
+    typeof context.observedActivity === "boolean" &&
+    Number.isInteger(context.activeToolCount) &&
+    context.activeToolCount >= 0 &&
+    Number.isInteger(context.backgroundTaskCount) &&
+    context.backgroundTaskCount >= 0,
+  );
+}
+
+export function findCliTimeoutError(
+  err: unknown,
+  seen: Set<object> = new Set(),
+): (FailoverError & { cliTimeout: CliTimeoutContext }) | undefined {
+  if (isFailoverError(err) && hasCliTimeoutContext(err)) {
+    return err;
+  }
+  if (!err || typeof err !== "object" || seen.has(err)) {
+    return undefined;
+  }
+  // Failover summaries and persistence failures can wrap the terminal CLI error.
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; errors?: unknown };
+  const nested = [
+    candidate.error,
+    candidate.cause,
+    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+  ];
+  for (const value of nested) {
+    const found = findCliTimeoutError(value, seen);
     if (found) {
       return found;
     }

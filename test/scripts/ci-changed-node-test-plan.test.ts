@@ -93,6 +93,9 @@ describe("CI changed Node test plan", () => {
       ]),
     ).toBe(true);
     expect(hasPromptSnapshotAffectingChange(["scripts/generate-prompt-snapshots.ts"])).toBe(true);
+    // Workspace packages feed the generator through package-specifier imports
+    // the relative graph walk cannot see.
+    expect(hasPromptSnapshotAffectingChange(["packages/llm-core/src/index.ts"])).toBe(true);
     // The gate's own orchestration must not be able to skip the gated lane.
     expect(hasPromptSnapshotAffectingChange([".github/workflows/ci.yml"])).toBe(true);
     expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(

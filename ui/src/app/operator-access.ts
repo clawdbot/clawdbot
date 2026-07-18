@@ -26,3 +26,19 @@ export function hasOperatorAdminAccess(
     allowedScopes: auth.scopes,
   });
 }
+
+export function hasOperatorApprovalsAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth) {
+    return false;
+  }
+  if (!auth.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.approvals"],
+    allowedScopes: auth.scopes,
+  });
+}

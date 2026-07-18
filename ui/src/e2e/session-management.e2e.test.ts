@@ -1545,7 +1545,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
         await seeMore.click();
       }
-      await page.locator(".sidebar-recent-sessions").evaluate((element) => {
+      await page.locator(".sidebar-shell__body").evaluate((element) => {
         element.scrollTop = 0;
       });
       await expect
@@ -1577,9 +1577,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       expect(overlaps).toBe(0);
 
       // The squeeze regression compressed sections into the viewport with no
-      // overflow; a healthy list is taller than its container and scrolls.
+      // overflow; a healthy sidebar body is taller than its viewport and scrolls.
       const scroll = await page.evaluate(() => {
-        const list = document.querySelector(".sidebar-recent-sessions");
+        const list = document.querySelector(".sidebar-shell__body");
         if (!list) {
           return null;
         }

@@ -13,6 +13,18 @@ import type { TemplateResult } from "lit";
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import type { WorkspaceWidget } from "../types.ts";
 
+export type CustomWidgetApprovalDecision = "approve" | "reject";
+export type PendingCustomWidgetApproval = {
+  id: string;
+  title: string;
+  requestedBy: string | null;
+  deciding: boolean;
+};
+export type CustomWidgetApprovalsSource = {
+  pending: PendingCustomWidgetApproval[];
+  onDecide?: (item: PendingCustomWidgetApproval, decision: CustomWidgetApprovalDecision) => void;
+};
+
 /** Ambient context a builtin may need beyond its own binding value. */
 export type BuiltinWidgetContext = {
   /** Control UI mount path used by builtins that link to another app route. */
@@ -22,7 +34,16 @@ export type BuiltinWidgetContext = {
     ApplicationConfigCapability["current"],
     "embedSandboxMode" | "allowExternalEmbedUrls"
   >;
+  /** Ephemeral preview UI state owned by the workspace view, never the document. */
+  preview: {
+    getViewport: (widgetId: string, fallback: PreviewViewport) => PreviewViewport;
+    setViewport: (widgetId: string, viewport: PreviewViewport) => void;
+  };
+  /** Pending custom-widget decisions; no exec or plugin approval queues are exposed. */
+  customWidgetApprovals?: CustomWidgetApprovalsSource;
 };
+
+export type PreviewViewport = "desktop" | "tablet" | "mobile";
 
 /** A builtin widget renderer: pure, side-effect-free, throws only on real bugs. */
 export type BuiltinWidgetRenderer = (

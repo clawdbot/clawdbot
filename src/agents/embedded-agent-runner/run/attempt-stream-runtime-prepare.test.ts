@@ -133,7 +133,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
     trackPromptSettlePromise,
     compactionTimeoutMs: 1_000,
     guards: {},
-    history: {},
+    history: { sandboxed: false },
     stream: {},
     lifecycle: {
       isYieldDetected: () => false,

@@ -3,68 +3,27 @@ title: Codex auth profile mixed profiles
 scenario:
   id: auth-profile-codex-mixed-profiles
   surface: runtime
-  runtimeParityTier: standard
-  runtimeParityUsage:
-    expectation: not-applicable
-    reason: Local auth-selection fixture only; no assistant turn runs.
   coverage:
     primary:
       - runtime.codex-plugin.auth
     secondary:
       - auth-profiles.provider-selection
-  objective: Verify mixed openai OAuth and openai API-key profile stores select the Codex OAuth profile for Codex app-server turns.
+      - runtime.doctor-repair
+  objective: Verify doctor repairs mixed legacy Codex OAuth and OpenAI API-key profiles into canonical SQLite state and the Codex auth bridge sends the selected OAuth profile to App Server.
   successCriteria:
     - The selected auth profile id is openai:qa-oauth.
     - The openai:media-api API-key profile is present but not selected.
-    - The fixture rejects the residual provider mismatch covered by issue #78499.
+    - Doctor removes the legacy JSON store after verifying its canonical per-agent SQLite import.
+    - The Gateway-backed Codex turn emits account/login/start with chatgptAuthTokens; evidence redacts token material.
   docsRefs:
     - docs/cli/doctor.md
+    - docs/plugins/codex-harness.md
   codeRefs:
-    - extensions/qa-lab/src/auth-profile.fixture.ts
-    - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
+    - src/commands/doctor-auth-flat-profiles.ts
+    - src/agents/auth-profiles/sqlite.ts
+    - extensions/codex/src/app-server/auth-bridge.ts
+    - test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts
   execution:
-    kind: flow
-    summary: Exercise the auth-profile fixture for mixed OpenAI API-key and Codex OAuth stores.
-    config:
-      selectedProfileId: openai:qa-oauth
-      rejectedProfileId: openai:media-api
-
-flow:
-  steps:
-    - name: validates mixed-profile Codex auth selection
-      actions:
-        - set: auth
-          value:
-            expr: await qaImport("./auth-profile.fixture.js")
-        - set: tmpRoot
-          value:
-            expr: await fs.mkdtemp(path.join(env.gateway?.workspaceDir ?? "/tmp", "qa-codex-auth-"))
-        - try:
-            actions:
-              - call: auth.seedAuthProfiles
-                args:
-                  - mixed
-                  - ref: tmpRoot
-              - set: selection
-                value:
-                  expr: auth.resolveCodexAuthProfile(await auth.snapshotAuthProfiles(tmpRoot))
-              - assert:
-                  expr: "selection.status === 'ready'"
-                  message:
-                    expr: "`expected ready Codex auth selection, got ${JSON.stringify(selection)}`"
-              - assert:
-                  expr: "selection.profileId === config.selectedProfileId"
-                  message: mixed profiles must select openai OAuth
-              - assert:
-                  expr: "selection.profileId !== config.rejectedProfileId"
-                  message: codex profile must not equal openai api-key profile
-            finally:
-              - call: fs.rm
-                args:
-                  - ref: tmpRoot
-                  - recursive: true
-                    force: true
-        - assert:
-            expr: "config.selectedProfileId !== config.rejectedProfileId"
-            message: "codex profile must not equal openai api-key profile"
-      detailsExpr: "`selected=${selection.profileId} rejected=${config.rejectedProfileId}`"
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts
+    summary: Run the isolated doctor-to-SQLite-to-Gateway-to-Codex-App-Server auth product path.

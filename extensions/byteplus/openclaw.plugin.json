@@ -83,19 +83,6 @@
             }
           },
           {
-            "id": "doubao-seed-code",
-            "name": "Doubao Seed Code",
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 4096,
-            "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
             "id": "glm-4.7",
             "name": "GLM 4.7 Coding",
             "input": ["text"],
@@ -105,20 +92,6 @@
               "input": 0.0001,
               "output": 0.0002,
               "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-thinking",
-            "name": "Kimi K2 Thinking",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 32768,
-            "cost": {
-              "input": 0.6,
-              "output": 2.5,
-              "cacheRead": 0.12,
               "cacheWrite": 0
             }
           },

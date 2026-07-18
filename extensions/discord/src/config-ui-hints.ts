@@ -115,6 +115,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Spawn Context",
     help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
+  subagentProgress: {
+    label: "Discord Subagent Progress",
+    help: "Show active subagent count reactions and typing on the source message. Default: false.",
+  },
   "ui.components.accentColor": {
     label: "Discord Component Accent Color",
     help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",

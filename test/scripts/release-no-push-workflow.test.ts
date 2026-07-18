@@ -207,6 +207,7 @@ describe("release validation no-push transport", () => {
 
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
+      [FULL_RELEASE, "prepare_release_candidate"],
       [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],
       [RELEASE_CHECKS, "live_repo_e2e_release_checks"],
       [RELEASE_CHECKS, "docker_e2e_release_checks"],
@@ -337,6 +338,9 @@ describe("release validation no-push transport", () => {
     expect(verify.run).toContain('"openclaw-release-checks.yml"');
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
+    expect(dispatch.run).toContain("--connect-timeout 10");
+    expect(dispatch.run).toContain("--max-time 30");
+    expect(dispatch.run).toContain("https://api.github.com/repos/openclaw/releases/dispatches");
   });
 
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {
@@ -580,9 +584,17 @@ describe("release validation no-push transport", () => {
       expect(producer.outputs?.image_archive_sha256).toContain("archive_sha256");
       expect(producer.outputs?.image_artifact_id).toContain("artifact-id");
       expect(producer.outputs?.image_artifact_digest).toContain("artifact-digest");
-      expect(producer.outputs?.image_artifact_run_id).toBe("${{ github.run_id }}");
-      expect(producer.outputs?.image_artifact_run_attempt).toBe("${{ github.run_attempt }}");
     }
+    expect(dockerProducer.outputs?.image_artifact_run_id).toContain("github.run_id");
+    expect(dockerProducer.outputs?.image_artifact_run_id).toContain(
+      "inputs.shared_image_artifact_run_id",
+    );
+    expect(dockerProducer.outputs?.image_artifact_run_attempt).toContain("github.run_attempt");
+    expect(dockerProducer.outputs?.image_artifact_run_attempt).toContain(
+      "inputs.shared_image_artifact_run_attempt",
+    );
+    expect(liveProducer.outputs?.image_artifact_run_id).toBe("${{ github.run_id }}");
+    expect(liveProducer.outputs?.image_artifact_run_attempt).toBe("${{ github.run_attempt }}");
     expect(dockerProducer.outputs?.package_artifact_id).toContain("artifact-id");
     expect(dockerProducer.outputs?.package_artifact_digest).toContain("artifact-digest");
     expect(dockerProducer.outputs?.package_artifact_run_attempt).toContain("run_attempt");
@@ -628,13 +640,21 @@ describe("release validation no-push transport", () => {
     ]) {
       const build = step(dockerProducer, name);
       expect(build.if).toContain("shared_image_policy == 'no-push-artifact'");
-      expect(build.run).toContain("--load");
-      expect(build.run).toContain("--sbom=false");
-      expect(build.run).toContain("--provenance=false");
       expect(build.run).not.toContain("--push");
       expect(build.run).not.toContain("--sbom=true");
       expect(build.run).not.toContain("--provenance=mode=max");
     }
+    const bareBuild = step(dockerProducer, "Build bare Docker E2E image artifact");
+    expect(bareBuild.run).toContain("docker build");
+    expect(bareBuild.run).toContain("--target bare");
+    expect(bareBuild.run).toContain('--tag "$IMAGE_REF"');
+    const functionalBuild = step(dockerProducer, "Build functional Docker E2E image artifact");
+    expect(functionalBuild.run).toContain("docker build");
+    expect(functionalBuild.run).toContain("--target functional");
+    expect(functionalBuild.run).toContain(
+      "--build-context openclaw_package=.artifacts/docker-e2e-package",
+    );
+    expect(functionalBuild.run).toContain('--tag "$IMAGE_REF"');
     const packDockerArtifact = step(dockerProducer, "Pack Docker E2E image artifact");
     expect(packDockerArtifact.env?.PACKAGE_SHA256).toBe("${{ steps.package.outputs.sha256 }}");
     expect(packDockerArtifact.run).toContain("shared-image-artifact.sh");
@@ -690,7 +710,7 @@ describe("release validation no-push transport", () => {
     }
     expect(step(dockerProducer, "Upload Docker E2E image artifact")).toMatchObject({
       id: "upload_image_artifact",
-      if: "inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_e2e_image == '1'",
+      if: "inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_artifact_id == ''",
       with: { "if-no-files-found": "error" },
     });
     expect(step(liveProducer, "Pack live-test image artifact").run).toContain(

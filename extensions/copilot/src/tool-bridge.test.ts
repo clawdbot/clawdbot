@@ -500,6 +500,7 @@ describe("createCopilotToolBridge", () => {
           forceMessageTool: true,
           enableHeartbeatTool: true,
           forceHeartbeatTool: false,
+          delegationCapability: "report_only",
         } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
@@ -532,6 +533,7 @@ describe("createCopilotToolBridge", () => {
         requireExplicitMessageTarget: true,
         forceMessageTool: true,
         enableHeartbeatTool: true,
+        delegationCapability: "report_only",
       });
     });
 

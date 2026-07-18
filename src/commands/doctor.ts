@@ -58,9 +58,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       outputRuntime.log(
         `- freelist=${report.before.freelistPages}->${report.after.freelistPages} pages, page-size=${report.after.pageSizeBytes} bytes, auto-vacuum=${report.before.autoVacuum}->${report.after.autoVacuum}`,
       );
-      outputRuntime.log(
-        `- quick-check=${report.quickCheck}, integrity-check=${report.integrityCheck}, path=${report.path}`,
-      );
+      outputRuntime.log(`- integrity-check=${report.integrityCheck}, path=${report.path}`);
     }
     outputRuntime.exit(0);
     return;

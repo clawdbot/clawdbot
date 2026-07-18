@@ -132,9 +132,10 @@ export function buildSessionContext(
   const path: SessionEntry[] = [];
   let current: SessionEntry | undefined = leaf;
   while (current) {
-    path.unshift(current);
+    path.push(current);
     current = current.parentId ? byId.get(current.parentId) : undefined;
   }
+  path.reverse();
   return buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
 }
 

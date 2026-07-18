@@ -6,6 +6,7 @@ import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
+import type { DiscordIngressLifecycle } from "./ingress.js";
 import type { DiscordChannelInfo, DiscordMediaInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
@@ -35,6 +36,7 @@ type DiscordMessagePreflightSharedFields = {
   replyToMode: ReplyToMode;
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
+  turnAdoptionLifecycle?: DiscordIngressLifecycle;
 };
 
 export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {

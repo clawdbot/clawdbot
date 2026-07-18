@@ -252,7 +252,7 @@ describe("QA Lab UI evidence render", () => {
                   source: "ux-matrix:web-ui:first-run",
                 },
               ],
-              coverage: [{ id: "ui.control", role: "primary" }],
+              coverage: [],
               failureReason: null,
               id: "ux-matrix.web-ui.first-run",
               kind: "ux-matrix-cell",
@@ -279,10 +279,11 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: ["screenshot"],
                   artifactPaths: ["screenshot.png"],
-                  coverageIds: ["ui.control"],
+                  coverageIds: [],
                   runner: {
                     availability: "local",
-                    command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+                    command:
+                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
                     lane: "web-ui-playwright",
                     workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
                   },
@@ -295,10 +296,11 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: [],
                   artifactPaths: [],
-                  coverageIds: ["cli.entrypoint"],
+                  coverageIds: [],
                   runner: {
                     availability: "local",
-                    command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+                    command:
+                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
                     lane: "cli-status",
                     workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
                   },
@@ -316,7 +318,7 @@ describe("QA Lab UI evidence render", () => {
             },
             preflight: { adbDevices: null, memory: null },
             releaseLedger: null,
-            rootPath: ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1",
+            rootPath: ".artifacts/qa-e2e/suite/script/ux-matrix-producer/run-1",
             scorecard: null,
           },
           profile: null,
@@ -329,7 +331,7 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
-    expect(html).toContain("Coverage: cli.entrypoint");
+    expect(html).not.toContain("Coverage:");
     expect(html).toContain("Runner: cli-status");
     expect(html).toContain("Open media artifact");
     expect(html).toContain("Open video artifact");

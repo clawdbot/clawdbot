@@ -337,17 +337,35 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("kills lingering verified gateway listeners after schtasks stop", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       inspectPortUsage
         .mockResolvedValueOnce(busyPortUsage(4242))
         .mockResolvedValueOnce(freePortUsage());
 
-      await stopScheduledTask({ env, stdout });
+      await stopScheduledTask({ env, stdout, onMutation });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(4242);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
+    });
+  });
+
+  it("audits a successful task stop before a later output failure", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      pushSuccessfulSchtasksResponses(3);
+      const onMutation = vi.fn();
+      const stdout = {
+        write: vi.fn(() => {
+          throw new Error("output failed");
+        }),
+      } as unknown as NodeJS.WritableStream;
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow("output failed");
+
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     });
   });
 
@@ -418,19 +436,21 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(4);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
         .mockResolvedValueOnce(busyPortUsage(5151))
         .mockResolvedValueOnce(freePortUsage());
 
-      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+      await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
         outcome: "completed",
       });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-restart" });
       expect(schtasksCalls).toEqual([
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Gateway"],
@@ -474,6 +494,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("throws when /Run fails during restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
       schtasksResponses.push(
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
@@ -481,9 +502,11 @@ describe("Scheduled Task stop/restart cleanup", () => {
         { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
       );
 
-      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
+      await expect(restartScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
         "schtasks run failed: ERROR: Access is denied.",
       );
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-end" });
+      expect(onMutation).not.toHaveBeenCalledWith({ mode: "schtasks-restart" });
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });

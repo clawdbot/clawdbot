@@ -142,6 +142,21 @@ describe("listThinkingLevels", () => {
     });
   });
 
+  it("can clamp from active provider facts without public artifact fallback", () => {
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        level: "medium",
+        providerPolicySource: "active",
+      }),
+    ).toBe("medium");
+    expect(providerRuntimeMocks.resolveProviderThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "deepseek" }),
+      { allowPublicArtifactFallback: false },
+    );
+  });
+
   it("does not include adaptive without provider support", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("adaptive");
     expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("adaptive");

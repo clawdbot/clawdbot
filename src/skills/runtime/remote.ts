@@ -7,7 +7,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry } from "../../gateway/node-registry.js";
-import { listNodePairing, updatePairedNodeMetadata } from "../../infra/node-pairing.js";
+import { listNodePairing, updatePairedNodeBins } from "../../infra/node-pairing.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
@@ -668,7 +668,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     if (!hasChanged) {
       return;
     }
-    await updatePairedNodeMetadata(params.nodeId, { bins });
+    await updatePairedNodeBins(params.nodeId, bins);
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
     const recorded = markRemoteNodeProbeFailure({

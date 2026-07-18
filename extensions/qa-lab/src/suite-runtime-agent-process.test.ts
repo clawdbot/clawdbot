@@ -222,6 +222,7 @@ describe("qa suite runtime agent process helpers", () => {
         {
           stdio: "ignore",
           windowsHide: true,
+          timeout: 5_000,
         },
       );
       expect(child.kill).not.toHaveBeenCalled();

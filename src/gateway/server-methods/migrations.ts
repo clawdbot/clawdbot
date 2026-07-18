@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import {
   ErrorCodes,
-  MAX_MEMORY_MIGRATION_ITEMS,
   errorShape,
   type MemoryMigrationItem,
   type MemoryMigrationProviderPlan,
@@ -13,31 +12,20 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { stableStringify } from "../../agents/stable-stringify.js";
-import { runMigrationApply } from "../../commands/migrate/apply.js";
-import { buildMigrationContext } from "../../commands/migrate/context.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { bindMemoryMigrationPlanSources } from "../../plugin-sdk/memory-migration-source.js";
-import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import {
-  ensureStandaloneMigrationProviderRegistryLoaded,
-  resolvePluginMigrationProviders,
-} from "../../plugins/migration-provider-runtime.js";
+  applyProviderMemoryImport,
+  listMemoryMigrationProviders,
+  planProviderMemoryImport,
+} from "../../commands/migrate/memory-import.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const MEMORY_ITEM_KIND = "memory";
 const MEMORY_APPLY_DEDUPE_PREFIX = "migrations.memory.apply:";
 const activeApplies = new Set<string>();
-const silentRuntime: RuntimeEnv = {
-  log() {},
-  error() {},
-  exit(code) {
-    throw new Error(`migration exited with ${code}`);
-  },
-};
 
 function emptySummary() {
   return summarizeMigrationItems([]);
@@ -96,31 +84,6 @@ function isCachedMemoryApply(value: unknown): value is CachedMemoryApply {
   return typeof candidate.requestFingerprint === "string" && candidate.result !== undefined;
 }
 
-function memoryProviders(config: OpenClawConfig) {
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: config });
-  return resolvePluginMigrationProviders({ cfg: config }).filter((provider) =>
-    provider.supportedItemKinds?.includes(MEMORY_ITEM_KIND),
-  );
-}
-
-function memoryOnlyPlan(plan: MigrationPlan): MigrationPlan {
-  const items = plan.items.filter((item) => item.kind === MEMORY_ITEM_KIND);
-  if (items.length > MAX_MEMORY_MIGRATION_ITEMS) {
-    throw new Error(
-      `memory import found ${items.length} items; the maximum is ${MAX_MEMORY_MIGRATION_ITEMS}. Narrow or split the source memory before importing.`,
-    );
-  }
-  const unsupported = items.find(
-    (item) => (item.status === "planned" || item.status === "conflict") && item.action !== "copy",
-  );
-  if (unsupported) {
-    throw new Error(
-      `memory import only supports copy actions; ${unsupported.id} uses ${unsupported.action}`,
-    );
-  }
-  return { ...plan, items, summary: summarizeMigrationItems(items) };
-}
-
 function toWireItem(item: MigrationItem): MemoryMigrationItem {
   return {
     id: item.id,
@@ -144,27 +107,13 @@ function fingerprintMemoryPlan(params: {
     .createHash("sha256")
     .update(
       stableStringify({
-        version: 2,
+        version: 3,
         agentId: params.agentId,
         workspace: params.workspace,
         providerId: params.providerId,
         overwrite: params.overwrite === true,
-        plan: {
-          source: params.plan.source,
-          target: params.plan.target ?? null,
-          items: params.plan.items.map((item) => ({
-            id: item.id,
-            kind: item.kind,
-            action: item.action,
-            status: item.status,
-            source: item.source ?? null,
-            target: item.target ?? null,
-            reason: item.reason ?? null,
-            sensitive: item.sensitive === true,
-            sourceRevision: item.sourceRevision ?? null,
-            details: item.details ?? null,
-          })),
-        },
+        // Apply receives the full plan, so every provider-visible field must bind to the review.
+        plan: params.plan,
       }),
     )
     .digest("hex");
@@ -199,15 +148,12 @@ async function planMemoryProvider(params: {
     ...(params.provider.description ? { description: params.provider.description } : {}),
   };
   try {
-    const ctx = buildMigrationContext({
-      runtime: silentRuntime,
-      configOverride: params.config,
-      targetAgentId: params.agentId,
-      itemKinds: [MEMORY_ITEM_KIND],
+    const { detection, plan } = await planProviderMemoryImport({
+      provider: params.provider,
+      config: params.config,
+      agentId: params.agentId,
       overwrite: params.overwrite,
-      json: true,
     });
-    const detection = await params.provider.detect?.(ctx);
     if (detection && !detection.found) {
       return {
         ...base,
@@ -219,10 +165,6 @@ async function planMemoryProvider(params: {
         items: [],
       };
     }
-    const plan = await bindMemoryMigrationPlanSources(
-      memoryOnlyPlan(await params.provider.plan(ctx)),
-      { includeConflicts: params.overwrite === true },
-    );
     const found = plan.items.length > 0;
     const workspace = resolveAgentWorkspaceDir(params.config, params.agentId);
     return {
@@ -278,7 +220,7 @@ export const migrationsHandlers: GatewayRequestHandlers = {
     if (!agentId) {
       return;
     }
-    const providers = memoryProviders(config);
+    const providers = listMemoryMigrationProviders(config);
     const planned = await Promise.all(
       providers.map(
         async (provider) =>
@@ -335,7 +277,7 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       respond(true, cached.payload.result, undefined, { cached: true });
       return;
     }
-    const provider = findMemoryProvider(memoryProviders(config), params.providerId);
+    const provider = findMemoryProvider(listMemoryMigrationProviders(config), params.providerId);
     if (!provider) {
       respond(
         false,
@@ -392,16 +334,11 @@ export const migrationsHandlers: GatewayRequestHandlers = {
     }
     activeApplies.add(applyKey);
     try {
-      const ctx = buildMigrationContext({
-        runtime: silentRuntime,
-        configOverride: config,
-        targetAgentId: agentId,
-        itemKinds: [MEMORY_ITEM_KIND],
+      const { plan } = await planProviderMemoryImport({
+        provider,
+        config,
+        agentId,
         overwrite: params.overwrite,
-        json: true,
-      });
-      const plan = await bindMemoryMigrationPlanSources(memoryOnlyPlan(await provider.plan(ctx)), {
-        includeConflicts: params.overwrite === true,
       });
       const currentFingerprint = fingerprintMemoryPlan({
         agentId,
@@ -449,21 +386,13 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         });
         return;
       }
-      const applied = await runMigrationApply({
-        runtime: silentRuntime,
-        providerId: provider.id,
+      const applied = await applyProviderMemoryImport({
         provider,
-        opts: {
-          yes: true,
-          json: true,
-          configOverride: config,
-          targetAgentId: agentId,
-          itemKinds: [MEMORY_ITEM_KIND],
-          itemIds: params.itemIds,
-          overwrite: params.overwrite,
-          preflightPlan: plan,
-          allowPartialResult: true,
-        },
+        config,
+        agentId,
+        itemIds: params.itemIds,
+        overwrite: params.overwrite,
+        preflightPlan: plan,
       });
       const result: MigrationsMemoryApplyResult = {
         providerId: applied.providerId,

@@ -2,6 +2,7 @@
 export {
   ackDelivery,
   enqueueDelivery,
+  enqueueDeliveryOnce,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,

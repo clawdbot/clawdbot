@@ -2108,7 +2108,7 @@ describe("deliverReplies", () => {
     await promptContextSequence.fail();
 
     expect(observer).toHaveBeenCalledTimes(1);
-    expect(observer).toHaveBeenCalledWith({ messageId: 301, text: "chunk-one\n" });
+    expect(observer).toHaveBeenCalledWith({ messageId: 301, text: "chunk-one\n\n" });
   });
 
   it("records the concrete Telegram media message", async () => {

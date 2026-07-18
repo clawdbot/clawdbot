@@ -18,7 +18,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   // turn small route-graph changes into extra startup preload requests.
   if (
     normalized.endsWith("/ui/src/components/config-form.shared.ts") ||
-    normalized.endsWith("/ui/src/lib/clipboard.ts")
+    normalized.endsWith("/ui/src/lib/clipboard.ts") ||
+    normalized.endsWith("/ui/src/build-info-normalizers.ts") ||
+    normalized.endsWith("/ui/src/build-info.ts")
   ) {
     return "control-ui-shared";
   }
@@ -77,7 +79,9 @@ export const controlUiCodeSplitting = {
         normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
       tags: ["$initial"] as ["$initial"],
       priority: 10,
-      maxSize: 400 * 1024,
+      // 448 KiB packs the core graph into fewer chunks; the previous 400 KiB
+      // boundary split one core chunk in two, costing ~1.4 KiB startup gzip.
+      maxSize: 448 * 1024,
     },
   ],
 };

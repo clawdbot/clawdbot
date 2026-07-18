@@ -1,4 +1,5 @@
 import { SpanKind } from "@opentelemetry/api";
+import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
 import type { DiagnosticEventPayload } from "../api.js";
 import { redactSensitiveText } from "../api.js";
 import { lowCardinalityAttr } from "./service-attributes.js";
@@ -26,7 +27,13 @@ function emitLatestGenAiSemconv(): boolean {
 
 export function genAiOperationName(
   api: string | undefined,
-): "chat" | "generate_content" | "text_completion" {
+  observationUnit?: "request" | "turn",
+): "chat" | "generate_content" | "invoke_agent" | "text_completion" {
+  // CLI/app-server diagnostics bracket an opaque agent turn, not one inference request.
+  // Label that boundary as agent invocation so its latency stays distinct from request latency.
+  if (observationUnit === "turn") {
+    return GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT;
+  }
   const normalized = api?.trim().toLowerCase();
   if (!normalized) {
     return "chat";
@@ -146,7 +153,12 @@ export function assignModelCallUsageAttrs(
 
 export function assignGenAiSpanIdentityAttrs(
   attrs: Record<string, string | number | boolean>,
-  input: { api?: string; model?: string; provider?: string },
+  input: {
+    api?: string;
+    model?: string;
+    observationUnit?: "request" | "turn";
+    provider?: string;
+  },
 ): void {
   if (emitLatestGenAiSemconv()) {
     attrs["gen_ai.provider.name"] = lowCardinalityAttr(input.provider);
@@ -161,21 +173,40 @@ export function assignGenAiSpanIdentityAttrs(
     // reads gen_ai.request.model). Keep the redacted raw model on the span.
     attrs["gen_ai.request.model"] = redactSensitiveText(input.model.trim());
   }
-  attrs["gen_ai.operation.name"] = genAiOperationName(input.api);
+  attrs["gen_ai.operation.name"] = genAiOperationName(input.api, input.observationUnit);
 }
 
 export function assignGenAiModelCallAttrs(
   attrs: Record<string, string | number | boolean>,
-  evt: { api?: string; model?: string; provider?: string },
+  evt: {
+    api?: string;
+    model?: string;
+    observationUnit?: "request" | "turn";
+    provider?: string;
+  },
 ): void {
   assignGenAiSpanIdentityAttrs(attrs, evt);
+  attrs["openclaw.model_call.observation_unit"] = modelCallObservationUnit(evt);
 }
 
-export function modelCallSpanName(evt: { api?: string; model?: string }): string {
+export function modelCallObservationUnit(evt: {
+  observationUnit?: "request" | "turn";
+}): "request" | "turn" {
+  return evt.observationUnit ?? "request";
+}
+
+export function modelCallSpanName(evt: {
+  api?: string;
+  model?: string;
+  observationUnit?: "request" | "turn";
+}): string {
   if (!emitLatestGenAiSemconv()) {
     return "openclaw.model.call";
   }
-  return `${genAiOperationName(evt.api)} ${lowCardinalityAttr(evt.model)}`;
+  const operationName = genAiOperationName(evt.api, evt.observationUnit);
+  return operationName === GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT
+    ? operationName
+    : `${operationName} ${lowCardinalityAttr(evt.model)}`;
 }
 
 export function modelCallSpanKind(): SpanKind | undefined {

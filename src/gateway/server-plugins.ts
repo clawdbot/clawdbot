@@ -27,7 +27,11 @@ import {
   type GatewayMethodDispatchResponse,
   unwrapGatewayMethodDispatchResponse,
 } from "./server-in-process-dispatch.js";
-import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestOptions,
+} from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import {
   createSyntheticPluginRuntimeClient,
@@ -308,6 +312,11 @@ export async function dispatchGatewayMethodInProcessRaw(
     requestIdPrefix: "plugin-subagent",
     timeoutMs: options?.timeoutMs,
   });
+}
+
+/** Live request context for trusted built-in tools that need direct runtime state. */
+export function getInProcessGatewayRequestContext(): GatewayRequestContext | undefined {
+  return getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
 }
 
 async function dispatchGatewayMethod<T>(

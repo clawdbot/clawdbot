@@ -333,7 +333,7 @@ export function assertFreshSetupMigrationTarget(freshness: {
   fresh: boolean;
   reasons: readonly string[];
 }): void {
-  if (freshness.fresh || process.env.OPENCLAW_MIGRATION_EXISTING_IMPORT === "1") {
+  if (freshness.fresh) {
     return;
   }
   throw new Error(

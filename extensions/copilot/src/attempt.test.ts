@@ -274,6 +274,7 @@ function makeParams(
     agentDir: "C:\\copilot-home",
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
+    disableTools: true,
     initialReplayState: undefined,
     messages: [{ content: "hello", role: "user", timestamp: 1 }],
     model: {

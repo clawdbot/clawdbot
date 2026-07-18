@@ -5,6 +5,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
+import { formatGatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
 import {
   resolveGatewayRestartLogPath,
@@ -127,6 +128,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`${label("Service env:")} ${daemonEnvLines.join(" ")}`);
+  }
+  if (service.gatewayHeap) {
+    defaultRuntime.log(
+      `${label("Gateway heap:")} ${infoText(formatGatewayHeapLimitReport(service.gatewayHeap))}`,
+    );
   }
   spacer();
 

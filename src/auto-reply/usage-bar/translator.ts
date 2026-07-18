@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, parseStrictInteger } from "@openclaw/normalization-core";
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
@@ -39,7 +39,7 @@ function fixed(value: unknown, digits: number): string {
   if (!Number.isFinite(n)) {
     return "";
   }
-  return n.toFixed(Math.max(0, digits));
+  return n.toFixed(digits);
 }
 
 function dur(value: unknown): string {
@@ -117,13 +117,18 @@ function meter(value: unknown, width: number, scale: unknown): string {
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
+function parseFixedDigits(raw: string | undefined): number | undefined {
+  const digits = raw === undefined ? 2 : parseStrictInteger(raw);
+  return digits !== undefined && digits >= 0 && digits <= 100 ? digits : undefined;
+}
+
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
   switch (name) {
     case "num":
       return num(value);
     case "fixed": {
-      const digits = args[0] ? Number.parseInt(args[0], 10) || 0 : 2;
-      return fixed(value, digits);
+      const digits = parseFixedDigits(args[0]);
+      return digits === undefined ? "" : fixed(value, digits);
     }
     case "dur":
       return dur(value);

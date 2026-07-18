@@ -133,6 +133,33 @@ function resolveMsteamsClawHubTrust(overrides: Partial<PluginInstallRecord> = {}
   return registry.plugins[0]?.trustedOfficialInstall;
 }
 
+function resolveDiffsNpmTrust(overrides: Partial<PluginInstallRecord> = {}) {
+  const dir = makeTempDir();
+  writeManifest(dir, { id: "diffs", configSchema: { type: "object" } });
+  const registry = loadPluginManifestRegistry({
+    installRecords: {
+      diffs: {
+        source: "npm",
+        spec: "@openclaw/diffs",
+        installPath: dir,
+        resolvedName: "@openclaw/diffs",
+        resolvedVersion: "2026.7.16",
+        resolvedSpec: "@openclaw/diffs@2026.7.16",
+        ...overrides,
+      },
+    },
+    candidates: [
+      createPluginCandidate({
+        idHint: "diffs",
+        rootDir: dir,
+        packageName: "@openclaw/diffs",
+        origin: "global",
+      }),
+    ],
+  });
+  return registry.plugins[0]?.trustedOfficialInstall;
+}
+
 function loadRegistry(candidates: PluginCandidate[]) {
   return loadPluginManifestRegistry({
     candidates,
@@ -559,6 +586,33 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("rejects plugins whose declared ids collide after case folding", () => {
+    const upperDir = makeTempDir();
+    const lowerDir = makeTempDir();
+    writeManifest(upperDir, { id: "Case-Collision", configSchema: { type: "object" } });
+    writeManifest(lowerDir, { id: "case-collision", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "Case-Collision",
+        rootDir: upperDir,
+        origin: "workspace",
+      }),
+      createPluginCandidate({
+        idHint: "case-collision",
+        rootDir: lowerDir,
+        origin: "config",
+      }),
+    ]);
+
+    expect(registry.plugins).toStrictEqual([]);
+    expect(
+      registry.diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('collide as normalized id "case-collision"'),
+      ),
+    ).toHaveLength(2);
+  });
+
   it("lets config-loaded plugins replace bundled duplicates", () => {
     const bundledDir = makeTempDir();
     const configDir = makeTempDir();
@@ -744,31 +798,33 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
-  it("marks official installed npm globals as trusted official installs", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
-
-    const registry = loadPluginManifestRegistry({
-      installRecords: {
-        "diagnostics-prometheus": {
-          source: "npm",
-          installPath: dir,
-          resolvedName: "@openclaw/diagnostics-prometheus",
-          resolvedVersion: "2026.5.3",
-        },
-      },
-      candidates: [
-        createPluginCandidate({
-          idHint: "diagnostics-prometheus",
-          rootDir: dir,
-          packageName: "@openclaw/diagnostics-prometheus",
-          origin: "global",
-        }),
-      ],
-    });
-
-    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  it("marks official registry npm installs as trusted", () => {
+    expect(resolveDiffsNpmTrust()).toBe(true);
   });
+
+  it.each([
+    {
+      name: "npm-pack archive metadata",
+      overrides: {
+        sourcePath: "/tmp/diffs.tgz",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+      },
+    },
+    {
+      name: "local source path metadata",
+      overrides: { sourcePath: "/tmp/diffs.tgz" },
+    },
+    {
+      name: "linked local path",
+      overrides: { source: "path", sourcePath: "/tmp/diffs" },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "does not trust official package identity from $name",
+    ({ overrides }) => {
+      expect(resolveDiffsNpmTrust(overrides)).toBeUndefined();
+    },
+  );
 
   it.each([
     { name: "complete records", overrides: {} },
@@ -1135,6 +1191,8 @@ describe("loadPluginManifestRegistry", () => {
           method: "api-key",
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
+          icon: "HTTPS://CDN.SIMPLEICONS.ORG/openai",
+          website: "https://platform.openai.com/api-keys",
           assistantPriority: 10,
           assistantVisibility: "visible",
           appGuidedSecret: true,
@@ -1204,10 +1262,54 @@ describe("loadPluginManifestRegistry", () => {
         method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        icon: "https://cdn.simpleicons.org/openai",
+        website: "https://platform.openai.com/api-keys",
         assistantPriority: 10,
         assistantVisibility: "visible",
         appGuidedSecret: true,
         appGuidedDiscovery: true,
+      },
+    ]);
+  });
+
+  it("drops non-HTTPS provider auth presentation URLs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "unsafe-auth-artwork",
+      providerAuthChoices: [
+        {
+          provider: "unsafe",
+          method: "api-key",
+          choiceId: "unsafe-api-key",
+          icon: "http://example.com/icon.svg",
+          website: "javascript:alert(1)",
+        },
+        {
+          provider: "oversized",
+          method: "api-key",
+          choiceId: "oversized-api-key",
+          icon: `https://example.com/${"a".repeat(2048)}`,
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "unsafe-auth-artwork",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
+      {
+        provider: "unsafe",
+        method: "api-key",
+        choiceId: "unsafe-api-key",
+      },
+      {
+        provider: "oversized",
+        method: "api-key",
+        choiceId: "oversized-api-key",
       },
     ]);
   });
@@ -2499,7 +2601,7 @@ describe("loadPluginManifestRegistry", () => {
         dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
         secretInputs: {
           bundledDefaultEnabled: false,
-          paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+          paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
         },
       },
     });
@@ -2516,7 +2618,7 @@ describe("loadPluginManifestRegistry", () => {
       dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
       secretInputs: {
         bundledDefaultEnabled: false,
-        paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+        paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
       },
     });
   });

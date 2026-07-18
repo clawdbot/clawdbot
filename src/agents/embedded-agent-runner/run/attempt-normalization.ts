@@ -87,6 +87,9 @@ export async function normalizeEmbeddedRunAttempt(input: {
       currentAttemptAssistant: ReturnType<
         typeof normalizeEmbeddedRunAttemptResult
       >["currentAttemptAssistant"];
+      currentAttemptCompletedAssistant: ReturnType<
+        typeof normalizeEmbeddedRunAttemptResult
+      >["currentAttemptCompletedAssistant"];
       attemptAssistant: ReturnType<
         typeof normalizeEmbeddedRunAttemptResult
       >["currentAttemptAssistant"];
@@ -129,6 +132,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     sessionFileUsed,
     lastAssistant: sessionLastAssistant,
     currentAttemptAssistant,
+    currentAttemptCompletedAssistant,
   } = attempt;
   const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
   const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
@@ -320,6 +324,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     sessionIdUsed,
     sessionFileUsed,
     currentAttemptAssistant,
+    currentAttemptCompletedAssistant,
     attemptAssistant,
     terminalOutcome,
     terminalAborted,

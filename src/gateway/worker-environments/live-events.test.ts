@@ -18,6 +18,8 @@ import {
   sweepStaleRunContexts,
   type AgentEventRuntimePayload as Event,
 } from "../../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../../trajectory/runtime-store.sqlite.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
 import {
   createWorkerLiveEventReceiver,
@@ -126,7 +128,84 @@ describe("worker live events", () => {
   afterEach(async () => {
     unsubscribe?.();
     rx.clear();
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("persists cloud-worker progress for sessions tail", async () => {
+    const credential = ["trajectory", "credential", "secret"].join("-");
+    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    ack(
+      live(
+        2,
+        tool({
+          phase: "start",
+          name: "write",
+          toolCallId: "call-write",
+          args: { path: "proof.txt", credential },
+        }),
+      ),
+    );
+    ack(
+      live(
+        3,
+        tool({
+          phase: "result",
+          name: "write",
+          toolCallId: "call-write",
+          isError: false,
+          result: { status: "written", credential },
+        }),
+      ),
+    );
+    const terminal = live(4, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 }));
+    ack(terminal);
+    ack(terminal);
+    await Promise.resolve();
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      agentId: "main",
+      sessionId: SID,
+      storePath: store,
+    });
+    expect(rows.map((row) => row.event.type)).toEqual([
+      "session.started",
+      "tool.call",
+      "tool.result",
+      "model.completed",
+      "session.ended",
+    ]);
+    expect(rows[2]?.event.data).toMatchObject({ name: "write", success: true });
+    expect(rows[4]?.event.data).toMatchObject({ status: "success" });
+    expect(JSON.stringify(rows)).not.toContain(credential);
+  });
+
+  it("records aborted cloud-worker terminals as interrupted", async () => {
+    const credential = ["lifecycle", "credential", "value"].join("-");
+    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    ack(
+      live(
+        2,
+        lifecycle({
+          phase: "error",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          error: `cancelled after Bearer ${credential}`,
+        }),
+      ),
+    );
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      agentId: "main",
+      sessionId: SID,
+      storePath: store,
+    });
+    expect(rows.at(-1)?.event).toMatchObject({
+      type: "session.ended",
+      data: { status: "interrupted" },
+    });
+    expect(JSON.stringify(rows)).not.toContain(credential);
   });
 
   it("maps and sanitizes kinds", () => {

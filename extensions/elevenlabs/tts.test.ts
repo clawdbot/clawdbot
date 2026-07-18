@@ -1,4 +1,5 @@
 // Elevenlabs tests cover tts plugin behavior.
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -203,12 +204,112 @@ describe("elevenlabs tts diagnostics", () => {
       ...createDefaultTtsRequest(),
       latencyTier: 2,
     });
+    try {
+      const url = getUrlFromFirstFetchCall(fetchMock);
+      expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
+      expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
+      const reader = result.audioStream.getReader();
+      await expect(reader.read()).resolves.toEqual({
+        done: false,
+        value: new Uint8Array([1, 2, 3]),
+      });
+      await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+      expect(audioStream.locked).toBe(false);
+    } finally {
+      await result.release();
+    }
+  });
 
-    const url = getUrlFromFirstFetchCall(fetchMock);
-    expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
-    expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
-    expect(result.audioStream).toBeInstanceOf(ReadableStream);
-    await result.release();
+  it("releases an unread provider stream when the public release hook runs", async () => {
+    const cancel = vi.fn();
+    const audioStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel,
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSStream(createDefaultTtsRequest());
+    try {
+      expect(audioStream.locked).toBe(true);
+
+      await result.release();
+      await result.release();
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(audioStream.locked).toBe(false);
+    } finally {
+      await result.audioStream.cancel().catch(() => undefined);
+      await result.release();
+    }
+  });
+
+  it("releases a partially consumed provider stream while its consumer holds a reader", async () => {
+    const cancel = vi.fn();
+    const audioStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel,
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSStream(createDefaultTtsRequest());
+    const reader = result.audioStream.getReader();
+    try {
+      await expect(reader.read()).resolves.toEqual({
+        done: false,
+        value: new Uint8Array([1, 2, 3]),
+      });
+
+      await result.release();
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(audioStream.locked).toBe(false);
+      await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      await result.release();
+    }
+  });
+
+  it("cancels streamed audio before delivering bytes beyond the audio limit", async () => {
+    const cancel = vi.fn();
+    const audioStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_AUDIO_BYTES));
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel,
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSStream(createDefaultTtsRequest());
+    try {
+      const reader = result.audioStream.getReader();
+
+      const first = await reader.read();
+      expect(first.done).toBe(false);
+      expect(first.value).toHaveLength(MAX_AUDIO_BYTES);
+      await expect(reader.read()).rejects.toThrow(
+        `ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`,
+      );
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(audioStream.locked).toBe(false);
+    } finally {
+      await result.release();
+    }
   });
 
   it("rejects JSON success stream responses as malformed audio", async () => {

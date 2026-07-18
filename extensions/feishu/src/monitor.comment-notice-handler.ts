@@ -24,8 +24,9 @@ export function createFeishuDriveCommentNoticeHandler(params: {
   runtime?: RuntimeEnv;
   fireAndForget?: boolean;
   getBotOpenId?: (accountId: string) => string | undefined;
+  abortSignal?: AbortSignal;
 }): (data: unknown) => Promise<void> {
-  const { cfg, accountId, runtime, fireAndForget } = params;
+  const { cfg, accountId, runtime, fireAndForget, abortSignal } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createSequentialQueue();
@@ -84,6 +85,7 @@ export function createFeishuDriveCommentNoticeHandler(params: {
             event,
             botOpenId: getBotOpenId(accountId),
             runtime,
+            abortSignal,
           });
         });
         await processingClaim?.commit();

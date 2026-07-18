@@ -501,6 +501,7 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining("elapsed 25ms reached task budget 25ms"),
       });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
@@ -609,6 +610,9 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining(
+          "abort grace 25ms elapsed (task budget 172800000ms, elapsed 25ms)",
+        ),
       });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
@@ -644,6 +648,9 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining(
+          "lane release requested after 0ms (task budget 172800000ms)",
+        ),
       });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
@@ -676,6 +683,7 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining("no progress for 25ms (task budget 25ms"),
       });
 
       await vi.advanceTimersByTimeAsync(25);

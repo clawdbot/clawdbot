@@ -219,6 +219,36 @@ describe("subagent registry persistence", () => {
     envSnapshot.restore();
   });
 
+  it("round-trips the progress source locator through SQLite", async () => {
+    const progressOrigin = {
+      channel: "discord",
+      accountId: "work",
+      to: "channel:123",
+      threadId: "789",
+      channelId: "123",
+      messageId: "456",
+    };
+    const record: SubagentRunRecord = {
+      runId: "run-progress-origin",
+      childSessionKey: "agent:main:subagent:progress-origin",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      progressOrigin,
+      task: "persist progress source",
+      cleanup: "keep",
+      createdAt: 1,
+    };
+
+    await writePersistedRegistry(
+      { runs: { [record.runId]: record } },
+      { seedChildSessions: false },
+    );
+
+    expect(loadSubagentRegistryFromSqlite().get(record.runId)?.progressOrigin).toEqual(
+      progressOrigin,
+    );
+  });
+
   it("persists completed subagent timing into the child session entry", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);

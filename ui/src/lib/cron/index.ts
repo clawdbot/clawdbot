@@ -44,7 +44,7 @@ export type CronFormState = {
   scheduleKind: "at" | "every" | "cron" | "on-exit";
   scheduleAt: string;
   everyAmount: string;
-  everyUnit: "minutes" | "hours" | "days";
+  everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;
   cronTz: string;
   scheduleExact: boolean;
@@ -693,15 +693,32 @@ function formatDateTimeLocal(input: string): string {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
+// Render everyMs back to the largest unit that divides it exactly, falling through
+// to decimal seconds. Sub-second remainders are built from BigInt quotient/remainder,
+// not float division, so every integer millisecond up to Number.MAX_SAFE_INTEGER
+// round-trips losslessly through parseCronEveryMs when the job is resaved.
 function parseEverySchedule(everyMs: number): Pick<CronFormState, "everyAmount" | "everyUnit"> {
   if (everyMs % 86_400_000 === 0) {
-    return { everyAmount: String(Math.max(1, everyMs / 86_400_000)), everyUnit: "days" };
+    return { everyAmount: String(everyMs / 86_400_000), everyUnit: "days" };
   }
   if (everyMs % 3_600_000 === 0) {
-    return { everyAmount: String(Math.max(1, everyMs / 3_600_000)), everyUnit: "hours" };
+    return { everyAmount: String(everyMs / 3_600_000), everyUnit: "hours" };
   }
-  const minutes = Math.max(1, Math.ceil(everyMs / 60_000));
-  return { everyAmount: String(minutes), everyUnit: "minutes" };
+  if (everyMs % 60_000 === 0) {
+    return { everyAmount: String(everyMs / 60_000), everyUnit: "minutes" };
+  }
+  return { everyAmount: everyMsToSecondsString(everyMs), everyUnit: "seconds" };
+}
+
+function everyMsToSecondsString(everyMs: number): string {
+  const value = BigInt(everyMs);
+  const whole = value / 1_000n;
+  const remainder = value % 1_000n;
+  if (remainder === 0n) {
+    return String(whole);
+  }
+  const fractional = remainder.toString().padStart(3, "0").replace(/0+$/u, "");
+  return `${whole}.${fractional}`;
 }
 
 function parseStaggerSchedule(

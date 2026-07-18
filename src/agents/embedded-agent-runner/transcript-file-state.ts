@@ -366,9 +366,10 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
       if (!entry) {
         break;
       }
-      pathLocal.unshift(entry);
+      pathLocal.push(entry);
       id = entry.parentId;
     }
+    pathLocal.reverse();
     return pathLocal;
   };
   const firstReadableDescendantOnBranch = (
@@ -836,7 +837,7 @@ export class TranscriptFileState {
       id: generateEntryId(this.byId),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
-      name: name.trim(),
+      name: name.replace(/[\r\n]+/g, " ").trim(),
     });
   }
 

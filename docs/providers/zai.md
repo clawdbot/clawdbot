@@ -87,6 +87,11 @@ openclaw plugins install @openclaw/zai-provider
 | `zai-coding-global` | `https://api.z.ai/api/coding/paas/v4`         | `glm-5.2`     |
 | `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.2`     |
 
+Z.AI also publishes the Anthropic-compatible Coding Plan base URL
+`https://api.z.ai/api/anthropic`. OpenClaw's Z.AI choices use the documented
+OpenAI Chat Completions endpoints above; the Anthropic URL is for clients that
+speak Anthropic Messages directly.
+
 `zai-api-key` auto-detects one of these four by probing your key against each
 endpoint's chat-completions API, checking general endpoints (`zai-global`,
 then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
@@ -176,6 +181,11 @@ The manifest-backed catalog currently includes:
 | `zai/glm-4.5-air`    |                                 |
 | `zai/glm-4.5-flash`  |                                 |
 | `zai/glm-4.5v`       |                                 |
+
+Catalog token-cost metadata follows Z.AI's current
+[pay-as-you-go pricing](https://docs.z.ai/guides/overview/pricing). Coding Plan
+subscriptions use plan quota instead of per-token billing; see the live
+[subscription page](https://z.ai/subscribe) for plan pricing and availability.
 
 <Tip>
 GLM models are available as `zai/<model>` (example: `zai/glm-5`).

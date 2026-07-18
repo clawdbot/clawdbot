@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
+import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
-  fetchNpmPackageTargetStatus,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
@@ -101,6 +101,7 @@ describe("resolveNpmChannelTag", () => {
         "openclaw@latest",
         "version",
         "engines.node",
+        "openclaw.schemaVersions",
         "--json",
         "--global",
       ],
@@ -118,6 +119,7 @@ describe("resolveNpmChannelTag", () => {
         {
           version: "2026.7.1",
           engines: { node: ">=22.22.3" },
+          openclaw: { schemaVersions: { state: 3, agent: 11 } },
         },
       ]),
       stderr: "",
@@ -134,6 +136,7 @@ describe("resolveNpmChannelTag", () => {
       target: "latest",
       version: "2026.7.1",
       nodeEngine: ">=22.22.3",
+      schemaVersions: { state: 3, agent: 11 },
     });
   });
 

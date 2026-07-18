@@ -53,7 +53,7 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   "test/vitest/vitest.extension-matrix.config.ts": 0.28,
   "test/vitest/vitest.extension-mattermost.config.ts": 0.75,
   "test/vitest/vitest.extension-media.config.ts": 0.7,
-  "test/vitest/vitest.extension-memory.config.ts": 0.25,
+  "test/vitest/vitest.extension-memory.config.ts": 1,
   "test/vitest/vitest.extension-messaging.config.ts": 0.4,
   "test/vitest/vitest.extension-misc.config.ts": 0.7,
   "test/vitest/vitest.extension-msteams.config.ts": 0.5,

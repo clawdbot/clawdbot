@@ -56,6 +56,17 @@ present.
   `5m`). Refreshes run through QMD subprocesses, not an in-process filesystem
   crawl. Semantic search modes also run `qmd embed`
   (`memory.qmd.update.embedInterval`, default `60m`).
+- QMD continues to own its `index.sqlite`, YAML collection config, and model
+  downloads under the per-agent QMD home; these are external-tool artifacts,
+  not OpenClaw state tables. OpenClaw-owned coordination lives only in SQLite:
+  one shared lease limits embedding work across agents, while one lease in each
+  agent database serializes that agent's collection, update, and embed writes.
+  Runtime no longer creates QMD file-lock sidecars. `openclaw doctor --fix`
+  removes retired sidecars only after proving their old process owner is stale.
+  Upgrades are a clean cutover: stop and restart every OpenClaw process that
+  shares the state directory before using the new version. Mixed old/new QMD
+  writers are unsupported; runtime intentionally does not dual-lock the retired
+  sidecars.
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
   tree. Lowercase `memory.md` is not indexed as a root memory file.
 - QMD's own scanner ignores hidden paths and common dependency/build
@@ -186,9 +197,13 @@ QMD.
 
 Session hits are still filtered by
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The
-default `tree` visibility does not expose unrelated same-agent sessions. If a
-gateway-dispatched session should be recallable from a separate DM session,
-set `tools.sessions.visibility: "agent"` intentionally.
+default `tree` visibility includes the current session, its spawned sessions,
+and same-agent group sessions watched through ambient group awareness. With
+`session.dmScope: "main"`, users in a multi-user DM setup share the main
+session and can recall content from its watched groups. Use a per-peer
+`dmScope` for DM isolation, or set visibility to `"self"` to opt out of ambient
+watched-session reads. Other unrelated same-agent sessions still require
+`"agent"` visibility.
 
 ## Search scope
 

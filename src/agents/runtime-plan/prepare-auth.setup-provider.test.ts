@@ -44,13 +44,11 @@ describe("prepared setup-provider auth fallback", () => {
       version: 1,
       profiles: {
         [profileId]: {
-          type: "api_key",
+          type: "oauth",
           provider: "anthropic-vertex",
-          keyRef: {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_TEST_MISSING_VERTEX_KEY",
-          },
+          access: "test-token",
+          refresh: "test-refresh-token",
+          expires: 0,
         },
       },
       order: { "anthropic-vertex": [profileId] },

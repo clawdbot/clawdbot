@@ -469,7 +469,7 @@ function assertCanInsertPluginStateEntry(params: {
   }
 }
 
-function resolveMaxPluginStateEntriesPerPlugin(): number {
+export function resolveMaxPluginStateEntriesPerPlugin(): number {
   return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 
@@ -481,6 +481,9 @@ export function pluginStateRegister(params: {
   maxEntries: number;
   overflowPolicy: PluginStateOverflowPolicy;
   ttlMs?: number;
+  // Migration-only override: eviction orders rows by created_at, so imported
+  // legacy rows must keep their original age instead of the import time.
+  createdAtMs?: number;
   env?: NodeJS.ProcessEnv;
 }): void {
   try {
@@ -522,7 +525,7 @@ export function pluginStateRegister(params: {
             namespace: params.namespace,
             key: params.key,
             valueJson: params.valueJson,
-            createdAt: now,
+            createdAt: params.createdAtMs ?? now,
             expiresAt,
           }),
         );

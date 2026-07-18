@@ -17,6 +17,7 @@ const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
   /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
 const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
 const CRON_DELIVERY_TARGET_ADVISORY_EXAMPLE_LIMIT = 3;
+const CRONTAB_READ_TIMEOUT_MS = 5_000;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -242,7 +243,10 @@ export function noteCronDeliveryTargetAdvisory(params: {
 }
 
 async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
-  const result = await runExec("crontab", ["-l"], { logOutput: false });
+  const result = await runExec("crontab", ["-l"], {
+    logOutput: false,
+    timeoutMs: CRONTAB_READ_TIMEOUT_MS,
+  });
   return {
     stdout: result.stdout,
     stderr: result.stderr,

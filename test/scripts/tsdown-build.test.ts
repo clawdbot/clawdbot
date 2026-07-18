@@ -16,6 +16,7 @@ import {
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   resolveTsdownBuildInvocations,
+  resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
   signalTsdownBuildProcessTree,
 } from "../../scripts/tsdown-build.mjs";
@@ -69,6 +70,23 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     await sleep(5);
   }
   throw new Error(`timed out waiting for ${filePath}`);
+}
+
+// Pid files are written with plain writeFileSync, so an existence poll can
+// observe the open-truncate 0-byte window and parse NaN (the #109140 flake
+// class). Wait until the content parses to a real pid, not just for the file.
+async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      const pid = Number.parseInt(fs.readFileSync(filePath, "utf8"), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    }
+    await sleep(5);
+  }
+  throw new Error(`timed out waiting for pid in ${filePath}`);
 }
 
 async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
@@ -449,6 +467,36 @@ describe("resolveTsdownBuildInvocation", () => {
     });
   });
 
+  it("limits cleanup to the explicitly selected declaration group", () => {
+    expect(resolveTsdownCleanOutputRoots(["--config", "tsdown.ai.config.ts"])).toEqual([
+      "packages/ai/dist",
+    ]);
+    expect(
+      resolveTsdownCleanOutputRoots([
+        "--config",
+        "tsdown.config.ts",
+        "--filter",
+        "openclaw-packages",
+      ]),
+    ).toEqual(expect.arrayContaining(["packages/agent-core/dist", "packages/net-policy/dist"]));
+    expect(
+      resolveTsdownCleanOutputRoots(["--config=tsdown.config.ts", "--filter=openclaw-packages"]),
+    ).not.toContain("packages/ai/dist");
+    expect(resolveTsdownCleanOutputRoots(["-c=tsdown.config.ts", "-F=openclaw-unified"])).toEqual([
+      "dist",
+      "dist-runtime",
+    ]);
+    expect(
+      resolveTsdownCleanOutputRoots([
+        "--config",
+        "configs/tsdown.config.ts",
+        "--filter",
+        "openclaw-packages",
+      ]),
+    ).toEqual(listTsdownOutputRoots());
+    expect(resolveTsdownCleanOutputRoots(["--format", "esm"])).toEqual(listTsdownOutputRoots());
+  });
+
   it("keeps source-checkout prune best-effort", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rmSync = vi.spyOn(fs, "rmSync");
@@ -550,6 +598,21 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(pluginSdkPackageFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(packageSourceFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("cleans only selected tsdown output roots", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-selected-clean-");
+    const aiFile = path.join(rootDir, "packages", "ai", "dist", "stale.js");
+    const coreFile = path.join(rootDir, "dist", "keep.js");
+    await fsPromises.mkdir(path.dirname(aiFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(coreFile), { recursive: true });
+    await fsPromises.writeFile(aiFile, "stale\n");
+    await fsPromises.writeFile(coreFile, "keep\n");
+
+    cleanTsdownOutputRoots({ cwd: rootDir, roots: ["packages/ai/dist"] });
+
+    await expectPathMissing(aiFile);
+    await expect(fsPromises.readFile(coreFile, "utf8")).resolves.toBe("keep\n");
   });
 
   it("removes CLI startup metadata during default tsdown clean", async () => {
@@ -909,8 +972,7 @@ describe("runTsdownBuildInvocation", () => {
           },
         );
 
-        await waitForFile(childPidPath, timeoutMs);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, timeoutMs);
         expect(isProcessAlive(childPid)).toBe(true);
         const result = await runPromise;
 
@@ -976,7 +1038,7 @@ describe("runTsdownBuildInvocation", () => {
         );
 
         await waitForFile(readyPath, 2_000);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         const result = await runPromise;
 
         expect(result.timedOut).toBe(true);
@@ -1029,8 +1091,7 @@ describe("runTsdownBuildInvocation", () => {
         });
 
         await waitForFile(readyPath, 2_000);
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");

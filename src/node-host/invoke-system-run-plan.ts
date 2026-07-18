@@ -20,6 +20,7 @@ import {
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "../infra/exec-wrapper-resolution.js";
+import { readFileWindowFullySync } from "../infra/file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 import {
@@ -337,7 +338,7 @@ function isLikelyScriptLikePathSync(targetPath: string): boolean {
     const fd = fs.openSync(targetPath, "r");
     try {
       header = Buffer.alloc(1024);
-      const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+      const bytesRead = readFileWindowFullySync(fd, header, 0);
       header = header.subarray(0, bytesRead);
     } finally {
       fs.closeSync(fd);

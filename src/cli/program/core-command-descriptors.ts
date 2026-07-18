@@ -20,7 +20,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "onboard",
     description: "Guided setup for auth, models, Gateway, workspace, channels, and skills",
-    hasSubcommands: false,
+    hasSubcommands: true,
   },
   {
     name: "configure",

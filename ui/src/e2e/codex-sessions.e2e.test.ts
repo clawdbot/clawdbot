@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -18,6 +19,8 @@ const suite = available || !allowMissing ? describe : describe.skip;
 let browser: Browser;
 let server: ControlUiE2eServer;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
+const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 const uiProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -88,8 +91,74 @@ suite("Codex native session catalog", () => {
     await page.close();
   });
 
+  it("shows a completed host while the aggregate catalog request is still pending", async () => {
+    const page = await browser.newPage({ viewport: { height: 900, width: 1280 } });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.catalog.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const request = await gateway.waitForRequest("sessions.catalog.list");
+      const progressId = (request.params as { progressId?: string })?.progressId;
+      expect(progressId).toEqual(expect.any(String));
+      if (!progressId) {
+        throw new Error("catalog request did not opt in to progressive host events");
+      }
+      await gateway.emitGatewayEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "node:fast",
+              label: "Fast Mac",
+              kind: "node",
+              connected: true,
+              nodeId: "fast",
+              sessions: [
+                {
+                  threadId: "thread-fast",
+                  name: "Progressive node result",
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: false,
+                },
+              ],
+            },
+          ],
+        },
+      } satisfies SessionsCatalogHostEvent);
+
+      await page.getByText("Progressive node result", { exact: true }).waitFor();
+      expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "05-progressive-host-result.png"),
+        });
+      }
+
+      await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
+    } finally {
+      await page.close();
+    }
+  });
+
   it("groups sessions by host and hides empty offline nodes", async () => {
     const page = await browser.newPage({ viewport: { height: 1100, width: 1440 } });
+    await page.addInitScript((key) => localStorage.removeItem(key), catalogGroupingStorageKey);
+    await page.addInitScript(
+      (key) => localStorage.removeItem(key),
+      collapsedSessionSectionsStorageKey,
+    );
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
@@ -109,6 +178,25 @@ suite("Codex native session catalog", () => {
                     {
                       threadId: "thread-local",
                       name: "Local planning session",
+                      cwd: "/Users/dev/openclaw",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                    {
+                      threadId: "thread-worktree",
+                      name: "Worktree fix session",
+                      cwd: "/Users/dev/openclaw/.claude/worktrees/fix-1",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                    {
+                      threadId: "thread-other",
+                      name: "Other project session",
+                      cwd: "/Users/dev/other",
                       status: "idle",
                       archived: false,
                       canContinue: true,
@@ -164,11 +252,76 @@ suite("Codex native session catalog", () => {
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
       expect(await section.getByText("Offline Workstation", { exact: true }).count()).toBe(0);
       expect(await section.getByText("Offline Laptop", { exact: true }).count()).toBe(0);
+      const projectHeads = section.locator("[data-session-catalog-project]");
+      await expect.poll(() => projectHeads.count()).toBe(2);
+      const openclawProject = section.locator(
+        '[data-session-catalog-project="/Users/dev/openclaw"]',
+      );
+      expect(
+        await openclawProject.locator(".sidebar-session-catalog-project__label").textContent(),
+      ).toBe("openclaw");
+      expect(
+        await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
+      ).toBe("2");
+      expect(
+        await section
+          .locator('[data-session-catalog-project="/Users/dev/other"]')
+          .locator(".sidebar-session-catalog-project__label")
+          .textContent(),
+      ).toBe("other");
+      expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
-      await expect
-        .poll(() => section.locator(".sidebar-session-group-count").textContent())
-        .toBe("2");
+      // Counts only render while a section is collapsed.
+      expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
+
+      const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
+      await groupingToggle.click();
+      await expect.poll(() => projectHeads.count()).toBe(0);
+      expect(await section.locator("[data-session-key]").count()).toBe(4);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
+      ).toBe("none");
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await section.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "04-flat-session-hosts.png"),
+        });
+      }
+
+      await groupingToggle.click();
+      await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
+      ).toBe("project");
+
+      await openclawProject.click();
+      await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("false");
+      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(0);
+      expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(0);
+      expect(await section.getByText("Other project session", { exact: true }).count()).toBe(1);
+      expect(await openclawProject.count()).toBe(1);
+      expect(
+        await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
+      ).toBe("2");
+      expect(
+        await page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
+          collapsedSessionSectionsStorageKey,
+        ),
+      ).toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+
+      await openclawProject.click();
+      await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("true");
+      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(1);
+      expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
+      expect(
+        await page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
+          collapsedSessionSectionsStorageKey,
+        ),
+      ).not.toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });

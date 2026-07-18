@@ -439,10 +439,13 @@ export async function runSystemAgentTui(
     const engine = createChatEngine(boundOpts);
     let welcome: string;
     if (welcomeVariant === "onboarding") {
-      welcome = await buildOnboardingWelcome({
-        engine,
-        ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
-      });
+      // The terminal renders prose only; the typed card question is web-only.
+      welcome = (
+        await buildOnboardingWelcome({
+          engine,
+          ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
+        })
+      ).text;
     } else {
       welcome = formatSystemAgentStartupMessage(await loadOverviewForTui(boundOpts));
       engine.noteAssistantMessage(welcome);

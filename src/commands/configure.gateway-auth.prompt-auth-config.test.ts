@@ -241,7 +241,7 @@ function createKilocodeProvider() {
     baseUrl: "https://api.kilo.ai/api/gateway/",
     api: "openai-completions",
     models: [
-      { id: "kilo/auto", name: "Kilo Auto" },
+      { id: "kilo-auto/balanced", name: "Auto Balanced" },
       { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
     ],
   };
@@ -264,7 +264,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
     config: {
       agents: {
         defaults: {
-          model: { primary: "kilocode/kilo/auto" },
+          model: { primary: "kilocode/kilo-auto/balanced" },
         },
       },
       models: {
@@ -289,7 +289,7 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
   mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
   mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
   mocks.promptModelAllowlist.mockResolvedValue({
-    models: ["kilocode/kilo/auto"],
+    models: ["kilocode/kilo-auto/balanced"],
   });
   mocks.resolvePluginProviders.mockReturnValue([]);
   mocks.resolveProviderPluginChoice.mockReturnValue(null);
@@ -301,16 +301,18 @@ describe("promptAuthConfig", () => {
   it("keeps Kilo provider models while applying allowlist defaults", async () => {
     const result = await runPromptAuthConfigWithAllowlist();
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "kilo/auto",
+      "kilo-auto/balanced",
       "anthropic/claude-sonnet-4",
     ]);
-    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["kilocode/kilo/auto"]);
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
+      "kilocode/kilo-auto/balanced",
+    ]);
   });
 
   it("does not mutate provider model catalogs when allowlist is set", async () => {
     const result = await runPromptAuthConfigWithAllowlist(true);
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "kilo/auto",
+      "kilo-auto/balanced",
       "anthropic/claude-sonnet-4",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([

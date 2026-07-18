@@ -1534,7 +1534,7 @@ export function startManagedGatewayConfigReloader(
   params: ManagedGatewayConfigReloaderParams,
 ): GatewayConfigReloaderHandle {
   if (params.minimalTestGateway) {
-    return { stop: async () => {} };
+    return { stop: async () => {}, notifyPluginMetadataChanged: () => {} };
   }
 
   const prepareRuntimeCandidate = (
@@ -2234,6 +2234,7 @@ export function startManagedGatewayConfigReloader(
       await configReloader.stop();
     },
     hotReloadStatus: configReloader.hotReloadStatus,
+    notifyPluginMetadataChanged: configReloader.notifyPluginMetadataChanged,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

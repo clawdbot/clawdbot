@@ -7,6 +7,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -101,6 +102,7 @@ import {
   selectAgentHarnessForPreparedModelProviders,
 } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
+import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
@@ -1323,6 +1325,14 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
     const promptContribution =
       runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
+    const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
+      enabled: promptMode === "full",
+      toolNames: effectiveTools.map((tool) => tool.name),
+      citationsMode: params.config?.memory?.citations,
+      agentId: runtimeInfo.agentId,
+      agentSessionKey: runtimeInfo.sessionKey,
+      sandboxed: sandboxInfo?.enabled === true,
+    });
     const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt = buildEmbeddedSystemPrompt({
         config: params.config,
@@ -1357,6 +1367,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         userTime,
         userTimeFormat,
         contextFiles,
+        preparedMemoryPrompt,
         promptContribution,
         nativeCommandGuidanceLines,
       });
@@ -1380,14 +1391,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      ...resolveSessionWriteLockOptions(params.config, {
-        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-          timeoutMs: compactionTimeoutMs,
+    const sessionLock =
+      (await acquireOwnedSessionTranscriptWriteLock({
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+      })) ??
+      (await acquireSessionWriteLock({
+        sessionFile: params.sessionFile,
+        ...resolveSessionWriteLockOptions(params.config, {
+          maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+            timeoutMs: compactionTimeoutMs,
+          }),
         }),
-      }),
-    });
+      }));
     try {
       if (!isSqliteSessionTranscript) {
         await repairSessionFileIfNeeded({

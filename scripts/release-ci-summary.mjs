@@ -1186,6 +1186,10 @@ export function resolveVerifierIdentity(
         "git",
         ["-C", repositoryRoot, "show", `${normalizedSourceSha}:${RELEASE_EVIDENCE_SCRIPT}`],
         {
+          // Evidence verification must stay local-deterministic: in a partial
+          // clone a missing blob would otherwise trigger a promisor network
+          // fetch (hang/minutes) inside this security check.
+          env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
           maxBuffer: 16 * 1024 * 1024,
           stdio: ["ignore", "pipe", "pipe"],
         },

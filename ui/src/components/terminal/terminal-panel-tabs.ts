@@ -11,6 +11,8 @@ export type TerminalPanelTab = {
   status: "connecting" | "live" | "exited";
   exitReason?: string;
   exitCode?: number | null;
+  /** Set for PTYs an agent opened; surfaces an "agent" pill on the tab. */
+  agentOwned?: boolean;
 };
 
 const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
@@ -57,6 +59,7 @@ export function renderTerminalPanelTabs(params: {
       title: terminalTabHint(tab),
       icon: TERMINAL_GLYPH,
       statusLabel: terminalTabStatusLabel(tab),
+      badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,
       className: `is-${tab.status}`,
       closeLabel: `${t("terminal.closeSession")}: ${label}`,
     };

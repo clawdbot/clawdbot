@@ -1,0 +1,117 @@
+name: Sticky Disk Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      retired_key:
+        description: Exact key listed in .github/retired-sticky-disks.json
+        required: true
+        type: string
+      architecture:
+        description: Blacksmith disk architecture
+        required: true
+        type: choice
+        options:
+          - amd64
+          - arm64
+      region:
+        description: Exact Blacksmith disk region listed in the retirement manifest
+        required: true
+        type: string
+      confirm:
+        description: Delete this retired sticky-disk key
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sticky-disk-cleanup
+  cancel-in-progress: false
+
+jobs:
+  delete:
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && inputs.confirm
+    runs-on: ${{ inputs.architecture == 'arm64' && 'blacksmith-16vcpu-ubuntu-2404-arm' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout protected manifest
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          # A rerun keeps its original workflow_dispatch SHA. Read the latest
+          # protected manifest so removing an entry revokes deletion authority.
+          ref: refs/heads/main
+
+      - name: Validate exact retired key
+        env:
+          RETIRED_ARCHITECTURE: ${{ inputs.architecture }}
+          RETIRED_KEY: ${{ inputs.retired_key }}
+          RETIRED_REGION: ${{ inputs.region }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { readFileSync } from "node:fs";
+
+          const retiredDisks = JSON.parse(
+            readFileSync(".github/retired-sticky-disks.json", "utf8"),
+          );
+          if (!Array.isArray(retiredDisks)) {
+            throw new Error("retired sticky-disk manifest must be an array");
+          }
+          for (const disk of retiredDisks) {
+            if (
+              typeof disk?.key !== "string" ||
+              disk.key.length === 0 ||
+              disk.key !== disk.key.trim() ||
+              (disk.architecture !== "amd64" && disk.architecture !== "arm64") ||
+              typeof disk.region !== "string" ||
+              disk.region.length === 0 ||
+              disk.region !== disk.region.trim()
+            ) {
+              throw new Error(
+                "retired sticky-disk manifest entries require canonical key, architecture, and region",
+              );
+            }
+          }
+          const requestedArchitecture = process.env.RETIRED_ARCHITECTURE;
+          const requestedKey = process.env.RETIRED_KEY;
+          const requestedRegion = process.env.RETIRED_REGION;
+          if (!requestedKey || requestedKey !== requestedKey.trim()) {
+            throw new Error("sticky-disk key must be non-empty and canonical");
+          }
+          if (!requestedRegion || requestedRegion !== requestedRegion.trim()) {
+            throw new Error("sticky-disk region must be non-empty and canonical");
+          }
+          const runnerArchitecture = process.env.BLACKSMITH_ENV?.includes("arm")
+            ? "arm64"
+            : "amd64";
+          if (requestedArchitecture !== runnerArchitecture) {
+            throw new Error(
+              `sticky-disk architecture ${requestedArchitecture} does not match runner ${runnerArchitecture}`,
+            );
+          }
+          if (requestedRegion !== process.env.BLACKSMITH_REGION) {
+            throw new Error(
+              `sticky-disk region ${requestedRegion} does not match runner ${process.env.BLACKSMITH_REGION}`,
+            );
+          }
+          const allowlisted = retiredDisks.some(
+            (disk) =>
+              disk?.key === requestedKey &&
+              disk?.architecture === requestedArchitecture &&
+              disk?.region === requestedRegion,
+          );
+          if (!allowlisted) {
+            throw new Error(
+              `sticky-disk identity is not allowlisted for retirement: ${requestedKey} (${requestedArchitecture}, ${requestedRegion})`,
+            );
+          }
+          EOF
+
+      - name: Delete retired sticky disk
+        uses: useblacksmith/stickydisk-delete@3bd8d43f9da764c6b80c2cd6db129bdb568c79b6 # v1
+        with:
+          delete-docker-cache: "false"
+          delete-key: ${{ inputs.retired_key }}

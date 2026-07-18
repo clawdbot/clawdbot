@@ -46,6 +46,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call doctor tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call doctor tests");
+      }) as never,
     },
   });
 }
@@ -226,6 +229,45 @@ describe("voice-call doctor state migration", () => {
     const history = await getCallHistoryFromStore(storePath);
     expect(history).toHaveLength(1);
     expect(history[0]?.callId).toBe("call-doctor");
+  });
+
+  it("honors OPENCLAW_STATE_DIR for the default store", async () => {
+    const defaultStorePath = path.join(stateDir, "voice-calls");
+    const call = makePersistedCall({
+      callId: "call-isolated-state",
+      providerCallId: "provider-isolated-state",
+    });
+    writeLegacyCallsJsonl(defaultStorePath, [call]);
+
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
+    const params = {
+      config: {
+        plugins: {
+          entries: {
+            "voice-call": { config: {} },
+          },
+        },
+      },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining("1 record")],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({
+      changes: [
+        expect.stringContaining("Migrated 1 Voice Call call-log record"),
+        expect.stringContaining("Archived Voice Call call-log legacy source"),
+      ],
+      warnings: [],
+    });
+
+    expect(loadActiveCallsFromStore(defaultStorePath).activeCalls.has("call-isolated-state")).toBe(
+      true,
+    );
   });
 
   it("repairs the plugin-local SQLite schema without a legacy call log", async () => {

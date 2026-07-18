@@ -146,9 +146,17 @@ without exceptions outside doctor/import/export/debug boundaries.
 - Backup: `sqlite-runtime`. Backup stages compact SQLite snapshots, omits live
   WAL/SHM sidecars, verifies SQLite integrity, and records backup runs in the
   global database.
+- Workspace setup: `sqlite-runtime`. Setup completion, workspace attestations,
+  and generated bootstrap hashes live in typed shared SQLite tables. Runtime
+  does not read or write the retired workspace JSON and `.attested` sidecars;
+  Doctor owns their validated import and verified removal.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
+- Exec approvals: `file-runtime`. TypeScript and macOS still read and write the
+  active state directory's `exec-approvals.json`; the reserved
+  `exec_approvals_config` schema has no runtime owner yet. A future cutover must
+  add same-state doctor import and move both runtimes together.
 - E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
   rows. The runtime-context Docker script creates legacy JSONL only inside the
   doctor migration seed and names the legacy session index path explicitly.
@@ -179,7 +187,7 @@ without exceptions outside doctor/import/export/debug boundaries.
       Proof: no schema change in this pass; `pnpm db:kysely:check`;
       `pnpm lint:kysely`.
 - [x] Re-run focused tests for touched stores, commands, and scripts.
-      Proof: `pnpm test src/cron/service/store.test.ts src/cron/store.test.ts src/cron/service.heartbeat-ok-summary-suppressed.test.ts src/cron/service.main-job-passes-heartbeat-target-last.test.ts src/cron/service.every-jobs-fire.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts src/cron/service/ops.test.ts src/cron/service/timer.regression.test.ts src/auto-reply/reply/commands-export-trajectory.test.ts extensions/telegram/src/thread-bindings.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts src/acp/translator.session-lineage-meta.test.ts`; `git diff --check`.
+      Proof: `pnpm test src/cron/service/store.test.ts src/cron/store.test.ts src/cron/service.heartbeat-ok-summary-suppressed.test.ts src/cron/service.main-job-passes-heartbeat-target-last.test.ts src/cron/service.every-jobs-fire.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts src/cron/service/ops.test.ts src/cron/service/timer.regression.test.ts src/auto-reply/reply/commands-export-session.test.ts extensions/telegram/src/thread-bindings.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts src/acp/translator.session-lineage-meta.test.ts`; `git diff --check`.
 - [x] Before declaring `done`, run the changed gate or remote broad proof.
       Proof: `pnpm check:changed --timed -- <changed extension paths>` passed on
       Hetzner Crabbox run `run_3f1cabf6b25c` after temporary Node 24/pnpm setup and
@@ -311,7 +319,8 @@ The branch already has a real shared SQLite base:
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_jobs`, `commitments`,
   `delivery_queue_entries`, `model_capability_cache`,
-  `workspace_setup_state`, `native_hook_relay_bridges`,
+  `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
+  `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
   `tui_last_sessions`, `acp_sessions`, `acp_replay_sessions`,
   `acp_replay_events`, `task_runs`, `task_delivery_state`, `flow_runs`,
@@ -451,17 +460,21 @@ The branch already has a real shared SQLite base:
   instead of scanning a whole namespace or relying on `LIKE` path matching.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
   run artifact, and scoped cache stores for workers.
-- Workspace bootstrap completion markers now live in typed shared
-  `workspace_setup_state` rows keyed by resolved workspace path instead of
-  `.openclaw/workspace-state.json`; runtime no longer reads or rewrites the
-  legacy workspace marker, and helper APIs no longer pass around a fake
-  `.openclaw/setup-state` path just to derive storage identity.
-- Exec approvals now live in the typed shared SQLite `exec_approvals_config`
-  singleton row. Doctor imports legacy `~/.openclaw/exec-approvals.json`;
-  runtime writes no longer create, rewrite, or report that file as its active
-  store location. The macOS companion reads and writes the same
-  `state/openclaw.sqlite` table row; it keeps only the Unix prompt socket on disk
-  because that is IPC, not durable runtime state.
+- Workspace bootstrap completion, attestation recency, and generated bootstrap
+  hashes now live in typed shared `workspace_setup_state`,
+  `workspace_path_aliases`, `workspace_attestations`, and
+  `workspace_generated_bootstrap_hashes` rows keyed by canonical workspace
+  identity. Persisted lexical and real-path aliases keep vanished-workspace
+  protection stable after a configured symlink disappears; repointed aliases
+  fail closed. Runtime no longer reads or writes
+  `openclaw-workspace-state.json`, `.openclaw/workspace-state.json`, state-dir
+  `workspace-attestations/*.attested`, or sibling `<workspace>.attested`
+  sidecars. `openclaw doctor --fix` validates and claims legacy sources,
+  imports them into SQLite with migration receipts, verifies the canonical
+  rows, and only then removes the claimed files.
+- The shared schema reserves an `exec_approvals_config` singleton row, but the
+  runtime cutover remains pending. TypeScript and the macOS companion still use
+  the state-scoped JSON file and must move to SQLite together.
 - Device identity, device auth, and bootstrap runtime modules now keep their
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers. Device identity uses typed `device_identities` rows and device auth
@@ -551,9 +564,9 @@ The branch already has a real shared SQLite base:
   an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
   reload decisions no longer wrap those rows in fake `plugins.installs` config
   objects.
-- Matrix named-account credential upgrade no longer happens during runtime
-  reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
-  rename when a single/default Matrix account can be resolved.
+- Matrix account credentials now live in SQLite plugin state. Runtime reads
+  only that canonical store; Doctor imports, verifies, and archives retired
+  `credentials/matrix/credentials*.json` files when their account can be resolved.
 - Core pairing and cron runtime modules no longer use legacy JSON path builders.
   The deprecated pairing-path SDK helper remains migration-only compatibility;
   doctor state migration owns its file reads and imports. Doctor-owned legacy
@@ -1180,8 +1193,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Zalo hosted outbound media now uses shared SQLite `plugin_blob_entries`
   instead of `openclaw-zalo-outbound-media` JSON/bin temp sidecars.
 - Diffs viewer HTML and metadata now use shared SQLite `plugin_blob_entries`
-  instead of `meta.json`/`viewer.html` temp files. Rendered PNG/PDF outputs stay
-  temp materializations because channel delivery still needs a file path.
+  instead of `meta.json`/`viewer.html` temp files. Viewer HTML is stored as a
+  gzip blob and only the URL token hash is persisted. Rendered PNG/PDF outputs
+  stay temp materializations because channel delivery still needs a file path;
+  their expiry metadata is SQLite-owned without JSON sidecars.
 - Canvas managed documents now use shared SQLite `plugin_blob_entries` instead
   of a default `state/canvas/documents` directory. The Canvas host serves those
   blobs directly; local files are created only for explicit `host.root`
@@ -1241,8 +1256,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Gateway restart sentinel state now uses typed shared SQLite
   `gateway_restart_sentinel` rows instead of `restart-sentinel.json`; runtime
   reads sentinel kind, status, routing, message, continuation, and stats from
-  typed columns. `payload_json` is only a replay/debug copy. Runtime code clears
-  the SQLite row directly and no longer carries file cleanup plumbing.
+  typed columns. Those columns are authoritative; `payload_json` is only a
+  replay/debug shadow. Runtime read, write, and clear paths are SQLite-only.
+  One bounded state-migration module runs during startup and Doctor to import a
+  validated older post-update sentinel before normal restart recovery, verify
+  the typed row, and remove the source file. No steady-state runtime module
+  reads, writes, or cleans up the legacy file.
 - Gateway restart intent and supervisor handoff state now use typed shared
   SQLite `gateway_restart_intent` and `gateway_restart_handoff` rows instead of
   `gateway-restart-intent.json` and
@@ -1283,6 +1302,14 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` instead of
   telling users to inspect or copy `auth-profiles.json`; legacy OAuth/auth JSON
   names remain documented only as doctor-import inputs.
+- MCP OAuth sessions now use versioned `mcp_oauth_stores` rows in shared
+  `state/openclaw.sqlite`. SDK-owned token, client-registration, and discovery
+  objects remain one validated JSON payload so dependency extension fields
+  survive, while every read/modify/write commits in one short Kysely
+  transaction. One shared SQLite lease serializes refresh, login, and logout;
+  embedded MCP transports no longer let the MCP SDK refresh outside that
+  lease. Doctor exclusively imports and removes retired `mcp-oauth/*.json`
+  stores with source receipts, and runtime has no file fallback.
 - Core state-path helpers no longer expose the retired `credentials/oauth.json`
   file. The legacy filename is local to the doctor auth import path.
 - Install, security, onboarding, model-auth, and SecretRef docs now describe
@@ -1315,10 +1342,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   per vault/run id instead of writing `.openclaw-wiki/import-runs/*.json`.
   Rollback snapshots remain explicit vault files until import-run snapshot
   archival is moved into blob storage.
-- Memory Wiki compiled digests now store SQLite plugin blob rows instead of
-  writing `.openclaw-wiki/cache/agent-digest.json` and
-  `.openclaw-wiki/cache/claims.jsonl`. The migration provider imports old cache
-  files and removes the cache directory when it becomes empty.
+- Memory Wiki compiled digests now store compressed SQLite plugin-blob rows
+  instead of writing `.openclaw-wiki/cache/agent-digest.json` and
+  `.openclaw-wiki/cache/claims.jsonl`. The cache is rebuildable, so doctor
+  deletes old cache files without importing them.
 - ClawHub skill install tracking now stores one SQLite plugin-state row per
   workspace/skill instead of writing or reading `.clawhub/lock.json` and
   `.clawhub/origin.json` sidecars at runtime. Runtime code uses tracked-install
@@ -1436,16 +1463,17 @@ create` validates the written archive by default; `--no-verify` is the
   `ensureOpenClawModelCatalog`; there is no `models.json` compatibility API in
   runtime code. The implementation writes SQLite and the embedded PI registry is
   hydrated from that stored payload without creating a `models.json` file.
-- QMD session transcript markdown export and `memory.qmd.sessions` config were
-  removed. There is no QMD transcript collection, no `qmd/sessions*` runtime
-  path, and no file-backed session memory bridge.
-- Memory-core runtime imports SQLite transcript indexing helpers from
-  `openclaw/plugin-sdk/memory-core-host-engine-session-transcripts`, not the
-  QMD SDK subpath. The QMD subpath keeps a compatibility re-export only for
-  external callers until a major SDK cleanup can remove it.
-- QMD's own `index.sqlite` is now a temp runtime materialization backed by the
-  main SQLite `plugin_blob_entries` table. Runtime no longer creates a durable
-  `~/.openclaw/agents/<agentId>/qmd` sidecar.
+- Optional `memory.qmd.sessions` export reads canonical transcript rows from
+  the per-agent database and materializes sanitized Markdown under the QMD home
+  as an explicit QMD input artifact. QMD session collections and artifact
+  identity mappings therefore remain part of the configured external-tool
+  bridge; they are not a second canonical transcript store.
+- QMD's own `index.sqlite`, YAML collection config, and model downloads remain
+  external-tool artifacts under `~/.openclaw/agents/<agentId>/qmd`; they are not
+  mirrored into `plugin_blob_entries`. OpenClaw-owned QMD coordination is
+  database-first: shared `state_leases` serialize embeds globally and per-agent
+  `state_leases` serialize collection/update/embed writers. Runtime creates no
+  QMD lock sidecars.
 - The optional `memory-lancedb` plugin no longer creates
   `~/.openclaw/memory/lancedb` as an implicit OpenClaw-managed store. It is an
   external LanceDB backend and stays disabled until the operator configures an
@@ -1502,6 +1530,9 @@ device_identities(identity_key, device_id, public_key_pem, private_key_pem, crea
 device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
 macos_port_guardian_records(pid, port, command, mode, timestamp)
 workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at)
+workspace_path_aliases(alias_key, alias_path, workspace_key, workspace_path, updated_at_ms)
+workspace_attestations(workspace_key, attested_at_ms, updated_at_ms)
+workspace_generated_bootstrap_hashes(workspace_key, filename, sha256)
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
 model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
 agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
@@ -2012,8 +2043,10 @@ payload.
      `gateway_locks` and no longer exposes a file-lock directory seam.
    - Generic plugin SDK dedupe persistence no longer uses file locks or JSON
      files; it writes shared SQLite plugin-state rows. Done.
-   - QMD embed coordination uses a SQLite state lease instead of
-     `qmd/embed.lock`. Done.
+   - QMD coordination uses a shared SQLite lease for embeds and a per-agent
+     SQLite lease for every collection/update/embed writer. Runtime no longer
+     creates `qmd/embed.lock.lock` or `agents/<agentId>/qmd-write.lock.lock`;
+     Doctor removes only definitely stale retired sidecars. Done.
 
 7. Make workers database-aware.
    - Workers open their own SQLite connections.
@@ -2193,7 +2226,10 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `auth-profiles.json`
 - `auth-state.json`
 - `exec-approvals.json`
+- `openclaw-workspace-state.json`
 - `workspace-state.json`
+- `workspace-attestations/*.attested`
+- sibling `<workspace>.attested`
 - Matrix `credentials*.json` and `recovery-key.json`
 - `cron/runs/*.jsonl`
 - `cron/jobs.json`
@@ -2252,7 +2288,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Discord `model-picker-preferences.json`
 - Discord `command-deploy-cache.json`
 - sandbox registry shard JSON files
-- native hook relay `/tmp` bridge JSON files
 - `plugin-state/state.sqlite`
 - ad-hoc `openclaw-state.sqlite` runtime sidecars
 - `tasks/runs.sqlite`
@@ -2262,7 +2297,8 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `gateway-restart-intent.json`
 - `gateway-supervisor-restart-handoff.json`
 - `gateway.<hash>.lock`
-- `qmd/embed.lock`
+- `qmd/embed.lock.lock`
+- `agents/<agentId>/qmd-write.lock.lock`
 - `commands.log`
 - `config-health.json`
 - `port-guard.json`

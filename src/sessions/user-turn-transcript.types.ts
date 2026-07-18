@@ -32,6 +32,14 @@ export type UserTurnInput = {
   mediaOnlyText?: string;
   /** Durable participant attribution. Callers must opt in at the product boundary. */
   sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
+  /** Durable transport correlation; stored privately and never rendered into model input. */
+  transport?: {
+    channel?: string;
+    conversationRef?: string;
+    messageId?: string;
+    replyToId?: string;
+    threadId?: string;
+  };
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";

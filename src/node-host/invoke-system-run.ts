@@ -7,6 +7,7 @@ import {
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
@@ -145,7 +146,10 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
 };
 
-const safeBinTrustedDirWarningCache = new Set<string>();
+const safeBinTrustedDirWarningCache = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
@@ -166,10 +170,9 @@ type EffectiveSystemRunExecPolicy = {
 };
 
 function warnWritableTrustedDirOnce(message: string): void {
-  if (safeBinTrustedDirWarningCache.has(message)) {
+  if (safeBinTrustedDirWarningCache.check(message)) {
     return;
   }
-  safeBinTrustedDirWarningCache.add(message);
   logWarn(message);
 }
 

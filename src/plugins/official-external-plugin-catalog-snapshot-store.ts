@@ -12,12 +12,14 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import type {
-  HostedOfficialExternalPluginCatalogMetadata,
-  HostedOfficialExternalPluginCatalogSnapshot,
-  HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
-  HostedOfficialExternalPluginCatalogSnapshotStore,
-  HostedOfficialExternalPluginCatalogTrustState,
+import {
+  type HostedOfficialExternalPluginCatalogMetadata,
+  type HostedOfficialExternalPluginCatalogSnapshot,
+  type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
+  type HostedOfficialExternalPluginCatalogSnapshotStore,
+  type HostedOfficialExternalPluginCatalogTrustState,
+  isOfficialExternalPluginCatalogSequence,
+  parseOfficialExternalPluginCatalogTimestamp,
 } from "./official-external-plugin-catalog.js";
 
 type HostedOfficialExternalPluginCatalogSnapshotStoreOptions = {
@@ -45,6 +47,11 @@ type HostedCatalogSnapshotDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "official_external_plugin_catalog_snapshots"
 >;
+
+type StoredHostedCatalogMonotonicState = {
+  sequence: number;
+  generatedAt?: string;
+};
 
 function resolveStoreEnv(
   options: HostedOfficialExternalPluginCatalogSnapshotStoreOptions,
@@ -103,9 +110,7 @@ function decodeBase64Payload(payload: string): string {
   return Buffer.from(normalized, "base64").toString("utf8");
 }
 
-function readMonotonicStateFromBody(
-  body: string,
-): HostedOfficialExternalPluginCatalogSnapshotMonotonicState | undefined {
+function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
     const document = JSON.parse(body) as {
       payload?: unknown;
@@ -119,11 +124,16 @@ function readMonotonicStateFromBody(
             generatedAt?: unknown;
           })
         : document;
-    if (typeof feed.sequence !== "number" || typeof feed.generatedAt !== "string") {
+    if (!isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;
     }
+    if (
+      typeof feed.generatedAt !== "string" ||
+      parseOfficialExternalPluginCatalogTimestamp(feed.generatedAt) === undefined
+    ) {
+      return { sequence: feed.sequence };
+    }
     return {
-      mode: "signed-feed",
       sequence: feed.sequence,
       generatedAt: feed.generatedAt,
     };
@@ -134,12 +144,15 @@ function readMonotonicStateFromBody(
 
 function isMonotonicRollback(params: {
   candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
-  current: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
+  current: StoredHostedCatalogMonotonicState;
 }): boolean {
   if (params.candidate.sequence < params.current.sequence) {
     return true;
   }
   if (params.candidate.sequence > params.current.sequence) {
+    return false;
+  }
+  if (params.current.generatedAt === undefined) {
     return false;
   }
   return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);

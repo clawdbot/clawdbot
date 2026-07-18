@@ -33,6 +33,19 @@ import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+
+const questionGatewayHoisted = vi.hoisted(() => ({
+  resolveQuestionOverGatewaySpy: vi.fn(async () => ({
+    status: "answered" as const,
+    questionId: "target",
+    optionValue: "Production",
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
+  resolveQuestionOverGateway: questionGatewayHoisted.resolveQuestionOverGatewaySpy,
+}));
+
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -380,6 +393,7 @@ describe("createTelegramBot", () => {
 
   beforeEach(() => {
     setMyCommandsSpy.mockClear();
+    questionGatewayHoisted.resolveQuestionOverGatewaySpy.mockClear();
     clearPluginInteractiveHandlers();
     loadConfig.mockReturnValue({
       agents: {
@@ -1011,6 +1025,44 @@ describe("createTelegramBot", () => {
     // The callback should be processed (not silently blocked)
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
+  });
+
+  it("keeps group question callbacks on the configured callback allowlist", async () => {
+    onSpy.mockClear();
+    answerCallbackQuerySpy.mockClear();
+
+    const config = {
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["9"],
+          capabilities: { inlineButtons: "all" },
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false, allowFrom: ["9"] } },
+        },
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({ token: "tok", config });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-question-blocked",
+        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
+        from: { id: 999, first_name: "Mallory", username: "mallory" },
+        message: {
+          chat: { id: -100999, type: "supergroup", title: "Test Group" },
+          date: 1736380800,
+          message_id: 21,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(questionGatewayHoisted.resolveQuestionOverGatewaySpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-question-blocked");
   });
 
   it("replaces legacy approval controls with a visible terminal receipt", async () => {

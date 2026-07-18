@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
-type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
+type CodeModeBridgeMethod = "search" | "describe" | "call" | "callValue" | "yield" | "namespace";
 
 type CodeModeConfig = {
   timeoutMs: number;
@@ -275,6 +275,7 @@ const CONTROLLER_SOURCE = String.raw`
     search: { value: (query, options) => request("search", [query, options]), enumerable: true },
     describe: { value: (id) => request("describe", [id]), enumerable: true },
     call: { value: (id, input) => request("call", [id, input]), enumerable: true },
+    callValue: { value: (id, input) => request("callValue", [id, input]), enumerable: true },
   });
 
   function normalizeApiPath(value) {
@@ -300,7 +301,10 @@ const CONTROLLER_SOURCE = String.raw`
   }
   const api = Object.freeze({
     list: async (prefix = "") => {
-      const normalizedPrefix = prefix == null || String(prefix).trim() === "" ? "" : normalizeApiPath(prefix);
+      // list takes a directory prefix, so tolerate a trailing slash (API.list("mcp/"))
+      // that read's exact-path normalizer would otherwise reject as an empty segment.
+      const rawPrefix = prefix == null ? "" : String(prefix).trim().replace(/\/+$/, "");
+      const normalizedPrefix = rawPrefix === "" ? "" : normalizeApiPath(rawPrefix);
       const files = [...apiFileMap.values()]
         .filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(normalizedPrefix.replace(/\/?$/, "/")))
         .map((file) => Object.freeze({
@@ -387,6 +391,7 @@ function createHostRequestHandler(params: {
       method !== "search" &&
       method !== "describe" &&
       method !== "call" &&
+      method !== "callValue" &&
       method !== "yield" &&
       method !== "namespace"
     ) {

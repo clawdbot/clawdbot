@@ -101,11 +101,11 @@ describe("catalog-backed provider endpoint classification", () => {
     expect(resolveProviderEndpoint("https://proxy.example.com/v1").endpointClass).toBe("custom");
   });
 
-  it("drops catalog endpoint classes core does not recognize", () => {
-    // qwen-portal-native, deepinfra-native, and gmi-native are mirrored
-    // faithfully from their manifests but are not core ProviderEndpointClass
-    // members, so they must stay inert (same filtering as installed manifests).
+  it("keeps removed and unsupported catalog endpoints custom", () => {
     expect(resolveProviderEndpoint("https://portal.qwen.ai/v1").endpointClass).toBe("custom");
+
+    // deepinfra-native and gmi-native are mirrored faithfully from their manifests
+    // but are not core ProviderEndpointClass members, so they must stay inert.
     expect(resolveProviderEndpoint("https://api.deepinfra.com/v1/openai").endpointClass).toBe(
       "custom",
     );

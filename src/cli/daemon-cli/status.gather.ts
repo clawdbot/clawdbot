@@ -16,6 +16,7 @@ import type {
 } from "../../config/types.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
+import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
@@ -295,6 +296,7 @@ export type DaemonStatus = {
     } | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
+    gatewayHeap?: GatewayHeapLimitReport;
     restartHandoff?: GatewayRestartHandoff;
     staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
@@ -781,6 +783,9 @@ export async function gatherDaemonStatus(
       command,
       runtime,
       configAudit,
+      ...(command
+        ? { gatewayHeap: inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS) }
+        : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
       ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
     },

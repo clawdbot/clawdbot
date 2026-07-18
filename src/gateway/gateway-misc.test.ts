@@ -6,6 +6,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   onDiagnosticEvent,
@@ -24,6 +29,10 @@ import {
 } from "./node-command-policy.js";
 import type { SerializedEventPayload } from "./node-registry.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import {
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
@@ -412,6 +421,47 @@ describe("gateway broadcaster", () => {
     expect(workerSocket.send).not.toHaveBeenCalled();
   });
 
+  it("delivers scoped client events only for gateway-owned session subscriptions", () => {
+    const legacySocket = makeRecordingSocket();
+    const firstSocket = makeRecordingSocket();
+    const secondSocket = makeRecordingSocket();
+    const legacy = makeOperatorWsClient("legacy", legacySocket, ["operator.read"]);
+    const first = makeOperatorWsClient("first", firstSocket, ["operator.read"]);
+    const second = makeOperatorWsClient("second", secondSocket, ["operator.read"]);
+    first.connect.caps = [
+      GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    ];
+    second.connect.caps = [];
+    second.connect.client = {
+      id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+      version: "test",
+      platform: "chrome",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const clients = new Set([legacy, first, second]);
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    sessionMessageSubscribers.subscribe(first.connId, "session-a");
+    sessionMessageSubscribers.subscribe(second.connId, "session-b");
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers,
+    });
+
+    broadcast("chat", { sessionKey: "session-a" }, { sessionKeys: ["session-a"] });
+    broadcast("agent", { stream: "lifecycle" });
+    broadcastToConnIds("agent", { sessionKey: "session-a" }, new Set([first.connId]), {
+      sessionKeys: ["session-a"],
+    });
+    broadcastToConnIds("agent", { sessionKey: "session-a" }, new Set([second.connId]), {
+      sessionKeys: ["session-a"],
+    });
+
+    expect(sentEvents(legacySocket)).toEqual(["chat", "agent"]);
+    expect(sentEvents(firstSocket)).toEqual(["chat", "agent"]);
+    expect(sentEvents(secondSocket)).toEqual([]);
+  });
+
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
       bufferedAmount: 0,
@@ -466,6 +516,40 @@ describe("gateway broadcaster", () => {
     expectSentEvents(readSocket, expectedEvents);
     expectSentEvents(writeSocket, expectedEvents);
     expectSentEvents(adminSocket, expectedEvents);
+  });
+
+  it("requires operator.questions for question broadcasts", () => {
+    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const clients = new Set<GatewayWsClient>([
+      makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
+      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+    ]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("question.requested", { id: "question-1" });
+    broadcast("question.resolved", { id: "question-1", status: "expired" });
+
+    expect(questionSocket.send).toHaveBeenCalledTimes(2);
+    expect(readSocket.send).not.toHaveBeenCalled();
+  });
+
+  it("requires operator.read for progressive session catalog events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcastToConnIds } =
+      makeScopedBroadcastContext();
+    const targets = new Set(["c-pairing", "c-node", "c-read", "c-write", "c-admin"]);
+
+    broadcastToConnIds(
+      "sessions.catalog.host",
+      { progressId: "progress-1", agentId: "main", catalog: { id: "codex", hosts: [] } },
+      targets,
+    );
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["sessions.catalog.host"]);
+    expectSentEvents(writeSocket, ["sessions.catalog.host"]);
+    expectSentEvents(adminSocket, ["sessions.catalog.host"]);
   });
 
   it("requires operator.read for task ledger broadcast events", () => {
@@ -827,7 +911,11 @@ describe("node subscription manager", () => {
     };
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
-      const runtime = createGatewayNodeSessionRuntime({ broadcast: vi.fn() });
+      const runtime = createGatewayNodeSessionRuntime({
+        broadcast: vi.fn(),
+        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+      });
       runtime.nodeRegistry.register(
         makeGatewayWsClient("conn-node-a", socket, {
           role: "node",

@@ -407,6 +407,7 @@ function buildOpenClawCodingToolsOptions(
     modelCompat,
     modelApi: model?.api,
     modelContextWindowTokens: model?.contextWindow,
+    delegationCapability: a.delegationCapability,
     modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
       workspaceDir,
     }),

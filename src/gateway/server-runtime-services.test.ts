@@ -8,6 +8,13 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
 
@@ -136,6 +143,10 @@ const {
 describe("server-runtime-services", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    // Gateway test helpers set these at module load. Stub them off so a shared
+    // worker's import order cannot silently disable this suite's health monitor.
+    vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "");
+    vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "");
     resetGatewayWorkAdmission();
     hoisted.heartbeatRunner.stop.mockClear();
     hoisted.heartbeatRunner.updateConfig.mockClear();
@@ -163,6 +174,7 @@ describe("server-runtime-services", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     resetGatewayWorkAdmission();
   });
 
@@ -271,7 +283,7 @@ describe("server-runtime-services", () => {
       logCron,
     });
 
-    await vi.waitFor(() => expect(order).toEqual(["start", "after-start", "hook"]));
+    await waitForFast(() => expect(order).toEqual(["start", "after-start", "hook"]));
     expect(cronReconciliation.arm).toHaveBeenCalledWith({
       reason: "startup",
       config,
@@ -301,7 +313,7 @@ describe("server-runtime-services", () => {
       logCron,
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: store unavailable"),
     );
     expect(onStartError).toHaveBeenCalledOnce();
@@ -324,7 +336,7 @@ describe("server-runtime-services", () => {
       logCron,
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: watcher unavailable"),
     );
     expect(cronReconciliation.complete).not.toHaveBeenCalled();
@@ -348,13 +360,13 @@ describe("server-runtime-services", () => {
       logCron: { error: vi.fn() },
     });
 
-    await vi.waitFor(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     if (!releaseHook) {
       throw new Error("Expected cron reconciliation hook to be pending");
     }
     releaseHook();
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
@@ -420,7 +432,7 @@ describe("server-runtime-services", () => {
     await vi.dynamicImportSettled();
 
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(log.error).toHaveBeenCalledWith(
         "Session delivery recovery failed: Error: database busy",
       ),
@@ -564,9 +576,9 @@ describe("server-runtime-services", () => {
     });
 
     await vi.advanceTimersByTimeAsync(25);
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
     expect(activeRootCounts).toEqual([1]);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("retries a scheduled idle task while request work is active", async () => {
@@ -593,7 +605,7 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(49);
     expect(run).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
   });
 
   it("cancels a scheduled idle task before its delay elapses", async () => {

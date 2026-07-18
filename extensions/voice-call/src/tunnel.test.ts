@@ -1,10 +1,16 @@
 // Voice Call tests cover tunnel plugin behavior.
+import type { ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { PassThrough, type Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type RealPipeChild = ChildProcessByStdio<null, Readable, Readable>;
+
 class FakeChildProcess extends EventEmitter {
-  readonly stdout = new EventEmitter();
-  readonly stderr = new EventEmitter();
+  // PassThrough honors setEncoding("utf8") like real child pipes, so split
+  // multibyte writes exercise the same decoder path as production ngrok.
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
   killedWith: NodeJS.Signals | null = null;
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
@@ -24,13 +30,19 @@ class FakeChildProcess extends EventEmitter {
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
+  realSpawn: undefined as undefined | typeof import("node:child_process").spawn,
   getTailscaleDnsName: vi.fn(),
   runCommand: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn: mocks.spawn,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  mocks.realSpawn = actual.spawn;
+  return {
+    ...actual,
+    spawn: mocks.spawn,
+  };
+});
 
 vi.mock("./webhook/tailscale.js", () => ({
   getTailscaleDnsName: mocks.getTailscaleDnsName,
@@ -84,7 +96,40 @@ function nextProcess(): FakeChildProcess {
 }
 
 function emitNgrokUrl(proc: FakeChildProcess, url: string): void {
-  proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ msg: "started tunnel", url })}\n`));
+  proc.stdout.write(`${JSON.stringify({ msg: "started tunnel", url })}\n`);
+}
+
+function midEmojiSplit(text: string): { bytes: Buffer; splitAt: number } {
+  const bytes = Buffer.from(text, "utf8");
+  const splitAt = bytes.indexOf(Buffer.from("😀", "utf8")) + 2;
+  expect(bytes[splitAt - 2]).toBe(0xf0);
+  return { bytes, splitAt };
+}
+
+/** Real child pipes: production `setEncoding("utf8")` on OS-delivered chunk boundaries. */
+function mockSpawnUtf8SplitChild(params: {
+  stream: "stdout" | "stderr";
+  text: string;
+  splitAt: number;
+  delayMs?: number;
+}): void {
+  const delayMs = params.delayMs ?? 40;
+  const script = [
+    `const bytes=Buffer.from(${JSON.stringify(params.text)},"utf8");`,
+    `const split=${params.splitAt};`,
+    `const stream=process.${params.stream};`,
+    `stream.write(bytes.subarray(0,split));`,
+    `setTimeout(()=>stream.write(bytes.subarray(split),()=>{}),${delayMs});`,
+  ].join("");
+  mocks.spawn.mockImplementationOnce(() => {
+    const spawnReal = mocks.realSpawn;
+    if (!spawnReal) {
+      throw new Error("expected real child_process.spawn from importOriginal");
+    }
+    return spawnReal(process.execPath, ["-e", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+    }) as RealPipeChild;
+  });
 }
 
 function commandResult(overrides: Record<string, unknown> = {}) {
@@ -129,11 +174,8 @@ describe("voice-call tunnels", () => {
     const proc = nextProcess();
     const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
 
-    proc.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({ msg: "started tunnel", url: "https://large.ngrok.io" })}\n${"x".repeat(20_000)}`,
-      ),
+    proc.stdout.write(
+      `${JSON.stringify({ msg: "started tunnel", url: "https://large.ngrok.io" })}\n${"x".repeat(20_000)}`,
     );
 
     const settled = await Promise.race([
@@ -190,7 +232,7 @@ describe("voice-call tunnels", () => {
     const proc = nextProcess();
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
 
-    proc.stderr.emit("data", Buffer.from("ERR_NGROK_3200: invalid auth token"));
+    proc.stderr.write("ERR_NGROK_3200: invalid auth token");
 
     await expect(result).rejects.toThrow("ngrok error: ERR_NGROK_3200: invalid auth token");
   });
@@ -203,10 +245,29 @@ describe("voice-call tunnels", () => {
     // A raw marker-length tail starts on the low surrogate. Production must
     // discard that dangling half while retaining the split marker prefix.
     expect(firstChunk.slice(-8).charCodeAt(0)).toBe(0xdd16);
-    proc.stderr.emit("data", Buffer.from(firstChunk));
-    proc.stderr.emit("data", Buffer.from("ROK_108: invalid tunnel config"));
+    proc.stderr.write(firstChunk);
+    proc.stderr.write("ROK_108: invalid tunnel config");
 
     await expect(result).rejects.toThrow("ngrok error: xERR_NGROK_108: invalid tunnel config");
+  });
+
+  it("preserves UTF-8 across real child stderr pipe chunks", async () => {
+    const message = "bad 😀 ERR_NGROK_3200: invalid token";
+    const { splitAt } = midEmojiSplit(message);
+    mockSpawnUtf8SplitChild({ stream: "stderr", text: message, splitAt });
+    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+
+    await expect(result).rejects.toThrow(`ngrok error: ${message}`);
+  });
+
+  it("preserves UTF-8 across real child stdout pipe chunks", async () => {
+    const line = '{"msg":"started tunnel","url":"https://utf8.ngrok.io","info":"😀"}\n';
+    const { splitAt } = midEmojiSplit(line);
+    mockSpawnUtf8SplitChild({ stream: "stdout", text: line, splitAt });
+    const tunnel = await startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
+
+    expect(tunnel.publicUrl).toBe("https://utf8.ngrok.io/voice/webhook");
+    await tunnel.stop();
   });
 
   it("starts Tailscale serve using the resolved tailnet DNS name", async () => {

@@ -56,10 +56,10 @@ struct GatewayErrorsTests {
 
         let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
 
-        #expect(problem.titlePresentation == .localized("Pairing approval required"))
-        #expect(problem.messagePresentation == .localized(
-            "Approve this device on the gateway, then reconnect."))
-        #expect(problem.actionLabelPresentation == .localized("Approve on gateway"))
+        #expect(problem.titlePresentation.localizationKey == "This device is not approved yet")
+        #expect(problem.messagePresentation
+            .localizationKey == "The gateway received the connection request, but this device must be approved first.")
+        #expect(problem.actionLabelPresentation?.localizationKey == "Approve on gateway")
     }
 
     @Test func `gateway supplied copy remains verbatim`() throws {
@@ -280,5 +280,12 @@ struct GatewayErrorsTests {
 
         #expect(problem?.kind == .tlsPinMismatch)
         #expect(problem?.canTrustRotatedCertificate == false)
+    }
+}
+
+extension GatewayConnectionProblem.PresentationText {
+    fileprivate var localizationKey: String? {
+        guard case let .localized(key) = self else { return nil }
+        return key
     }
 }

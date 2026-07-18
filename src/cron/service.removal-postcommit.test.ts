@@ -156,10 +156,11 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
     });
 
     const realSave = cronStoreModule.saveCronJobsStore;
-    let saveCount = 0;
+    let finalDeletionAttempts = 0;
     vi.spyOn(cronStoreModule, "saveCronJobsStore").mockImplementation(async (...args) => {
-      saveCount += 1;
-      if (saveCount === 2) {
+      const nextStore = args[1];
+      if (!nextStore.jobs.some((entry) => entry.id === job.id)) {
+        finalDeletionAttempts += 1;
         throw new Error("final persist failed");
       }
       await realSave(...args);
@@ -168,7 +169,7 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
     try {
       await expect(executeRemovalPath(path, state, job.id)).rejects.toThrow("final persist failed");
 
-      expect(saveCount).toBe(2);
+      expect(finalDeletionAttempts).toBe(1);
       expect(events.some((event) => event.action === "removed")).toBe(false);
       if (!listedAfterFinished) {
         throw new Error("missing detached finished-hook read");

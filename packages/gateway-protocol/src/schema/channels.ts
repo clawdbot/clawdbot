@@ -199,6 +199,7 @@ export const TalkClientCreateParamsSchema = closedObject({
   mode: Type.Optional(TalkModeSchema),
   transport: Type.Optional(TalkTransportSchema),
   brain: Type.Optional(TalkBrainSchema),
+  capabilities: Type.Optional(Type.Array(Type.Literal("camera-frame"), { uniqueItems: true })),
 });
 
 /** Tool-call request from a browser/client session back into the agent runtime. */
@@ -261,6 +262,7 @@ export const TalkSessionCreateParamsSchema = closedObject({
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
+  language: Type.Optional(Type.String({ pattern: "^[a-z]{2}$" })),
   vadThreshold: Type.Optional(Type.Number()),
   silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
   prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),

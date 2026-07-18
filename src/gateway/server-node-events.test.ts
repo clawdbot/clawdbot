@@ -84,7 +84,6 @@ const sanitizeInboundSystemTagsMock = vi.hoisted(() =>
   ),
 );
 const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: ingressAgentCommandMock,
@@ -154,14 +153,17 @@ vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
 vi.mock("../infra/device-pairing.js", () => ({
   updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
 }));
-vi.mock("../infra/node-pairing.js", () => ({
-  updatePairedNodeMetadata: updatePairedNodeMetadataMock,
-}));
-
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
@@ -340,8 +342,6 @@ describe("node exec events", () => {
     sanitizeInboundSystemTagsMock.mockClear();
     updatePairedDeviceMetadataMock.mockClear();
     updatePairedDeviceMetadataMock.mockResolvedValue(true);
-    updatePairedNodeMetadataMock.mockClear();
-    updatePairedNodeMetadataMock.mockResolvedValue(true);
   });
 
   it("enqueues exec.started events", async () => {
@@ -1039,7 +1039,7 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(String(mockCallArg(warn))).toContain("voice session-store update failed");
   });
 
@@ -1055,10 +1055,10 @@ describe("voice transcript events", () => {
       }),
     });
 
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("voice-touch-busy");
     touch.resolve();
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("voice-touch-ready");
   });
 
@@ -1420,10 +1420,10 @@ describe("agent request events", () => {
       }),
     });
 
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("agent-dispatch-busy");
     dispatch.resolve(undefined as never);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("agent-dispatch-ready");
   });
 
@@ -1443,10 +1443,10 @@ describe("agent request events", () => {
       }),
     });
 
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("receipt-delivery-busy");
     receipt.resolve({ status: "sent" });
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("receipt-delivery-ready");
   });
 
@@ -1672,8 +1672,6 @@ describe("agent request events", () => {
   beforeEach(() => {
     updatePairedDeviceMetadataMock.mockClear();
     updatePairedDeviceMetadataMock.mockResolvedValue(true);
-    updatePairedNodeMetadataMock.mockClear();
-    updatePairedNodeMetadataMock.mockResolvedValue(true);
   });
 
   it("persists authenticated node presence alive events", async () => {
@@ -1694,7 +1692,6 @@ describe("agent request events", () => {
       handled: true,
       reason: "persisted",
     });
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expectPresencePersistCall(
       updatePairedDeviceMetadataMock,
       "ios-presence-persist",
@@ -1715,12 +1712,10 @@ describe("agent request events", () => {
       handled: false,
       reason: "missing_device_identity",
     });
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
   });
 
   it("does not throttle unknown node presence alive identities", async () => {
-    updatePairedNodeMetadataMock.mockResolvedValue(false);
     updatePairedDeviceMetadataMock.mockResolvedValue(false);
     const ctx = buildCtx();
     const result = await handleNodeEvent(
@@ -1777,7 +1772,6 @@ describe("agent request events", () => {
       handled: true,
       reason: "throttled",
     });
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1859,7 +1853,6 @@ describe("agent request events", () => {
       { deviceId: "ios-presence-normalize" },
     );
 
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expectPresencePersistCall(
       updatePairedDeviceMetadataMock,
       "ios-presence-normalize",

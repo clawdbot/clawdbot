@@ -26,10 +26,12 @@ type RealtimeTalkLaunchOptions = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+  capabilities?: Array<"camera-frame">;
 };
 
 type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;
+  videoEnabled?: boolean;
 };
 
 type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
@@ -121,6 +123,7 @@ export class RealtimeTalkSession {
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
       inputDeviceId: this.localOptions.inputDeviceId,
+      videoEnabled: this.localOptions.videoEnabled,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
     });

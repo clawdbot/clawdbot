@@ -331,6 +331,77 @@ describe("normalizeAssistantReplayContent", () => {
     expect((out[1] as { provider: string }).provider).toBe("amazon-bedrock");
   });
 
+  it.each(["channel-final", "channel-final-suppressed", "message-tool-source-reply"] as const)(
+    "filters a stripped delivery mirror identified by %s",
+    (kind) => {
+      const strippedMirror = {
+        ...bedrockAssistant([{ type: "text", text: "channel mirror" }], "stop"),
+        provider: undefined,
+        model: undefined,
+        openclawDeliveryMirror: { kind },
+      } as unknown as AgentMessage;
+      const realReply = bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+        input: 1,
+        output: 1,
+        totalTokens: 2,
+      });
+
+      expect(
+        normalizeAssistantReplayContent([userMessage("hello"), strippedMirror, realReply]),
+      ).toEqual([expect.objectContaining({ role: "user" }), realReply]);
+    },
+  );
+
+  it("preserves an assistant carrying an invalid delivery-mirror marker", () => {
+    const assistant = {
+      ...bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+        input: 1,
+        output: 1,
+        totalTokens: 2,
+      }),
+      openclawDeliveryMirror: { kind: "unknown" },
+    } as unknown as AgentMessage;
+    const messages = [userMessage("hello"), assistant];
+
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
+  it("filters an adjacent marker-free zero-usage delivery mirror", () => {
+    const content = [{ type: "text", text: "real reply" }];
+    const realReply = bedrockAssistant(content, "stop", {
+      input: 1,
+      output: 1,
+      totalTokens: 2,
+    });
+    const bareMirror = bedrockAssistant([{ text: "real reply", type: "text" }], "stop");
+
+    expect(normalizeAssistantReplayContent([userMessage("hello"), realReply, bareMirror])).toEqual([
+      expect.objectContaining({ role: "user" }),
+      realReply,
+    ]);
+  });
+
+  it("preserves adjacent identical assistant turns with nonzero usage", () => {
+    const content = [{ type: "text", text: "intentional repeat" }];
+    const first = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
+    const second = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
+    const messages = [userMessage("repeat"), first, second];
+
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
+  it("preserves adjacent zero-usage assistant turns with tool calls", () => {
+    const content = [
+      { type: "text", text: "checking" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: { path: "file.txt" } },
+    ];
+    const first = bedrockAssistant(content, "stop");
+    const second = bedrockAssistant(content, "stop");
+    const messages = [userMessage("check"), first, second];
+
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
   it("returns the original array reference when nothing needs to change", () => {
     const messages = [userMessage("hello"), bedrockAssistant([{ type: "text", text: "fine" }])];
     const out = normalizeAssistantReplayContent(messages);

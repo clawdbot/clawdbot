@@ -25,6 +25,12 @@ const sessionAccessibilityProofDir = path.join(
   "control-ui-e2e",
   "session-accessibility",
 );
+const managedImageCacheProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "managed-image-cache",
+);
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -271,7 +277,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     await closeOpenBrowserContexts();
   });
 
-  it("renders per-pane headers in split view without desktop topbar chrome", async () => {
+  it("renders always-on pane headers without desktop topbar chrome", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -299,6 +305,22 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
+      await page.evaluate(() => {
+        document.documentElement.classList.add("openclaw-native-macos");
+        document.querySelector(".shell")?.classList.add("shell--nav-collapsed");
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-pane__header")
+            .evaluate((header) => getComputedStyle(header).paddingLeft),
+        )
+        .toBe("90px");
+      await page.evaluate(() => {
+        document.documentElement.classList.remove("openclaw-native-macos");
+        document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
+      });
       await page.setViewportSize({ height: 900, width: 1100 });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
       await page.setViewportSize({ height: 900, width: 1440 });
@@ -321,8 +343,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .poll(async () => (await gateway.getRequests("chat.startup")).length)
         .toBeGreaterThan(startupRequestsBeforeSplit);
 
-      // Each pane owns an in-flow header (title + workspace/split/close
-      // actions); no fixed toolbar layer mirrors the split geometry.
+      // Each pane owns the same in-flow header in classic and split layouts.
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
@@ -354,8 +375,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect.poll(() => headers.first().locator(".chat-workspace-toggle").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      // Pane headers render a static session title; keyboard focus lands on
-      // the pane buttons and marks the pane active.
+      // Keyboard focus on a header action marks the pane active.
       await headers.first().getByRole("button", { name: "Split down" }).focus();
       await expect.poll(() => headers.first().getAttribute("class")).toContain("--active");
 
@@ -418,7 +438,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await expect.poll(() => panes.count()).toBe(3);
       await expect
-        .poll(() => page.locator(".chat-pane__session-title").allTextContents())
+        .poll(async () =>
+          (await page.locator(".chat-pane__session-title").allTextContents()).map((title) =>
+            title.trim(),
+          ),
+        )
         .toContain("Session B");
       await expect
         .poll(() => new URL(page.url()).searchParams.get("session"))
@@ -900,6 +924,227 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("evicts and refetches managed image Blob URLs after the cache reaches capacity", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const originalCreateObjectURL = URL.createObjectURL.bind(URL);
+      const originalRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+      const proof = { created: [] as string[], revoked: [] as string[] };
+      Object.defineProperty(globalThis, "managedImageCacheProof", {
+        configurable: true,
+        value: proof,
+      });
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: (blob: Blob) => {
+          const blobUrl = originalCreateObjectURL(blob);
+          proof.created.push(blobUrl);
+          return blobUrl;
+        },
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: (blobUrl: string) => {
+          proof.revoked.push(blobUrl);
+          originalRevokeObjectURL(blobUrl);
+        },
+      });
+    });
+
+    const imageUrls = Array.from({ length: 65 }, (_, index) => {
+      const id = String(index + 1).padStart(12, "0");
+      return `/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-${id}/full`;
+    });
+    const fetchedMedia: Array<{
+      authorization: string | undefined;
+      pathname: string;
+      requesterSessionKey: string | undefined;
+    }> = [];
+    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      fetchedMedia.push({
+        authorization: request.headers().authorization,
+        pathname: url.pathname,
+        requesterSessionKey: request.headers()["x-openclaw-requester-session-key"],
+      });
+      await route.fulfill({
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" rx="12" fill="#0f766e"/><text x="80" y="50" text-anchor="middle" fill="white" font-family="sans-serif" font-size="14">managed preview</text></svg>',
+        contentType: "image/svg+xml",
+      });
+    });
+
+    const historyFor = (indexes: number[], labelPrefix: string) => [
+      {
+        content: indexes.map((index) => ({
+          alt: `${labelPrefix} ${index + 1}`,
+          type: "image",
+          url: imageUrls[index],
+        })),
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+    ];
+    const gateway = await installMockGateway(page, {
+      historyMessages: historyFor(
+        Array.from({ length: 64 }, (_, index) => index),
+        "Initial managed image",
+      ),
+    });
+    const readBlobProof = () =>
+      page.evaluate(() => {
+        const proof = (
+          globalThis as typeof globalThis & {
+            managedImageCacheProof: { created: string[]; revoked: string[] };
+          }
+        ).managedImageCacheProof;
+        return { created: [...proof.created], revoked: [...proof.revoked] };
+      });
+    let proofMessageSequence = 100;
+    const replaceHistory = async (messages: unknown[], visibleAlt: string) => {
+      const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
+      await gateway.setHistoryMessages(messages);
+      proofMessageSequence += 1;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        hasActiveRun: false,
+        message: messages[0],
+        messageId: `managed-image-cache-proof-${proofMessageSequence}`,
+        messageSeq: proofMessageSequence,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length, {
+          timeout: 15_000,
+        })
+        .toBeGreaterThan(historyRequestsBefore);
+      await page.getByAltText(visibleAlt).waitFor({ state: "visible", timeout: 10_000 });
+    };
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await expect.poll(async () => (await readBlobProof()).created.length).toBe(64);
+      await expect
+        .poll(() =>
+          page
+            .locator("img.chat-message-image")
+            .evaluateAll(
+              (images) =>
+                images.filter(
+                  (image) =>
+                    image instanceof HTMLImageElement &&
+                    image.complete &&
+                    image.naturalWidth === 160,
+                ).length,
+            ),
+        )
+        .toBe(64);
+
+      await replaceHistory(
+        historyFor([0], "Recently viewed managed image"),
+        "Recently viewed managed image 1",
+      );
+      expect((await readBlobProof()).created).toHaveLength(64);
+
+      await replaceHistory(historyFor([64], "Overflow managed image"), "Overflow managed image 65");
+      await expect.poll(async () => (await readBlobProof()).created.length).toBe(65);
+      const overflowProof = await readBlobProof();
+      const retainedRecentBlobUrl = expectDefined(
+        overflowProof.created[0],
+        "recent managed image Blob URL",
+      );
+      const evictedBlobUrl = expectDefined(
+        overflowProof.created[1],
+        "evicted managed image Blob URL",
+      );
+      expect(overflowProof.revoked).toContain(evictedBlobUrl);
+      expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
+
+      const evictedPath = new URL(
+        expectDefined(imageUrls[1], "evicted managed image URL"),
+        server.baseUrl,
+      ).pathname;
+      const fetchesBeforeRevisit = fetchedMedia.filter(
+        (request) => request.pathname === evictedPath,
+      ).length;
+      await replaceHistory(historyFor([1], "Refetched managed image"), "Refetched managed image 2");
+      const revisitedImage = page.getByAltText("Refetched managed image 2");
+      await expect
+        .poll(() =>
+          revisitedImage.evaluate((image) =>
+            image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
+          ),
+        )
+        .toBe(160);
+      await expect.poll(async () => (await readBlobProof()).created.length).toBe(66);
+      const finalProof = await readBlobProof();
+      const evictedImageFetches = fetchedMedia.filter(
+        (request) => request.pathname === evictedPath,
+      ).length;
+      expect(evictedImageFetches).toBe(fetchesBeforeRevisit + 1);
+      expect(fetchedMedia).not.toHaveLength(0);
+      expect(
+        fetchedMedia.every((request) => request.authorization === "Bearer e2e-device-token"),
+      ).toBe(true);
+      expect(
+        fetchedMedia.every((request) => request.requesterSessionKey === "agent:main:main"),
+      ).toBe(true);
+
+      const proofSummary = {
+        cacheCapacity: 64,
+        createdBlobUrls: finalProof.created.length,
+        evictedBlobIndex: 1,
+        evictedImageFetches,
+        refetchedImageNaturalWidth: await revisitedImage.evaluate(
+          (image) => (image as HTMLImageElement).naturalWidth,
+        ),
+        retainedRecentBlobRevoked: finalProof.revoked.includes(retainedRecentBlobUrl),
+        revokedBlobUrls: finalProof.revoked.length,
+      };
+      if (captureUiProofEnabled) {
+        await mkdir(managedImageCacheProofDir, { recursive: true });
+        await page.evaluate((summary) => {
+          const panel = document.createElement("pre");
+          panel.setAttribute("data-managed-image-cache-proof", "true");
+          panel.style.cssText =
+            "position:fixed;right:16px;bottom:16px;z-index:99999;max-width:460px;padding:16px;border:2px solid #5eead4;border-radius:10px;background:#0f172a;color:#ccfbf1;font:14px/1.45 monospace;white-space:pre-wrap";
+          panel.textContent = `Managed image cache browser proof\n${JSON.stringify(summary, null, 2)}`;
+          document.body.append(panel);
+        }, proofSummary);
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(managedImageCacheProofDir, "after-refetch.png"),
+        });
+        await writeFile(
+          path.join(managedImageCacheProofDir, "after-refetch.json"),
+          `${JSON.stringify(proofSummary, null, 2)}\n`,
+          "utf8",
+        );
+      }
+      if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
+        process.stdout.write(
+          `${JSON.stringify({ proof: "managed-image-cache", ...proofSummary })}\n`,
+        );
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("opens current context and latest-run usage from the composer ring", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1330,18 +1575,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      // Collapsed rails render nothing; the floating opener (with the
-      // changed-file badge) is the only pointer affordance.
+      // Collapsed rails render nothing; the title-bar toggle carries the
+      // changed-file badge.
       const opener = page.locator(".chat-workspace-toggle");
       await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
       await opener.click();
-      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await opener.count()).toBe(0);
+      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
+      await expect.poll(() => opener.getAttribute("aria-expanded")).toBe("true");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -1361,14 +1604,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         }),
       ).toBe(0);
 
-      await page.getByRole("button", { name: "Collapse session workspace" }).click();
+      await page.locator(".chat-workspace-rail__collapse-toggle").click();
       await opener.waitFor({ timeout: 10_000 });
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
       await opener.click();
-      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
-        timeout: 10_000,
-      });
+      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -1649,7 +1890,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-session-new");
+      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-new-session");
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
 
@@ -2007,7 +2248,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("steers ordinary follow-ups into the active run by default", async () => {
+  it("steers ordinary follow-ups when the server default is steer", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2018,7 +2259,21 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         : {}),
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "steer" }, mode: "followup" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-steer-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+      },
+    });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
@@ -2052,7 +2307,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps a steerable queued message above the composer in queue mode", async () => {
+  it("preserves a non-steer server default for active-run follow-ups", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2060,15 +2315,44 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "followup" }, mode: "steer" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-followup-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+      },
+    });
 
     try {
       await page.goto(`${server.baseUrl}settings/appearance`);
       const followUpSelect = page.locator("[data-settings-follow-up-mode]");
       await followUpSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await followUpSelect.inputValue()).toBe("steer");
-      await followUpSelect.selectOption("queue");
-      expect(await followUpSelect.inputValue()).toBe("queue");
+      expect(await followUpSelect.inputValue()).toBe("server");
+      await page.getByText("Using server default (followup)").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/server-followup-setting.png`,
+          fullPage: true,
+        });
+      }
+      await followUpSelect.selectOption("steer");
+      await page.getByText("Overriding server default (followup)").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/server-followup-override.png`,
+          fullPage: true,
+        });
+      }
+      await page.getByRole("button", { name: "Reset to server default" }).click();
+      expect(await followUpSelect.inputValue()).toBe("server");
 
       await page.goto(`${server.baseUrl}chat`);
 
@@ -2079,21 +2363,73 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
-      const queuedPrompt = "show this only above the composer";
+      const queuedPrompt = "queue this on the server";
       await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
       await page.getByRole("button", { name: "Queue message" }).click();
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
-      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/queue-mode.png`,
-          fullPage: true,
-        });
-      }
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        message: queuedPrompt,
+        queueMode: "followup",
+        sessionKey: "main",
+      });
+      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("honors a session interrupt override ahead of the webchat config default", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "steer" }, mode: "steer" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-session-override-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+        "sessions.list": chatSessionListResponse([
+          {
+            effectiveQueueMode: "interrupt",
+            key: "main",
+            kind: "direct",
+            label: "Main",
+            queueMode: "interrupt",
+            updatedAt: Date.now(),
+          },
+        ]),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const followUp = "interrupt for this session override";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        message: followUp,
+        queueMode: "interrupt",
+        sessionKey: "main",
+      });
     } finally {
       await closeBrowserContext(context);
     }

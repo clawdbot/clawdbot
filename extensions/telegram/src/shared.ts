@@ -246,9 +246,10 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            Boolean(inspected.token?.trim()) &&
+            inspected.tokenStatus !== "missing" &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
+          tokenStatus: inspected.tokenStatus,
         };
       },
     },

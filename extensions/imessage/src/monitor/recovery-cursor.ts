@@ -187,6 +187,6 @@ export function advanceIMessageRecoveryCursor(
     store.register(key, { lastRowid: rowid });
   } catch {
     // Best effort: a failed cursor write just means we replay a little more
-    // next startup, which the dedupe absorbs.
+    // next startup, which durable ingress tombstones reject by GUID.
   }
 }

@@ -31,6 +31,7 @@ import {
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
@@ -49,7 +50,6 @@ import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } fr
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
-export type { AgentHarnessPolicy };
 
 type AgentHarnessAvailabilityParams = {
   provider?: string;
@@ -389,29 +389,35 @@ function selectAgentHarnessDecision(
     throw new MissingAgentHarnessError(runtime);
   }
 
-  const candidates =
-    pluginHarnesses.length > 0
-      ? (() => {
-          const supportContext = buildAgentHarnessSupportContext({
+  const hintedCandidates = pluginHarnesses.map((harness) => ({
+    harness,
+    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
+  }));
+  const candidates = hintedCandidates.some((entry) => entry.support === undefined)
+    ? (() => {
+        const supportContext = buildAgentHarnessSupportContext({
+          provider: params.provider,
+          modelId: params.modelId,
+          modelProvider: params.modelProvider,
+          requestedRuntime: runtime,
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          preparedModelProvider: params.preparedModelProvider,
+          providerOwnership: resolveProviderRefOwnership({
             provider: params.provider,
-            modelId: params.modelId,
-            modelProvider: params.modelProvider,
-            requestedRuntime: runtime,
             config: params.config,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            preparedModelProvider: params.preparedModelProvider,
-            providerOwnership: resolveProviderRefOwnership({
-              provider: params.provider,
-              config: params.config,
-            }),
-          });
-          return pluginHarnesses.map((harness) => ({
-            harness,
-            support: harness.supports(supportContext),
-          }));
-        })()
-      : [];
+          }),
+        });
+        return hintedCandidates.map(({ harness, support }) => ({
+          harness,
+          support: support ?? harness.supports(supportContext),
+        }));
+      })()
+    : hintedCandidates.map(({ harness, support }) => ({
+        harness,
+        support: support as AgentHarnessSupport,
+      }));
   const supported = candidates
     .filter(
       (

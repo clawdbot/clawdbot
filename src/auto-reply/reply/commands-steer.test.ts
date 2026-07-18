@@ -61,6 +61,7 @@ describe("handleSteerCommand", () => {
       "keep going",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -79,6 +80,7 @@ describe("handleSteerCommand", () => {
       "keep going",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: "gateway",
       },
@@ -103,6 +105,7 @@ describe("handleSteerCommand", () => {
       "check the target",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -126,6 +129,7 @@ describe("handleSteerCommand", () => {
       "continue from state",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -165,6 +169,7 @@ describe("handleSteerCommand", () => {
       "check the active file",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -194,6 +199,7 @@ describe("handleSteerCommand", () => {
       "use the active direct lane",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },

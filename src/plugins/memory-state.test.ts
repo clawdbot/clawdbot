@@ -6,10 +6,13 @@ import {
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
+  listMemoryPromptPreparations,
   listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
+  prepareMemoryPromptSection,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
+  registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   resolveMemoryFlushPlan,
@@ -52,6 +55,7 @@ function createMemoryStateSnapshot() {
   return {
     capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
+    promptPreparations: listMemoryPromptPreparations(),
     promptSupplements: listMemoryPromptSupplements(),
   };
 }
@@ -319,6 +323,65 @@ describe("memory plugin state", () => {
     registerMemoryPromptSupplement("valid-helper", () => ["valid", false] as never);
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["primary", "valid"]);
+  });
+
+  it("prepares immutable prompt lines once per run before synchronous assembly", async () => {
+    let compiledLines = ["compiled before"];
+    const prepare = vi.fn(async () => [...compiledLines]);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+    const params = {
+      availableTools: new Set(["wiki_search"]),
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    };
+
+    const preparedBefore = await prepareMemoryPromptSection(params);
+    compiledLines = ["compiled after"];
+
+    expect(Object.isFrozen(preparedBefore)).toBe(true);
+    expect(Object.isFrozen(preparedBefore.context)).toBe(true);
+    expect(Object.isFrozen(preparedBefore.context.availableTools)).toBe(true);
+    expect(Object.isFrozen(preparedBefore.lines)).toBe(true);
+    expect(buildMemoryPromptSection(params, preparedBefore)).toEqual(["compiled before"]);
+    expect(buildMemoryPromptSection(params, preparedBefore)).toEqual(["compiled before"]);
+    expect(prepare).toHaveBeenCalledTimes(1);
+
+    const preparedAfter = await prepareMemoryPromptSection(params);
+    expect(buildMemoryPromptSection(params, preparedAfter)).toEqual(["compiled after"]);
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects prepared state from a different run context", async () => {
+    registerMemoryPromptPreparation("memory-wiki", async () => ["private wiki state"]);
+    const prepared = await prepareMemoryPromptSection({
+      availableTools: new Set(["wiki_search"]),
+      agentId: "first",
+      agentSessionKey: "agent:first:main",
+    });
+
+    expect(() =>
+      buildMemoryPromptSection(
+        {
+          availableTools: new Set(["wiki_search"]),
+          agentId: "second",
+          agentSessionKey: "agent:second:main",
+        },
+        prepared,
+      ),
+    ).toThrow("prepared memory prompt section does not match the current run");
+  });
+
+  it("removes prompt preparations from future runs without mutating an in-flight snapshot", async () => {
+    registerMemoryPromptPreparation("memory-wiki", async () => ["prepared wiki"]);
+    const params = { availableTools: new Set<string>() };
+    const prepared = await prepareMemoryPromptSection(params);
+
+    clearMemoryPluginState();
+
+    const afterRemoval = await prepareMemoryPromptSection(params);
+    expect(buildMemoryPromptSection(params, prepared)).toEqual(["prepared wiki"]);
+    expect(buildMemoryPromptSection(params, afterRemoval)).toEqual([]);
+    expect(listMemoryPromptPreparations()).toEqual([]);
   });
 
   it("stores memory corpus supplements", async () => {

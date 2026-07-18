@@ -9,7 +9,7 @@ import {
   recordInboundSessionMeta,
   updateSessionLastRoute,
 } from "./session-accessor.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Materializes the SQLite-backed session store as a keyed object so key
 // normalization/migration assertions keep matching the old JSON-store shape.
@@ -58,6 +58,50 @@ function createSignalGroupContext(): MsgContext {
     SessionKey: SIGNAL_GROUP_KEY,
     OriginatingTo: `signal:group:${SIGNAL_GROUP_ID}`,
   };
+}
+
+function createRecoveryEntry(sessionId: string): SessionEntry {
+  return {
+    sessionId,
+    updatedAt: 1,
+    abortedLastRun: true,
+    restartRecoveryRuns: [
+      { runId: "initial-wedged-run", lifecycleGeneration: "gen-1" },
+      { runId: "recovery-run-1", lifecycleGeneration: "gen-2" },
+    ],
+    mainRestartRecovery: {
+      cycleId: "cycle-1",
+      revision: 3,
+      chargedAttempts: 2,
+    },
+    subagentRecovery: {
+      automaticAttempts: 2,
+      lastAttemptAt: 3,
+      wedgedAt: 4,
+      wedgedReason: "automatic_attempt_budget_exceeded",
+    },
+  };
+}
+
+function expectRecoveryMarkers(entry: SessionEntry | undefined): void {
+  expect(entry).toMatchObject({
+    abortedLastRun: true,
+    restartRecoveryRuns: [
+      { runId: "initial-wedged-run", lifecycleGeneration: "gen-1" },
+      { runId: "recovery-run-1", lifecycleGeneration: "gen-2" },
+    ],
+    mainRestartRecovery: {
+      cycleId: "cycle-1",
+      revision: 3,
+      chargedAttempts: 2,
+    },
+    subagentRecovery: {
+      automaticAttempts: 2,
+      lastAttemptAt: 3,
+      wedgedAt: 4,
+      wedgedReason: "automatic_attempt_budget_exceeded",
+    },
+  });
 }
 
 describe("session store key normalization", () => {
@@ -201,6 +245,39 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.sessionId).toBe("existing-session");
     expect(store[CANONICAL_KEY]?.updatedAt).toBe(existingUpdatedAt);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+  });
+
+  it("preserves recovery markers when recording inbound metadata", async () => {
+    await seedStore(storePath, {
+      [CANONICAL_KEY]: createRecoveryEntry("recovered-session"),
+    });
+
+    await recordInboundSessionMeta({
+      storePath,
+      sessionKey: MIXED_CASE_KEY,
+      ctx: createInboundContext(),
+    });
+
+    const store = loadStore(storePath);
+    expectRecoveryMarkers(store[CANONICAL_KEY]);
+    expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+  });
+
+  it("preserves recovery markers when updating the last route", async () => {
+    await seedStore(storePath, {
+      [CANONICAL_KEY]: createRecoveryEntry("route-session"),
+    });
+
+    await updateSessionLastRoute({
+      storePath,
+      sessionKey: CANONICAL_KEY,
+      channel: "webchat",
+      to: "webchat:user-1",
+    });
+
+    const store = loadStore(storePath);
+    expectRecoveryMarkers(store[CANONICAL_KEY]);
+    expect(store[CANONICAL_KEY]?.lastTo).toBe("webchat:user-1");
   });
 
   it("records Signal group metadata under the mixed-case opaque group id", async () => {

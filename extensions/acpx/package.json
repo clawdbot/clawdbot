@@ -9,8 +9,9 @@
   "type": "module",
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.55.0",
-    "@zed-industries/codex-acp": "0.16.0",
+    "@agentclientprotocol/codex-acp": "1.1.2",
     "acpx": "0.11.2",
+    "smol-toml": "1.7.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

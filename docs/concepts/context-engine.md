@@ -168,7 +168,10 @@ export default function register(api) {
 
 The factory `ctx` includes optional `config`, `agentDir`, and `workspaceDir`
 values so plugins can initialize per-agent or per-workspace state before the
-first lifecycle hook runs.
+first lifecycle call. Before a non-legacy `assemble()` call, the host completes
+registered async memory prompt preparation. The synchronous
+`buildMemorySystemPromptAddition(...)` helper reads that immutable run snapshot;
+pass the supplied tool, citation, agent, and session context through unchanged.
 
 Then enable it in config:
 

@@ -80,7 +80,7 @@ vi.mock("./clack-navigation-prompts.js", () => ({
 
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
-import { WizardNavigationError } from "./prompts.js";
+import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -258,6 +258,27 @@ describe("createClackPrompter", () => {
         navigation: { canGoBack: true, canGoForward: true },
         signal: expect.any(AbortSignal),
       }),
+    );
+  });
+
+  it("cancels text prompts silently when their owner aborts them", async () => {
+    const controller = new AbortController();
+    clackMocks.isCancel.mockReturnValueOnce(true);
+    clackMocks.text.mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<symbol>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
+        }),
+    );
+    const prompter = createClackPrompter();
+
+    const prompt = prompter.text({ message: "Paste callback", signal: controller.signal });
+    controller.abort();
+
+    await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+    expect(clackMocks.cancel).not.toHaveBeenCalled();
+    expect(clackMocks.text).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
     );
   });
 

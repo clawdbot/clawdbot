@@ -153,12 +153,14 @@ public enum OpenClawChatGatewayRequests {
         sessionKey: String,
         agentID: String?,
         thinkingLevel: String?? = nil,
+        fastMode: OpenClawChatFastMode?? = nil,
         verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
     {
         self.patchSessionSettings(
             sessionKey: sessionKey,
             agentID: agentID,
             thinkingLevel: thinkingLevel,
+            fastMode: fastMode,
             verboseLevel: verboseLevel)
     }
 
@@ -167,6 +169,7 @@ public enum OpenClawChatGatewayRequests {
         agentID: String?,
         model: String?? = nil,
         thinkingLevel: String?? = nil,
+        fastMode: OpenClawChatFastMode?? = nil,
         verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
@@ -176,6 +179,9 @@ public enum OpenClawChatGatewayRequests {
         if let thinkingLevel {
             params["thinkingLevel"] = thinkingLevel.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
+        if let fastMode {
+            params["fastMode"] = fastMode.map(self.fastModeValue) ?? AnyCodable(NSNull())
+        }
         if let verboseLevel {
             params["verboseLevel"] = verboseLevel.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
@@ -183,6 +189,14 @@ public enum OpenClawChatGatewayRequests {
             method: "sessions.patch",
             params: params,
             timeoutMs: self.mutationTimeoutMs)
+    }
+
+    private static func fastModeValue(_ mode: OpenClawChatFastMode) -> AnyCodable {
+        switch mode {
+        case .off: AnyCodable(false)
+        case .on: AnyCodable(true)
+        case .automatic: AnyCodable("auto")
+        }
     }
 
     public static func patchSession(

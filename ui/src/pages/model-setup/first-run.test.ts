@@ -80,7 +80,7 @@ describe("model setup first-run redirect", () => {
       {},
       expect.objectContaining({ timeoutMs: 20_000 }),
     );
-    expect(replace).toHaveBeenCalledWith("model-setup");
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
     expect(consumeCachedModelSetupDetection(client)).toEqual(result);
   });
 

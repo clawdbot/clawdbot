@@ -48,6 +48,11 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
     label: () => t("aboutPage.linkDiscord"),
   },
   {
+    href: "https://x.com/openclaw",
+    icon: brandIcons.x,
+    label: () => t("aboutPage.linkX"),
+  },
+  {
     href: "https://docs.openclaw.ai/releases",
     icon: icons.scrollText,
     label: () => t("aboutPage.linkChangelog"),

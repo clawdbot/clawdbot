@@ -1404,8 +1404,16 @@
     "target": "操作员权限范围"
   },
   {
+    "source": "Pull request review flow",
+    "target": "PR 审查流程"
+  },
+  {
     "source": "Scheduled tasks vs heartbeat",
     "target": "定时任务与心跳对比"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI 流水线"
   },
   {
     "source": "Scheduled tasks: Troubleshooting",

@@ -160,6 +160,11 @@ internal enum class NodeEventSendOutcome {
   FAILED,
 }
 
+internal data class GatewayCanvasHostRoute(
+  val url: String,
+  val tlsFingerprintSha256: String?,
+)
+
 /**
  * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
  */
@@ -224,8 +229,19 @@ class GatewaySession(
   /** One ready physical WebSocket captured before queued work starts waiting. */
   internal class RequestLease internal constructor(
     val endpointStableId: String,
+    private val isCurrentImpl: () -> Boolean = { true },
+    private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
     private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String,
   ) {
+    fun isCurrent(): Boolean = isCurrentImpl()
+
+    fun commitIfCurrent(block: () -> Unit): Boolean {
+      commitIfCurrentImpl?.let { return it(block) }
+      if (!isCurrentImpl()) return false
+      block()
+      return true
+    }
+
     suspend fun request(
       method: String,
       paramsJson: String?,
@@ -377,6 +393,101 @@ class GatewaySession(
 
   internal fun isReady(): Boolean = readyConnection() != null
 
+  internal fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
+
+  internal fun currentCanvasHostRoute(): GatewayCanvasHostRoute? =
+    synchronized(lifecycleLock) {
+      val connection = readyConnection() ?: return@synchronized null
+      val url = pluginSurfaceUrls["canvas"] ?: return@synchronized null
+      // TOFU can learn the certificate during the WebSocket handshake. Read
+      // the live TLS config so the widget document inherits that exact trust.
+      val fingerprint =
+        connection.tlsConfig
+          ?.effectiveFingerprintSha256
+          ?.let(::normalizeGatewayTlsFingerprint)
+          ?.takeIf { it.length == 64 }
+      GatewayCanvasHostRoute(
+        url = url,
+        tlsFingerprintSha256 =
+          gatewayTlsFingerprintForCanvasSurface(
+            fingerprint = fingerprint,
+            surfaceUrl = url,
+            endpoint = connection.endpoint,
+            isTlsConnection = connection.tlsConfig != null,
+          ),
+      )
+    }
+
+  internal suspend fun refreshCanvasHostUrl(): String? = refreshCanvasHostUrl(observedSurfaceUrl = null, requireObservedMatch = false)
+
+  internal suspend fun refreshCanvasHostUrlIfCurrent(observedSurfaceUrl: String?): String? = refreshCanvasHostUrl(observedSurfaceUrl = observedSurfaceUrl, requireObservedMatch = true)
+
+  internal suspend fun refreshCanvasHostRouteIfCurrent(observedSurfaceUrl: String?): GatewayCanvasHostRoute? {
+    refreshCanvasHostUrlIfCurrent(observedSurfaceUrl)
+    // Pair the URL with the currently installed connection after suspension;
+    // a reconnect can replace both the capability and its certificate pin.
+    return currentCanvasHostRoute()
+  }
+
+  private suspend fun refreshCanvasHostUrl(
+    observedSurfaceUrl: String?,
+    requireObservedMatch: Boolean,
+  ): String? {
+    val (lease, target, requestObservedSurfaceUrl) =
+      synchronized(lifecycleLock) {
+        val current = pluginSurfaceUrls["canvas"]
+        if (requireObservedMatch && current != observedSurfaceUrl) return current
+        val capturedLease = captureRequestLease() ?: return null
+        val capturedTarget =
+          desired
+            ?.takeIf { it.endpoint.stableId == capturedLease.endpointStableId }
+            ?: return null
+        Triple(capturedLease, capturedTarget, current)
+      }
+    val refreshMethod =
+      when (
+        target.options.role
+          .trim()
+          .lowercase(Locale.ROOT)
+      ) {
+        "node" -> GatewayMethod.NodePluginSurfaceRefresh
+        "operator" -> GatewayMethod.PluginSurfaceRefresh
+        else -> return null
+      }
+    val response =
+      runCatching {
+        lease.request(
+          refreshMethod.rawValue,
+          buildJsonObject {
+            put("surface", JsonPrimitive("canvas"))
+            requestObservedSurfaceUrl?.let { put("observedUrl", JsonPrimitive(it)) }
+          }.toString(),
+          timeoutMs = 8_000,
+        )
+      }.getOrNull() ?: return null
+    val raw =
+      parseJsonOrNull(response)
+        .asObjectOrNull()
+        ?.get("pluginSurfaceUrls")
+        .asObjectOrNull()
+        ?.get("canvas")
+        .asStringOrNull()
+    val refreshed = normalizeCanvasHostUrl(raw, target.endpoint, isTlsConnection = target.tls != null) ?: return null
+    var result: String? = null
+    val committed =
+      lease.commitIfCurrent {
+        val current = pluginSurfaceUrls["canvas"]
+        result =
+          if (requireObservedMatch && current != observedSurfaceUrl) {
+            current
+          } else {
+            pluginSurfaceUrls = pluginSurfaceUrls + ("canvas" to refreshed)
+            refreshed
+          }
+      }
+    return if (committed) result else null
+  }
+
   /** Current physical connection identity, including events sent during connect publication. */
   internal fun currentEndpointStableId(): String? = currentConnection?.endpoint?.stableId
 
@@ -490,16 +601,30 @@ class GatewaySession(
   }
 
   /** Captures the current physical connection; requests never resolve a replacement socket. */
-  internal fun captureRequestLease(expectedEndpointStableId: String? = null): RequestLease? {
-    val conn = readyConnection(expectedEndpointStableId) ?: return null
-    return RequestLease(endpointStableId = conn.endpoint.stableId) { method, paramsJson, timeoutMs ->
-      val res = requestDetailed(conn, method, paramsJson, timeoutMs)
-      if (!res.ok) {
-        throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+  internal fun captureRequestLease(expectedEndpointStableId: String? = null): RequestLease? =
+    synchronized(lifecycleLock) {
+      val conn = readyConnection(expectedEndpointStableId) ?: return@synchronized null
+      RequestLease(
+        endpointStableId = conn.endpoint.stableId,
+        isCurrentImpl = { currentConnection === conn && conn.isReady() },
+        commitIfCurrentImpl = { block ->
+          synchronized(lifecycleLock) {
+            if (currentConnection !== conn || !conn.isReady()) {
+              false
+            } else {
+              block()
+              true
+            }
+          }
+        },
+      ) { method, paramsJson, timeoutMs ->
+        val res = requestDetailed(conn, method, paramsJson, timeoutMs)
+        if (!res.ok) {
+          throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+        }
+        res.payloadJson ?: ""
       }
-      res.payloadJson ?: ""
     }
-  }
 
   /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(
@@ -616,6 +741,10 @@ class GatewaySession(
 
     @Volatile
     private var connectRequestId: String? = null
+    val tlsConfig: GatewayTlsConfig? =
+      buildGatewayTlsConfig(tls) { fingerprint ->
+        onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
+      }
     private val client: OkHttpClient = buildClient()
     private val listener = Listener()
     private var socket: WebSocket? = null
@@ -820,10 +949,6 @@ class GatewaySession(
           .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
           .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
           .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
-      val tlsConfig =
-        buildGatewayTlsConfig(tls) { fingerprint ->
-          onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
-        }
       if (tlsConfig != null) {
         builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
         builder.hostnameVerifier(tlsConfig.hostnameVerifier)
@@ -1701,6 +1826,23 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
 }
 
 /** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
+internal fun gatewayTlsFingerprintForCanvasSurface(
+  fingerprint: String?,
+  surfaceUrl: String,
+  endpoint: GatewayEndpoint,
+  isTlsConnection: Boolean,
+): String? {
+  if (!isTlsConnection || fingerprint == null) return null
+  val surface = runCatching { java.net.URI(surfaceUrl) }.getOrNull() ?: return null
+  if (!surface.scheme.equals("https", ignoreCase = true)) return null
+  val surfaceHost = surface.host?.trim()?.trimEnd('.') ?: return null
+  val gatewayHost = endpoint.host.trim().trimEnd('.')
+  val surfacePort = surface.port.takeIf { it > 0 } ?: 443
+  return fingerprint.takeIf {
+    surfaceHost.equals(gatewayHost, ignoreCase = true) && surfacePort == endpoint.port
+  }
+}
+
 internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,

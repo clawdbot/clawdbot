@@ -2,6 +2,9 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
+  openChat: "Chat with {name}",
+  offlineOpenSettings: "Offline — open Settings",
+  switchAgent: "Switch agent",
   working: "Working…",
   ready: "Ready to chat",
   whatCanAgentDo: "What can {name} do?",

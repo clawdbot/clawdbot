@@ -1,5 +1,4 @@
 import CryptoKit
-import Darwin
 import Foundation
 import OSLog
 import Security
@@ -13,12 +12,6 @@ enum ExecApprovalsStore {
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
     private static let secureStateDirPermissions = 0o700
-
-    private enum LegacyMigrationResult {
-        case notNeeded
-        case migrated
-        case blocked
-    }
 
     /// Match the TypeScript writer's `<approvals>.lock` protocol. Both processes
     /// must cover the complete read-modify-write transaction or a stale native
@@ -68,57 +61,6 @@ enum ExecApprovalsStore {
         return URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
     }
 
-    private static func legacyStateDirURLs() -> [URL] {
-        if OpenClawEnv.path("OPENCLAW_HOME") != nil {
-            // OPENCLAW_HOME replaces the OS home; crossing back would mutate
-            // the real default profile during an isolated run.
-            return [
-                self.trustedRootURL()
-                    .appendingPathComponent(".openclaw", isDirectory: true),
-            ]
-        }
-        return [
-            FileManager().homeDirectoryForCurrentUser
-                .appendingPathComponent(".openclaw", isDirectory: true),
-        ]
-    }
-
-    private static func legacyFileURLIfPending() -> URL? {
-        guard OpenClawEnv.path("OPENCLAW_STATE_DIR") != nil || OpenClawEnv.path("OPENCLAW_HOME") != nil
-        else { return nil }
-        // Named profiles are isolated. Bare state-dir relocation keeps the
-        // shipped migration for users who moved their primary state root.
-        if let profile = OpenClawEnv.path("OPENCLAW_PROFILE"),
-           profile.lowercased() != "default"
-        {
-            return nil
-        }
-        let targetURL = self.fileURL()
-        for stateDirURL in self.legacyStateDirURLs() {
-            let legacyURL = stateDirURL
-                .appendingPathComponent("exec-approvals.json", isDirectory: false)
-            guard legacyURL.standardizedFileURL.path != targetURL.standardizedFileURL.path else {
-                continue
-            }
-            guard ExecApprovalsFileIO.pathExistsNoFollow(legacyURL) else { continue }
-            guard !ExecApprovalsFileIO.pathExistsNoFollow(targetURL) else { return nil }
-            return legacyURL
-        }
-        return nil
-    }
-
-    private static func unmigratedLegacyFallbackFile() -> ExecApprovalsFile {
-        ExecApprovalsFile(
-            version: 1,
-            socket: nil,
-            defaults: ExecApprovalsDefaults(
-                security: .deny,
-                ask: .always,
-                askFallback: .deny,
-                autoAllowSkills: false),
-            agents: [:])
-    }
-
     private static func failClosedFallbackFile() -> ExecApprovalsFile {
         ExecApprovalsFile(
             version: 1,
@@ -129,174 +71,6 @@ enum ExecApprovalsStore {
                 askFallback: .deny,
                 autoAllowSkills: false),
             agents: [:])
-    }
-
-    private static func isLegacyDefaultSocketPath(_ raw: String, legacyFileURL: URL) -> Bool {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return true
-        }
-        let expanded = self.expandPath(trimmed)
-        let legacySocket = legacyFileURL.deletingLastPathComponent()
-            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
-            .path
-        return URL(fileURLWithPath: expanded).standardizedFileURL.path
-            == URL(fileURLWithPath: legacySocket).standardizedFileURL.path
-    }
-
-    private static func archiveMigratedLegacyFile(_ legacyURL: URL) throws -> URL {
-        let manager = FileManager()
-        var archiveURL = URL(fileURLWithPath: "\(legacyURL.path).migrated")
-        if manager.fileExists(atPath: archiveURL.path) {
-            archiveURL = URL(fileURLWithPath: "\(archiveURL.path)-\(UUID().uuidString)")
-        }
-        try manager.moveItem(at: legacyURL, to: archiveURL)
-        return archiveURL
-    }
-
-    private static func writeMigratedFileExclusively(_ data: Data, to targetURL: URL) throws -> Bool {
-        let tempURL = targetURL.deletingLastPathComponent()
-            .appendingPathComponent(".exec-approvals.migration.\(UUID().uuidString)")
-        let fd = open(tempURL.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
-        if fd == -1 {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        var closed = false
-        defer {
-            if !closed {
-                close(fd)
-            }
-        }
-        do {
-            try data.withUnsafeBytes { rawBuffer in
-                guard let base = rawBuffer.baseAddress else { return }
-                var offset = 0
-                while offset < rawBuffer.count {
-                    let written = Darwin.write(
-                        fd,
-                        base.advanced(by: offset),
-                        rawBuffer.count - offset)
-                    if written < 0 {
-                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-                    }
-                    offset += written
-                }
-            }
-            close(fd)
-            closed = true
-            // Publish the complete 0600 temp inode atomically without replacing
-            // policy a mixed-version writer may have created meanwhile.
-            let renamed = renamex_np(tempURL.path, targetURL.path, UInt32(RENAME_EXCL))
-            if renamed == -1 {
-                let code = errno
-                try? FileManager().removeItem(at: tempURL)
-                if code == EEXIST {
-                    return false
-                }
-                throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
-            }
-            return true
-        } catch {
-            try? FileManager().removeItem(at: tempURL)
-            throw error
-        }
-    }
-
-    private static func migrateLegacyFileIfNeeded() -> LegacyMigrationResult {
-        guard let legacyURL = legacyFileURLIfPending() else { return .notNeeded }
-        let targetURL = self.fileURL()
-        do {
-            let trustedRoot = self.trustedRootURL()
-            try ExecApprovalsFileIO.assertSafeParentChain(of: targetURL, trustedRoot: trustedRoot)
-            let effectiveLegacyDir = trustedRoot.appendingPathComponent(".openclaw", isDirectory: true)
-            let legacyRoot = legacyURL.deletingLastPathComponent().standardizedFileURL.path
-                == effectiveLegacyDir.standardizedFileURL.path
-                ? trustedRoot
-                : FileManager().homeDirectoryForCurrentUser
-            // ensureFileUnlocked already owns the target lock. Always take the
-            // legacy lock second so migration cannot race an older writer and
-            // two migrating processes cannot deadlock with opposite lock order.
-            return try ExecApprovalsFileIO.withLock(
-                fileURL: legacyURL,
-                trustedRoot: legacyRoot)
-            {
-                if ExecApprovalsFileIO.pathExistsNoFollow(targetURL) {
-                    return .notNeeded
-                }
-                guard ExecApprovalsFileIO.pathExistsNoFollow(legacyURL) else {
-                    throw NSError(domain: "ExecApprovals", code: 10, userInfo: [
-                        NSLocalizedDescriptionKey: "legacy exec approvals disappeared during migration",
-                    ])
-                }
-                return try self.migrateLegacyFileLocked(
-                    legacyURL: legacyURL,
-                    legacyRoot: legacyRoot,
-                    targetURL: targetURL,
-                    trustedRoot: trustedRoot)
-            }
-        } catch {
-            self.logger
-                .error(
-                    "exec approvals legacy migration failed: \(error.localizedDescription, privacy: .public)")
-            return .blocked
-        }
-    }
-
-    private static func migrateLegacyFileLocked(
-        legacyURL: URL,
-        legacyRoot: URL,
-        targetURL: URL,
-        trustedRoot: URL) throws -> LegacyMigrationResult
-    {
-        guard let legacy = try ExecApprovalsFileIO.read(at: legacyURL, trustedRoot: legacyRoot) else {
-            throw NSError(domain: "ExecApprovals", code: 10, userInfo: [
-                NSLocalizedDescriptionKey: "legacy exec approvals disappeared during migration",
-            ])
-        }
-        let data = legacy.data
-        guard self.hasValidPersistedStructure(data) else {
-            throw NSError(domain: "ExecApprovals", code: 13, userInfo: [
-                NSLocalizedDescriptionKey: "invalid legacy approvals structure",
-            ])
-        }
-        var file = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-        guard file.version == 1 else {
-            throw NSError(domain: "ExecApprovals", code: 11, userInfo: [
-                NSLocalizedDescriptionKey: "unsupported legacy approvals version",
-            ])
-        }
-        file = self.normalizeIncoming(file)
-        let rawSocketPath = file.socket?.path?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if self.isLegacyDefaultSocketPath(rawSocketPath, legacyFileURL: legacyURL) {
-            if file.socket == nil {
-                file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
-            }
-            file.socket?.path = self.socketPath()
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let migrated = try encoder.encode(file)
-        try self.ensureSecureStateDirectory()
-        try FileManager().createDirectory(
-            at: targetURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        try ExecApprovalsFileIO.assertSafeParentChain(of: targetURL, trustedRoot: trustedRoot)
-        if ExecApprovalsFileIO.pathExistsNoFollow(targetURL) {
-            return .notNeeded
-        }
-        let created = try writeMigratedFileExclusively(migrated, to: targetURL)
-        if !created {
-            return .notNeeded
-        }
-        do {
-            _ = try self.archiveMigratedLegacyFile(legacyURL)
-        } catch {
-            self.logger
-                .warning(
-                    "exec approvals legacy archive failed: \(error.localizedDescription, privacy: .public)")
-        }
-        return .migrated
     }
 
     static func normalizeIncoming(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
@@ -348,14 +122,6 @@ enum ExecApprovalsStore {
     }
 
     private static func readSnapshotUnlocked() throws -> ExecApprovalsSnapshot {
-        if self.legacyFileURLIfPending() != nil {
-            let file = self.unmigratedLegacyFallbackFile()
-            return ExecApprovalsSnapshot(
-                path: self.fileURL().path,
-                exists: false,
-                hash: self.hashRaw(nil),
-                file: file)
-        }
         let url = self.fileURL()
         guard let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL()) else {
             return ExecApprovalsSnapshot(
@@ -375,9 +141,6 @@ enum ExecApprovalsStore {
     }
 
     static func loadFile() -> ExecApprovalsFile {
-        if self.legacyFileURLIfPending() != nil {
-            return self.ensureFile()
-        }
         do {
             return try self.withWriteLock {
                 self.loadFileUnlocked()
@@ -537,16 +300,6 @@ enum ExecApprovalsStore {
     }
 
     private static func ensureFileUnlocked() throws -> ExecApprovalsFile {
-        if self.legacyFileURLIfPending() != nil {
-            switch self.migrateLegacyFileIfNeeded() {
-            case .migrated, .notNeeded:
-                break
-            case .blocked:
-                throw NSError(domain: "ExecApprovals", code: 18, userInfo: [
-                    NSLocalizedDescriptionKey: "legacy exec approvals migration blocked",
-                ])
-            }
-        }
         try self.ensureSecureStateDirectory()
         let url = self.fileURL()
         let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL())
@@ -585,9 +338,6 @@ enum ExecApprovalsStore {
             return try self.withWriteLock {
                 // A conditional write must not create or normalize policy state
                 // before it proves the caller still owns the observed snapshot.
-                guard self.legacyFileURLIfPending() == nil else {
-                    return .baseHashUnavailable
-                }
                 let snapshot = try self.readSnapshotUnlocked()
                 let expected = baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if snapshot.exists {
@@ -663,10 +413,7 @@ enum ExecApprovalsStore {
         let file: ExecApprovalsFile
         do {
             file = try self.withWriteLock {
-                guard self.legacyFileURLIfPending() == nil else {
-                    return self.unmigratedLegacyFallbackFile()
-                }
-                return self.loadFileUnlocked()
+                self.loadFileUnlocked()
             }
         } catch {
             self.logger.warning("exec approvals read-only lock failed: \(error.localizedDescription, privacy: .public)")

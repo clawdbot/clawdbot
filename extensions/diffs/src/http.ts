@@ -97,23 +97,24 @@ export function createDiffsHttpHandler(params: {
       return true;
     }
 
-    const artifact = await params.store.getArtifact(id, token);
-    if (!artifact) {
-      recordRemoteFailure(viewerFailureLimiter, access);
-      respondText(res, 404, "Diff not found or expired");
-      return true;
-    }
-
     try {
-      const html = await params.store.readHtml(id);
+      // Authorization and payload read share one SQLite row snapshot. Keeping
+      // them together prevents a replacement between token check and response.
+      const viewer = await params.store.readAuthorizedViewer(id, token);
+      if (!viewer) {
+        recordRemoteFailure(viewerFailureLimiter, access);
+        respondText(res, 404, "Diff not found or expired");
+        return true;
+      }
       resetRemoteFailures(viewerFailureLimiter, access);
       res.statusCode = 200;
       setSharedHeaders(res, "text/html; charset=utf-8");
       res.setHeader("content-security-policy", VIEWER_CONTENT_SECURITY_POLICY);
+      res.setHeader("content-length", String(viewer.html.byteLength));
       if (req.method === "HEAD") {
         res.end();
       } else {
-        res.end(html);
+        res.end(Buffer.from(viewer.html));
       }
       return true;
     } catch (error) {

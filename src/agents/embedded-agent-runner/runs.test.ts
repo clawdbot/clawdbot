@@ -888,6 +888,64 @@ describe("embedded-agent runner run registry", () => {
     }
   });
 
+  it("waits without a timer when no run-end timeout is requested", async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = createRunHandle();
+      setActiveEmbeddedRun("session-unbounded", handle);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const waitPromise = waitForEmbeddedAgentRunEnd("session-unbounded", null);
+
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+      clearActiveEmbeddedRun("session-unbounded", handle);
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a reply-backed run without an embedded handle", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:reply-wait",
+      sessionId: "session-reply-wait",
+      resetTriggered: false,
+    });
+
+    const waitPromise = waitForEmbeddedAgentRunEnd("session-reply-wait", null);
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    operation.complete();
+    await expect(waitPromise).resolves.toBe(true);
+  });
+
+  it("waits for a replacement run under the same session id", async () => {
+    const firstHandle = createRunHandle();
+    const replacementHandle = createRunHandle();
+    setActiveEmbeddedRun("session-replaced", firstHandle);
+
+    const waitPromise = waitForEmbeddedAgentRunEnd("session-replaced", null);
+    clearActiveEmbeddedRun("session-replaced", firstHandle);
+    setActiveEmbeddedRun("session-replaced", replacementHandle);
+    await Promise.resolve();
+
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    clearActiveEmbeddedRun("session-replaced", replacementHandle);
+    await expect(waitPromise).resolves.toBe(true);
+  });
+
   it("waits for active runs to drain", async () => {
     vi.useFakeTimers();
     try {

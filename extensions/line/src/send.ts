@@ -1,6 +1,7 @@
 // Line plugin module implements send behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -29,6 +30,25 @@ const userProfileCache = new Map<
   { displayName: string; pictureUrl?: string; fetchedAt: number }
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PROFILE_CACHE_MAX_ENTRIES = 1000;
+
+function cacheUserProfile(
+  userId: string,
+  profile: { displayName: string; pictureUrl?: string; fetchedAt: number },
+): void {
+  // Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
+  userProfileCache.delete(userId);
+  userProfileCache.set(userId, profile);
+  if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  for (const [key, cached] of userProfileCache) {
+    if (profile.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      userProfileCache.delete(key);
+    }
+  }
+  pruneMapToMaxSize(userProfileCache, PROFILE_CACHE_MAX_ENTRIES);
+}
 
 interface LineSendOpts {
   cfg: OpenClawConfig;
@@ -511,7 +531,7 @@ export async function getUserProfile(
       pictureUrl: profile.pictureUrl,
     };
 
-    userProfileCache.set(userId, {
+    cacheUserProfile(userId, {
       ...result,
       fetchedAt: Date.now(),
     });

@@ -2,9 +2,13 @@
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
-} from "../agents/workspace.js";
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -164,22 +168,32 @@ export async function agentsDeleteCommand(
   // Only trash the workspace if no other agent can depend on that path (#70890).
   const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
   const workspaceRetained = workspaceSharedWith.length > 0;
+  let workspaceCleanupError: Error | undefined;
   if (workspaceRetained) {
     quietRuntime.log(
       `Skipped workspace removal (shared with other agents: ${workspaceSharedWith.join(", ")}): ${workspaceDir}`,
     );
   } else {
-    await moveToTrash(workspaceDir, quietRuntime);
-    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-      workspaceDir,
-    ).entries()) {
-      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
-        await moveToTrash(attestationPath, quietRuntime);
+    const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+    const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    const workspaceRemoved = await moveToTrash(workspaceDir, quietRuntime);
+    if (workspaceRemoved) {
+      try {
+        const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+        for (const warning of legacyCleanup.warnings) {
+          quietRuntime.log(warning);
+        }
+        deleteWorkspaceState(statePlan);
+      } catch (error) {
+        workspaceCleanupError = error instanceof Error ? error : new Error(String(error));
       }
     }
   }
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
+  if (workspaceCleanupError) {
+    throw workspaceCleanupError;
+  }
 
   if (opts.json) {
     writeRuntimeJson(runtime, {

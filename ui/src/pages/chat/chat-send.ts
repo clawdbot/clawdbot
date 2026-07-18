@@ -1,5 +1,6 @@
 // Control UI module implements app chat behavior.
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import {
   GatewayRequestError,
@@ -8,7 +9,7 @@ import {
 } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
-  normalizeChatFollowUpMode,
+  normalizeChatFollowUpModeOverride,
   setLastActiveSessionKey,
   type ChatFollowUpMode,
 } from "../../app/settings.ts";
@@ -18,6 +19,7 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
 import {
   retirePendingChatSideQuestion,
@@ -130,6 +132,8 @@ export type ChatHost = ChatInputHistoryState &
     assistantAgentId?: string | null;
     agentsList?: ChatAgentsListSnapshot | null;
     settings?: { chatFollowUpMode?: ChatFollowUpMode };
+    /** Prepared from the browser override and current Gateway effective queue mode. */
+    chatFollowUpMode?: ControlUiFollowUpMode;
     /** Selected message to reply to (right-click / keyboard shortcut). */
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
     /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
@@ -205,6 +209,9 @@ type ChatSendOptions = {
   /** Lets the side-chat panel restore its typed follow-up when the detached
    * send is not accepted (the panel input is not a managed draft). */
   onSideQuestionSendRejected?: () => void;
+  /** Lets request-scoped UI actions recover when their local slash command
+   * fails before the Gateway accepts it. */
+  onLocalCommandSendRejected?: () => void;
 };
 
 function normalizeAckTimingValue(value: unknown): number | undefined {
@@ -254,7 +261,7 @@ async function requestChatSend(
     runId: string;
     sessionKey?: string;
     agentId?: string;
-    queueMode?: "steer";
+    queueMode?: QueueMode;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -356,7 +363,7 @@ async function sendChatMessageWithGeneratedRunId(
   attachments?: ChatAttachment[],
   options: {
     canApplyError?: () => boolean;
-    queueMode?: "steer";
+    queueMode?: QueueMode;
     runId?: string;
   } = {},
 ): Promise<ChatSendAck | null> {
@@ -594,6 +601,8 @@ const UNCONFIRMED_CHAT_SEND_ERROR =
   "Delivery could not be confirmed after reconnect. Check the conversation before retrying.";
 const UNCONFIRMED_STEER_ERROR =
   "Steer delivery could not be confirmed. Check the active run before retrying.";
+const UNCONFIRMED_FOLLOW_UP_ERROR =
+  "Follow-up delivery could not be confirmed. Check the conversation before retrying.";
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
   "A preceding /clear may have completed. Review the current conversation before retrying.";
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
@@ -1309,10 +1318,16 @@ async function sendDetachedCommandMessage(
   return ack;
 }
 
-export async function steerQueuedChatMessage(host: ChatHost, id: string) {
+async function sendQueuedChatMessageWithQueueMode(
+  host: ChatHost,
+  id: string,
+  queueMode?: QueueMode,
+) {
   if (!host.connected || !hasAbortableSessionRun(host)) {
     return;
   }
+  const isSteer = queueMode === "steer";
+  const unconfirmedError = isSteer ? UNCONFIRMED_STEER_ERROR : UNCONFIRMED_FOLLOW_UP_ERROR;
   const activeRunId = host.chatRunId;
   const item = host.chatQueue.find(
     (entry) =>
@@ -1333,10 +1348,10 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   }
 
   // Claim the durable row before transport so a crash or ambiguous ACK cannot
-  // replay the original queued turn after the steer may already be accepted.
+  // replay the original queued turn after active-run admission may have succeeded.
   const claimed = updateQueuedMessage(host, id, (entry) => ({
     ...entry,
-    sendError: UNCONFIRMED_STEER_ERROR,
+    sendError: unconfirmedError,
     sendState: "unconfirmed",
   }));
   if (!claimed) {
@@ -1347,18 +1362,20 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     id: item.id,
     text: item.text,
     createdAt: item.createdAt,
-    kind: "steered",
+    ...(isSteer ? { kind: "steered" as const } : {}),
     ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-    ...(activeRunId ? { pendingRunId: activeRunId } : { sendState: "steering" as const }),
+    ...(isSteer && activeRunId
+      ? { pendingRunId: activeRunId }
+      : { sendState: isSteer ? ("steering" as const) : ("sending" as const) }),
   };
   const hasTransientProjection = setTransientQueuedMessageProjection(
     host,
     itemSessionKey,
     {
       ...claimed,
-      kind: "steered",
+      ...(isSteer ? { kind: "steered" as const } : {}),
       sendError: undefined,
-      sendState: "steering",
+      sendState: isSteer ? "steering" : "sending",
     },
     item.agentId,
   );
@@ -1377,13 +1394,14 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     hasAttachments ? attachments : undefined,
     {
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
-      queueMode: "steer",
+      ...(queueMode ? { queueMode } : {}),
     },
   );
-  const pendingStillVisible = activeRunId
-    ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
-    : false;
-  if (activeRunId) {
+  const pendingStillVisible =
+    isSteer && activeRunId
+      ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
+      : false;
+  if (isSteer && activeRunId) {
     replacePendingQueuedMessageProjection(
       host,
       itemSessionKey,
@@ -1396,10 +1414,10 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
   const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
   if (!ack) {
-    // A transport failure does not prove the steer was rejected. Keep the
+    // A transport failure does not prove active-run admission was rejected. Keep the
     // durable row parked so reconnect cannot replay it as a separate turn.
     if (itemStillVisible) {
-      setChatError(host, UNCONFIRMED_STEER_ERROR);
+      setChatError(host, unconfirmedError);
     }
     return;
   }
@@ -1410,11 +1428,11 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     }));
     if (!restored) {
       if (itemStillVisible) {
-        setChatError(host, UNCONFIRMED_STEER_ERROR);
+        setChatError(host, unconfirmedError);
       }
     } else {
       if (itemStillVisible) {
-        setChatError(host, formatTerminalChatSendAckError(ack, "steer"));
+        setChatError(host, formatTerminalChatSendAckError(ack, isSteer ? "steer" : "chat"));
       }
       const restoredOutbox = listStoredChatOutboxes(host).find((outbox) =>
         outbox.queue.some((entry) => entry.id === id),
@@ -1428,11 +1446,12 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   const removed = removeQueuedMessageWithoutReleasing(host, id, itemSessionKey, item.agentId);
   if (!removed) {
     if (itemStillVisible) {
-      setChatError(host, UNCONFIRMED_STEER_ERROR);
+      setChatError(host, unconfirmedError);
     }
     return;
   }
   if (
+    isSteer &&
     ack.status !== "ok" &&
     pendingStillVisible &&
     host.chatRunId === activeRunId &&
@@ -1451,6 +1470,10 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     );
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   }
+}
+
+export function steerQueuedChatMessage(host: ChatHost, id: string) {
+  return sendQueuedChatMessageWithQueueMode(host, id, "steer");
 }
 
 type StoredChatOutboxDrainResult = "blocked" | "empty";
@@ -2296,6 +2319,9 @@ export async function handleSendChat(
               sendResetSlashCommand(host, resetMessage, resetOpts),
           },
         );
+        if (dispatchResult === "failed") {
+          opts?.onLocalCommandSendRejected?.();
+        }
         if (dispatchResult === "failed" && messageOverride == null) {
           const restorePlan = pendingComposerRestorePlan(host, {
             previousAttachments: attachmentsToSend,
@@ -2437,7 +2463,7 @@ export async function handleSendChat(
     }
 
     let sendResult: QueuedChatSendResult;
-    if (isChatBusy(host)) {
+    if (isChatBusy(host) || hasAbortableSessionRun(host)) {
       const pending = updateQueuedMessage(host, queued.id, (item) => ({
         ...item,
         sendError: undefined,
@@ -2449,16 +2475,19 @@ export async function handleSendChat(
       } else {
         recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
         sendResult = "pending";
-        // Steer-by-default injects the follow-up into the active run, same as
-        // clicking Steer on the queued row. When steering is unavailable the
-        // message stays queued, keeping the queue row as the visible fallback.
+        // Inherited policy belongs to the Gateway: preserve steer, followup,
+        // collect, and interrupt semantics. Browser-local queueing only applies
+        // to an explicit browser override.
+        const followUpMode =
+          host.chatFollowUpMode ??
+          normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
         if (
           !skillWorkshopRevision &&
-          normalizeChatFollowUpMode(host.settings?.chatFollowUpMode) === "steer" &&
+          followUpMode !== "queue" &&
           host.connected &&
           hasAbortableSessionRun(host)
         ) {
-          void steerQueuedChatMessage(host, pending.id);
+          void sendQueuedChatMessageWithQueueMode(host, pending.id, followUpMode);
         }
       }
     } else {

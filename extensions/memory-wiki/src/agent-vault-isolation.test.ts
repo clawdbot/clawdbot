@@ -1,6 +1,7 @@
 // Memory Wiki tests cover agent-scoped vault isolation through the public tools.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -40,6 +41,7 @@ function registerMemoryCoreToolFactories(
     createTestPluginApi({
       id: "memory-core",
       config: appConfig,
+      runtime: createPluginRuntimeMock(),
       registerTool(tool, options) {
         if (typeof tool !== "function") {
           return;

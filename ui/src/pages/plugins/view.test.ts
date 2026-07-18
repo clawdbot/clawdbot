@@ -49,6 +49,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     messages: {},
     pendingRemoval: {},
     detailPluginId: null,
+    iconUrls: {},
     canMutate: true,
     mutationBlockedReason: null,
     pageNotice: null,
@@ -60,6 +61,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
+    onIconError: () => undefined,
     onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
@@ -165,6 +167,34 @@ describe("renderPlugins", () => {
           ?.textContent,
       ).toBe(expected);
     }
+  });
+
+  it("renders proxied plugin icons and falls back after an image error", () => {
+    const plugin = createPlugin({
+      id: "remote-icon",
+      name: "FireCrawl",
+      origin: "official",
+      hasIcon: true,
+    });
+    const onIconError = vi.fn();
+    const first = mount(
+      createProps({
+        result: createResult([plugin]),
+        iconUrls: { "remote-icon": "blob:firecrawl-icon" },
+        onIconError,
+      }),
+    );
+    const image = first.querySelector<HTMLImageElement>(
+      '[data-plugin-id="remote-icon"] .plugins-tile img.plugins-icon',
+    );
+    expect(image?.getAttribute("src")).toBe("blob:firecrawl-icon");
+    image?.dispatchEvent(new Event("error"));
+    expect(onIconError).toHaveBeenCalledWith("remote-icon");
+
+    const fallback = mount(createProps({ result: createResult([plugin]) }));
+    expect(
+      fallback.querySelector('[data-plugin-id="remote-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("FI");
   });
 
   it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
@@ -358,6 +388,41 @@ describe("renderPlugins", () => {
       source: "official",
       pluginId: "tavily",
     });
+  });
+
+  it("renders featured plugins newest-featured first", () => {
+    const plugins = [
+      createPlugin({
+        id: "not-featured",
+        name: "Not Featured",
+        featured: false,
+        origin: "official",
+        installed: false,
+        order: 0,
+      }),
+      createPlugin({
+        id: "older-popular",
+        name: "Older Popular",
+        featured: true,
+        featuredAt: 100,
+        order: 1,
+      }),
+      createPlugin({
+        id: "newest-featured",
+        name: "Newest Featured",
+        featured: true,
+        featuredAt: 200,
+        order: 99,
+      }),
+    ];
+
+    const container = mount(createProps({ activeTab: "discover", result: createResult(plugins) }));
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-plugin-id]")].map(
+        (row) => row.dataset.pluginId,
+      ),
+    ).toEqual(["newest-featured", "older-popular", "not-featured"]);
   });
 
   it("adds MCP connectors and routes ClawHub connector searches", () => {

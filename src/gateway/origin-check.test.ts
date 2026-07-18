@@ -1,7 +1,7 @@
 // Browser origin tests document same-origin, private-network, loopback, forwarded
 // host, and explicit allowlist decisions for gateway browser surfaces.
 import { describe, expect, it } from "vitest";
-import { checkBrowserOrigin } from "./origin-check.js";
+import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
   it.each([
@@ -172,5 +172,15 @@ describe("checkBrowserOrigin", () => {
       ok: false,
       reason: "origin missing or invalid",
     });
+  });
+
+  it("recognizes only canonical Chrome extension origins", () => {
+    expect(
+      normalizeChromeExtensionOrigin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBe("chrome-extension://abcdefghijklmnopabcdefghijklmnop");
+    expect(normalizeChromeExtensionOrigin("chrome-extension://abc")).toBeUndefined();
+    expect(
+      normalizeChromeExtensionOrigin("https://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBeUndefined();
   });
 });

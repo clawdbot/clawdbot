@@ -9,7 +9,7 @@ import {
 
 export type ResolvedWorkerSessionTarget = Omit<
   SessionTranscriptWriteScope,
-  "sessionId" | "sessionKey"
+  "sessionId" | "sessionKey" | "storePath"
 > & {
   sessionEntry: NonNullable<ReturnType<typeof resolveFreshestSessionEntryFromStoreKeys>>;
   sessionId: string;
@@ -18,6 +18,7 @@ export type ResolvedWorkerSessionTarget = Omit<
     string,
     NonNullable<ReturnType<typeof resolveFreshestSessionEntryFromStoreKeys>>
   >;
+  storePath: string;
 };
 
 export function resolveWorkerSessionTarget(

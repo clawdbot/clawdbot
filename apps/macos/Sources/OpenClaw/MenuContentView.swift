@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import KeyboardShortcuts
 import Observation
 import OpenClawKit
 import SwiftUI
@@ -136,6 +137,14 @@ struct MenuContent: View {
                 AppNavigationActions.openChat()
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+            }
+            if self.state.quickChatEnabled {
+                Button {
+                    QuickChatController.shared.toggle()
+                } label: {
+                    Label("Quick Chat", systemImage: "text.bubble")
+                }
+                .globalKeyboardShortcut(.toggleQuickChat)
             }
             if self.state.canvasEnabled {
                 Button {

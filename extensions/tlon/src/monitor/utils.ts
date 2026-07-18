@@ -1,7 +1,14 @@
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Tlon helper module supports utils behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -177,15 +184,46 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
   });
 }
 
+export function resolveTlonGroupMentionDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  wasMentioned: boolean;
+  botParticipatedInThread: boolean;
+}) {
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "tlon",
+    accountId: params.accountId,
+  });
+  return resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        params.botParticipatedInThread,
+      ),
+    },
+    policy: {
+      isGroup: true,
+      requireMention: true,
+      implicitMentions,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
+  });
+}
+
 export function isGroupInviteAllowed(
   inviterShip: string,
   allowlist: string[] | undefined,
 ): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return false;
-  }
   const normalizedInviter = normalizeShip(inviterShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
+  return resolveAllowlistMatchByCandidates({
+    allowList: (allowlist ?? []).map((ship) => normalizeShip(ship)),
+    candidates: [{ value: normalizedInviter, source: "ship" }],
+  }).allowed;
 }
 
 export async function resolveAuthorizedMessageText(params: {

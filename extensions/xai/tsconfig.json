@@ -54,6 +54,18 @@
       "openclaw/plugin-sdk/test-fixtures": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/test-fixtures.d.ts"
       ],
+      "openclaw/plugin-sdk/test-live": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/test-live.d.ts"
+      ],
+      "openclaw/plugin-sdk/test-live-auth": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/test-live-auth.d.ts"
+      ],
+      "openclaw/plugin-sdk/test-media-generation": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/test-media-generation.d.ts"
+      ],
+      "openclaw/plugin-sdk/test-media-understanding": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/test-media-understanding.d.ts"
+      ],
       "openclaw/plugin-sdk/test-node-mocks": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/test-node-mocks.d.ts"
       ],

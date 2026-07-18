@@ -51,6 +51,8 @@ const OPENAI_CHAT_TOOLS_SCENARIO_PATH = "scripts/e2e/lib/openai-chat-tools/scena
 const CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH = "scripts/e2e/codex-npm-plugin-live-docker.sh";
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_PATH =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
+const CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH =
+  "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs";
 const LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH = "scripts/e2e/live-plugin-tool-docker.sh";
 const NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const SKILL_INSTALL_DOCKER_E2E_PATH = "scripts/e2e/skill-install-docker.sh";
@@ -633,7 +635,7 @@ docker_build_run e2e-build -t demo-image .
       chmodSync(join(workDir, "runner.sh"), 0o755);
 
       const waitForFile = async (filePath: string) => {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
+        for (let attempt = 0; attempt < 500; attempt += 1) {
           if (existsSync(filePath)) {
             return;
           }
@@ -646,7 +648,7 @@ docker_build_run e2e-build -t demo-image .
           child.once("exit", (code, signal) => resolve({ code, signal }));
         });
       const waitForDead = async (pid: number) => {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
+        for (let attempt = 0; attempt < 500; attempt += 1) {
           try {
             process.kill(pid, 0);
           } catch {
@@ -1314,6 +1316,154 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
     }
   });
 
+  it("explains how to opt out when Docker rejects default resource limits", () => {
+    const workDir = tempDirs.make("openclaw-docker-resource-diagnostic-");
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "docker: Error response from daemon: NanoCPUs can not be set, as the cgroup is not mounted" >&2
+  return 125
+}
+
+mktemp() {
+  local dir=""
+  dir="$(/usr/bin/mktemp "$@")" || return
+  printf "%s\\n" "$*" >"$TMPDIR/mktemp-seen"
+  printf "%s\\n" "$dir" >"$TMPDIR/diagnostic-dir"
+  printf "%s\\n" "$dir"
+}
+
+tail() {
+  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
+  /usr/bin/tail "$@"
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+printf "before Docker\\n" >"$TMPDIR/stderr"
+docker_e2e_docker_cmd run demo 2>>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = before\\ Docker* ]]
+[[ "$stderr" = *"NanoCPUs can not be set"* ]]
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
+[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]]
+[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suggest resource opt-out for other Docker failures", () => {
+    const workDir = tempDirs.make("openclaw-docker-resource-unrelated-");
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "docker: Error response from daemon: No such image: cgroup-helper" >&2
+  return 125
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = *"No such image: cgroup-helper"* ]]
+[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs Docker when resource diagnostic capture is unavailable", () => {
+    const workDir = tempDirs.make("openclaw-docker-resource-no-temp-");
+
+    try {
+      const rootDir = process.cwd();
+      const missingTmpDir = join(workDir, "missing");
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(missingTmpDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>${shellQuote(join(workDir, "docker-seen"))}
+  return 7
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+docker_e2e_docker_cmd run demo 2>/dev/null
+status="$?"
+set -e
+
+[[ "$status" = "7" ]]
+[[ "$(grep -c '^run ' ${shellQuote(join(workDir, "docker-seen"))})" = "1" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid Docker run pids limits before invoking docker", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-resource-pids-"));
 
@@ -1650,6 +1800,59 @@ docker_e2e_docker_run_cmd run demo
 
 [[ "$(<"$TMPDIR/timeout-seen")" = "gtimeout:--kill-after=30s 15s|docker run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
 [[ "$(<"$TMPDIR/docker-seen")" = "run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("diagnoses rejected resource limits in the package-backed fallback", () => {
+    const workDir = tempDirs.make("openclaw-docker-package-diagnostic-");
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+timeout() {
+  if [[ "$1" = "--kill-after=1s" ]]; then
+    return 0
+  fi
+  shift 2
+  "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "OCI runtime create failed: crun: controller pids is not available" >&2
+  return 125
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+set +e
+docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = *"controller pids is not available"* ]]
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -2735,6 +2938,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
   it("bounds Codex npm plugin live assertion file and transcript reads", () => {
     const assertions = readFileSync(CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_PATH, "utf8");
+    const followthrough = readFileSync(CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH, "utf8");
     const runner = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
 
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES");
@@ -2742,6 +2946,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES");
+    expect(assertions).toContain(
+      "COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes",
+    );
+    expect(assertions).toContain('db.exec("BEGIN")');
+    expect(assertions).toContain('db.exec("ROLLBACK")');
     expect(assertions).toContain("const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(");
     expect(assertions).toContain('"OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS"');
     expect(assertions).toContain("requestTimeoutMs: AGENT_TURN_TIMEOUT_SECONDS * 1000");
@@ -2762,6 +2971,19 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       'readTextFileTail(\n        "/tmp/openclaw-codex-agent-after-uninstall.err",',
     );
     expect(runner).toContain('assert-agent-error "$post_uninstall_status"');
+    expect(runner).toContain("assert-followthrough");
+    expect(runner).toContain("followthrough-turn.mjs");
+    expect(followthrough).toContain('"dist",\n  "plugin-sdk",\n  "agent-runtime.js"');
+    expect(followthrough).toContain("agentCommandFromIngress");
+    expect(followthrough).toContain('sourceReplyDeliveryMode: "message_tool_only"');
+    expect(followthrough).toContain('thinking: "medium"');
+    expect(runner).toContain("without passing final");
+    expect(runner).toContain("omitted, not false");
+    expect(runner).not.toContain("final=false");
+    expect(runner).toContain("final=true");
+    expect(assertions).toContain('"assert-followthrough": assertFollowthrough');
+    expect(assertions).toContain("expected exact progress and completion replies");
+    expect(assertions).toContain("unexpected Codex follow-through artifact");
     expect(runner).not.toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-agent-after-uninstall.err");
     const earlyAgentTimeoutEnvIndex = runner.indexOf(
@@ -2797,6 +3019,59 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
     expect(runner).toContain('--timeout "$AGENT_TURN_TIMEOUT_SECONDS"');
     expect(runner).not.toContain("--timeout 420");
+  });
+
+  it("writes the packaged Codex follow-through result independently of stdout logs", () => {
+    const workDir = tempDirs.make("openclaw-codex-followthrough-");
+    const packageRoot = join(workDir, "package");
+    const runtimeDir = join(packageRoot, "dist", "plugin-sdk");
+    const outputPath = join(workDir, "result.json");
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), '{"type":"module"}\n');
+    writeFileSync(
+      join(runtimeDir, "agent-runtime.js"),
+      [
+        "export async function agentCommandFromIngress(opts, runtime) {",
+        '  runtime.log("unexpected runtime output");',
+        '  console.log("unexpected subsystem output");',
+        "  return { captured: opts };",
+        "}",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH,
+        packageRoot,
+        "followthrough-session",
+        "openai/gpt-5.4",
+        "90",
+        outputPath,
+        "follow through",
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("unexpected subsystem output");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      captured: expect.objectContaining({
+        sessionId: "followthrough-session",
+        model: "openai/gpt-5.4",
+        message: "follow through",
+        thinking: "medium",
+        timeout: "90",
+        json: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        senderIsOwner: true,
+        allowModelOverride: true,
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+        oneShotCliRun: true,
+      }),
+    });
   });
 
   it.each([
@@ -3420,6 +3695,14 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     );
   });
 
+  it("keeps private bundled plugins discoverable in the functional Docker E2E image", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+
+    expect(dockerfile).toContain(
+      "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 node /app/scripts/postinstall-bundled-plugins.mjs",
+    );
+  });
+
   it("keeps onboarding Docker E2E resource-guarded", () => {
     const runner = readFileSync(ONBOARD_DOCKER_E2E_PATH, "utf8");
 
@@ -3923,6 +4206,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(helper).toContain("--allow-unreleased-changelog");
     expect(helper).toContain(
       '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+    );
+    expect(helper).toContain(
+      '-v "$ROOT_DIR/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
     );
     expect(helper).toContain('-v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"');
     expect(helper).toContain('-v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"');

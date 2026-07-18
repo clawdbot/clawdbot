@@ -62,6 +62,7 @@ describe("plugin tool descriptor cache keys", () => {
   });
 
   it("preserves required gateway client capabilities in cached descriptors", () => {
+    const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } } as const;
     const cached = capturePluginToolDescriptor({
       pluginId: "demo",
       optional: false,
@@ -70,12 +71,14 @@ describe("plugin tool descriptor cache keys", () => {
         label: "Inline demo",
         description: "Render a demo",
         parameters: { type: "object", properties: {} },
+        outputSchema,
         requiredClientCaps: ["inline-widgets"],
         execute: async () => ({ content: [], details: {} }),
       },
     });
 
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
+    expect(cached.descriptor.outputSchema).toBe(outputSchema);
   });
 
   it("isolates descriptor caches by declared gateway client capabilities", () => {

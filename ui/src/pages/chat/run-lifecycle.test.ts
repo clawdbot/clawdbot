@@ -68,6 +68,9 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
         sessionKey: "s1",
         occurredAt: 1,
       },
+      planStatus: {
+        steps: [{ step: "Wait for child completion", status: "in_progress" }],
+      },
     });
 
     reconcileChatRunLifecycle(host, {
@@ -81,11 +84,53 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
     expect(host.chatRunStatus).toBeNull();
+    expect(host.planStatus).toBeNull();
     expect(host.lastLocalTerminalReconcile).toBeNull();
     expect(host.sessionsResult?.sessions[0]).toMatchObject({
       activeRunIds: [],
       hasActiveRun: false,
       status: "running",
+    });
+  });
+});
+
+describe("reconcileChatRunLifecycle indicators", () => {
+  it("clears plan status on terminal run end", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      planStatus: {
+        steps: [{ step: "Finish the run", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r1",
+      clearLocalRun: true,
+    });
+
+    expect(host.planStatus).toBeNull();
+  });
+
+  it("preserves an owned plan when another run terminates", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      planStatus: {
+        runId: "r1",
+        steps: [{ step: "Finish the run", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r2",
+      clearIndicators: true,
+      clearLocalRun: false,
+    });
+
+    expect(host.planStatus).toEqual({
+      runId: "r1",
+      steps: [{ step: "Finish the run", status: "in_progress" }],
     });
   });
 });

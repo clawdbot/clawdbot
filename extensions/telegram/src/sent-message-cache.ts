@@ -217,7 +217,7 @@ export function wasSentByBot(
 export function listTelegramLegacySentMessageCacheEntries(params: {
   cfg?: Pick<OpenClawConfig, "session">;
   persistedPath?: string;
-}): Array<{ key: string; value: PersistedSentMessage; ttlMs?: number }> {
+}): Array<{ key: string; value: PersistedSentMessage; ttlMs?: number; timestamp?: number }> {
   const scopeKey = resolveSentMessageScopeKey(params.cfg);
   const filePath = params.persistedPath ?? resolveSentMessageStorePath(params.cfg);
   const legacy = fs.existsSync(filePath)
@@ -232,6 +232,7 @@ export function listTelegramLegacySentMessageCacheEntries(params: {
               key: sentMessageEntryKey(scopeKey, chatId, messageId),
               value: { scopeKey, chatId, messageId, timestamp },
               ttlMs,
+              timestamp,
             },
           ]
         : [];

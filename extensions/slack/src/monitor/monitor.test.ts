@@ -226,7 +226,6 @@ const baseParams = () => ({
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
-  threadRequireExplicitMention: false,
   removeAckAfterReply: false,
 });
 

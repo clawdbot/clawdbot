@@ -83,6 +83,13 @@ import {
   setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_TASK_RETENTION_MS = 24 * 60 * 60_000;
 
@@ -296,7 +303,7 @@ function createAcpSessionStoreEntry(params: {
 }
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
-  await vi.waitFor(assertion, { timeout: timeoutMs, interval: stepMs });
+  await waitForFast(assertion, { timeout: timeoutMs, interval: stepMs });
 }
 
 async function flushAsyncWork(times = 4) {
@@ -486,7 +493,7 @@ async function flushHeartbeatWakeRequests(): Promise<void> {
     reason: HEARTBEAT_FLUSH_REASON,
     coalesceMs: 0,
   });
-  await vi.waitFor(() => {
+  await waitForFast(() => {
     expect(heartbeatWakeRequests.some((request) => request.reason === HEARTBEAT_FLUSH_REASON)).toBe(
       true,
     );
@@ -2779,10 +2786,10 @@ describe("task-registry", () => {
         terminalSummary: "Waiting for parent review.",
       });
 
-      await vi.waitFor(() => expect(hoisted.sendMessageMock).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(hoisted.sendMessageMock).toHaveBeenCalledOnce());
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       releaseSend();
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expectRecordFields(requireTaskByRunId("run-held-delivery"), {
         deliveryStatus: "delivered",
       });
@@ -3647,10 +3654,10 @@ describe("task-registry", () => {
 
       startTaskRegistryMaintenance();
       await vi.advanceTimersByTimeAsync(5_000);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
 
       releaseInspection([]);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       stopTaskRegistryMaintenance();
     });
   });

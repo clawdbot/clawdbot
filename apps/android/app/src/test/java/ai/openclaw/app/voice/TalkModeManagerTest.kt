@@ -3,6 +3,7 @@ package ai.openclaw.app.voice
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
@@ -47,6 +48,51 @@ import java.util.concurrent.atomic.AtomicLong
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TalkModeManagerTest {
+  @Test
+  fun phoneRealtimeRetriesWithoutLanguageWhenOlderGatewayRejectsCreateParams() =
+    runTest {
+      val requestedLanguages = mutableListOf<String?>()
+
+      val payload =
+        requestPhoneRealtimeSessionWithLanguageFallback("de") { language ->
+          requestedLanguages += language
+          if (requestedLanguages.size == 1) {
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "invalid talk.session.create params at root",
+              ),
+            )
+          }
+          """{"relaySessionId":"relay-1"}"""
+        }
+
+      assertEquals("""{"relaySessionId":"relay-1"}""", payload)
+      assertEquals(listOf("de", null), requestedLanguages)
+    }
+
+  @Test
+  fun phoneRealtimeDoesNotRetryUnrelatedGatewayErrors() =
+    runTest {
+      var attempts = 0
+
+      val error =
+        runCatching {
+          requestPhoneRealtimeSessionWithLanguageFallback("de") {
+            attempts += 1
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "invalid talk.session.appendAudio params",
+              ),
+            )
+          }
+        }.exceptionOrNull()
+
+      assertTrue(error is GatewayRequestRejected)
+      assertEquals(1, attempts)
+    }
+
   @Test
   fun stopTtsCancelsTrackedPlaybackJob() {
     val manager = createManager()

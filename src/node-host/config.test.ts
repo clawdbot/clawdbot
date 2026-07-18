@@ -169,6 +169,7 @@ describe("node-host SQLite config", () => {
       version: 1,
       nodeId: "node-custom",
       displayName: "Build Node",
+      installedAppsSharing: false,
       gateway: {
         host: "gateway.local",
         port: 18443,
@@ -182,6 +183,28 @@ describe("node-host SQLite config", () => {
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("keeps installed-app sharing disabled by default and persists an explicit enable", async () => {
+    const { env } = makeTestEnv();
+    const initial = await configureNodeHost({
+      fallbackDisplayName: "node",
+      gateway: {},
+      env,
+      nowMs: 1,
+    });
+    expect(initial.installedAppsSharing).toBe(false);
+
+    const enabled = await configureNodeHost({
+      fallbackDisplayName: "node",
+      gateway: {},
+      installedAppsSharing: true,
+      env,
+      nowMs: 2,
+    });
+    expect(enabled.installedAppsSharing).toBe(true);
+    closeOpenClawStateDatabaseForTest();
+    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
   });
 
   it("adds the gateway context-path column to an existing state database", async () => {

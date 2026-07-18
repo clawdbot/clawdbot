@@ -27,7 +27,10 @@ import {
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
-import { isSuppressedControlReplyText } from "./control-reply-text.js";
+import {
+  isSuppressedControlReplyText,
+  stripSuppressedControlReplyToken,
+} from "./control-reply-text.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 
@@ -635,20 +638,46 @@ function sanitizeChatHistoryMessage(
     }
   }
 
+  const stripAssistantControlTokens =
+    role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
+
   if (typeof entry.content === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const controlStripped = stripAssistantControlTokens
+      ? stripSuppressedControlReplyToken(stripped.text)
+      : stripped.text;
+    changed ||= controlStripped !== stripped.text;
     if (preserveExactToolPayload) {
-      entry.content = stripped.text;
+      entry.content = controlStripped;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.content = res.text;
       changed ||= stripped.changed || res.truncated;
     }
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
-    );
+    const updated = entry.content.map((block) => {
+      const sanitized = sanitizeChatHistoryContentBlock(block, {
+        preserveExactToolPayload,
+        maxChars,
+      });
+      if (
+        !stripAssistantControlTokens ||
+        !sanitized.block ||
+        typeof sanitized.block !== "object" ||
+        Array.isArray(sanitized.block)
+      ) {
+        return sanitized;
+      }
+      const contentBlock = sanitized.block as { type?: unknown; text?: unknown };
+      if (!isAssistantTextContentType(contentBlock.type) || typeof contentBlock.text !== "string") {
+        return sanitized;
+      }
+      const text = stripSuppressedControlReplyToken(contentBlock.text);
+      return text === contentBlock.text
+        ? sanitized
+        : { block: { ...contentBlock, text }, changed: true };
+    });
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
       changed = true;
@@ -673,11 +702,15 @@ function sanitizeChatHistoryMessage(
 
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const controlStripped = stripAssistantControlTokens
+      ? stripSuppressedControlReplyToken(stripped.text)
+      : stripped.text;
+    changed ||= controlStripped !== stripped.text;
     if (preserveExactToolPayload) {
-      entry.text = stripped.text;
+      entry.text = controlStripped;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.text = res.text;
       changed ||= stripped.changed || res.truncated;
     }
@@ -710,6 +743,9 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
       return undefined;
     }
     const typed = block as { type?: unknown; text?: unknown };
+    if (isAssistantInternalReasoningContentType(typed.type)) {
+      continue;
+    }
     if (!isAssistantTextContentType(typed.type) || typeof typed.text !== "string") {
       return undefined;
     }
@@ -720,6 +756,10 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
 
 function isAssistantTextContentType(type: unknown): boolean {
   return type === "text" || type === "input_text" || type === "output_text";
+}
+
+function isAssistantInternalReasoningContentType(type: unknown): boolean {
+  return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
 }
 
 function hasAssistantNonTextContent(message: unknown): boolean {
@@ -735,6 +775,51 @@ function hasAssistantNonTextContent(message: unknown): boolean {
       block &&
       typeof block === "object" &&
       !isAssistantTextContentType((block as { type?: unknown }).type),
+  );
+}
+
+function hasAssistantDisplayableNonTextContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      !isAssistantTextContentType((block as { type?: unknown }).type) &&
+      !isAssistantInternalReasoningContentType((block as { type?: unknown }).type),
+  );
+}
+
+function shouldPreserveAssistantControlReplyText(message: Record<string, unknown>): boolean {
+  if (isProjectedSessionsSendForwardedMessage(message)) {
+    return true;
+  }
+  const content = message.text ?? message.content;
+  const texts =
+    typeof content === "string"
+      ? [content]
+      : Array.isArray(content)
+        ? content.flatMap((block) => {
+            if (!block || typeof block !== "object" || Array.isArray(block)) {
+              return [];
+            }
+            const typed = block as { type?: unknown; text?: unknown };
+            return isAssistantTextContentType(typed.type) && typeof typed.text === "string"
+              ? [typed.text]
+              : [];
+          })
+        : [];
+  return (
+    texts.length > 0 &&
+    texts.every((text) =>
+      isSuppressedControlReplyText(stripInlineDirectiveTagsForDisplay(text).text),
+    ) &&
+    hasAssistantDisplayableNonTextContent(message)
   );
 }
 
@@ -927,7 +1012,9 @@ function extractMessageToolVisibleReplies(
 function isAssistantSilentControlReplyOnly(message: Record<string, unknown>): boolean {
   const text = extractAssistantTextForSilentCheck(message);
   return (
-    text !== undefined && isSuppressedControlReplyText(text) && !hasAssistantNonTextContent(message)
+    text !== undefined &&
+    isSuppressedControlReplyText(text) &&
+    !hasAssistantDisplayableNonTextContent(message)
   );
 }
 
@@ -1240,10 +1327,14 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSuppressedControlReplyText(text)) {
+  // Classify after removing UI-only directives, before sanitization can erase
+  // the control token and leave a blank assistant row behind.
+  const displayText =
+    text === undefined ? undefined : stripInlineDirectiveTagsForDisplay(text).text;
+  if (displayText === undefined || !isSuppressedControlReplyText(displayText)) {
     return false;
   }
-  return !hasAssistantNonTextContent(message);
+  return !hasAssistantDisplayableNonTextContent(message);
 }
 
 export function sanitizeChatHistoryMessages(

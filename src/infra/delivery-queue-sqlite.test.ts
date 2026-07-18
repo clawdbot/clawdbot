@@ -220,6 +220,45 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         last_error: null,
       });
     });
+
+    it("never prunes a permanent producer receipt", () => {
+      upsertDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id: "rt-permanent",
+          enqueuedAt: 1,
+          retryCount: 0,
+          completionRetention: "permanent",
+        },
+        stateDir,
+      });
+      completeDeliveryQueueEntry(QUEUE, "rt-permanent", stateDir);
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      db.prepare(
+        `UPDATE delivery_queue_entries
+            SET enqueued_at = ?
+          WHERE queue_name = ? AND id = ?`,
+      ).run(Date.now() - 31 * 24 * 60 * 60_000, QUEUE, "rt-permanent");
+
+      enqueueValid("rt-prune-trigger");
+      completeDeliveryQueueEntry(QUEUE, "rt-prune-trigger", stateDir);
+
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-permanent", stateDir)).toBe("completed");
+      const row = db
+        .prepare(
+          `SELECT recovery_state, entry_json
+             FROM delivery_queue_entries
+            WHERE queue_name = ? AND id = ?`,
+        )
+        .get(QUEUE, "rt-permanent") as Record<string, unknown>;
+      expect(row.recovery_state).toBe("completed_permanent");
+      expect(JSON.parse(String(row.entry_json))).toMatchObject({
+        completionRetention: "permanent",
+        recoveryState: "completed_permanent",
+      });
+    });
   });
 });
 

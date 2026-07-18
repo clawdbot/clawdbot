@@ -6,6 +6,7 @@ import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -423,6 +424,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActiveDegradedPlugins([]);
   serverPluginsModule.clearFallbackGatewayContext();
   clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
@@ -445,6 +447,41 @@ describe("loadGatewayPlugins", () => {
       "[plugins] failed to load plugin: boom (plugin=telegram, source=/tmp/telegram/index.ts)",
     );
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  test("does not re-log a quarantined plugin verification diagnostic", () => {
+    const diagnostic: PluginDiagnostic = {
+      level: "error",
+      code: "plugin-verification",
+      pluginId: "broken-payload",
+      source: "/tmp/broken-payload/index.ts",
+      message: "configured plugin payload verification failed (missing-main-entry): missing",
+    };
+    const distinctDiagnostic: PluginDiagnostic = {
+      ...diagnostic,
+      message: "configured plugin payload verification failed (missing-package-json): missing",
+    };
+    const registry = createRegistry([diagnostic, distinctDiagnostic]);
+    loadOpenClawPlugins.mockReturnValue(registry);
+    setActiveDegradedPlugins([
+      {
+        pluginId: "broken-payload",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-main-entry",
+          detail: "missing",
+        },
+      },
+    ]);
+
+    const log = loadGatewayStartupPluginsForTest();
+
+    expect(log.error).toHaveBeenCalledOnce();
+    expect(log.error).toHaveBeenCalledWith(
+      "[plugins] configured plugin payload verification failed (missing-package-json): missing (plugin=broken-payload, source=/tmp/broken-payload/index.ts)",
+    );
+    expect(registry.diagnostics).toEqual([diagnostic, distinctDiagnostic]);
   });
 
   test("loads only gateway startup plugin ids", () => {

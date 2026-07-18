@@ -61,6 +61,20 @@ describe("anthropic Claude model refs", () => {
     );
   });
 
+  it("canonicalizes fable family aliases in bare and provider-qualified forms", () => {
+    // "fable-5" must map to the full model id, not the family name: the
+    // canonicalizer only accepts alias values that already start with
+    // "claude-", so a family-name value would leave the shorthand unresolved.
+    expect(resolveKnownAnthropicModelRef("fable")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/fable")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/claude-fable-5")).toBe(
+      "anthropic/claude-fable-5",
+    );
+  });
+
   it("preserves the current claude-haiku-4-5 model and its bare alias", () => {
     // claude-haiku-4-5 is a current production model (not retired), so neither
     // its full ref, its dotted variant, nor the bare "haiku" family alias must
@@ -166,14 +180,15 @@ describe("anthropic cli migration", () => {
               alias: "Opus",
               agentRuntime: { id: "claude-cli" },
             },
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": {
               alias: "Opus",
               agentRuntime: { id: "claude-cli" },
             },
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -259,9 +274,10 @@ describe("anthropic cli migration", () => {
         defaults: {
           models: {
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
           },
@@ -304,9 +320,10 @@ describe("anthropic cli migration", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
           models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
           },
@@ -443,6 +460,15 @@ describe("anthropic cli migration", () => {
         },
       },
     ]);
+  });
+
+  it("does not persist a synthetic profile for Claude CLI apiKeyHelper auth", () => {
+    const result = buildAnthropicCliMigrationResult(
+      {},
+      { type: "api_key_helper", provider: "anthropic", helperHash: "helper-hash" },
+    );
+
+    expect(result.profiles).toEqual([]);
   });
 
   it("registered non-interactive cli auth keeps anthropic fallbacks and selects claude-cli runtime", async () => {

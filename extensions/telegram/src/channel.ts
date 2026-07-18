@@ -1076,6 +1076,7 @@ export const telegramPlugin = createChatChannelPlugin({
                 network: account.config.network,
                 apiRoot: account.config.apiRoot,
                 includeWebhookInfo: false,
+                abortSignal: ctx.abortSignal,
               },
             ),
           );

@@ -262,6 +262,49 @@ struct MacNodeClaudeSessionCatalogTests {
         }
     }
 
+    @Test func `cached metadata honors access revocation and refreshes replaced transcripts`() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let sessionId = "cached-session"
+        let transcript = project.appendingPathComponent("\(sessionId).jsonl")
+        var firstMessage = self.message(sessionId: sessionId, role: "user", text: "Alpha", index: 1)
+        firstMessage["entrypoint"] = "sdk-cli"
+        try self.writeTranscript([firstMessage], to: transcript)
+
+        let firstJSON = try MacNodeClaudeSessionCatalog.list(paramsJSON: nil, homeURL: home)
+        let first = try #require(
+            JSONSerialization.jsonObject(with: Data(firstJSON.utf8)) as? [String: Any])
+        #expect((first["sessions"] as? [[String: Any]])?.first?["name"] as? String == "Alpha")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: transcript.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: transcript.path)
+        }
+        let cachedJSON = try MacNodeClaudeSessionCatalog.list(paramsJSON: nil, homeURL: home)
+        let cached = try #require(
+            JSONSerialization.jsonObject(with: Data(cachedJSON.utf8)) as? [String: Any])
+        #expect((cached["sessions"] as? [[String: Any]])?.isEmpty == true)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: transcript.path)
+        let restoredJSON = try MacNodeClaudeSessionCatalog.list(paramsJSON: nil, homeURL: home)
+        let restored = try #require(
+            JSONSerialization.jsonObject(with: Data(restoredJSON.utf8)) as? [String: Any])
+        #expect((restored["sessions"] as? [[String: Any]])?.first?["name"] as? String == "Alpha")
+
+        var replacement = self.message(sessionId: sessionId, role: "user", text: "Bravo", index: 2)
+        replacement["entrypoint"] = "sdk-cli"
+        try self.writeTranscript([replacement], to: transcript)
+        let refreshedJSON = try MacNodeClaudeSessionCatalog.list(paramsJSON: nil, homeURL: home)
+        let refreshed = try #require(
+            JSONSerialization.jsonObject(with: Data(refreshedJSON.utf8)) as? [String: Any])
+        #expect((refreshed["sessions"] as? [[String: Any]])?.first?["name"] as? String == "Bravo")
+    }
+
+
     @Test func `reads transcript pages backward without loading the whole history`() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }

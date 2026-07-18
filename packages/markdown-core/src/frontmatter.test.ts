@@ -201,6 +201,16 @@ metadata:
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
   });
 
+  it("reports an unterminated frontmatter block", () => {
+    const result = parseFrontmatterBlockResult(`---
+name: broken
+description: Missing the closing delimiter
+`);
+
+    expect(result.frontmatter).toEqual({});
+    expect(result.issues).toEqual([expect.objectContaining({ code: "UNTERMINATED_FRONTMATTER" })]);
+  });
+
   it("ignores non-delimiter opening prefixes", () => {
     for (const prefix of ["---not", "----", "--- name"]) {
       const content = `${prefix}

@@ -31,6 +31,14 @@ beforeEach(() => {
 });
 
 describe("messaging delivery action classification", () => {
+  it("classifies exact conversation sends as visible messaging delivery", () => {
+    for (const toolName of ["conversations_send", "conversations_turn"]) {
+      expect(isMessagingToolSendAction(toolName, {})).toBe(true);
+      expect(isMessagingToolTargetEvidenceAction(toolName, {})).toBe(true);
+      expect(isMessagingToolDeliveryAction(toolName, {})).toBe(true);
+    }
+  });
+
   it("keeps visible side effects broader than terminal reply sends", () => {
     expect(isMessagingToolSendAction("message", { action: "poll" })).toBe(false);
     expect(isMessagingToolTargetEvidenceAction("message", { action: "poll" })).toBe(true);

@@ -1116,9 +1116,11 @@ describe("truncateOversizedToolResultsInMessages", () => {
     await fs.writeFile(spillPath, "partial web output", { mode: 0o600 });
     const messages: AgentMessage[] = [
       makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "partial_spill_1", {
-        fullOutputPath: spillPath,
-        spilledChars: 2_000_000,
-        spillTruncated: true,
+        spill: {
+          path: spillPath,
+          chars: 2_000_000,
+          truncated: true,
+        },
       }),
       makeToolResult("b".repeat(100), "partial_spill_2"),
       makeToolResult("c".repeat(100), "partial_spill_3"),

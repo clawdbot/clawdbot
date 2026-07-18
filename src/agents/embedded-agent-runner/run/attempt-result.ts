@@ -59,6 +59,7 @@ type EmbeddedAttemptResultState = Pick<
   | "beforeAgentFinalizeRevisionReason"
   | "lastAssistant"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"

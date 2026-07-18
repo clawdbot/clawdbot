@@ -85,6 +85,14 @@ export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 /** Attachment envelope shared by chat.send and session creation's initial turn. */
 export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
 
+/** Opaque, out-of-band plugin bindings carried separately from model input. */
+export const RunToolBindingsSchema = Type.Record(
+  Type.String({ minLength: 1, maxLength: 128 }),
+  Type.Unknown(),
+  { maxProperties: 16 },
+);
+export type RunToolBindings = Static<typeof RunToolBindingsSchema>;
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -103,6 +111,7 @@ export const ChatSendParamsSchema = closedObject({
   originatingAccountId: Type.Optional(Type.String()),
   originatingThreadId: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  toolBindings: Type.Optional(RunToolBindingsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),

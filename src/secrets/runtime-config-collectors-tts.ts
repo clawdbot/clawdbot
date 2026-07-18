@@ -1,6 +1,6 @@
 /** Collects text-to-speech secret refs from runtime config. */
 import {
-  collectSecretInputAssignment,
+  collectRuntimeSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -15,7 +15,7 @@ function collectProviderApiKeyAssignment(params: {
   active?: boolean;
   inactiveReason?: string;
 }): void {
-  collectSecretInputAssignment({
+  collectRuntimeSecretInputAssignment({
     value: params.providerConfig.apiKey,
     path: `${params.pathPrefix}.providers.${params.providerId}.apiKey`,
     expected: "string",
@@ -23,6 +23,12 @@ function collectProviderApiKeyAssignment(params: {
     context: params.context,
     active: params.active,
     inactiveReason: params.inactiveReason,
+    owner: {
+      ownerKind: "capability",
+      ownerId: "tts",
+      requiredForGateway: false,
+      disposition: "isolate",
+    },
     apply: (value) => {
       params.providerConfig.apiKey = value;
     },

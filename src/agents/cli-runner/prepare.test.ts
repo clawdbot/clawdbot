@@ -70,12 +70,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
@@ -3525,6 +3520,91 @@ describe("prepareCliRunContext", () => {
 
       expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds the loopback grant to the selectable MCP tool allowlist", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          bundleMcp: true,
+          bundleMcpMode: "claude-config-file",
+          nativeToolMode: "selectable",
+          resolveExecutionArgs,
+          config: {
+            command: "claude",
+            args: ["--print"],
+            output: "jsonl",
+            jsonlDialect: "claude-stream-json",
+            input: "stdin",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant,
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-tools-allow",
+        config: {
+          ...createCliBackendConfig(),
+          mcp: {
+            servers: {
+              userProbe: { command: "node", args: ["user-probe.mjs"] },
+            },
+          },
+        },
+        cliToolAvailability: {
+          native: [],
+          mcp: ["mcp__openclaw__memory_search", "mcp__openclaw__memory_get", "mcp__other__thing"],
+        },
+      });
+      cleanup = context.preparedBackend.cleanup;
+
+      // Foreign-server entries are not loopback-governed; the grant carries
+      // only the gateway tool names the run may reach.
+      const grantContext = mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context;
+      expect(grantContext?.toolsAllow).toEqual(["memory_search", "memory_get"]);
+
+      // Restricted runs must not see user/plugin MCP servers: the generated
+      // bundle serves only the grant-scoped loopback server.
+      const args = context.preparedBackend.backend.args ?? [];
+      const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+      const rawBundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
+        mcpServers?: Record<string, unknown>;
+      };
+      expect(Object.keys(rawBundle.mcpServers ?? {})).toEqual(["openclaw"]);
+    } finally {
+      await cleanup?.();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

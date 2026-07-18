@@ -1,15 +1,12 @@
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { prepareSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
@@ -23,17 +20,25 @@ export {
 } from "./tts-provider-helpers.js";
 
 type SummarizeTextDeps = {
-  completeSimple: typeof completeSimple;
-  prepareSimpleCompletionModel: typeof prepareSimpleCompletionModel;
-  requireApiKey: typeof requireApiKey;
+  completeSimple: typeof import("../llm/stream.js").completeSimple;
+  prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
+  requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
 
-function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
-  return {
-    completeSimple,
-    prepareSimpleCompletionModel,
+let defaultSummarizeTextDepsPromise: Promise<SummarizeTextDeps> | undefined;
+
+function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
+  // Speech provider imports should not initialize the LLM stack. Load it only
+  // when synthesis actually needs summarization, then reuse the module bindings.
+  return (defaultSummarizeTextDepsPromise ??= Promise.all([
+    import("../llm/stream.js"),
+    import("../agents/simple-completion-runtime.js"),
+    import("../agents/model-auth.js"),
+  ]).then(([stream, completionRuntime, { requireApiKey }]) => ({
+    completeSimple: stream.completeSimple,
+    prepareSimpleCompletionModel: completionRuntime.prepareSimpleCompletionModel,
     requireApiKey,
-  };
+  })));
 }
 
 type SummarizeResult = {
@@ -83,7 +88,7 @@ export async function summarizeText(
     config: ResolvedTtsConfig;
     timeoutMs: number;
   },
-  deps: SummarizeTextDeps = resolveDefaultSummarizeTextDeps(),
+  deps?: SummarizeTextDeps,
 ): Promise<SummarizeResult> {
   const { text, targetLength, cfg, config, timeoutMs } = params;
   if (targetLength < 100 || targetLength > 10_000) {
@@ -91,10 +96,11 @@ export async function summarizeText(
   }
 
   const startTime = Date.now();
+  const resolvedDeps = deps ?? (await loadDefaultSummarizeTextDeps());
   const { ref } = resolveSummaryModelRef(cfg, config);
   // Dynamic model discovery precedes the request timeout, matching the established
   // summarization contract. The timeout below bounds only the completion request.
-  const prepared = await deps.prepareSimpleCompletionModel({
+  const prepared = await resolvedDeps.prepareSimpleCompletionModel({
     cfg,
     provider: ref.provider,
     modelId: ref.model,
@@ -104,7 +110,7 @@ export async function summarizeText(
     throw new Error(prepared.error);
   }
   const completionModel = prepared.model;
-  const apiKey = deps.requireApiKey(prepared.auth, ref.provider);
+  const providerKey = resolvedDeps.requireApiKey(prepared.auth, ref.provider);
 
   try {
     const controller = new AbortController();
@@ -114,7 +120,7 @@ export async function summarizeText(
     try {
       // Keep summarization on the simple-completion path so provider auth,
       // aliases, and timeout behavior match other lightweight model calls.
-      const res = await deps.completeSimple(
+      const res = await resolvedDeps.completeSimple(
         completionModel,
         {
           messages: [
@@ -130,7 +136,7 @@ export async function summarizeText(
           ],
         },
         {
-          apiKey,
+          apiKey: providerKey,
           maxTokens: Math.ceil(targetLength / 2),
           temperature: 0.3,
           signal: controller.signal,

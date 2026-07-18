@@ -2,10 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { runPluginPayloadSmokeCheck } from "./plugin-payload-validation.js";
+import {
+  runPluginPayloadSmokeCheck,
+  runPluginPayloadSmokeCheckForManifestRecords,
+} from "./plugin-payload-validation.js";
 
 type BundleFormat = "codex" | "claude" | "cursor";
 type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
@@ -19,6 +22,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-payload-smoke-"));
   });
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpRoot, { recursive: true, force: true });
   });
 
@@ -108,6 +112,21 @@ describe("runPluginPayloadSmokeCheck", () => {
     });
     expect(result.failures).toEqual([]);
     expect(result.checked).toEqual(["discord"]);
+  });
+
+  it("checks a selected manifest root without an installed-index record", async () => {
+    const dir = path.join(tmpRoot, "codex");
+    await writePackage(
+      dir,
+      { name: "@openclaw/codex", openclaw: { extensions: ["./index.js"] } },
+      "export default {};",
+    );
+    const result = await runPluginPayloadSmokeCheckForManifestRecords({
+      plugins: [{ id: "codex", rootDir: dir }],
+      env: {},
+    });
+
+    expect(result).toEqual({ checked: ["codex"], failures: [] });
   });
 
   it("reports a failure when the package directory is missing", async () => {
@@ -618,6 +637,32 @@ describe("runPluginPayloadSmokeCheck", () => {
       },
     ]);
   });
+
+  it.each(["EACCES", "EPERM", "EIO"])(
+    "classifies a %s package.json read failure as unreadable",
+    async (code) => {
+      const dir = path.join(tmpRoot, "unreadable");
+      const packageJsonPath = path.join(dir, "package.json");
+      await writePackage(dir, { name: "unreadable" });
+      vi.spyOn(fs, "readFile").mockRejectedValueOnce(
+        Object.assign(new Error(`${code}: could not read ${packageJsonPath}`), { code }),
+      );
+
+      const result = await runPluginPayloadSmokeCheck({
+        records: { unreadable: { source: "npm", installPath: dir } },
+        env: {},
+      });
+
+      expect(result.failures).toStrictEqual([
+        {
+          pluginId: "unreadable",
+          installPath: dir,
+          reason: "unreadable-package-json",
+          detail: `Could not read package.json at ${packageJsonPath}: ${code}: could not read ${packageJsonPath}`,
+        },
+      ]);
+    },
+  );
 
   it("reports a failure when an install record is missing installPath", async () => {
     const result = await runPluginPayloadSmokeCheck({

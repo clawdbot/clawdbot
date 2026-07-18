@@ -12,10 +12,14 @@ Channel plugins expose outbound message behavior from
 `openclaw/plugin-sdk/channel-inbound` for receive/context/dispatch
 orchestration.
 
-Core owns queueing, durability, generic retry policy, hooks, receipts, and
-the shared `message` tool. The plugin owns native send/edit/delete calls,
-target normalization, platform threading, selected quotes, notification
-flags, account state, and platform-specific side effects.
+Core owns queueing, durability, the durable **ingress drain**
+(`createChannelIngressDrain` / `openChannelIngressDrain`), generic retry
+policy, turn-adoption lifecycle (`turnAdoptionLifecycle` /
+`bindIngressLifecycleToReplyOptions`), hooks, receipts, and the shared
+`message` tool. The plugin owns native send/edit/delete calls, target
+normalization, platform threading, selected quotes, notification flags,
+account state, accept-side enqueue, lane keys, non-retryable predicates,
+optional supersede authorization, and platform-specific side effects.
 
 ## Adapter
 

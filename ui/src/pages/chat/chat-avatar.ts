@@ -8,9 +8,12 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
-import { assistantAvatarFallbackUrl } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
-import { isRenderableControlUiAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
+import {
+  assistantAvatarFallbackUrl,
+  isRenderableControlUiAvatarUrl,
+  resolveAssistantTextAvatar,
+} from "../../lib/avatar.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import {
   DEFAULT_AGENT_ID,

@@ -1,4 +1,5 @@
 // Gateway supervised lock tests cover single-runner locking for supervised gateway starts.
+import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { testing } from "./run.test-support.js";
@@ -77,6 +78,7 @@ describe("supervised gateway lock recovery", () => {
       testing.resolveGatewayLockErrorExitCode(
         new GatewayLockError("gateway already running under systemd; existing gateway is healthy"),
         "systemd",
+        true,
       ),
     ).toBe(78);
   });
@@ -147,13 +149,55 @@ describe("supervised gateway lock recovery", () => {
     expect(sleep).toHaveBeenNthCalledWith(3, 2);
   });
 
-  it("keeps unmanaged duplicate starts on the existing exit-success path", () => {
+  it("requires a confirmed healthy gateway for unmanaged duplicate starts", () => {
+    const err = new GatewayLockError("another gateway instance is already listening");
+
+    expect(testing.resolveGatewayLockErrorExitCode(err, null, false)).toBe(1);
+    expect(testing.resolveGatewayLockErrorExitCode(err, null, true)).toBe(0);
+  });
+
+  it("recognizes only the OpenClaw health response", () => {
     expect(
-      testing.resolveGatewayLockErrorExitCode(
-        new GatewayLockError("another gateway instance is already listening"),
-        null,
-      ),
-    ).toBe(0);
+      testing.isGatewayHealthzResponse(200, JSON.stringify({ ok: true, status: "live" })),
+    ).toBe(true);
+    expect(
+      testing.isGatewayHealthzResponse(200, JSON.stringify({ ok: true, status: "ready" })),
+    ).toBe(false);
+    expect(testing.isGatewayHealthzResponse(404, "not found")).toBe(false);
+    expect(testing.isGatewayHealthzResponse(200, "not json")).toBe(false);
+  });
+
+  it("bounds slow health responses with an absolute deadline", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const interval = setInterval(() => {
+        res.write(" ");
+      }, 10);
+      res.once("close", () => clearInterval(interval));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      const startedAt = Date.now();
+      await expect(
+        testing.probeGatewayHealthz({
+          host: "127.0.0.1",
+          port: address.port,
+          timeoutMs: 50,
+        }),
+      ).resolves.toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 
   it("normalizes wildcard bind hosts for local health probes", () => {

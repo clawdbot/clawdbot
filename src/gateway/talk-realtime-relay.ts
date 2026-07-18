@@ -167,6 +167,7 @@ type CreateTalkRealtimeRelaySessionParams = {
   model?: string;
   sessionKey?: string;
   voice?: string;
+  language?: string;
   forceAgentConsultOnFinalTranscript?: boolean;
 };
 
@@ -619,6 +620,7 @@ export function createTalkRealtimeRelaySession(
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
+    language: params.language,
     autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
     interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
     tools: params.tools,

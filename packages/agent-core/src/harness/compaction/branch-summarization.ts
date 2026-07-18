@@ -1,5 +1,5 @@
 // Agent Core module implements branch summarization behavior.
-import type { Model, StreamFn } from "../../../../llm-core/src/index.js";
+import type { Model, StreamFn } from "@openclaw/llm-core";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,
@@ -12,7 +12,7 @@ import {
   createCompactionSummaryMessage,
   createCustomMessage,
 } from "../messages.js";
-import type { BranchSummaryResult, Session, SessionTreeEntry } from "../types.js";
+import type { BranchSummaryResult, SessionTreeEntry } from "../types.js";
 import { BranchSummaryError, err, ok, type Result } from "../types.js";
 import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
 import {
@@ -40,14 +40,6 @@ export interface BranchPreparation {
   fileOps: FileOperations;
   /** Estimated token count for selected messages. */
   totalTokens: number;
-}
-
-/** Entries selected for branch summarization. */
-export interface CollectEntriesResult {
-  /** Entries to summarize in chronological order. */
-  entries: SessionTreeEntry[];
-  /** Deepest common ancestor between the previous leaf and target entry. */
-  commonAncestorId: string | null;
 }
 
 /** Minimal tree entry shape needed to compare two session branches. */
@@ -109,19 +101,6 @@ export function collectEntriesForBranchSummaryFromBranches<TEntry extends Branch
   return { entries: oldBranch.slice(firstSummarizedIndex), commonAncestorId };
 }
 
-/** Collect concrete session entries to summarize before moving from one leaf to another. */
-export async function collectEntriesForBranchSummary(
-  session: Session,
-  oldLeafId: string | null,
-  targetId: string,
-): Promise<CollectEntriesResult> {
-  if (!oldLeafId) {
-    return { entries: [], commonAncestorId: null };
-  }
-  const oldBranch = await session.getBranch(oldLeafId);
-  const targetPath = await session.getBranch(targetId);
-  return collectEntriesForBranchSummaryFromBranches(oldBranch, targetPath);
-}
 function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined {
   switch (entry.type) {
     case "message":

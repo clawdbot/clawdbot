@@ -5,6 +5,7 @@
  * maps high-level actions onto browser control client calls.
  */
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
+import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { describeBrowserTool } from "./browser-tool-description.js";
 import {
   executeActAction,
@@ -403,6 +404,7 @@ export function createBrowserTool(opts?: {
     channel?: string;
     chatType?: string;
   };
+  runToolBinding?: unknown;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -413,7 +415,16 @@ export function createBrowserTool(opts?: {
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      const bindingResult =
+        opts?.runToolBinding === undefined
+          ? undefined
+          : parseBrowserTabToolBinding(opts.runToolBinding);
+      if (bindingResult && !bindingResult.ok) {
+        throw new Error(`invalid browser run binding: ${bindingResult.error}`);
+      }
+      const params = bindingResult?.ok
+        ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
+        : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
@@ -617,6 +628,7 @@ export function createBrowserTool(opts?: {
             profile,
             timeoutMs: toolTimeoutMs,
             proxyRequest,
+            targetId: bindingResult?.ok ? bindingResult.binding.targetId : undefined,
           });
         case "open": {
           const targetUrl = readTargetUrlParam(params);

@@ -71,8 +71,8 @@ function makeGeminiClient(
 ): GeminiEmbeddingClient {
   return {
     baseUrl,
-    model: "text-embedding-004",
-    modelPath: "models/text-embedding-004",
+    model: "gemini-embedding-001",
+    modelPath: "models/gemini-embedding-001",
     headers: { "x-goog-api-client": "test-client" },
     apiKeys: ["test-key"],
     ssrfPolicy: undefined,
@@ -85,7 +85,7 @@ function batchRequest(customId: string, text: string): GeminiBatchRequest {
   return {
     custom_id: customId,
     request: {
-      model: "models/text-embedding-004",
+      model: "models/gemini-embedding-001",
       content: { parts: [{ text }] },
       taskType: "RETRIEVAL_DOCUMENT",
     },

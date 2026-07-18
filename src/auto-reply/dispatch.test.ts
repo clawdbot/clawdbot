@@ -157,10 +157,13 @@ describe("withReplyDispatcher", () => {
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcher,
+      onSettled: () => {
+        order.push("onSettled");
+      },
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle", "onSettled"]);
   });
 
   it("emits message.received diagnostics before dispatch", async () => {
@@ -275,6 +278,34 @@ describe("withReplyDispatcher", () => {
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
     expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("composes channel and dispatcher typing-controller observers", async () => {
+    const dispatcherObserver = vi.fn();
+    const channelObserver = vi.fn();
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: { onTypingController: dispatcherObserver },
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: { deliver: async () => undefined },
+      replyOptions: { onTypingController: channelObserver },
+    });
+
+    const typingController = {} as never;
+    const dispatchParams = hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0];
+    dispatchParams?.replyOptions?.onTypingController?.(typingController);
+    expect(dispatcherObserver).toHaveBeenCalledWith(typingController);
+    expect(channelObserver).toHaveBeenCalledWith(typingController);
   });
 
   it("passes runtime toolsAllow from buffered dispatch into reply resolution", async () => {

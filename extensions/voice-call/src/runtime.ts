@@ -521,8 +521,8 @@ export async function createVoiceCallRuntime(params: {
       const twilioProvider = provider as TwilioProvider;
       if (ttsRuntime?.textToSpeechTelephony) {
         try {
-          const ttsProvider = createTelephonyTtsProvider({
-            coreConfig,
+          const ttsProvider = await createTelephonyTtsProvider({
+            coreConfig: cfg,
             ttsOverride: config.tts,
             runtime: ttsRuntime,
             logger: log,

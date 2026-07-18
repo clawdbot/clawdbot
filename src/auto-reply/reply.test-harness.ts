@@ -27,7 +27,6 @@ const replyRuntimeMockState = vi.hoisted(() => ({
 vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: (...args: unknown[]) => replyRuntimeMockState.mocks.runEmbeddedAgent(...args),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),

@@ -12,6 +12,7 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../../test-utils/env.js";
+import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -31,6 +32,9 @@ const cleanStaleGatewayProcessesSync = vi.fn(
   (_port?: number, _options?: { protectedPid?: number }) => [],
 );
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
+const findVerifiedGatewayListenerPidsOnPortSync = vi.fn((_port: number) => [] as number[]);
+const formatGatewayPidList = vi.fn((pids: number[]) => pids.join(", "));
+const isTerminalInteractive = vi.fn(() => true);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
@@ -245,6 +249,12 @@ vi.mock("../../infra/restart-stale-pids.js", () => ({
     cleanStaleGatewayProcessesSync(port, options),
 }));
 
+vi.mock("../../infra/gateway-processes.js", () => ({
+  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
+    findVerifiedGatewayListenerPidsOnPortSync(port),
+  formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
+}));
+
 vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
@@ -314,6 +324,12 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("../command-format.js", () => ({
   formatCliCommand: (cmd: string) => cmd,
+}));
+
+vi.mock("../terminal-interactivity.js", () => ({
+  isTerminalInteractive: () => isTerminalInteractive(),
+  NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE:
+    "Refusing to kill the operator's running gateway service from a non-interactive shell. Use an isolated dev gateway (openclaw gateway run --dev, or --profile <name> with a free port) for testing.",
 }));
 
 vi.mock("../ports.js", () => ({
@@ -390,6 +406,11 @@ describe("gateway run option collisions", () => {
     setVerbose.mockClear();
     setConsoleSubsystemFilter.mockClear();
     forceFreePortAndWait.mockClear();
+    findVerifiedGatewayListenerPidsOnPortSync.mockReset();
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    formatGatewayPidList.mockClear();
+    isTerminalInteractive.mockReset();
+    isTerminalInteractive.mockReturnValue(true);
     cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
@@ -941,6 +962,25 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().auth?.token).toBe("tok_run");
     expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("refuses non-interactive --force when a verified gateway appears before signaling", async () => {
+    isTerminalInteractive.mockReturnValue(false);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValueOnce([4242]);
+    forceFreePortAndWait.mockImplementationOnce(async (_port, opts) => {
+      (opts as { beforeSignal?: () => void }).beforeSignal?.();
+      return { killed: [], waitedMs: 0, escalatedToSigkill: false };
+    });
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(forceFreePortAndWait).toHaveBeenCalledTimes(1);
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("openclaw gateway run --dev");
+    expect(runtimeErrors.join("\n")).toContain("--profile <name> with a free port");
   });
 
   it("marks service-mode gateway descendants with the live gateway pid", async () => {
@@ -1511,15 +1551,22 @@ describe("gateway run option collisions", () => {
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
-  it("does not write startup failure bundles for expected gateway lock conflicts", async () => {
-    const err = Object.assign(new Error("gateway already running on port 18789"), {
+  it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
+    const port = await getFreePort();
+    configState.snapshot = {
+      config: { gateway: { port } },
+      exists: false,
+      sourceConfig: {},
+      valid: true,
+    };
+    const err = Object.assign(new Error(`gateway already running on port ${port}`), {
       name: "GatewayLockError",
     });
     startGatewayServer.mockRejectedValueOnce(err);
 
     await withEnvAsync(withoutSupervisorEnv, async () => {
       await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:0",
+        "__exit__:1",
       );
     });
 

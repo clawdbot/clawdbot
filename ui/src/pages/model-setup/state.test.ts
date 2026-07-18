@@ -4,6 +4,7 @@ import {
   activationTimeoutForKind,
   initialWizardValue,
   mapActivationResult,
+  mapVerifyResult,
   wizardStateFromResult,
 } from "./state.ts";
 
@@ -36,6 +37,19 @@ describe("model setup state", () => {
         fallbackError: "failed",
       }),
     ).toEqual({ phase: "failure", targetId: "openai", status: "unknown", error: "failed" });
+  });
+
+  it("maps connection verification success and failure results", () => {
+    expect(mapVerifyResult({ ok: true, modelRef: "openai/gpt-5", latencyMs: 84 })).toEqual({
+      phase: "ok",
+      modelRef: "openai/gpt-5",
+      latencyMs: 84,
+    });
+    expect(mapVerifyResult({ ok: false, status: "rate_limit", error: "Try later" })).toEqual({
+      phase: "failed",
+      status: "rate_limit",
+      error: "Try later",
+    });
   });
 
   it("transitions wizard results through step, validation, done, cancelled, and error", () => {

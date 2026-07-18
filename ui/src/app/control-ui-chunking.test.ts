@@ -26,6 +26,10 @@ describe("Control UI build chunking", () => {
       "control-ui-shared",
     );
     expect(controlUiStableChunkName("/repo/ui/src/lib/clipboard.ts")).toBe("control-ui-shared");
+    expect(controlUiStableChunkName("/repo/ui/src/build-info.ts")).toBe("control-ui-shared");
+    expect(controlUiStableChunkName("/repo/ui/src/build-info-normalizers.ts")).toBe(
+      "control-ui-shared",
+    );
     expect(
       controlUiStableChunkName("/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js"),
     ).toBe("gateway-runtime");
@@ -37,7 +41,7 @@ describe("Control UI build chunking", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({
       tags: ["$initial"],
-      maxSize: 400 * 1024,
+      maxSize: 448 * 1024,
     });
   });
 

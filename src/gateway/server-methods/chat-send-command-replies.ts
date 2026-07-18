@@ -1,7 +1,6 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { parseInlineDirectives, sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
 
@@ -20,27 +19,8 @@ function replyMediaUrls(payload: ReplyPayload): string[] {
   return resolveSendableOutboundReplyParts(payload).mediaUrls;
 }
 
-function normalizeCommandMediaDedupeKey(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (!trimmed.toLowerCase().startsWith("file://")) {
-    return path.isAbsolute(trimmed) ? path.normalize(trimmed) : trimmed;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol === "file:") {
-      return path.normalize(fileURLToPath(parsed));
-    }
-  } catch {
-    // Keep malformed file URL-like values comparable with the fallback below.
-  }
-  return trimmed.replace(/^file:\/\//iu, "");
-}
-
 function replyMediaDedupeKeys(payload: ReplyPayload): string[] {
-  return replyMediaUrls(payload).map((mediaUrl) => normalizeCommandMediaDedupeKey(mediaUrl));
+  return replyMediaUrls(payload).map((mediaUrl) => normalizeMediaReferenceForComparison(mediaUrl));
 }
 
 function canonicalizeReplyMedia(payload: ReplyPayload): ReplyPayload {

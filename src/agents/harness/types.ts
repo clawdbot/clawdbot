@@ -133,9 +133,10 @@ export type AgentHarnessResultClassification =
   | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 
 export type AgentHarnessDeliveryDefaults = {
+  /** Default visible-reply policy when config does not override the harness. */
+  visibleReplies?: "automatic" | "message_tool";
   /**
-   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
-   * config. Kept for existing harness plugins.
+   * @deprecated Use visibleReplies. Kept for existing harness plugins.
    */
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
@@ -144,6 +145,11 @@ type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
+  /**
+   * Exhaustive provider ids eligible for automatic selection. Omitting this hint preserves
+   * dynamic probing; an empty list marks an explicit-only harness.
+   */
+  autoSelection?: { providerIds: readonly string[] };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.

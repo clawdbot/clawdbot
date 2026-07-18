@@ -810,6 +810,16 @@ Reply -> TTS enabled?
     </ParamField>
   </Accordion>
 
+Provider `apiKey` fields can be raw strings or SecretRefs. During cold Gateway
+startup, an unavailable TTS SecretRef marks the built-in TTS capability
+configured-unavailable instead of stopping the Gateway. `tts.speak` then returns
+`UNAVAILABLE` with reason `SECRET_SURFACE_UNAVAILABLE`, and no provider request is
+sent. Status and doctor list the degraded TTS owner and its config paths. The
+explicit refs remain in the runtime snapshot, so environment or profile
+credentials cannot silently select a different account. Reloads and config-write
+preflight remain strict and keep the last-known-good snapshot. Structurally
+invalid refs and resolved values still fail startup.
+
   <Accordion title="Azure Speech">
     <ParamField path="apiKey" type="string">Env: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`.</ParamField>
     <ParamField path="region" type="string">Azure Speech region (e.g. `eastus`). Env: `AZURE_SPEECH_REGION` or `SPEECH_REGION`.</ParamField>
@@ -938,7 +948,7 @@ Reply -> TTS enabled?
   <Accordion title="Xiaomi MiMo">
     <ParamField path="apiKey" type="string">Env: `XIAOMI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.xiaomimimo.com/v1`. Env: `XIAOMI_BASE_URL`.</ParamField>
-    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2-tts` and `mimo-v2.5-tts-voicedesign`.</ParamField>
+    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2.5-tts-voicedesign`.</ParamField>
     <ParamField path="speakerVoice" type="string">Default `mimo_default` for preset-voice models. Env: `XIAOMI_TTS_VOICE`. Legacy alias: `voice`. Not sent for `mimo-v2.5-tts-voicedesign`.</ParamField>
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
     <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken. For `mimo-v2.5-tts-voicedesign`, this is the voice-design prompt; OpenClaw supplies a default when omitted.</ParamField>

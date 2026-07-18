@@ -161,6 +161,8 @@ describe("createCopilotAgentHarness", () => {
   it("supports returns false in auto runtime even for github provider", () => {
     const harness = createCopilotAgentHarness();
 
+    expect(harness.autoSelection?.providerIds).toEqual([]);
+
     expect(
       harness.supports({
         provider: "github-copilot",

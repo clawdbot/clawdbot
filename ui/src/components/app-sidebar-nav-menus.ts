@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
+  isSessionsHubRoute,
   isSettingsNavigationRoute,
   navigationIconForRoute,
   type NavigationRouteId,
@@ -32,7 +33,7 @@ export function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-/** Settings routes highlight Settings; Plugins hub tabs highlight Plugins. */
+/** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
   activeRouteId: NavigationRouteId | undefined,
   routeId: NavigationRouteId,
@@ -45,6 +46,9 @@ export function isSidebarRouteActive(
   }
   if (routeId === "plugins") {
     return isPluginsHubRoute(activeRouteId);
+  }
+  if (routeId === "sessions") {
+    return isSessionsHubRoute(activeRouteId);
   }
   return activeRouteId === routeId;
 }

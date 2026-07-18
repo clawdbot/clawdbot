@@ -121,6 +121,27 @@ describe("chunkFeishuPostMarkdown", () => {
     }
   });
 
+  it("reserves every chunk byte budget for required bot mentions", () => {
+    const mentions = [
+      {
+        openId: "ou_peer_bot",
+        name: "界".repeat(1_000),
+        key: "",
+      },
+    ];
+    const chunks = chunkFeishuPostMarkdown({
+      text: "界".repeat(11_000),
+      limit: 25_000,
+      chunkMentions: mentions,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const content = buildFeishuPostMessageContent({ messageText: chunk, mentions });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    }
+  });
+
   it("keeps byte-split fenced code chunks independently parseable", () => {
     const chunks = chunkFeishuPostMarkdown({
       text: `\`\`\`ts\n${"界".repeat(12_000)}\n\`\`\``,

@@ -20,6 +20,10 @@ type SkillWorkshopPageTestElement = HTMLElement & {
   requestUpdate: () => void;
 };
 
+function waitForSkillWorkshop(assertion: () => void) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((next) => {
@@ -201,7 +205,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.requestUpdate();
     await page.updateComplete;
 
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(secondRequest).toHaveBeenCalledWith("skills.proposals.list", {
         agentId: "research",
       }),
@@ -232,7 +236,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       updatedAt: "2026-07-08T00:00:00.000Z",
       proposals: [],
     });
-    await vi.waitFor(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
+    await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
     expect(callsFor(request, "skills.proposals.list")).toHaveLength(1);
   });
 
@@ -246,7 +250,9 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(request);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.state?.skillWorkshopError).toContain("gateway offline"));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopError).toContain("gateway offline"),
+    );
 
     page.requestUpdate();
     await page.updateComplete;
@@ -273,7 +279,9 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
     page.requestUpdate();
     await page.updateComplete;
-    await vi.waitFor(() => expect(callsFor(request, "skills.proposals.list")).toHaveLength(1));
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(1),
+    );
     const loadingState = page.state;
 
     gatewayListener?.({ ...context.gateway.snapshot, connected: false });
@@ -337,7 +345,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
 
     const revision = page.handleRevisionRequest("revise it", proposal, "research");
-    await vi.waitFor(() => expect(oldSessions.list).toHaveBeenCalledTimes(1));
+    await waitForSkillWorkshop(() => expect(oldSessions.list).toHaveBeenCalledTimes(1));
 
     const newContext = createContext(vi.fn(async () => ({})));
     page.context = newContext;
@@ -391,14 +399,18 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(oldRequest);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(callsFor(oldRequest, "skills.proposals.list")).toHaveLength(1));
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(oldRequest, "skills.proposals.list")).toHaveLength(1),
+    );
+    await waitForSkillWorkshop(() =>
       expect(callsFor(oldRequest, "skills.proposals.historyStatus")).toHaveLength(1),
     );
-    await vi.waitFor(() => expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(oldRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
         agentId: "research",
         direction: "older",
@@ -457,10 +469,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(firstRequest);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(firstRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
         agentId: "research",
         direction: "older",
@@ -491,14 +505,14 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(returnedRequest);
     page.requestUpdate();
     await page.updateComplete;
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(callsFor(returnedRequest, "skills.proposals.historyStatus")).toHaveLength(1),
     );
 
     scan.resolve({ ...scanStatus, hasScanned: true, reviewedSessions: 8 });
     await Promise.resolve();
     firstReturnedStatus.resolve(scanStatus);
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(callsFor(returnedRequest, "skills.proposals.historyStatus")).toHaveLength(2),
     );
     expect(page.state?.skillWorkshopHistoryScan.result?.reviewedSessions).toBe(8);
@@ -533,24 +547,30 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(request);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(callsFor(request, "skills.proposals.list")).toHaveLength(1));
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(1),
+    );
+    await waitForSkillWorkshop(() =>
       expect(callsFor(request, "skills.proposals.historyStatus")).toHaveLength(1),
     );
-    await vi.waitFor(() => expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
 
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(request).toHaveBeenCalledWith("skills.proposals.historyScan", {
         agentId: "research",
         direction: "older",
       }),
     );
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(callsFor(request, "skills.proposals.historyStatus")).toHaveLength(2),
     );
-    await vi.waitFor(() => expect(callsFor(request, "skills.proposals.list")).toHaveLength(2));
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(2),
+    );
     expect(page.state?.skillWorkshopHistoryScan.error).toBe("late review failure");
   });
 });
@@ -604,13 +624,13 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     expect(button).not.toBeNull();
     button?.click();
 
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(patch).toHaveBeenCalledWith({
         raw: { skills: { workshop: { autonomous: { enabled: true } } } },
         note: "Enable Skill Workshop self-learning",
       }),
     );
-    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
+    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
   });
 
   it("refreshes a stale config snapshot and retries the self-learning toggle", async () => {
@@ -640,8 +660,8 @@ describe("SkillWorkshopPage self-learning toggle", () => {
 
     page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(2));
+    await waitForSkillWorkshop(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
+    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(2));
     await page.updateComplete;
     expect(page.querySelector(".sw-error")).toBeNull();
     expect(
@@ -658,7 +678,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     await page.updateComplete;
 
     page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(page.querySelector(".sw-error")?.textContent).toContain(
         "Could not update the self-learning setting.",
       ),

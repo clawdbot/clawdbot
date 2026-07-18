@@ -31,7 +31,12 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/active-memory/index.ts": ["before_prompt_build"],
   "extensions/codex/index.ts": ["after_compaction", "inbound_claim", "session_end"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
-  "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
+  "extensions/discord/subagent-hooks-api.ts": [
+    "gateway_start",
+    "subagent_delivery_target",
+    "subagent_ended",
+    "subagent_progress",
+  ],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
@@ -53,7 +58,7 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   ],
   "extensions/memory-core/src/dreaming.ts": [
     'params.reason === "runtime"',
-    "resolveMemoryCorePluginConfig(startupCfg)",
+    "resolveMemoryDreamingPluginConfig(startupCfg)",
     "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],

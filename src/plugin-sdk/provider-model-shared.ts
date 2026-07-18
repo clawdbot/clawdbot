@@ -115,6 +115,58 @@ export function modelCostsEqual(
     current?.cacheWrite === expected.cacheWrite
   );
 }
+
+const LOCAL_MODEL_FAMILY_PREFERENCES = [
+  // Gemma 4 leads: live bench of the system-agent contract (planner JSON +
+  // openclaw tool calls) scored gemma4:e4b well above qwen3.5:4b on approval
+  // follow-through and structured-command accuracy at ~2.5x lower latency.
+  /gemma[-_.]?4(?!\d)/,
+  /qwen[-_.]?3[._]5(?!\d)/,
+  /qwen[-_.]?3(?!\d)/,
+  /gpt[-_.]?oss/,
+  /gemma[-_.]?3(?!\d)/,
+  /llama[-_.]?4(?!\d)/,
+  /llama[-_.]?3(?!\d)/,
+  /phi[-_.]?4(?!\d)/,
+  /mistral/,
+  /deepseek/,
+] as const;
+const LOCAL_MODEL_SPECIALIST_PATTERN = /embed|rerank|whisper|-vl\b|vision|omni|guard/;
+
+/**
+ * Setup-assistant preference for agentic tool-calling quality in current BFCL-class results.
+ * Heuristic contract; safe to retune as local model families improve.
+ */
+export function selectPreferredLocalModelId(modelIds: readonly string[]): string | undefined {
+  const familyCount = LOCAL_MODEL_FAMILY_PREFERENCES.length;
+  let preferred: string | undefined;
+  let preferredRank = Number.POSITIVE_INFINITY;
+
+  for (const rawId of modelIds) {
+    const id = rawId.trim();
+    if (!id) {
+      continue;
+    }
+    const normalized = id.toLowerCase();
+    const familyRank = LOCAL_MODEL_FAMILY_PREFERENCES.findIndex((pattern) =>
+      pattern.test(normalized),
+    );
+    // Rank buckets, best to worst: known family (0..N-1), known-family coder
+    // (N..2N-1), unknown chat (2N), unknown coder (2N+1), specialist (3N).
+    // Strict `<` below keeps the caller's original order within a bucket.
+    const rank = LOCAL_MODEL_SPECIALIST_PATTERN.test(normalized)
+      ? familyCount * 3
+      : familyRank >= 0
+        ? familyRank + (normalized.includes("coder") ? familyCount : 0)
+        : familyCount * 2 + (normalized.includes("coder") ? 1 : 0);
+    if (rank < preferredRank) {
+      preferred = id;
+      preferredRank = rank;
+    }
+  }
+
+  return preferred;
+}
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,

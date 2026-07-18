@@ -27,6 +27,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
+  /** Client id verified against the server-approved device pairing record. */
+  pairedClientId?: string;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;

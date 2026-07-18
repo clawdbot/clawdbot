@@ -11,6 +11,7 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -311,11 +312,15 @@ export function createTelegramBotCore(
       if (!getSessionEntry) {
         return undefined;
       }
-      const entry = getSessionEntry({ storePath, sessionKey });
-      if (entry?.groupActivation === "always") {
+      const storedActivation = getSessionEntry({ storePath, sessionKey })?.groupActivation;
+      const activation =
+        storedActivation === "mention" || storedActivation === "always"
+          ? normalizeGroupActivation(storedActivation)
+          : undefined;
+      if (activation === "always") {
         return false;
       }
-      if (entry?.groupActivation === "mention") {
+      if (activation === "mention") {
         return true;
       }
     } catch (err) {

@@ -81,9 +81,8 @@ export const TerminalCloseParamsSchema = closedObject({ sessionId: NonEmptyStrin
 export type TerminalCloseParams = Static<typeof TerminalCloseParamsSchema>;
 
 /**
- * Rebinds a live-or-detached session to the calling admin connection.
- * Attach is take-over (tmux-like): the previous owner, if still connected,
- * receives `terminal.exit` with reason "detached".
+ * Attaches the calling admin connection. Connection-owned sessions use
+ * take-over; agent-owned sessions retain ownership and add a shared viewer.
  */
 export const TerminalAttachParamsSchema = closedObject({ sessionId: NonEmptyString });
 export type TerminalAttachParams = Static<typeof TerminalAttachParamsSchema>;
@@ -115,6 +114,8 @@ export const TerminalSessionInfoSchema = closedObject({
   confined: Type.Boolean(),
   /** False while the session is detached (no connection owns its stream). */
   attached: Type.Boolean(),
+  /** Connection-owned session, or the trusted agent session key that owns it. */
+  owner: Type.Optional(Type.Union([Type.Literal("conn"), Type.String({ pattern: "^agent:.+" })])),
   createdAtMs: Type.Integer({ minimum: 0 }),
 });
 export type TerminalSessionInfo = Static<typeof TerminalSessionInfoSchema>;

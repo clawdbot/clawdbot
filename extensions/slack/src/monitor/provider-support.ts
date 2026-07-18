@@ -308,12 +308,13 @@ function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
   slackMode: "socket" | "http" | "relay";
-  botToken: string;
+  token: string;
   appToken?: string;
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
   socketMode?: SlackSocketModeConfig;
+  wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
@@ -325,6 +326,7 @@ export function createSlackBoltApp(params: {
     installerOptions: {
       clientOptions: params.clientOptions,
     },
+    ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
   };
   if (params.socketMode?.serverPingTimeout !== undefined) {
     socketModeReceiverOptions.serverPingTimeout = params.socketMode.serverPingTimeout;
@@ -345,19 +347,21 @@ export function createSlackBoltApp(params: {
     receiver = new params.interop.HTTPReceiver({
       signingSecret: params.signingSecret ?? "",
       endpoints: params.slackWebhookPath,
+      ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
     });
   } else {
     receiver = createSlackRelayReceiver();
   }
+  const appReceiver = receiver && params.wrapReceiver ? params.wrapReceiver(receiver) : receiver;
   const app = new params.interop.App({
-    token: params.botToken,
+    token: params.token,
     clientOptions: params.clientOptions,
     ignoreSelf: false,
     // Bolt eagerly starts an auth.test promise in the constructor when token
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
-    ...(receiver ? { receiver } : {}),
+    ...(appReceiver ? { receiver: appReceiver } : {}),
   });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {

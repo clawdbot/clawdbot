@@ -110,6 +110,18 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts implicit mention policy at root and account scope", () => {
+    const result = MattermostConfigSchema.safeParse({
+      implicitMentions: { threadParticipation: false },
+      accounts: {
+        main: {
+          implicitMentions: { replyToBot: false },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects unknown properties inside groups entry", () => {
     const result = MattermostConfigSchema.safeParse({
       groups: {

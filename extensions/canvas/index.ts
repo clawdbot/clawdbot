@@ -65,7 +65,7 @@ function createLazyShowWidgetTool(params: {
     label: "Show Widget",
     name: "show_widget",
     description:
-      "Show an interactive, self-contained HTML or SVG widget to the user on their current surface. Inline all required code and data. A global sendPrompt(text) function submits text to the chat as if the user typed it — wire it to buttons or controls to build interactive widgets. It only works after the user clicks inside the widget (plain conversational text only; slash commands are rejected), so never call it automatically.",
+      "Show an interactive, self-contained HTML or SVG widget to the user on their current surface. Inline all required code and data. In web chat, a global sendPrompt(text) function submits text to the chat as if the user typed it — wire it to buttons or controls to build interactive widgets. It only works after the user clicks inside the widget (plain conversational text only; slash commands are rejected), so never call it automatically.",
     parameters: ShowWidgetToolSchema,
     requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>

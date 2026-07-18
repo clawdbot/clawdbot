@@ -27,9 +27,21 @@ function createEmbeddedRunMockExports() {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
     },
-    waitForEmbeddedAgentRunEnd: async (sessionId: string) => {
+    waitForEmbeddedAgentRunEnd: async (sessionId: string, timeoutMs?: number | null) => {
+      if (timeoutMs === null) {
+        embeddedRunMock.endWaitCalls.push(sessionId);
+        return await new Promise<boolean>((resolve) => {
+          embeddedRunMock.endWaiters.set(sessionId, resolve);
+        });
+      }
       embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
+      const ended = embeddedRunMock.waitResults.get(sessionId) ?? true;
+      if (ended) {
+        embeddedRunMock.endWaiters.get(sessionId)?.(true);
+      } else if (embeddedRunMock.resolveEndBeforeTimeoutIds.delete(sessionId)) {
+        embeddedRunMock.endWaiters.get(sessionId)?.(true);
+      }
+      return ended;
     },
   };
 }
@@ -239,6 +251,7 @@ vi.mock("../commands/status.js", () => ({
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  agentCommandFromGatewayIngress: agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
 vi.mock("../agents/btw.js", () => ({

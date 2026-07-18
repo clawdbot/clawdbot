@@ -4,11 +4,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { applyLocalSetupWorkspaceConfig } from "./onboard-config.js";
 
 describe("applyLocalSetupWorkspaceConfig", () => {
-  it("sets secure dmScope default when unset", () => {
+  it("leaves dmScope unset when not configured", () => {
     const baseConfig: OpenClawConfig = {};
     const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
 
-    expect(result.session?.dmScope).toBe("per-channel-peer");
+    expect(result.session?.dmScope).toBeUndefined();
+    expect(result).not.toHaveProperty("session.dmScope");
     expect(result.gateway?.mode).toBe("local");
     expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
     expect(result.tools?.profile).toBe("coding");

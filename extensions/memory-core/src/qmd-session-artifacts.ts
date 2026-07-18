@@ -180,6 +180,7 @@ export function replaceQmdSessionArtifactMappings(params: {
 }
 
 export function refreshQmdSessionArtifactDocIds(params: {
+  assertOwned: () => void;
   collection: string;
   indexPath: string;
 }): void {
@@ -203,12 +204,15 @@ export function refreshQmdSessionArtifactDocIds(params: {
        SET docid = ?, updated_at = ?
        WHERE collection = ? AND artifact_path = ?`,
     );
+    params.assertOwned();
     db.exec("BEGIN");
     transactionStarted = true;
     const updatedAt = Date.now();
     for (const row of rows) {
+      params.assertOwned();
       updateDocId.run(row.docid, updatedAt, params.collection, row.artifact_path);
     }
+    params.assertOwned();
     db.exec("COMMIT");
   } catch (err) {
     if (transactionStarted) {

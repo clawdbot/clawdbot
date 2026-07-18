@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
+import { hasErrnoCode } from "../infra/errors.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -136,6 +137,14 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  const raw = fs.readFileSync(pathname, "utf8");
+  let raw: string;
+  try {
+    raw = fs.readFileSync(pathname, "utf8");
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      throw new Error(`--batch-file not found: ${pathname}`, { cause: err });
+    }
+    throw err;
+  }
   return parseBatchEntries(raw, "--batch-file");
 }

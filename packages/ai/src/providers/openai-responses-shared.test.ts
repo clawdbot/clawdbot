@@ -1,5 +1,6 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type {
+  ResponseCreateParamsStreaming,
   ResponseStreamEvent,
   Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
@@ -22,9 +23,9 @@ type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
 type OpenAIResponsesStreamEvent =
   Parameters<typeof processResponsesStream>[0] extends AsyncIterable<infer Event> ? Event : never;
 
-async function* streamResponsesEvents(
-  events: readonly OpenAIResponsesStreamEvent[],
-): AsyncGenerator<OpenAIResponsesStreamEvent> {
+async function* streamResponsesEvents<T extends OpenAIResponsesStreamEvent>(
+  events: readonly T[],
+): AsyncGenerator<T> {
   for (const event of events) {
     yield event;
   }
@@ -303,6 +304,20 @@ describe("Responses temperature support", () => {
   });
 });
 
+describe("Responses output token limits", () => {
+  it.each([
+    [1, 16],
+    [15, 16],
+    [16, 16],
+    [32, 32],
+  ])("normalizes maxTokens %i to %i", (maxTokens, expected) => {
+    const params = {} as ResponseCreateParamsStreaming;
+    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { maxTokens });
+
+    expect(params.max_output_tokens).toBe(expected);
+  });
+});
+
 describe("Responses reasoning effort", () => {
   it("omits unsupported default-off reasoning for GPT-5.6 Sol", () => {
     const params = {} as never;
@@ -363,6 +378,21 @@ describe("convertResponsesMessages", () => {
       role: "user",
       content: [{ type: "input_text", text: "hello" }],
     });
+  });
+
+  it("uses the system role when a Responses-compatible provider opts out of developer", () => {
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: { supportsDeveloperRole: false },
+    } satisfies Model<"openai-responses">;
+
+    const input = convertResponsesMessages(
+      compatModel,
+      { systemPrompt: "system", messages: [] },
+      allowedToolCallProviders,
+    );
+
+    expect(input[0]).toMatchObject({ type: "message", role: "system" });
   });
 
   it("strips the internal cache boundary marker from the system prompt message", () => {
@@ -900,6 +930,484 @@ describe("processResponsesStream", () => {
   });
 
   it.each([
+    [undefined, 0],
+    [2, 2],
+  ])("passes SDK maxRetries %s as %i", async (maxRetries, expected) => {
+    let requestMaxRetries: number | undefined;
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+
+    await runResponsesStreamLifecycle({
+      stream,
+      model: nativeOpenAIModel,
+      output,
+      options: maxRetries === undefined ? undefined : { maxRetries },
+      createClient: () => ({
+        responses: {
+          create: (_params, requestOptions) => {
+            requestMaxRetries = requestOptions.maxRetries;
+            return {
+              withResponse: async () => ({
+                data: streamResponsesEvents([
+                  {
+                    type: "response.completed",
+                    sequence_number: 1,
+                    response: { id: "resp_retry", status: "completed" },
+                  } as ResponseStreamEvent,
+                ]),
+                response: new Response(null, { status: 200 }),
+              }),
+            };
+          },
+        },
+      }),
+      buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
+      formatError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+
+    expect(requestMaxRetries).toBe(expected);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("keeps interleaved reasoning items bound to their output indices", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_first", summary: [] },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: { type: "reasoning", id: "rs_second", summary: [] },
+        },
+        { type: "response.reasoning_text.delta", output_index: 0, delta: "first" },
+        { type: "response.reasoning_text.delta", output_index: 1, delta: "second" },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: {
+            type: "reasoning",
+            id: "rs_second",
+            summary: [],
+            content: [{ type: "reasoning_text", text: "second" }],
+            encrypted_content: "cipher-second",
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "reasoning",
+            id: "rs_first",
+            summary: [],
+            content: [{ type: "reasoning_text", text: "first" }],
+            encrypted_content: "cipher-first",
+          },
+        },
+        { type: "response.completed", response: { id: "resp_reasoning", status: "completed" } },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "first" },
+      { type: "thinking", thinking: "second" },
+    ]);
+    const signatures = output.content.map((block) =>
+      block.type === "thinking" && block.thinkingSignature
+        ? JSON.parse(block.thinkingSignature)
+        : undefined,
+    );
+    expect(signatures).toMatchObject([
+      { id: "rs_first", encrypted_content: "cipher-first" },
+      { id: "rs_second", encrypted_content: "cipher-second" },
+    ]);
+    expect(
+      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
+    ).toEqual([
+      ["thinking_start", 0],
+      ["thinking_start", 1],
+      ["thinking_delta", 0],
+      ["thinking_delta", 1],
+      ["thinking_end", 1],
+      ["thinking_end", 0],
+    ]);
+  });
+
+  it("preserves reasoning while a tool call streams on another output index", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_tool", summary: [] },
+        },
+        { type: "response.reasoning_text.delta", output_index: 0, delta: "before " },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 1,
+          item_id: "fc_read",
+          delta: '{"path":"README.md"}',
+        },
+        { type: "response.reasoning_text.delta", output_index: 0, delta: "after" },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: '{"path":"README.md"}',
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "reasoning",
+            id: "rs_tool",
+            summary: [],
+            encrypted_content: "cipher-tool",
+          },
+        },
+        { type: "response.completed", response: { id: "resp_tool", status: "completed" } },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "before after" },
+      { type: "toolCall", id: "call_read|fc_read", arguments: { path: "README.md" } },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type.endsWith("_delta"))
+        .map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
+    ).toEqual([
+      ["thinking_delta", 0],
+      ["toolcall_delta", 1],
+      ["thinking_delta", 0],
+    ]);
+  });
+
+  it("backfills terminal encrypted reasoning for stateless replay", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_backfill", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_backfill", summary: [] },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_backfill",
+            status: "completed",
+            output: [
+              {
+                type: "reasoning",
+                id: "rs_backfill",
+                summary: [],
+                encrypted_content: "cipher-from-terminal",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    const replay = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        messages: [
+          { role: "user", content: "first", timestamp: 1 },
+          output,
+          { role: "user", content: "again", timestamp: 2 },
+        ],
+      },
+      testAllowedToolCallProviders,
+    );
+    expect(replay.find((item) => item.type === "reasoning")).toMatchObject({
+      id: "rs_backfill",
+      encrypted_content: "cipher-from-terminal",
+    });
+  });
+
+  it("tolerates a completed message item with null content", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "message",
+            id: "msg_null",
+            content: [{ type: "output_text", text: "" }],
+          },
+        },
+        { type: "response.output_text.delta", output_index: 0, delta: "streamed" },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: { type: "message", id: "msg_null", content: null },
+        },
+        { type: "response.completed", response: { id: "resp_null", status: "completed" } },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([{ type: "text", text: "streamed" }]);
+  });
+
+  it("keeps deferred text before an interleaved output item", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "message",
+            id: "msg_first",
+            content: [{ type: "output_text", text: "" }],
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "message",
+            id: "msg_first",
+            content: [{ type: "output_text", text: "first" }],
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: {
+            type: "message",
+            id: "msg_second",
+            content: [{ type: "output_text", text: "" }],
+          },
+        },
+        { type: "response.output_text.delta", output_index: 1, delta: "first extended" },
+        {
+          type: "response.output_item.added",
+          output_index: 2,
+          item: { type: "reasoning", id: "rs_after", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 2,
+          item: {
+            type: "reasoning",
+            id: "rs_after",
+            summary: [],
+            content: [{ type: "reasoning_text", text: "thought" }],
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: {
+            type: "message",
+            id: "msg_second",
+            content: [{ type: "output_text", text: "first extended" }],
+          },
+        },
+        { type: "response.completed", response: { id: "resp_order", status: "completed" } },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "text", text: "first" },
+      { type: "text", text: "first extended" },
+      { type: "thinking", thinking: "thought" },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type.endsWith("_start"))
+        .map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
+    ).toEqual([
+      ["text_start", 0],
+      ["text_start", 1],
+      ["thinking_start", 2],
+    ]);
+  });
+
+  it("finalizes incomplete terminal events with usage", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp_incomplete",
+            status: "incomplete",
+            usage: {
+              input_tokens: 30,
+              output_tokens: 12,
+              total_tokens: 42,
+              input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
+            },
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output.stopReason).toBe("length");
+    expect(output.usage).toMatchObject({
+      input: 22,
+      output: 12,
+      cacheRead: 5,
+      cacheWrite: 3,
+      totalTokens: 42,
+    });
+  });
+
+  it("reports content-filtered incomplete responses as errors", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp_filtered",
+            status: "incomplete",
+            incomplete_details: { reason: "content_filter" },
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toBe("Provider incomplete_reason: content_filter");
+
+    const lifecycleOutput = createAssistantOutput();
+    await runResponsesStreamLifecycle({
+      stream: new AssistantMessageEventStream(),
+      model: nativeOpenAIModel,
+      output: lifecycleOutput,
+      createClient: () => ({
+        responses: {
+          create: () => ({
+            withResponse: async () => ({
+              data: streamResponsesEvents([
+                {
+                  type: "response.incomplete",
+                  response: {
+                    id: "resp_filtered_lifecycle",
+                    status: "incomplete",
+                    incomplete_details: { reason: "content_filter" },
+                  },
+                } as ResponseStreamEvent,
+              ]),
+              response: new Response(null, { status: 200 }),
+            }),
+          }),
+        },
+      }),
+      buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
+      formatError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+
+    expect(lifecycleOutput.stopReason).toBe("error");
+    expect(lifecycleOutput.errorMessage).toBe("Provider incomplete_reason: content_filter");
+  });
+
+  it("preserves failed terminal response details", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed",
+            status: "failed",
+            error: { code: "server_error", message: "provider failed" },
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output).toMatchObject({
+      responseId: "resp_failed",
+      stopReason: "error",
+      errorMessage: "server_error: provider failed",
+    });
+  });
+
+  it("rejects streams that end without a terminal response event", async () => {
+    const output = createAssistantOutput();
+    output.usage.input = 7;
+
+    await expect(
+      processResponsesStream(
+        responseEvents([{ type: "response.created", response: { id: "resp_truncated" } }]),
+        output,
+        new AssistantMessageEventStream(),
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("OpenAI Responses stream ended before a terminal response event");
+    expect(output.usage.input).toBe(7);
+  });
+
+  it.each([
     ["omits arguments", undefined],
     ["sends empty arguments", ""],
   ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
@@ -990,6 +1498,7 @@ describe("processResponsesStream", () => {
             type: "response.output_item.done",
             item: { type: "function_call", name: "computer", arguments: "{}" },
           },
+          { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
         ]),
         output,
         stream,
@@ -1037,6 +1546,11 @@ describe("processResponsesStream", () => {
           status: "completed",
         },
       },
+      {
+        type: "response.completed",
+        sequence_number: 3,
+        response: { id: "resp_without_item_id", status: "completed" },
+      } as ResponseStreamEvent,
     ];
     const output = createAssistantOutput();
 
@@ -1084,6 +1598,11 @@ describe("processResponsesStream", () => {
           status: "completed",
         },
       },
+      {
+        type: "response.completed",
+        sequence_number: 3,
+        response: { id: "resp_weather", status: "completed" },
+      } as ResponseStreamEvent,
     ];
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
@@ -1221,6 +1740,11 @@ describe("processResponsesStream", () => {
           status: "completed",
         },
       },
+      {
+        type: "response.completed",
+        sequence_number: 7,
+        response: { id: "resp_interleaved", status: "completed" },
+      } as ResponseStreamEvent,
     ];
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
@@ -1740,6 +2264,7 @@ describe("processResponsesStream", () => {
             arguments: '{"slot":1}',
           },
         },
+        { type: "response.completed", response: { id: "resp_suffix", status: "completed" } },
       ]),
       output,
       stream,
@@ -1811,6 +2336,10 @@ describe("processResponsesStream", () => {
             arguments: '{"slot":0}',
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_completions", status: "completed" },
+        },
       ]),
       output,
       stream,
@@ -1866,6 +2395,10 @@ describe("processResponsesStream", () => {
             name: "computer",
             arguments: '{"slot":0}',
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_identity_mismatch", status: "completed" },
         },
       ]),
       output,
@@ -1931,6 +2464,7 @@ describe("processResponsesStream", () => {
             arguments: '{"slot":1}',
           },
         },
+        { type: "response.completed", response: { id: "resp_sequential", status: "completed" } },
       ]),
       output,
       stream,
@@ -2013,6 +2547,7 @@ describe("processResponsesStream", () => {
             status: "completed",
           },
         },
+        { type: "response.completed", response: { id: "resp_item_only", status: "completed" } },
       ]),
       output,
       stream,

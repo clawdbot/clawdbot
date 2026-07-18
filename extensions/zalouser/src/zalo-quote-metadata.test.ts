@@ -1,7 +1,13 @@
 // Zalouser tests cover inbound normalization and outbound bounds through public plugin paths.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, Message } from "./zca-client.js";
@@ -14,6 +20,8 @@ vi.mock("./zca-client.js", () => ({
   TextStyle: { Indent: 9 },
 }));
 
+import { setZalouserRuntime } from "./runtime.js";
+import { saveStoredZaloCredentials } from "./session-state.js";
 import { resolveZaloGroupContext, sendZaloTextMessage, startZaloListener } from "./zalo-js.js";
 
 type ListenerOn = ReturnType<typeof vi.fn>;
@@ -45,20 +53,15 @@ async function withStoredSession<T>(params: {
   run: () => Promise<T>;
 }): Promise<T> {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-message-"));
-  const credentialFile = path.join(
-    stateDir,
-    "credentials",
-    "zalouser",
-    `credentials-${encodeURIComponent(params.profile)}.json`,
-  );
-  await mkdir(path.dirname(credentialFile), { recursive: true });
-  await writeFile(
-    credentialFile,
-    JSON.stringify({
+  saveStoredZaloCredentials(
+    params.profile,
+    {
       imei: "test-imei",
       cookie: [{ key: "zpsid", value: "test" }],
       userAgent: "test-agent",
-    }),
+      createdAt: new Date().toISOString(),
+    },
+    { OPENCLAW_STATE_DIR: stateDir },
   );
   createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => params.api) });
   try {
@@ -91,6 +94,11 @@ function createInboundMessage(data: Record<string, unknown>): Message {
 }
 
 beforeEach(() => {
+  resetPluginStateStoreForTests();
+  const runtime = createPluginRuntimeMock();
+  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateSyncKeyedStoreForTests<T>("zalouser", options);
+  setZalouserRuntime(runtime);
   createZaloMock.mockReset();
 });
 

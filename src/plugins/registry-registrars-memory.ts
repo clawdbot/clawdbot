@@ -6,6 +6,7 @@ import {
   registerMemoryCapability as registerGlobalMemoryCapability,
   registerMemoryCorpusSupplement as registerGlobalMemoryCorpusSupplement,
   registerMemoryFlushPlanResolverForPlugin,
+  registerMemoryPromptPreparation as registerGlobalMemoryPromptPreparation,
   registerMemoryPromptSupplement as registerGlobalMemoryPromptSupplement,
   registerMemoryPromptSectionForPlugin,
   registerMemoryRuntimeForPlugin,
@@ -66,6 +67,22 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       return;
     }
     registerGlobalMemoryPromptSupplement(record.id, builder);
+  };
+
+  const registerMemoryPromptPreparation = (
+    record: PluginRecord,
+    prepare: Parameters<OpenClawPluginApi["registerMemoryPromptPreparation"]>[0],
+  ) => {
+    if (typeof prepare !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "memory prompt preparation registration missing prepare function",
+      });
+      return;
+    }
+    registerGlobalMemoryPromptPreparation(record.id, prepare);
   };
 
   const registerMemoryCorpusSupplement = (
@@ -135,6 +152,7 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     registerMemoryCapability,
     registerMemoryPromptSection,
     registerMemoryPromptSupplement,
+    registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
     registerMemoryFlushPlan,
     registerMemoryRuntime,

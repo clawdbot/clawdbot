@@ -9,8 +9,13 @@ import {
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
@@ -19,7 +24,11 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
+import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
+import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+let testState: OpenClawTestState | undefined;
 
 function registerExtraBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
@@ -111,15 +120,10 @@ async function createHeartbeatAgentsWorkspace() {
 }
 
 async function writeCompletedWorkspaceState(workspaceDir: string): Promise<void> {
-  await fs.writeFile(
-    path.join(workspaceDir, "openclaw-workspace-state.json"),
-    `${JSON.stringify({
-      version: 1,
-      bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
-      setupCompletedAt: "2026-05-16T00:00:01.000Z",
-    })}\n`,
-    "utf8",
-  );
+  mergeWorkspaceSetupState(workspaceDir, {
+    bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
+    setupCompletedAt: "2026-05-16T00:00:01.000Z",
+  });
 }
 
 async function writeLegacyCompletedWorkspaceState(workspaceDir: string): Promise<void> {
@@ -144,8 +148,21 @@ function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
 }
 
 describe("resolveBootstrapFilesForRun", () => {
-  beforeEach(() => clearInternalHooks());
-  afterEach(() => clearInternalHooks());
+  beforeEach(async () => {
+    clearInternalHooks();
+    resetLegacyWorkspaceStateCheckForTest();
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-bootstrap-state-",
+    });
+  });
+  afterEach(async () => {
+    clearInternalHooks();
+    closeOpenClawStateDatabaseForTest();
+    resetLegacyWorkspaceStateCheckForTest();
+    await testState?.cleanup();
+    testState = undefined;
+  });
 
   it("applies bootstrap hook overrides", async () => {
     registerExtraBootstrapFileHook();
@@ -211,7 +228,7 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
   });
 
-  it("ignores stale workspace BOOTSTRAP.md when legacy setup state is completed", async () => {
+  it("keeps BOOTSTRAP.md until Doctor migrates legacy setup state", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await writeLegacyCompletedWorkspaceState(workspaceDir);
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
@@ -220,7 +237,7 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.map((file) => file.name)).toContain("AGENTS.md");
-    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+    expect(files.map((file) => file.name)).toContain("BOOTSTRAP.md");
   });
 
   it("keeps BOOTSTRAP.md when current setup state cannot be read", async () => {

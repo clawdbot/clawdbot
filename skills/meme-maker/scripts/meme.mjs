@@ -283,9 +283,9 @@ async function renderLocal(template, texts, flags) {
     try {
       sharp = (await import("sharp")).default;
     } catch {
-      throw new Error(
-        "PNG output needs the optional sharp package. Use --out meme.svg or install sharp near the skill runner.",
-      );
+      // Keep this message free of package-install advice: agents follow it
+      // literally and can corrupt pnpm-managed OpenClaw installs (see #109405).
+      throw new Error("PNG output needs the optional sharp package. Use --out meme.svg instead.");
     }
     await sharp(Buffer.from(svg)).png().toFile(out);
   } else {

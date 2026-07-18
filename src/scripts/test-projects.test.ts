@@ -94,12 +94,12 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("keeps extracted test entries in their owner configs", () => {
-    expect(buildVitestRunPlans(["src/agents/openai-transport-stream.test.ts"])).toEqual([
+  it("keeps split test entries in their owner configs", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream.base.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/agents/openai-transport-stream.test.ts"],
+        includePatterns: ["src/agents/openai-transport-stream.base.test.ts"],
         watchMode: false,
       },
     ]);
@@ -108,6 +108,26 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.auto-reply.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/auto-reply/reply/dispatch-from-config.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("expands a test filename prefix into standalone sibling suites", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream"])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/agents/openai-transport-stream.base.test.ts",
+          "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
+          "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
+          "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
+          "src/agents/openai-transport-stream.replay-and-tools.test.ts",
+          "src/agents/openai-transport-stream.replay-sanitization.test.ts",
+          "src/agents/openai-transport-stream.streaming.test.ts",
+          "src/agents/openai-transport-stream.usage-and-calls.test.ts",
+        ],
         watchMode: false,
       },
     ]);

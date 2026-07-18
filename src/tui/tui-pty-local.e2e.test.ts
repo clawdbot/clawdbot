@@ -514,7 +514,11 @@ function buildLocalModeConfig(params: {
 
 async function startLocalModeTui(
   registerCleanup: CleanupRegistrar,
-  opts: { invalidEditLoop?: boolean } = {},
+  opts: {
+    invalidEditLoop?: boolean;
+    holdFirstResponse?: boolean;
+    followupReplyText?: string;
+  } = {},
 ) {
   const replyText = "LOCAL_PTY_RESPONSE";
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-local-"));
@@ -527,6 +531,8 @@ async function startLocalModeTui(
   const configPath = path.join(tempDir, "openclaw.json");
   const mockModel = await startMockModelServer(replyText, {
     invalidEditLoop: opts.invalidEditLoop,
+    holdFirstResponse: opts.holdFirstResponse,
+    followupReplyText: opts.followupReplyText,
   });
   const config = buildLocalModeConfig({
     workspaceDir,
@@ -874,6 +880,68 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("/exit\r", { delay: false });
         const exit = await fixture.run.waitForExit();
         expect(exit.exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "steers an active real local session in the same turn",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished, {
+        holdFirstResponse: true,
+        followupReplyText: "LOCAL_STEER_COMPLETE",
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("slow local parent\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
+        });
+
+        const steerOffset = fixture.run.output().length;
+        await fixture.run.write("steer the active local turn\r");
+        await waitForOutputAfter(fixture.run, "steer the active local turn", steerOffset);
+        await sleep(SUBMISSION_SETTLE_MS);
+        fixture.mockModel.releaseFirstResponse("gpt-5.5");
+
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `steered prompt did not reach the active local session\nrequests=${JSON.stringify(
+                fixture.mockModel.requests(),
+                null,
+                2,
+              )}\n${fixture.run.output()}`,
+            ),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "steer the active local turn",
+        );
+        await fixture.run.waitForOutput("LOCAL_STEER_COMPLETE");
+        if (process.env.OPENCLAW_BEHAVIOR_EVIDENCE === "1") {
+          console.info(
+            "[behavior-evidence] local-steer",
+            JSON.stringify({
+              providerRequestCount: fixture.mockModel.requests().length,
+              secondRequestHasDynamicPrompt: (
+                JSON.stringify(fixture.mockModel.requests()[1]?.body) ?? ""
+              ).includes("steer the active local turn"),
+              renderedCompletion: fixture.run.output().includes("LOCAL_STEER_COMPLETE"),
+              secondPromptEchoedBeforeRelease: true,
+            }),
+          );
+        }
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
         await fixture.cleanup();
       }

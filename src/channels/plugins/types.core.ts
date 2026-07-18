@@ -105,6 +105,10 @@ export type ChannelSetupInput = {
   secretFile?: string;
   botToken?: string;
   appToken?: string;
+  userToken?: string;
+  signingSecret?: string;
+  identity?: "bot" | "user";
+  mode?: "socket" | "http" | "relay";
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
@@ -140,6 +144,9 @@ export type ChannelSetupInput = {
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
   workspace?: string;
+  defaultTo?: string;
+  allowFrom?: string[];
+  agentActivity?: boolean;
 };
 
 export type ChannelStatusIssue = {
@@ -229,12 +236,14 @@ export type ChannelAccountSnapshot = {
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
   botTokenStatus?: string;
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  identity?: string;
   credentialSource?: string;
   secretSource?: string;
   audienceType?: string;

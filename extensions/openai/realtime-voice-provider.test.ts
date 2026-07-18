@@ -304,6 +304,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       supportsBargeIn: true,
       handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
+      supportsVideoFrames: true,
     });
   });
 
@@ -867,6 +868,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       instructions: "Be helpful.",
+      language: "de",
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onReady,
@@ -901,7 +903,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expectRecordFields(inputAudio, "session audio input", {
       format: { type: "audio/pcmu" },
       noise_reduction: null,
-      transcription: { model: "gpt-4o-mini-transcribe" },
+      transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
     });
     expect(requireNestedRecord(session, ["audio", "output"])).toEqual({
       format: { type: "audio/pcmu" },

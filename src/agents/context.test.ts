@@ -558,8 +558,10 @@ describe("resolveContextTokensForModel", () => {
   it.each([
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["claude-cli", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-mythos-5", 200_000],
     ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
@@ -697,8 +699,10 @@ describe("resolveContextTokensForModel", () => {
   it.each([
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["claude-cli", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-mythos-5", 200_000],
     ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],

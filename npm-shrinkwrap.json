@@ -14,7 +14,7 @@
         "@anthropic-ai/sdk": "0.109.1",
         "@clack/core": "1.4.2",
         "@clack/prompts": "1.6.0",
-        "@earendil-works/pi-tui": "0.80.3",
+        "@earendil-works/pi-tui": "0.80.9",
         "@google/genai": "2.10.0",
         "@grammyjs/runner": "2.0.3",
         "@grammyjs/transformer-throttler": "1.2.1",
@@ -161,9 +161,9 @@
       }
     },
     "node_modules/@earendil-works/pi-tui": {
-      "version": "0.80.3",
-      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.3.tgz",
-      "integrity": "sha512-2BJI6qwRQfnM0Q7seL1+SbacU/jRRjBnN7Hu3n9BjAn7/s5FaBNnvdD1qBQYRsFTHfjqMaDsjYqanPyqwXj99w==",
+      "version": "0.80.9",
+      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.9.tgz",
+      "integrity": "sha512-unPTW8hRgIHEGjV8mJJ2jqm+fzgnRubes6V2FPk9ay1W9ZLofcpYQ3NDfrODXSci+oKbBpX9JyYUMfQV6jCA/A==",
       "license": "MIT",
       "dependencies": {
         "get-east-asian-width": "1.6.0",

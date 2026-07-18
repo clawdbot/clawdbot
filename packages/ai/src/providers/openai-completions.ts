@@ -36,6 +36,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { formatProviderError } from "../utils/provider-error.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
@@ -122,7 +123,28 @@ type ResolvedOpenAICompletionsCompat = Omit<
   "cacheControlFormat"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  sessionAffinityFormat: "openai" | "openrouter";
 };
+
+type EncryptedReasoningDetail = {
+  type: "reasoning.encrypted";
+  id: string;
+  data: string;
+};
+
+function isEncryptedReasoningDetail(detail: unknown): detail is EncryptedReasoningDetail {
+  if (typeof detail !== "object" || detail === null) {
+    return false;
+  }
+  const candidate = detail as Record<string, unknown>;
+  return (
+    candidate.type === "reasoning.encrypted" &&
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    typeof candidate.data === "string" &&
+    candidate.data.length > 0
+  );
+}
 
 type ChatCompletionInstructionMessageParam =
   | ChatCompletionDeveloperMessageParam
@@ -177,7 +199,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+        maxRetries: options?.maxRetries ?? 0,
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(
@@ -206,6 +228,7 @@ export const streamOpenAICompletions: StreamFunction<
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
+      const pendingReasoningDetailsByToolCallId = new Map<string, string>();
       const blocks = output.content as StreamingBlock[];
       // A block can be finished mid-stream (native reasoning sealed at the
       // text-lane transition) and again by the end-of-stream loop; guard so its
@@ -218,8 +241,16 @@ export const streamOpenAICompletions: StreamFunction<
       };
       const getContentIndex = (block: StreamingBlock) => contentIndices.get(block) ?? -1;
       const rememberFirstToolCallById = (id: string, block: StreamingToolCallBlock) => {
-        if (!toolCallBlocksByFirstId.has(id)) {
-          toolCallBlocksByFirstId.set(id, block);
+        if (toolCallBlocksByFirstId.has(id)) {
+          return;
+        }
+        toolCallBlocksByFirstId.set(id, block);
+        // Some gateways emit encrypted reasoning before the referenced call.
+        // Attach it once the first matching block exists so replay stays intact.
+        const pendingDetail = pendingReasoningDetailsByToolCallId.get(id);
+        if (pendingDetail) {
+          block.thoughtSignature = pendingDetail;
+          pendingReasoningDetailsByToolCallId.delete(id);
         }
       };
       const finishBlock = (block: StreamingBlock) => {
@@ -505,12 +536,15 @@ export const streamOpenAICompletions: StreamFunction<
 
           const reasoningDetails = (choiceDelta as { reasoning_details?: unknown })
             .reasoning_details;
-          if (reasoningDetails && Array.isArray(reasoningDetails)) {
+          if (Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
-              if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
+              if (isEncryptedReasoningDetail(detail)) {
+                const serializedDetail = JSON.stringify(detail);
                 const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
                 if (matchingToolCall) {
-                  matchingToolCall.thoughtSignature = JSON.stringify(detail);
+                  matchingToolCall.thoughtSignature = serializedDetail;
+                } else {
+                  pendingReasoningDetailsByToolCallId.set(detail.id, serializedDetail);
                 }
               }
             }
@@ -561,11 +595,11 @@ export const streamOpenAICompletions: StreamFunction<
         delete (block as { streamIndex?: number }).streamIndex;
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      output.errorMessage = formatProviderError(error);
       // Some providers via OpenRouter give additional information in this field.
       const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
         ?.raw;
-      if (rawMetadata) {
+      if (rawMetadata && !output.errorMessage.includes(rawMetadata)) {
         output.errorMessage += `\n${rawMetadata}`;
       }
       stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -629,9 +663,13 @@ function createClient(
   }
 
   if (sessionId && compat.sendSessionAffinityHeaders) {
-    headers.session_id = sessionId;
-    headers["x-client-request-id"] = sessionId;
-    headers["x-session-affinity"] = sessionId;
+    if (compat.sessionAffinityFormat === "openrouter") {
+      headers["x-session-id"] = sessionId;
+    } else {
+      headers.session_id = sessionId;
+      headers["x-client-request-id"] = sessionId;
+      headers["x-session-affinity"] = sessionId;
+    }
   }
 
   // Merge options headers last so they can override defaults
@@ -686,7 +724,7 @@ function buildParams(
     tool_stream?: boolean;
     enable_thinking?: boolean;
     chat_template_kwargs?: { enable_thinking: boolean; preserve_thinking: boolean };
-    thinking?: { type: string };
+    thinking?: { type: string; clear_thinking?: boolean };
     provider?: unknown;
     providerOptions?: unknown;
   };
@@ -765,7 +803,9 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
+    params.thinking = options?.reasoningEffort
+      ? { type: "enabled", clear_thinking: false }
+      : { type: "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
@@ -811,7 +851,7 @@ function buildParams(
   }
 
   // OpenRouter provider routing preferences
-  if (model.baseUrl.includes("openrouter.ai") && model.compat?.openRouterRouting) {
+  if (model.compat?.openRouterRouting) {
     params.provider = model.compat.openRouterRouting;
   }
 
@@ -1357,6 +1397,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
   const isCloudflareAiGateway =
     provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
+  const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
 
   const isNonStandard =
     provider === "cerebras" ||
@@ -1379,12 +1420,18 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
   const isXiaomi = provider === "xiaomi" || baseUrl.includes("xiaomimimo.com");
+  const supportsOpenRouterDeveloperRole =
+    isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
+  const usesOpenRouterSessionAffinity =
+    isOpenRouter ||
+    model.compat?.thinkingFormat === "openrouter" ||
+    model.compat?.openRouterRouting !== undefined;
   const cacheControlFormat =
     provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
 
   return {
     supportsStore: !isNonStandard,
-    supportsDeveloperRole: !isNonStandard,
+    supportsDeveloperRole: supportsOpenRouterDeveloperRole || (!isNonStandard && !isOpenRouter),
     supportsReasoningEffort:
       !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
     supportsUsageInStreaming: true,
@@ -1401,7 +1448,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
           ? "zai"
           : isTogether
             ? "together"
-            : provider === "openrouter" || baseUrl.includes("openrouter.ai")
+            : isOpenRouter
               ? "openrouter"
               : "openai",
     openRouterRouting: {},
@@ -1410,6 +1457,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
     sendSessionAffinityHeaders: false,
+    sessionAffinityFormat: usesOpenRouterSessionAffinity ? "openrouter" : "openai",
     supportsPromptCacheKey: false,
     supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
   };
@@ -1448,6 +1496,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
     sendSessionAffinityHeaders:
       model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
+    sessionAffinityFormat: detected.sessionAffinityFormat,
     supportsPromptCacheKey: model.compat.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,
     supportsLongCacheRetention:
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,

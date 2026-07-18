@@ -105,8 +105,8 @@ openclaw tasks cancel <lookup>
 | Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | Auth                                     |
 | --------------------- | ------------------------------- | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
 | Alibaba               | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
-| BytePlus (1.0)        | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (I2V models only; first + last frame) | -                                               | `BYTEPLUS_API_KEY`                       |
-| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus (bundled)    | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus 1.5 plugin   | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
 | ComfyUI               | `workflow`                      |  ✓   | 1 image                                              | -                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
 | DeepInfra             | `Pixverse/Pixverse-T2V`         |  ✓   | -                                                    | -                                               | `DEEPINFRA_API_KEY`                      |
@@ -322,24 +322,21 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
     Uses DashScope / Model Studio async endpoint. Reference images and
     videos must be remote `http(s)` URLs.
   </Accordion>
-  <Accordion title="BytePlus (1.0)">
+  <Accordion title="BytePlus (bundled)">
     Provider id: `byteplus`.
 
     Models: `seedance-1-0-pro-250528` (default),
-    `seedance-1-0-pro-t2v-250528`, `seedance-1-0-pro-fast-251015`,
-    `seedance-1-0-lite-t2v-250428`, `seedance-1-0-lite-i2v-250428`.
+    `seedance-1-5-pro-251215`.
 
-    T2V models (`*-t2v-*`) do not accept image inputs; I2V models and
-    general `*-pro-*` models support a single reference image (first
-    frame). Pass the image positionally or set `role: "first_frame"`.
-    T2V model IDs are automatically switched to the corresponding I2V
-    variant when an image is provided.
+    Uses the unified `content[]` API. Supports up to 2 input images
+    (`first_frame` + `last_frame`). Pass images positionally or set each
+    image's `role` explicitly.
 
     Supported `providerOptions` keys: `seed` (number), `draft` (boolean -
     forces 480p), `camera_fixed` (boolean).
 
   </Accordion>
-  <Accordion title="BytePlus Seedance 1.5">
+  <Accordion title="BytePlus Seedance 1.5 plugin">
     Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark)
     plugin (external, not bundled). Provider id: `byteplus-seedance15`. Model:
     `seedance-1-5-pro-251215`.

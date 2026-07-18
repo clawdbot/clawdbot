@@ -76,8 +76,10 @@ Plain `openclaw onboard` follows this path:
 2. Detect configured models, API-key environment variables, supported local AI
    CLIs, and already installed tool-capable models from reachable Ollama or LM
    Studio servers on the Gateway host. This read-only pass never downloads a
-   model. Gemini CLI and Antigravity installs are reported but not auto-tested
-   because they cannot enforce a tool-free probe.
+   model. Gemini CLI, Antigravity, Pi, and OpenCode installs are also reported
+   when they cannot serve as the reusable inference route for guided setup.
+   Gemini and Antigravity cannot enforce the tool-free probe; Pi and OpenCode
+   are whole-agent harnesses rather than setup inference routes.
 3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
 4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
@@ -111,7 +113,7 @@ flow and skip that prompt.
     - Gateway port **18789**
     - Gateway auth **Token** (auto-generated, even on loopback)
     - Tool policy: `tools.profile: "coding"` for new setups (an existing explicit profile is preserved)
-    - DM isolation: `session.dmScope: "per-channel-peer"` for new setups. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
+    - DM sessions: onboarding preserves an explicit `session.dmScope` and otherwise leaves it unset, so the `"main"` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `"per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram and WhatsApp DMs default to **allowlist**: Telegram asks for a numeric Telegram user ID, WhatsApp asks for a phone number
 

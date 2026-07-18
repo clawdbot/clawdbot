@@ -1,5 +1,6 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -7,7 +8,13 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
+  SYSTEM_AGENT_CONFIG_WRITE_DENYLIST,
+  classifyInferenceRouteConfigPath,
+  type InferenceRoutePathVerdict,
+} from "./config-write-policy.js";
+import {
   projectDefaultInferenceRoute,
+  projectInferenceRoute,
   sameDefaultInferenceRoute,
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
@@ -92,7 +99,9 @@ export async function runGatewayLifecycle(
     return;
   }
   if (operation === "stop") {
-    await lifecycle.runDaemonStop();
+    // The system-agent approval gate is the non-interactive equivalent of an
+    // operator passing --force after explicitly approving the mutation.
+    await lifecycle.runDaemonStop({ force: true });
     return;
   }
   return await lifecycle.runDaemonRestart();
@@ -161,7 +170,7 @@ export function formatConfigValidationLine(snapshot: ConfigFileSnapshot): string
   ].join("\n");
 }
 
-function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
+export function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
     ...runtime,
     exit: (code) => {
@@ -290,11 +299,17 @@ export async function runConfigSetOperation(params: {
     });
   if (operation.kind === "config-set") {
     await ctx.commit(async () => {
+      // Conditional verdicts (per-agent routing, plugin entries) depend on the
+      // current config; a concurrent edit can flip them between the
+      // pre-approval check and this write. Re-verify at the commit boundary,
+      // like the plugin-uninstall path.
+      await assertConfigWriteDoesNotBypassInferenceVerification(operation);
       await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
     });
     return;
   }
   await ctx.commit(async () => {
+    await assertConfigWriteDoesNotBypassInferenceVerification(operation);
     await runConfigSet({
       path: operation.path,
       cliOptions: {
@@ -306,52 +321,62 @@ export async function runConfigSetOperation(params: {
   });
 }
 
-function isInferenceRouteConfigPath(path: readonly string[]): boolean {
-  const segments = path.map((segment) => segment.trim().toLowerCase()).filter(Boolean);
-  const [root, scope, ownerOrField, field] = segments;
-  if (["$include", "auth", "env", "models", "plugins", "secrets", "tools"].includes(root ?? "")) {
+async function isDefaultAgentListPath(segments: readonly string[]): Promise<boolean> {
+  const listIndexSegment = segments
+    .map((segment) => segment.trim().toLowerCase())
+    .filter(Boolean)[2];
+  if (!listIndexSegment || !/^\d+$/.test(listIndexSegment)) {
+    // Path addresses agents.list.<field> without an index; fail closed.
     return true;
   }
-  if (root !== "agents") {
-    return false;
-  }
-  if (!scope || (scope === "defaults" && !ownerOrField) || (scope === "list" && !ownerOrField)) {
+  const { readConfigFileSnapshot } = await loadConfigModule();
+  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.exists || !snapshot.valid) {
     return true;
   }
-  if (scope === "defaults") {
-    return ["agentruntime", "clibackends", "model", "models", "params", "tools"].includes(
-      ownerOrField ?? "",
-    );
-  }
-  if (scope !== "list") {
-    return false;
-  }
-  if (/^\d+$/.test(ownerOrField ?? "") && !field) {
+  const config = snapshot.sourceConfig ?? snapshot.config;
+  const entry = config?.agents?.list?.[Number(listIndexSegment)];
+  if (!entry?.id) {
+    // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
   }
-  const routeField = /^\d+$/.test(ownerOrField ?? "") ? field : ownerOrField;
-  return [
-    "agentdir",
-    "agentruntime",
-    "clibackends",
-    "default",
-    "id",
-    "model",
-    "models",
-    "params",
-    "tools",
-  ].includes(routeField ?? "");
+  const defaultAgentId = resolveDefaultAgentId(config ?? {});
+  return normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
 }
 
 export async function assertConfigWriteDoesNotBypassInferenceVerification(
   operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>,
 ): Promise<void> {
   const { parseConfigSetPath } = await import("../cli/config-cli.js");
-  if (!isInferenceRouteConfigPath(parseConfigSetPath(operation.path))) {
+  const segments = parseConfigSetPath(operation.path);
+  const verdict: InferenceRoutePathVerdict = classifyInferenceRouteConfigPath(segments);
+  if (verdict === "allowed") {
     return;
   }
+  // Per-agent routing overrides are fine for agents that do not back the
+  // default/system route: they cannot break the inference powering this
+  // session, and set_default_model live-tests the default route instead.
+  if (verdict === "agent-route" && !(await isDefaultAgentListPath(segments))) {
+    return;
+  }
+  // Same invariant as plugin_uninstall: a plugins.entries write may not touch
+  // the plugin backing the active default route (e.g. disabling it).
+  if (verdict === "plugin-entry") {
+    const pluginId = segments.filter((segment) => segment.trim())[2] ?? "";
+    if (!(await isPluginBackingDefaultInferenceRoute(pluginId))) {
+      return;
+    }
+    throw new Error(
+      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Exit OpenClaw and edit it from a terminal.`,
+    );
+  }
+  const deniedRoot = segments[0]?.trim().toLowerCase() ?? "";
+  const denialReason = SYSTEM_AGENT_CONFIG_WRITE_DENYLIST[deniedRoot];
   throw new Error(
-    "Direct config writes cannot change inference routing or include alternate config. Use `set default model <provider/model>` for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
+    denialReason
+      ? `Direct config writes cannot change \`${deniedRoot}\` (${denialReason}).`
+      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
   );
 }
 
@@ -500,13 +525,19 @@ export async function executeSetDefaultModel(
       const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
       const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
         await import("./setup-apply.js");
+      const targetAgentId = operation.agentId;
+      // Route projection and the live probes below all take the same optional
+      // agent scope, so a per-agent selection is verified against that agent's
+      // route with the exact rigor the default route gets.
+      const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
       const snapshot = await readConfigFileSnapshot();
       const stagedConfig = await applySystemAgentModelSelection({
         config: snapshot.sourceConfig,
         model: operation.model,
+        ...(targetAgentId ? { targetAgentId } : {}),
       });
-      const beforeRoute = await projectDefaultInferenceRoute(snapshot.sourceConfig);
-      const verifiedRoute = await projectDefaultInferenceRoute(stagedConfig);
+      const beforeRoute = await projectRoute(snapshot.sourceConfig);
+      const verifiedRoute = await projectRoute(stagedConfig);
       const verifyInferenceConfig =
         ctx.deps?.verifyInferenceConfig ??
         (await import("./setup-inference.js")).verifySetupInferenceConfig;
@@ -514,6 +545,7 @@ export async function executeSetDefaultModel(
         config: stagedConfig,
         runtime: ctx.runtime,
         requireExecutionOwner: true,
+        ...(targetAgentId ? { agentId: targetAgentId } : {}),
       });
       if (!initialVerification.ok) {
         throw new Error(
@@ -530,12 +562,13 @@ export async function executeSetDefaultModel(
       let selectedRouteForCommit = verifiedRoute;
       const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
+        ...(targetAgentId ? { targetAgentId } : {}),
       });
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
           preCommitRuntimePreflight: async (sourceConfig) => {
-            const commitRoute = await projectDefaultInferenceRoute(sourceConfig);
+            const commitRoute = await projectRoute(sourceConfig);
             if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
               throw new Error(
                 "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
@@ -546,6 +579,7 @@ export async function executeSetDefaultModel(
               config: sourceConfig,
               runtime: ctx.runtime,
               requireExecutionOwner: true,
+              ...(targetAgentId ? { agentId: targetAgentId } : {}),
             });
             if (!latestVerification.ok) {
               throw new Error(
@@ -566,14 +600,14 @@ export async function executeSetDefaultModel(
         mutate: async (cfg) => {
           // Verification may take time. Preserve unrelated edits, but never
           // combine the passing result with a concurrently changed route.
-          const currentRoute = await projectDefaultInferenceRoute(cfg);
+          const currentRoute = await projectRoute(cfg);
           if (!sameDefaultInferenceRoute(currentRoute, beforeRoute)) {
             throw new Error(
               "The default-agent inference route changed during verification, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
             );
           }
           const selected = selectModel(cfg);
-          const selectedRoute = await projectDefaultInferenceRoute(selected);
+          const selectedRoute = await projectRoute(selected);
           if (selectedRoute.route?.modelLabel !== verifiedModelRef) {
             throw new Error(
               "The model selection no longer resolves to the exact model that passed live inference. Review the current model/auth/runtime settings and retry.",
@@ -587,11 +621,18 @@ export async function executeSetDefaultModel(
         },
       });
       ctx.runtime.log(`Updated ${result.path}`);
-      ctx.runtime.log(`Default model: ${persistedVerification.modelRef}`);
+      ctx.runtime.log(
+        targetAgentId
+          ? `Agent ${targetAgentId} model: ${persistedVerification.modelRef}`
+          : `Default model: ${persistedVerification.modelRef}`,
+      );
       return {
-        summary: `Set default model to ${operation.model}`,
+        summary: targetAgentId
+          ? `Set agent ${targetAgentId} model to ${operation.model}`
+          : `Set default model to ${operation.model}`,
         configPath: result.path,
         details: {
+          ...(targetAgentId ? { agentId: targetAgentId } : {}),
           requestedModel: operation.model,
           effectiveModel: persistedVerification.modelRef,
           inferenceVerified: true,
@@ -600,6 +641,54 @@ export async function executeSetDefaultModel(
       };
     },
   });
+}
+
+/**
+ * Uninstalling the plugin that provides the active default inference route
+ * would break the very session driving the change, so that case stays a
+ * terminal-only operation. Every other plugin is uninstallable behind the
+ * standard approval gate — matching what the operator can do from the UI/CLI.
+ */
+export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Promise<boolean> {
+  const { readConfigFileSnapshot } = await loadConfigModule();
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.exists || !snapshot.valid) {
+    return true;
+  }
+  const config = snapshot.runtimeConfig ?? snapshot.config;
+  const route = (await projectDefaultInferenceRoute(config ?? {})).route;
+  if (!route) {
+    return false;
+  }
+  // The route's execution owners are the provider plus whichever runtime
+  // component executes it (embedded harness override or the resolved model
+  // runtime policy, e.g. a CLI-backend harness plugin) — removing any of them
+  // breaks the session driving this change.
+  const { resolveModelRuntimePolicy } = await import("../agents/model-runtime-policy.js");
+  const runtimePolicyId = resolveModelRuntimePolicy({
+    config,
+    provider: route.provider,
+    modelId: route.model,
+    agentId: route.agentId,
+  }).policy?.id;
+  const normalizedPluginId = pluginId.trim().toLowerCase();
+  const components = [
+    route.provider,
+    runtimePolicyId,
+    route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+  ]
+    .map((component) => component?.trim().toLowerCase())
+    .filter((component): component is string => Boolean(component));
+  // Same-name convention covers components with no resolvable plugin metadata.
+  if (components.includes(normalizedPluginId)) {
+    return true;
+  }
+  const { resolveOwningPluginIdsForProviderRef } = await import("../plugins/providers.js");
+  return components.some((component) =>
+    (resolveOwningPluginIdsForProviderRef({ provider: component, config }) ?? []).some(
+      (owner) => owner.trim().toLowerCase() === normalizedPluginId,
+    ),
+  );
 }
 
 export async function executePluginInstall(

@@ -2772,11 +2772,11 @@ describe("model-selection", () => {
         resolveThinkingDefault({
           cfg,
           provider: "amazon-bedrock",
-          model: "us.anthropic.claude-sonnet-4-6-v1:0",
+          model: "us.anthropic.claude-sonnet-4-6",
           catalog: [
             {
               provider: "amazon-bedrock",
-              id: "us.anthropic.claude-sonnet-4-6-v1:0",
+              id: "us.anthropic.claude-sonnet-4-6",
               name: "Claude Sonnet 4.6",
               reasoning: true,
             },

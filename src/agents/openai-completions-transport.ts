@@ -1555,6 +1555,8 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "kimi-k2.5",
   "kimi-k2.6",
   "kimi-k2.7-code",
+  "kimi-k2.7-code-highspeed",
+  "kimi-k3",
   "kimi-k2-thinking",
   "kimi-k2-thinking-turbo",
   "mimo-v2-pro",

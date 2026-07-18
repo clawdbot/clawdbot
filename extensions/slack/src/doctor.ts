@@ -5,11 +5,13 @@ import {
   createDangerousNameMatchingMutableAllowlistWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, mergeSlackAccountConfig } from "./accounts.js";
 import {
   legacyConfigRules as SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeSlackCompatibilityConfig,
 } from "./doctor-contract.js";
+import { probeSlack } from "./probe.js";
 import { isSlackMutableAllowEntry } from "./security-doctor.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -160,6 +162,67 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
   return [...warnings];
 }
 
+function slackAccountConfigPath(accountId: string): string {
+  return accountId === "default" ? "channels.slack" : `channels.slack.accounts.${accountId}`;
+}
+
+async function collectSlackUserIdentityWarnings(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const accountId of listSlackAccountIds(params.cfg)) {
+    const account = inspectSlackAccount({
+      cfg: params.cfg,
+      accountId,
+      envBotToken: params.env?.SLACK_BOT_TOKEN,
+      envAppToken: params.env?.SLACK_APP_TOKEN,
+      envUserToken: params.env?.SLACK_USER_TOKEN,
+    });
+    if (!account.enabled || account.identity !== "user") {
+      continue;
+    }
+    const path = slackAccountConfigPath(accountId);
+    const mode = account.mode ?? "socket";
+    if (mode === "socket" && account.appTokenStatus === "missing") {
+      warnings.push(
+        `- ${path}: identity "user" in Socket Mode requires appToken for companion-app events.`,
+      );
+    } else if (mode === "http" && account.signingSecretStatus === "missing") {
+      warnings.push(
+        `- ${path}: identity "user" in HTTP mode requires signingSecret for companion-app events.`,
+      );
+    }
+
+    if (!account.userToken) {
+      warnings.push(
+        account.userTokenStatus === "configured_unavailable"
+          ? `- ${path}: userToken is configured but unavailable; Slack auth.test validation was skipped.`
+          : `- ${path}: identity "user" requires userToken for the authorizing human.`,
+      );
+      continue;
+    }
+    const probe = await probeSlack(account.userToken, 2_500, {
+      accountId,
+      identity: "user",
+    });
+    if (!probe.ok) {
+      warnings.push(`- ${path}: userToken auth.test failed: ${probe.error ?? "unknown error"}.`);
+      continue;
+    }
+    const userId = probe.user?.id?.trim();
+    const userName = probe.user?.name?.trim();
+    if (!userId) {
+      warnings.push(`- ${path}: userToken auth.test succeeded but returned no human user_id.`);
+      continue;
+    }
+    warnings.push(
+      `- ${path}: user identity authenticated as ${userName ? `@${userName} ` : ""}(${userId}).`,
+    );
+  }
+  return warnings;
+}
+
 export const slackDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOnly",
   groupModel: "route",
@@ -167,6 +230,8 @@ export const slackDoctor: ChannelDoctorAdapter = {
   warnOnEmptyGroupSenderAllowlist: false,
   legacyConfigRules: SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeSlackCompatibilityConfig,
+  collectPreviewWarnings: async ({ cfg, env }) =>
+    await collectSlackUserIdentityWarnings({ cfg, env }),
   collectMutableAllowlistWarnings: ({ cfg }) => [
     ...collectSlackMutableAllowlistWarnings({ cfg }),
     ...collectSlackNameKeyedChannelWarnings({ cfg }),

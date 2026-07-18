@@ -66,7 +66,7 @@ export function resolveFastModeModelParams(params: {
   return undefined;
 }
 
-export function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
+function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
@@ -148,12 +148,6 @@ export function formatFastModeCommandOptions(params?: { fastAutoOnSeconds?: numb
   return `on, off, ${formatFastModeAutoLabel({
     fastAutoOnSeconds: params?.fastAutoOnSeconds,
   })}, default, status`;
-}
-
-export function normalizeFastModeSource(value: unknown): FastModeSource | undefined {
-  return value === "session" || value === "agent" || value === "config" || value === "default"
-    ? value
-    : undefined;
 }
 
 export function formatFastModeSourceSuffix(source: FastModeSource | undefined): string {

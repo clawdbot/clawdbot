@@ -26,14 +26,17 @@ import {
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  createChannelMessageReplyPipeline,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
@@ -44,9 +47,6 @@ import {
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
-import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   danger,
@@ -83,6 +83,7 @@ import {
   type SignalReactionOpts,
 } from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
+import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import {
   createSignalPendingInboundRegistry,
@@ -154,7 +155,9 @@ function resolveSignalStatusReactionTimestamp(params: {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-type SignalStatusDispatchResult = Awaited<ReturnType<typeof dispatchInboundMessage>>;
+type SignalStatusDispatchResult = {
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+};
 
 function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
   const failedCounts = result.failedCounts;
@@ -329,6 +332,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       route: {
         agentId: route.agentId,
+        dmScope: route.dmScope,
         accountId: route.accountId,
         routeSessionKey: route.sessionKey,
       },
@@ -495,10 +499,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToMode !== "off" && replyThreading?.implicitCurrentMessage !== "deny",
       state: { hasReplied: false },
     };
-    const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
+    };
+    const delivery: ChannelInboundTurnPlan["delivery"] = {
       deliver: async (payload, _info) => {
         await deps.deliverReplies({
           cfg: deps.cfg,
@@ -518,7 +524,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
       },
-    });
+    };
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route,
       sessionKey: route.sessionKey,
@@ -536,12 +542,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           raw: entry,
         }),
         resolveTurn: () => ({
+          cfg: deps.cfg,
           channel: "signal",
           accountId: route.accountId,
-          routeSessionKey: route.sessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
-          recordInboundSession,
           record: {
             updateLastRoute: !entry.isGroup
               ? {
@@ -583,49 +588,39 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             historyMap: deps.groupHistories,
             limit: deps.historyLimit,
           },
-          onPreDispatchFailure: () =>
-            settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => markDispatchIdle(),
-            }),
-          runDispatch: async () => {
-            try {
-              if (statusReactionController) {
-                void statusReactionController.setThinking();
-              }
-              return await dispatchInboundMessage({
-                ctx: ctxPayload,
-                cfg: deps.cfg,
-                dispatcher,
-                replyOptions: {
-                  ...replyOptions,
-                  disableBlockStreaming:
-                    typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-                  ...(statusReactionController
-                    ? {
-                        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-                        allowToolLifecycleWhenProgressHidden: true,
-                        onToolStart: async (payload: { name?: string }) => {
-                          const toolName = payload.name?.trim();
-                          if (toolName) {
-                            await statusReactionController.setTool(toolName);
-                          }
-                        },
-                        onCompactionStart: async () => {
-                          await statusReactionController.setCompacting();
-                        },
-                        onCompactionEnd: async () => {
-                          statusReactionController.cancelPending();
-                          await statusReactionController.setThinking();
-                        },
-                      }
-                    : {}),
-                  onModelSelected,
-                },
-              });
-            } finally {
-              markDispatchIdle();
+          afterRecord: () => {
+            if (statusReactionController) {
+              void statusReactionController.setThinking();
             }
+          },
+          dispatcherOptions,
+          delivery,
+          replyOptions: {
+            ...(entry.turnAdoptionLifecycle
+              ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)
+              : {}),
+            disableBlockStreaming:
+              typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+            ...(statusReactionController
+              ? {
+                  allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+                  allowToolLifecycleWhenProgressHidden: true,
+                  onToolStart: async (payload: { name?: string }) => {
+                    const toolName = payload.name?.trim();
+                    if (toolName) {
+                      await statusReactionController.setTool(toolName);
+                    }
+                  },
+                  onCompactionStart: async () => {
+                    await statusReactionController.setCompacting();
+                  },
+                  onCompactionEnd: async () => {
+                    statusReactionController.cancelPending();
+                    await statusReactionController.setThinking();
+                  },
+                }
+              : {}),
+            onModelSelected,
           },
         }),
         onFinalize: (result) => {
@@ -650,30 +645,96 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
+  // Fan one settlement out to every constituent claim of a (possibly merged)
+  // flush, and track whether the reply lane took ownership. A merged turn owns
+  // ALL constituent queue claims: adoption must complete each of them or the
+  // unmerged events would stall and redeliver duplicates.
+  function buildFlushIngressLifecycle(entries: SignalInboundEntry[]): {
+    lifecycle: SignalIngressLifecycle | undefined;
+    settle: () => Promise<void>;
+  } {
+    const lifecycles = entries
+      .map((entry) => entry.turnAdoptionLifecycle)
+      .filter((lifecycle) => lifecycle !== undefined);
+    const [firstLifecycle] = lifecycles;
+    if (!firstLifecycle) {
+      return { lifecycle: undefined, settle: async () => {} };
+    }
+    let handedOff = false;
+    const adoptAll = async () => {
+      for (const lifecycle of lifecycles) {
+        await lifecycle.onAdopted();
+      }
+    };
+    return {
+      lifecycle: {
+        abortSignal:
+          lifecycles.length === 1
+            ? firstLifecycle.abortSignal
+            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+        onAdopted: async () => {
+          handedOff = true;
+          await adoptAll();
+        },
+        onDeferred: () => {
+          handedOff = true;
+          for (const lifecycle of lifecycles) {
+            lifecycle.onDeferred();
+          }
+        },
+        onAdoptionFinalizing: () => {
+          for (const lifecycle of lifecycles) {
+            lifecycle.onAdoptionFinalizing();
+          }
+        },
+        onAbandoned: async () => {
+          handedOff = true;
+          await Promise.all(
+            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
+          );
+        },
+      },
+      // Terminal no-dispatch (gated, whitespace-only, deliberate skip) must
+      // still tombstone the claims — mirrors the drain's skipped→completed
+      // mapping; leaving them deferred would watchdog-dead-letter live turns.
+      settle: async () => {
+        if (!handedOff) {
+          await adoptAll();
+        }
+      },
+    };
+  }
+
   async function flushSignalInboundEntries(entries: SignalInboundEntry[]): Promise<void> {
     const last = entries.at(-1);
     if (!last) {
       return;
     }
+    const { lifecycle, settle } = buildFlushIngressLifecycle(entries);
     if (entries.length === 1) {
-      await handleSignalInboundMessage(last);
+      await handleSignalInboundMessage(
+        lifecycle ? { ...last, turnAdoptionLifecycle: lifecycle } : last,
+      );
+      await settle();
       return;
     }
     const combinedText = entries
       .map((entry) => entry.bodyText)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     const combinedCommandBody = entries
       .map((entry) => entry.commandBody)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     if (!combinedText.trim()) {
+      await settle();
       return;
     }
     await handleSignalInboundMessage({
       ...last,
       bodyText: combinedText,
       commandBody: combinedCommandBody,
+      ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
       isBatched: true,
       nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
       mediaPath: undefined,
@@ -681,6 +742,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaPaths: undefined,
       mediaTypes: undefined,
     });
+    await settle();
   }
 
   async function retrySignalInboundFlush(
@@ -738,7 +800,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
       // Keep the current keyed debounce task reserved through backoff so a
       // newer same-conversation flush cannot overtake this failed batch.
-      const retryTask = retrySignalInboundFlush(entries, err);
+      const retryTask = retrySignalInboundFlush(entries, err).catch(
+        async (terminalError: unknown) => {
+          // Exhausted retries: release the drain claims so queue retry policy
+          // owns redelivery instead of the stall watchdog dead-lettering them.
+          await Promise.all(
+            entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+          );
+          throw terminalError;
+        },
+      );
       deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
       await retryTask;
     }
@@ -755,13 +826,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     cfg: deps.cfg,
     channel: "signal",
     buildKey: (entry) => resolveSignalInboundDebounceKey(deps.accountId, entry),
-    shouldDebounce: (entry) => {
-      return shouldDebounceTextInbound({
+    shouldDebounce: (entry) =>
+      shouldDebounceTextInbound({
         text: entry.commandBody,
         cfg: deps.cfg,
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
-      });
-    },
+      }),
     onFlush: flushNormalSignalInboundEntries,
     onError: reportSignalInboundFlushError,
     onCancel: pendingInboundRegistry.complete,
@@ -872,7 +942,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     return true;
   }
 
-  return async (event: { event?: string; data?: string }) => {
+  return async (
+    event: { event?: string; data?: string },
+    turnAdoptionLifecycle?: SignalIngressLifecycle,
+  ): Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> => {
     if (event.event !== "receive" || !event.data) {
       return;
     }
@@ -1300,6 +1373,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
+      turnAdoptionLifecycle,
     };
     pendingInboundRegistry.cancelPendingOnAbort(entry, debouncer.cancelKey);
     // Normal and stateful turns stay on the existing ingress path so core session admission owns
@@ -1315,6 +1389,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       await inboundLane.enqueue(entry);
     } finally {
       activeEnqueueEntries.delete(entry);
+    }
+    if (turnAdoptionLifecycle) {
+      // Debounce merging stays on under the drain: the claim defers (held,
+      // watchdog armed) and completes when the merged turn adopts. Returning
+      // completed here would tombstone before the buffered flush dispatches,
+      // losing the message if the gateway dies inside the debounce window.
+      return { kind: "deferred" };
     }
   };
 }

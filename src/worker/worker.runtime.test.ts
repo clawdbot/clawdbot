@@ -43,6 +43,13 @@ import {
 } from "./worker-rpc-clients.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const SESSION_ID = "worker-session";
 const RUN_ID = "worker-run";
 const OWNER_EPOCH = 4;
@@ -591,9 +598,13 @@ class FakeWorkerGateway {
     const toolCallId = "local-exec-call";
     const args = background
       ? {
-          command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-            "setInterval(() => undefined, 1000)",
-          )}`,
+          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
+          command:
+            process.platform === "win32"
+              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+                  "setInterval(() => undefined, 1000)",
+                )}`
+              : "exec sleep 60",
           background: true,
         }
       : { command: "printf worker-local > local-proof.txt" };
@@ -905,7 +916,7 @@ describe("worker runtime", () => {
     const { gateway, launch } = await setup({ inferencePlans: ["hold"] });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await vi.waitFor(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
 
     controller.abort(new Error("operator stopped worker"));
 
@@ -924,12 +935,23 @@ describe("worker runtime", () => {
     });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await vi.waitFor(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
 
-    controller.abort(new Error("operator stopped worker during outage"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const rejected = expect(result).rejects.toThrow("operator stopped worker during outage");
 
-    await expect(result).rejects.toThrow("operator stopped worker during outage");
-    expect(gateway.methods).toContain("worker.inference.cancel");
+      controller.abort(new Error("operator stopped worker during outage"));
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejected;
+      expect(gateway.methods).toContain("worker.inference.cancel");
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -1042,7 +1064,7 @@ describe("worker runtime", () => {
       reason: "owner-epoch-mismatch",
     });
     expect(gateway.inferenceRequests).toHaveLength(2);
-    await vi.waitFor(
+    await waitForFast(
       () => {
         expect(
           listRunningSessions().filter((session) => session.scopeKey === `worker:${SESSION_ID}`),
@@ -1184,7 +1206,7 @@ describe("worker reconnect clients", () => {
     });
     try {
       await connection.start();
-      await vi.waitFor(() => expect(gateway.connectionCount).toBeGreaterThanOrEqual(2));
+      await waitForFast(() => expect(gateway.connectionCount).toBeGreaterThanOrEqual(2));
     } finally {
       await connection.stop();
     }
@@ -1276,7 +1298,7 @@ describe("worker reconnect clients", () => {
           timestamp: 1,
         },
       ]);
-      await vi.waitFor(() => expect(gateway.transcriptRequests).toHaveLength(1));
+      await waitForFast(() => expect(gateway.transcriptRequests).toHaveLength(1));
 
       await connection.stop();
       await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);

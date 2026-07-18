@@ -152,6 +152,56 @@ function replacePluginNodeCapabilityInScopedHostUrl(
   }
 }
 
+function pluginNodeCapabilityFromScopedHostUrl(rawUrl: string): string | undefined {
+  try {
+    const pathname = new URL(rawUrl).pathname;
+    const prefix = `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/`;
+    const markerStart = pathname.indexOf(prefix);
+    if (markerStart < 0) {
+      return undefined;
+    }
+    const capabilityStart = markerStart + prefix.length;
+    const nextSlashIndex = pathname.indexOf("/", capabilityStart);
+    const capabilityEnd = nextSlashIndex >= 0 ? nextSlashIndex : pathname.length;
+    if (capabilityEnd <= capabilityStart) {
+      return undefined;
+    }
+    return normalizeCapability(decodeURIComponent(pathname.slice(capabilityStart, capabilityEnd)));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Detect conflicting scoped capabilities while allowing transport host rewriting. */
+export function pluginNodeCapabilityScopedHostUrlsConflict(first: string, second: string): boolean {
+  const firstCapability = pluginNodeCapabilityFromScopedHostUrl(first);
+  const secondCapability = pluginNodeCapabilityFromScopedHostUrl(second);
+  return Boolean(
+    firstCapability && secondCapability && !safeEqualSecret(firstCapability, secondCapability),
+  );
+}
+
+/** Check whether a client's current scoped surface URL still has live authorization. */
+export function hasAuthorizedClientPluginNodeCapabilityUrl(params: {
+  client: PluginNodeCapabilityClient;
+  surface: PluginNodeCapabilitySurface;
+  url: string;
+  nowMs?: number;
+}): boolean {
+  const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
+  const capability = pluginNodeCapabilityFromScopedHostUrl(params.url);
+  if (!storageKey || !capability) {
+    return false;
+  }
+  const entry = params.client.pluginNodeCapabilities?.[storageKey];
+  const nowMs = params.nowMs ?? Date.now();
+  return Boolean(
+    entry &&
+    isFutureDateTimestampMs(entry.expiresAtMs, { nowMs }) &&
+    safeEqualSecret(entry.capability, capability),
+  );
+}
+
 /** Parse and rewrite scoped capability URLs into canonical paths plus query tokens. */
 export function normalizePluginNodeCapabilityScopedUrl(
   rawUrl: string,

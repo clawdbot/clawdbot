@@ -86,7 +86,9 @@ function killPtyTree(pty: Pick<IPty, "pid" | "kill">, signal?: string): void {
   const sig = (signal ?? "SIGKILL") as NodeJS.Signals;
   try {
     if ((sig === "SIGKILL" || sig === "SIGTERM") && typeof pty.pid === "number" && pty.pid > 0) {
-      signalProcessTree(pty.pid, sig);
+      // forkpty creates a new session/process group; retain descendant cleanup
+      // after the shell exits and only its group remains.
+      signalProcessTree(pty.pid, sig, { detached: true });
     } else if (process.platform === "win32") {
       pty.kill();
     } else {

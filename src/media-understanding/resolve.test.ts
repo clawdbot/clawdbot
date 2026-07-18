@@ -38,6 +38,10 @@ describe("resolveModelEntries", () => {
       providerRegistry,
     });
     expect(imageEntries).toHaveLength(1);
+    expect(imageEntries[0]).toMatchObject({
+      entry: { provider: "openai", model: "gpt-5.4" },
+      secretOwnerId: "media-model:shared:0",
+    });
 
     const audioEntries = resolveModelEntries({
       cfg,
@@ -65,6 +69,7 @@ describe("resolveModelEntries", () => {
       providerRegistry,
     });
     expect(imageEntries).toHaveLength(1);
+    expect(imageEntries[0]?.secretOwnerId).toBe("media-model:image:0");
   });
 
   it("skips shared CLI entries without capabilities", () => {

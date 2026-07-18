@@ -11,6 +11,7 @@ import {
   OLLAMA_DEFAULT_MAX_TOKENS,
   OLLAMA_GLM52_CLOUD_MODEL_ID,
   OLLAMA_GLM52_CONTEXT_WINDOW,
+  OLLAMA_LOCAL_CONTEXT_TOKENS,
 } from "./defaults.js";
 
 export type OllamaTagModel = {
@@ -298,6 +299,25 @@ export function buildOllamaModelDefinition(
         : OLLAMA_DEFAULT_CONTEXT_WINDOW),
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
     compat,
+  };
+}
+
+export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
+  if (typeof model.contextWindow !== "number") {
+    return model;
+  }
+  return {
+    ...model,
+    // Local Ollama allocates KV cache from num_ctx. Keep native metadata, but cap
+    // setup-assistant and typical agent turns at 32k; config overlays remain authoritative.
+    contextTokens: Math.min(OLLAMA_LOCAL_CONTEXT_TOKENS, model.contextWindow),
+  };
+}
+
+export function capLocalOllamaProviderContext(provider: ModelProviderConfig): ModelProviderConfig {
+  return {
+    ...provider,
+    models: provider.models?.map(capLocalOllamaModelContext),
   };
 }
 

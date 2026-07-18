@@ -10,6 +10,7 @@ import {
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  resolveInboundSupplementalSenderAllowed,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -738,18 +739,21 @@ export async function resolveIMessageInboundDecision(params: {
   const replyContextAllowFrom = Array.from(
     new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
   );
-  const replySenderAllowed =
-    !isGroup || replyContextAllowFrom.length === 0
-      ? true
-      : replyContext?.sender
+  const replySenderAllowed = resolveInboundSupplementalSenderAllowed({
+    isGroup,
+    groupPolicy: replyContextAllowFrom.length === 0 ? "open" : "allowlist",
+    allowFrom: replyContextAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      replyContext?.sender
         ? isAllowedIMessageReplyContextSender({
-            allowFrom: replyContextAllowFrom,
+            allowFrom: [...allowFrom],
             sender: replyContext.sender,
             chatId,
             chatGuid,
             chatIdentifier,
           })
-        : false;
+        : false,
+  });
   const visibleReply = filterChannelInboundQuoteContext(
     contextVisibilityMode,
     replyContext
@@ -1023,6 +1027,7 @@ export async function buildIMessageInboundContext(params: {
     },
     route: {
       agentId: decision.route.agentId,
+      dmScope: decision.route.dmScope,
       accountId: decision.route.accountId,
       routeSessionKey: decision.route.sessionKey,
     },

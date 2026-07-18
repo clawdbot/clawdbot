@@ -1,15 +1,13 @@
 // Googlechat plugin module implements monitor behavior.
 import {
   recordChannelBotPairLoopAndCheckSuppression,
+  resolveChannelInboundRouteEnvelope,
   type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
-import {
-  resolveInboundRouteEnvelopeBuilderWithRuntime,
-  resolveWebhookPath,
-} from "../runtime-api.js";
+import { resolveWebhookPath } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
@@ -252,7 +250,7 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: config,
     channel: "googlechat",
     accountId: account.accountId,
@@ -260,8 +258,6 @@ async function processMessageWithPipeline(params: {
       kind: isGroup ? ("group" as const) : ("direct" as const),
       id: spaceId,
     },
-    runtime: core.channel,
-    sessionStore: config.session?.store,
   });
 
   let mediaPath: string | undefined;
@@ -279,7 +275,7 @@ async function processMessageWithPipeline(params: {
     ? space.displayName || `space:${spaceId}`
     : senderName || `user:${senderId}`;
   const timestampMs = resolveGoogleChatTimestampMs(event.eventTime);
-  const { storePath, body } = buildEnvelope({
+  const body = buildEnvelope({
     channel: "Google Chat",
     from: fromLabel,
     timestamp: timestampMs,
@@ -307,6 +303,7 @@ async function processMessageWithPipeline(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },
@@ -399,13 +396,8 @@ async function processMessageWithPipeline(params: {
         cfg: config,
         channel: "googlechat",
         accountId: route.accountId,
-        agentId: route.agentId,
-        routeSessionKey: route.sessionKey,
-        storePath,
+        route: { agentId: route.agentId, sessionKey: route.sessionKey },
         ctxPayload,
-        recordInboundSession: core.channel.session.recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher:
-          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
         delivery: {
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({

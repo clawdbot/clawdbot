@@ -153,7 +153,7 @@ describe("getSlashCommands", () => {
     expect(names).toEqual(
       expect.not.arrayContaining(["commands", "status", "compact", "context", "tools"]),
     );
-    expect(names).toEqual(expect.arrayContaining(["goal", "btw", "side", "stop", "t"]));
+    expect(names).toEqual(expect.arrayContaining(["goal", "btw", "side", "queue", "stop", "t"]));
   });
 });
 

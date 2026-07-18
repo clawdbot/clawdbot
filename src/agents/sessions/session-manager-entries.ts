@@ -127,7 +127,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       id: generateSessionEntryId(this.byId),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
-      name: name.trim(),
+      name: name.replace(/[\r\n]+/g, " ").trim(),
     };
     this.appendEntry(entry);
     return entry.id;
@@ -222,12 +222,13 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       const current = this.byId.get(currentId);
       if (current) {
         const normalizedCurrent = this.normalizeEntryParent(current);
-        path.unshift(normalizedCurrent);
+        path.push(normalizedCurrent);
         currentId = normalizedCurrent.parentId;
       } else {
         currentId = this.opaqueParentsById.get(currentId) ?? null;
       }
     }
+    path.reverse();
     return path;
   }
 

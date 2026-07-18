@@ -72,7 +72,7 @@ const releaseTasks = [
   },
   {
     id: "plugin-sdk-api",
-    name: "plugin SDK API baseline",
+    name: "plugin SDK API contract manifest",
     scopes: ["plugin-sdk"],
     fix: pnpmCommand("plugin-sdk:api:gen"),
     fixAfter: ["plugin-sdk-exports"],
@@ -83,6 +83,13 @@ const releaseTasks = [
     name: "plugin SDK surface budget",
     scopes: ["plugin-sdk"],
     check: pnpmCommand("plugin-sdk:surface:check"),
+  },
+  {
+    id: "control-ui-i18n",
+    name: "Control UI locale bundles",
+    scopes: ["version"],
+    fix: pnpmCommand("ui:i18n:sync"),
+    check: pnpmCommand("ui:i18n:check"),
   },
 ];
 const selectedTasks = releaseTasks.filter((task) => taskMatchesScopes(task, parsedArgs.scopes));

@@ -371,6 +371,13 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/browser-cdp-snapshot.test.ts"],
       ],
       [
+        "scripts/e2e/lib/codex-app-server-fixture.mjs",
+        [
+          "test/scripts/codex-media-path-client.test.ts",
+          "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+        ],
+      ],
+      [
         "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs",
         ["test/scripts/codex-media-path-client.test.ts"],
       ],
@@ -380,7 +387,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs",
-        ["test/scripts/codex-media-path-client.test.ts"],
+        [
+          "test/scripts/codex-media-path-client.test.ts",
+          "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+        ],
       ],
       [
         "scripts/e2e/lib/codex-media-path/limits.mjs",
@@ -602,6 +612,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/incremental-line-reader.test.ts",
           "test/scripts/config-reload-log-scanner.test.ts",
           "test/scripts/codex-media-path-client.test.ts",
+          "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
         ],
       ],
       [
@@ -1432,7 +1443,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps CI, dependency, and docs tooling edits on owner tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/ci-changed-scope.mjs"])).toEqual({
       mode: "targets",
-      targets: ["src/scripts/ci-changed-scope.test.ts"],
+      targets: ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
     });
 
     expect(resolveChangedTestTargetPlan(["scripts/check-dependency-pins.mjs"])).toEqual({
@@ -1852,6 +1863,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/official-external-provider-catalog.json",
         ["src/plugins/official-external-plugin-catalog.test.ts", "test/release-check.test.ts"],
       ],
+      [
+        "scripts/lib/recommended-tool-installs.json",
+        ["src/plugins/recommended-tool-installs.test.ts", "test/release-check.test.ts"],
+      ],
       ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
       ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
       [
@@ -1899,6 +1914,10 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],
+      ],
+      [
+        ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+        ["test/scripts/ci-workflow-guards.test.ts"],
       ],
       [
         ".github/actions/setup-pnpm-store-cache/action.yml",
@@ -2147,8 +2166,17 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
       ],
       [
+        "scripts/lib/generated-text-asset.mjs",
+        [
+          "extensions/browser/scripts/build-copilot-runtime.test.ts",
+          "test/scripts/build-diffs-viewer-runtime.test.ts",
+          "test/scripts/bundled-plugin-assets.test.ts",
+        ],
+      ],
+      [
         "scripts/lib/static-extension-assets.mjs",
         [
+          "test/scripts/bundled-plugin-assets.test.ts",
           "test/scripts/runtime-postbuild.test.ts",
           "src/infra/run-node.test.ts",
           "test/scripts/plugin-npm-runtime-build-args.test.ts",

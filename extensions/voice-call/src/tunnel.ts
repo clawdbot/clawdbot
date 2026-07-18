@@ -174,8 +174,12 @@ async function startNgrokTunnel(config: {
       }
     };
 
-    proc.stdout.on("data", (data: Buffer) => {
-      const lines = (outputBuffer + data.toString()).split("\n");
+    // Decode pipes statefully so a multibyte UTF-8 code point split across
+    // chunk boundaries does not become U+FFFD in startup logs / ERR_NGROK text.
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      const lines = (outputBuffer + chunk).split("\n");
       outputBuffer = lines.pop() || "";
       if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
         // Same UTF-16 contract as appendBoundedChildOutput: do not leave a lone
@@ -189,8 +193,8 @@ async function startNgrokTunnel(config: {
         }
       }
     });
-    proc.stderr.on("data", (data: Buffer) => {
-      const combined = stderrTail + data.toString();
+    proc.stderr.on("data", (chunk: string) => {
+      const combined = stderrTail + chunk;
       if (combined.includes(NGROK_ERROR_MARKER)) {
         rejectIfPending(
           `ngrok error: ${formatBoundedChildOutput(

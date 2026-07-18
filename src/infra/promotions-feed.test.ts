@@ -220,6 +220,43 @@ describe("promotions feed state", () => {
     expect(state.lastCheckedAtMs).toBe(NOW + 60_000);
   });
 
+  it("keeps the cached snapshot when a refresh has calendar-invalid timestamps", async () => {
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload(), headers: { etag: '"v4"' } },
+    });
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: {
+        json: feedPayload({
+          generatedAt: "2026-02-30T00:00:00.000Z",
+          sequence: 5,
+          entries: [],
+        }),
+        headers: { etag: '"v5"' },
+      },
+    });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
+
+    const rejected = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      force: true,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(rejected.sequence).toBe(4);
+    expect(rejected.etag).toBe('"v4"');
+    expect(rejected.entries).toHaveLength(1);
+
+    const cached = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 61_000,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(mockHttp.requests()).toHaveLength(2);
+    expect(cached.sequence).toBe(4);
+    expect(cached.etag).toBe('"v4"');
+    expect(cached.entries).toHaveLength(1);
+  });
+
   it("persists and deduplicates notified promotion slugs", async () => {
     markPromotionSlugsNotified(["example-models-launch", "second-offer"]);
     markPromotionSlugsNotified(["example-models-launch"]);

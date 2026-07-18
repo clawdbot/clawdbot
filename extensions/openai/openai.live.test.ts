@@ -17,7 +17,7 @@ import {
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 

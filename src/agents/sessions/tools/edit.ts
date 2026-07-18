@@ -53,7 +53,7 @@ const replaceEditSchema = Type.Object(
       description: "Replacement text.",
     }),
   },
-  { additionalProperties: false },
+  {},
 );
 
 const editSchema = Type.Object(
@@ -66,8 +66,21 @@ const editSchema = Type.Object(
         "Targeted replacements against original file; no overlap/nesting. Merge nearby changes.",
     }),
   },
-  { additionalProperties: false },
+  {},
 );
+
+const EditToolOutputSchema = Type.Union([
+  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
+  Type.Object(
+    {
+      changed: Type.Literal(true),
+      diff: Type.String(),
+      patch: Type.String(),
+      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
+    },
+    { additionalProperties: false },
+  ),
+]);
 type LegacyEditToolInput = Record<string, unknown> & {
   edits?: unknown;
   oldText?: unknown;
@@ -309,7 +322,7 @@ function formatEditResult(
     return theme.fg("error", errorText);
   }
 
-  const resultDiff = result.details?.diff;
+  const resultDiff = result.details?.changed === true ? result.details.diff : undefined;
   if (resultDiff && resultDiff !== previewDiff) {
     return renderDiff(resultDiff);
   }
@@ -379,7 +392,7 @@ function setEditPreview(
 export function createEditToolDefinition(
   cwd: string,
   options?: EditToolOptions,
-): ToolDefinition<typeof editSchema, EditToolDetails | undefined, EditRenderState> {
+): ToolDefinition<typeof editSchema, EditToolDetails, EditRenderState> {
   const ops = options?.operations ?? defaultEditOperations;
   return {
     name: "edit",
@@ -394,6 +407,7 @@ export function createEditToolDefinition(
       "oldText minimal but unique; no padding",
     ],
     parameters: editSchema,
+    outputSchema: EditToolOutputSchema,
     renderShell: "self",
     prepareArguments: prepareEditArguments,
     async execute(toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, ctx?) {
@@ -440,7 +454,7 @@ export function createEditToolDefinition(
             return {
               ...textResult(
                 `No changes made to ${path}. The replacement text is identical to the original.`,
-                undefined,
+                { changed: false } satisfies EditToolDetails,
               ),
               terminate: true,
             };
@@ -466,9 +480,12 @@ export function createEditToolDefinition(
               },
             ],
             details: {
+              changed: true,
               diff: diffResult.diff,
               patch,
-              firstChangedLine: diffResult.firstChangedLine,
+              ...(diffResult.firstChangedLine === undefined
+                ? {}
+                : { firstChangedLine: diffResult.firstChangedLine }),
             },
           };
         } catch (error: unknown) {
@@ -491,7 +508,7 @@ export function createEditToolDefinition(
                   text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
                 },
               ],
-              details: { diff: "", patch: "" },
+              details: { changed: true, diff: "", patch: "" },
             };
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
@@ -502,7 +519,7 @@ export function createEditToolDefinition(
             return {
               ...textResult(
                 `No changes made to ${path}. The replacement produced identical content.`,
-                undefined,
+                { changed: false } satisfies EditToolDetails,
               ),
               terminate: true,
             };
@@ -550,7 +567,10 @@ export function createEditToolDefinition(
         ? JSON.stringify({ path: previewInput.path, edits: previewInput.edits })
         : undefined;
       const typedResult = result as EditToolResultLike;
-      const resultDiff = !context.isError ? typedResult.details?.diff : undefined;
+      const resultDiff =
+        !context.isError && typedResult.details?.changed === true
+          ? typedResult.details.diff
+          : undefined;
       let changed = false;
       if (callComponent) {
         if (typeof resultDiff === "string") {
@@ -559,7 +579,10 @@ export function createEditToolDefinition(
               callComponent,
               {
                 diff: resultDiff,
-                firstChangedLine: typedResult.details?.firstChangedLine,
+                firstChangedLine:
+                  typedResult.details?.changed === true
+                    ? typedResult.details.firstChangedLine
+                    : undefined,
               },
               argsKey,
             ) || changed;

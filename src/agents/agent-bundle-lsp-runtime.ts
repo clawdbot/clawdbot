@@ -373,7 +373,7 @@ function hasLspProcessExited(child: ChildProcess): boolean {
 function terminateLspProcessTree(session: LspSession): void {
   const pid = session.process.pid;
   if (pid && !hasLspProcessExited(session.process)) {
-    session.killProcessTree(pid, { graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS });
+    session.killProcessTree(pid, { graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS, detached: true });
     return;
   }
   if (!hasLspProcessExited(session.process)) {

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { editorOpenUrl } from "../../../lib/editor-links.ts";
+import { openEditor } from "../../../lib/editor-links.ts";
 import { hasUniformLineEndings } from "./chat-sidebar.ts";
 
 describe("hasUniformLineEndings", () => {
@@ -19,35 +19,42 @@ describe("hasUniformLineEndings", () => {
   });
 });
 
-describe("editorOpenUrl", () => {
-  it("creates a custom editor URL for a plain path", () => {
-    expect(editorOpenUrl("cursor", "/workspace/src/foo.ts")).toBe(
+describe("openEditor", () => {
+  it.each([
+    [
+      "plain path",
+      "cursor",
+      "/workspace/src/foo.ts",
+      undefined,
       "cursor://file/workspace/src/foo.ts",
-    );
-  });
-
-  it("encodes spaces in paths", () => {
-    expect(editorOpenUrl("vscode", "/workspace/My File.ts")).toBe(
+    ],
+    [
+      "spaces",
+      "vscode",
+      "/workspace/My File.ts",
+      undefined,
       "vscode://file/workspace/My%20File.ts",
-    );
-  });
-
-  it("appends a target line", () => {
-    expect(editorOpenUrl("zed", "/workspace/src/foo.ts", 42)).toBe(
-      "zed://file/workspace/src/foo.ts:42",
-    );
-  });
-
-  it("normalizes Windows paths", () => {
-    expect(editorOpenUrl("vscode", "C:\\workspace\\src\\foo.ts", 42)).toBe(
+    ],
+    ["target line", "zed", "/workspace/src/foo.ts", 42, "zed://file/workspace/src/foo.ts:42"],
+    [
+      "Windows path",
+      "vscode",
+      "C:\\workspace\\src\\foo.ts",
+      42,
       "vscode://file/C:/workspace/src/foo.ts:42",
-    );
-  });
-
-  it("encodes URL-significant path characters", () => {
-    expect(editorOpenUrl("windsurf", "/workspace/#notes?.md")).toBe(
+    ],
+    [
+      "URL-significant characters",
+      "windsurf",
+      "/workspace/#notes?.md",
+      undefined,
       "windsurf://file/workspace/%23notes%3F.md",
-    );
+    ],
+  ] as const)("opens the encoded custom URL for %s", (_name, editor, path, line, expected) => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    openEditor(editor, path, line);
+    expect(open).toHaveBeenCalledWith(expected);
+    open.mockRestore();
   });
 });
 

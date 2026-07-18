@@ -11,6 +11,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Enterprise Grid Org Install",
     help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
+  identity: {
+    label: "Slack Identity",
+    help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
     dmPolicy: { channelKey: "slack", includeLegacyNestedPolicy: true },
@@ -21,6 +25,7 @@ export const slackChannelConfigUiHints = {
       denyNote: "Native @mentions still trigger.",
     },
     nativeCommands: true,
+    implicitMentions: true,
   }),
   allowBots: {
     label: "Slack Allow Bot Messages",
@@ -209,9 +214,5 @@ export const slackChannelConfigUiHints = {
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
-  },
-  "thread.requireExplicitMention": {
-    label: "Slack Thread Require Explicit Mention",
-    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

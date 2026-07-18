@@ -1294,7 +1294,7 @@ describe("cron service ops persist rollback", () => {
     expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
-  it("keeps a job's catch-up deferral marker when a remove persist fails", async () => {
+  it("restores a job's catch-up deferral when a remove persist fails", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
     const state = createOkIsolatedCronState({ storePath, now });
@@ -1303,13 +1303,13 @@ describe("cron service ops persist rollback", () => {
     if (state.timer) {
       clearTimeout(state.timer);
     }
-    state.pendingCatchupDeferralJobIds.add(job.id);
+    job.state.startupCatchupAtMs = now + 5_000;
 
     vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
 
     await expect(remove(state, job.id)).rejects.toThrow("disk full");
 
-    expect(state.pendingCatchupDeferralJobIds.has(job.id)).toBe(true);
+    expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
     expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 

@@ -1,10 +1,11 @@
 /**
  * Version and package pins for the managed Codex app-server runtime.
  */
-// The floor tracks the managed package train. Every protocol shape OpenClaw
-// sends or reads assumes this floor; range-compat normalizers were removed
-// with the 0.143 bump, so lowering it requires reintroducing them.
+// The supported range tracks protocol shapes validated against the managed
+// package. Raising the ceiling requires regenerating schemas from that tag.
 /** Minimum Codex app-server version supported by the OpenClaw Codex bridge. */
 export const MIN_CODEX_APP_SERVER_VERSION = "0.143.0";
+/** Newest Codex app-server version validated by the OpenClaw Codex bridge. */
+export const MAX_CODEX_APP_SERVER_VERSION = "0.144.5";
 /** npm package name for the managed Codex app-server binary. */
 export const MANAGED_CODEX_APP_SERVER_PACKAGE = "@openai/codex";

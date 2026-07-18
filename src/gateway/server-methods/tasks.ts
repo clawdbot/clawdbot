@@ -158,7 +158,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, { task: mapTaskSummary(task) });
+    // The potentially longer task input is lookup-only. List and event payloads
+    // stay compact while detail views can show the operator what was requested.
+    respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
   "tasks.cancel": async ({ params, respond, context }) => {
     if (!validateTasksCancelParams(params)) {

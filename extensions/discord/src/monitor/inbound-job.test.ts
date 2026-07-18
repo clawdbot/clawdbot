@@ -143,12 +143,11 @@ describe("buildDiscordInboundJob", () => {
 
   it("re-materializes the process context with an overridden abort signal", async () => {
     const ctx = await createBaseDiscordMessageContext();
-    const replayClaim = {
-      keys: ["default:ch-1:m-1"] as const,
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
+    const ingressSettlement = {
+      settle: vi.fn(async () => {}),
+      abandon: vi.fn(async () => {}),
     };
-    const job = buildDiscordInboundJob(ctx, { replayClaims: [replayClaim] });
+    const job = buildDiscordInboundJob(ctx, { ingressSettlement });
     const overrideAbortController = new AbortController();
 
     const rematerialized = materializeDiscordInboundJob(job, overrideAbortController.signal);
@@ -159,7 +158,7 @@ describe("buildDiscordInboundJob", () => {
     expect(rematerialized.abortSignal).toBe(overrideAbortController.signal);
     expect(rematerialized.message).toEqual(job.payload.message);
     expect(rematerialized.data).toEqual(job.payload.data);
-    expect(job.replayClaims).toEqual([replayClaim]);
+    expect(job.ingressSettlement).toBe(ingressSettlement);
   });
 
   it("preserves Discord message getters across queued jobs", async () => {

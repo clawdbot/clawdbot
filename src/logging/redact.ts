@@ -1,3 +1,15 @@
+import {
+  CREDENTIAL_STYLE_HEADER_REDACT_PATTERN,
+  findStructuredAuthParamRanges,
+  HTTP_AUTH_HEADER_BOUNDARY_PATTERN,
+  HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN,
+  HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN,
+  HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN,
+  HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN,
+  HTTP_AUTH_SCHEME_PATTERN,
+  HTTP_AUTH_SERIALIZED_QUOTE_PATTERN,
+  redactStructuredAuthHeaders,
+} from "@openclaw/acp-core";
 import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -130,6 +142,17 @@ const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-
 const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+const HTTP_AUTH_HEADER_REDACT_PATTERNS = [
+  String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}${HTTP_AUTH_SCHEME_PATTERN}${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
+  String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})[ \t]*(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
+  String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic|Bot)(?=${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}))${HTTP_AUTH_SCHEME_PATTERN}${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
+  String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic|Bot)(?=${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}))(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})[ \t]*(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
+  CREDENTIAL_STYLE_HEADER_REDACT_PATTERN,
+] as const;
+const AUTHORIZATION_BEARER_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bearer${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`;
+const AUTHORIZATION_BASIC_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Basic${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`;
+const AUTHORIZATION_BOT_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bot${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`;
+const STANDALONE_BEARER_REDACT_PATTERN = String.raw`\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])`;
 const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
@@ -139,6 +162,11 @@ const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
 const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
   TELEGRAM_TOKEN_REDACT_PATTERN,
+  AUTHORIZATION_BEARER_REDACT_PATTERN,
+  AUTHORIZATION_BASIC_REDACT_PATTERN,
+  AUTHORIZATION_BOT_REDACT_PATTERN,
+  STANDALONE_BEARER_REDACT_PATTERN,
+  ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
 ]);
 const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
@@ -162,11 +190,12 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // CLI flags.
   String.raw`--(?:api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${PAYMENT_CREDENTIAL_QUERY_KEYS})\s+(?!(?:or|and)\b(?=\s+--))(["']?)([^\s"']+)\1`,
   // Authorization headers.
-  String.raw`Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)`,
-  String.raw`Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)`,
-  String.raw`Authorization\s*[:=]\s*Bot\s+([A-Za-z0-9._\-+=]{18,})`,
+  AUTHORIZATION_BEARER_REDACT_PATTERN,
+  AUTHORIZATION_BASIC_REDACT_PATTERN,
+  AUTHORIZATION_BOT_REDACT_PATTERN,
+  ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
   String.raw`(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)`,
-  String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
+  STANDALONE_BEARER_REDACT_PATTERN,
   // URL userinfo and common connection-string password slots.
   String.raw`\b(?:https?|wss?|ftp):\/\/[^\/\s:@]*:([^\/\s@]+)@`,
   String.raw`\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^:\s/@]*:([^@\s]+)@`,
@@ -301,6 +330,7 @@ export type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: RegExp[];
   redactFormBodies: boolean;
+  redactStructuredAuthHeaders?: boolean;
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
@@ -865,9 +895,16 @@ function redactMatch(
 function redactText(
   text: string,
   patterns: RegExp[],
-  options?: { fullContext?: boolean; redactFormBodies?: boolean },
+  options?: {
+    fullContext?: boolean;
+    redactFormBodies?: boolean;
+    redactStructuredAuthHeaders?: boolean;
+  },
 ): string {
   let next = text;
+  if (options?.redactStructuredAuthHeaders) {
+    next = redactStructuredAuthHeaders(next, "***");
+  }
   if (options?.redactFormBodies) {
     next = redactUrlQueryPairs(next);
     next = redactFormBody(next);
@@ -947,6 +984,11 @@ export function computeSensitiveRedactionBitmap(
   if (resolved.mode === "off" || !resolved.patterns.length || !text) {
     return bitmap;
   }
+  if (resolved.redactStructuredAuthHeaders) {
+    for (const range of findStructuredAuthParamRanges(text)) {
+      markBitmapRange(bitmap, range.start, range.end);
+    }
+  }
   if (resolved.redactFormBodies) {
     markUrlQueryPairRedactions(text, bitmap);
     markFormBodyRedactions(text, bitmap);
@@ -990,10 +1032,12 @@ export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOpt
     };
   }
   const patterns = resolvePatterns(resolved.patterns);
+  const includesDefaults = patterns.length > 0 && includesDefaultRedactPatterns(resolved.patterns);
   return {
     mode,
     patterns,
-    redactFormBodies: patterns.length > 0 && includesDefaultRedactPatterns(resolved.patterns),
+    redactFormBodies: includesDefaults,
+    redactStructuredAuthHeaders: includesDefaults,
   };
 }
 
@@ -1015,6 +1059,7 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   }
   return redactText(exactRedacted, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
+    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
   });
 }
 
@@ -1053,6 +1098,7 @@ export function redactToolPayloadTextWithConfig(
     return redactText(exactRedacted, resolved.patterns, {
       fullContext: true,
       redactFormBodies: resolved.redactFormBodies,
+      redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
     });
   }
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
@@ -1075,6 +1121,7 @@ function redactSensitiveFieldValueWithOptions(
   }
   const redacted = redactText(exactRedacted, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
+    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
   });
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
@@ -1238,6 +1285,10 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
   const redactedLines = resolved.redactFormBodies
     ? lines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
     : lines;
-  return redactText(redactedLines.join("\n"), resolved.patterns).split("\n");
+  let redacted = redactedLines.join("\n");
+  if (resolved.redactStructuredAuthHeaders) {
+    redacted = redactStructuredAuthHeaders(redacted, "***");
+  }
+  return redactText(redacted, resolved.patterns).split("\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

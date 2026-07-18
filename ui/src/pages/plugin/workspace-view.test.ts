@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkspaceState } from "../../lib/workspace/index.ts";
 import { stopWorkspace } from "./workspace-controller.ts";
-import { renderWorkspace } from "./workspace-view.ts";
+import { renderWorkspace as renderWorkspaceView } from "./workspace-view.ts";
+
+function renderWorkspace(
+  props: Omit<Parameters<typeof renderWorkspaceView>[0], "onRequestUpdate">,
+) {
+  return renderWorkspaceView({ ...props, onRequestUpdate: () => undefined });
+}
 
 function renderView(host: object): HTMLElement {
   const container = document.createElement("div");
@@ -82,6 +88,19 @@ describe("renderWorkspace", () => {
     state.activeSlug = "empty";
     const container = renderView(host);
     expect(container.querySelector('[data-test-id="workspace-empty-tab"]')).not.toBeNull();
+  });
+
+  it("renders the first widget full bleed without grid chrome", () => {
+    const host = {};
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.workspace = structuredClone(doc);
+    state.workspace.tabs[0]!.layout = "full";
+    state.activeSlug = "main";
+    const container = renderView(host);
+    expect(container.querySelector('[data-test-id="workspace-fullbleed"]')).not.toBeNull();
+    expect(container.querySelector('[data-test-id="workspace-grid"]')).toBeNull();
+    expect(container.textContent).toContain("hello");
   });
 
   it("surfaces an action error toast", () => {
@@ -221,6 +240,82 @@ describe("renderWorkspace", () => {
       stopWorkspace(host);
       host.remove();
       vi.useRealTimers();
+    }
+  });
+
+  it("refreshes agent status when the canonical session list advances", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const state = getWorkspaceState(host);
+    let active = false;
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.list"
+        ? { sessions: [{ key: "agent:main", hasActiveRun: active }] }
+        : { total: 42 },
+    );
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => undefined),
+    } as unknown as GatewayBrowserClient;
+    state.loaded = true;
+    state.activeSlug = "main";
+    state.workspace = {
+      schemaVersion: 1,
+      workspaceVersion: 1,
+      tabs: [
+        {
+          slug: "main",
+          title: "Main",
+          hidden: false,
+          widgets: [
+            {
+              id: "status",
+              kind: "builtin:agent-status",
+              title: "Agent status",
+              grid: { x: 0, y: 0, w: 6, h: 3 },
+              collapsed: false,
+              bindings: { value: { source: "rpc", method: "sessions.list" } },
+            },
+            {
+              id: "usage",
+              kind: "builtin:usage",
+              title: "Usage",
+              grid: { x: 6, y: 0, w: 6, h: 3 },
+              collapsed: false,
+              bindings: { value: { source: "rpc", method: "usage.status" } },
+            },
+          ],
+        },
+      ],
+      widgetsRegistry: {},
+      prefs: { tabOrder: ["main"] },
+    };
+
+    try {
+      render(renderWorkspace({ host, client, connected: true }), host);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        render(renderWorkspace({ host, client, connected: true }), host);
+        expect(
+          host.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
+        ).toContain("Idle");
+      });
+
+      active = true;
+      render(renderWorkspace({ host, client, connected: true, sessionListRevision: 1 }), host);
+      await vi.waitFor(() => {
+        expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
+      });
+      await vi.waitFor(() => {
+        render(renderWorkspace({ host, client, connected: true, sessionListRevision: 1 }), host);
+        expect(
+          host.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
+        ).toContain("Busy");
+      });
+      expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(1);
+    } finally {
+      stopWorkspace(host);
+      host.remove();
     }
   });
 

@@ -22,6 +22,8 @@ import {
 } from "../memory-host-sdk/multimodal.js";
 import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { clampInt, clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -481,6 +483,7 @@ export function resolveMemorySearchConfig(
   if (!resolved.enabled) {
     return null;
   }
+  assertSecretOwnerAvailable("capability", runtimeMemorySecretOwnerId(agentId));
   const isFtsOnly = normalizeProviderId(resolved.provider) === "none";
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider = isFtsOnly

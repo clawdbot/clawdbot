@@ -78,7 +78,7 @@ DM-specific keys only match in direct-message conversations; they do not affect 
 
 ### Channel defaults and heartbeat
 
-Use `channels.defaults` for shared group-policy and heartbeat behavior across providers:
+Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat behavior across providers:
 
 ```json5
 {
@@ -86,6 +86,11 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
     defaults: {
       groupPolicy: "allowlist", // open | allowlist | disabled
       contextVisibility: "all", // all | allowlist | allowlist_quote
+      implicitMentions: {
+        replyToBot: true,
+        quotedBot: true,
+        threadParticipation: true,
+      },
       heartbeat: {
         showOk: false,
         showAlerts: true,
@@ -98,6 +103,7 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
 
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
+- `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. Override per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`; each flag resolves account -> channel -> defaults independently. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. These settings do not change outbound reply/thread modes or authorized command handling.
 - `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output (default `false`).
 - `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
 - `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output (default `true`).
@@ -501,6 +507,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- **User identity** (`identity: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
 - `enterpriseOrgInstall: true` opts an account into the Slack Enterprise Grid
   org-wide event path. Startup verifies the bot token with `auth.test` and
   fails when the configured mode does not match Slack's installation identity.
@@ -519,8 +526,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
-  `botTokenSource`, `botTokenStatus`, `appTokenStatus`, and, in HTTP mode,
-  `signingSecretStatus`. `configured_unavailable` means the account is
+  `botTokenSource`, `botTokenStatus`, `userTokenSource`, `userTokenStatus`,
+  `appTokenStatus`, and, in HTTP mode, `signingSecretStatus`.
+  `configured_unavailable` means the account is
   configured through SecretRef but the current command/runtime path could not
   resolve the secret value.
 - `configWrites: false` blocks Slack-initiated config writes.

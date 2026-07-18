@@ -216,7 +216,7 @@ function delayedBodyStream(
   };
 }
 const wsMockState = vi.hoisted(() => ({
-  behavior: "close" as "close" | "open" | "error" | "unexpected-response",
+  behavior: "close" as "close" | "open" | "error" | "message" | "unexpected-response",
   urls: [] as string[],
   options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
 }));
@@ -277,6 +277,9 @@ vi.mock("ws", () => ({
           this.emit("error", new Error("WebSocket failed"));
         } else if (wsMockState.behavior === "unexpected-response") {
           this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
+        } else if (wsMockState.behavior === "message") {
+          this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
+          this.emit("close", 1000, Buffer.from("done"));
         } else {
           this.emit("close", 1000, Buffer.from("done"));
         }
@@ -1477,6 +1480,21 @@ describe("streamContainerEvents", () => {
     const abortHandler = addEventListener.mock.calls.find((call) => call[0] === "abort")?.[1];
     expect(abortHandler).toBeTypeOf("function");
     expect(removeEventListener).toHaveBeenCalledWith("abort", abortHandler);
+  });
+
+  it("propagates receive-handler failures to the stream", async () => {
+    wsMockState.behavior = "message";
+    const appendError = new Error("durable append failed");
+
+    await expect(
+      streamContainerEvents({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        onEvent: async () => {
+          throw appendError;
+        },
+      }),
+    ).rejects.toBe(appendError);
   });
 });
 

@@ -103,8 +103,7 @@ describe("runAgentTurnWithFallback: command events", () => {
       phase: "update",
       title: "Assistant proposed a plan",
       explanation: "Inspect code, patch it, run tests.",
-      steps: ["Inspect code", "Patch code", "Run tests", "legacy string"],
-      planSteps: [
+      steps: [
         { step: "Inspect code", status: "completed" },
         { step: "Patch code", status: "in_progress" },
         { step: "Run tests", status: "pending" },

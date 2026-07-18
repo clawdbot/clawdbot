@@ -16,6 +16,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.firstGraphemeOrNull
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -311,8 +312,8 @@ fun ShellScreen(
               nav.openSettingsRoute(SettingsRoute.Home)
               commandOpen = false
             },
-            onOpenSession = { sessionKey ->
-              viewModel.switchChatSession(sessionKey)
+            onOpenSession = { sessionKey, ownerAgentId ->
+              viewModel.switchChatSession(sessionKey, ownerAgentId)
               nav.selectTab(Tab.Chat)
               commandOpen = false
             },
@@ -562,8 +563,8 @@ private fun OverviewScreen(
           item {
             RecentSessionList(
               rows = visibleRecentRows,
-              onOpen = { sessionKey ->
-                viewModel.switchChatSession(sessionKey)
+              onOpen = { sessionKey, ownerAgentId ->
+                viewModel.switchChatSession(sessionKey, ownerAgentId)
                 onSelectTab(Tab.Chat)
               },
             )
@@ -850,6 +851,12 @@ internal fun localizedUppercase(
   languageTag: String?,
   fallbackLocale: Locale = Locale.getDefault(),
 ): String = value.uppercase(languageTag?.let(Locale::forLanguageTag) ?: fallbackLocale)
+
+internal fun localizedInitial(
+  value: String,
+  languageTag: String?,
+  fallbackLocale: Locale = Locale.getDefault(),
+): String? = value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
 
 @Composable
 private fun OverviewProgressBar(
@@ -1198,7 +1205,7 @@ private fun agentInitials(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { part -> part.firstOrNull()?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) } }
+    .mapNotNull { part -> localizedInitial(part, currentAppLanguage().languageTag) }
     .joinToString("")
     .ifBlank { "OC" }
 
@@ -1382,6 +1389,7 @@ internal data class RecentSessionListItem(
   val title: String,
   val source: String,
   val metadata: String,
+  val ownerAgentId: String? = null,
 )
 
 internal fun overviewRecentSessionRows(
@@ -1394,6 +1402,7 @@ internal fun overviewRecentSessionRows(
       val title = displaySessionTitle(session.displayName)
       RecentSessionListItem(
         key = session.key,
+        ownerAgentId = session.ownerAgentId,
         title = title,
         source = sessionSourceLabel(session.key, channelsSummary),
         metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::overviewRelativeSessionTime) ?: "",
@@ -1422,7 +1431,7 @@ private fun RecentSessionListItem.withStableFieldsFrom(previousRow: RecentSessio
 @Composable
 private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
-  onOpen: (String) -> Unit,
+  onOpen: (String, String?) -> Unit,
 ) {
   OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     Column {
@@ -1431,7 +1440,7 @@ private fun RecentSessionList(
           title = row.title,
           source = row.source,
           metadata = row.metadata,
-          onClick = { onOpen(row.key) },
+          onClick = { onOpen(row.key, row.ownerAgentId) },
         )
         if (index != rows.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.48f), thickness = 1.dp)
@@ -1956,10 +1965,7 @@ private fun ProfilePanel(
         Box(contentAlignment = Alignment.Center) {
           Text(
             text =
-              displayName
-                .firstOrNull()
-                ?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) }
-                ?: "O",
+              localizedInitial(displayName, currentAppLanguage().languageTag) ?: "O",
             style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp),
             color = ClawTheme.colors.text,
             textAlign = TextAlign.Center,

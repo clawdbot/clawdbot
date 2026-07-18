@@ -319,7 +319,7 @@ describe("session store lifecycle mutations", () => {
     expect(readSearchState()).toEqual({ fts: [], watermarks: [] });
   });
 
-  it("durably writes SQLite transcript archives before deleting entry rows", async () => {
+  it("fsyncs SQLite transcript archives through their writable descriptor before deletion", async () => {
     const now = Date.now();
     await replaceSessionEntry(
       { sessionKey: "agent:main:durable-delete", storePath },
@@ -333,17 +333,19 @@ describe("session store lifecycle mutations", () => {
       [createTranscriptEvent("durable-delete-session", "durable archive first")],
     );
 
-    const originalWriteFileSync = fs.writeFileSync;
-    const entryObservedDuringArchiveWrite: boolean[] = [];
-    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
-      const filePath = String(args[0]);
-      if (filePath.includes("durable-delete-session.jsonl.deleted.")) {
-        entryObservedDuringArchiveWrite.push(
+    const originalRenameSync = fs.renameSync;
+    const entryObservedDuringArchiveRename: boolean[] = [];
+    const openSpy = vi.spyOn(fs, "openSync");
+    const fsyncSpy = vi.spyOn(fs, "fsyncSync");
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((...args) => {
+      const archivePath = String(args[1]);
+      if (archivePath.includes("durable-delete-session.jsonl.deleted.")) {
+        entryObservedDuringArchiveRename.push(
           loadSessionEntry({ sessionKey: "agent:main:durable-delete", storePath })?.sessionId ===
             "durable-delete-session",
         );
       }
-      return originalWriteFileSync(...args);
+      return originalRenameSync(...args);
     });
 
     try {
@@ -358,9 +360,18 @@ describe("session store lifecycle mutations", () => {
 
       expect(result.deleted).toBe(true);
       expect(result.archivedTranscripts).toHaveLength(1);
-      expect(entryObservedDuringArchiveWrite).toEqual([true]);
+      expect(entryObservedDuringArchiveRename).toEqual([true]);
+      const archiveTempOpenIndexes = openSpy.mock.calls.flatMap((args, index) =>
+        String(args[0]).includes("durable-delete-session.jsonl.deleted.") ? [index] : [],
+      );
+      expect(archiveTempOpenIndexes).toHaveLength(1);
+      const archiveTempOpenIndex = archiveTempOpenIndexes[0] ?? -1;
+      expect(openSpy.mock.calls[archiveTempOpenIndex]?.[1]).toBe("wx");
+      expect(fsyncSpy).toHaveBeenCalledWith(openSpy.mock.results[archiveTempOpenIndex]?.value);
     } finally {
-      writeSpy.mockRestore();
+      renameSpy.mockRestore();
+      fsyncSpy.mockRestore();
+      openSpy.mockRestore();
     }
   });
 

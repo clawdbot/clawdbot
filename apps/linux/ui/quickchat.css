@@ -1,0 +1,372 @@
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f7f7f8;
+  background: transparent;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body {
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 8px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.composer {
+  width: 100%;
+  padding: 9px 11px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 16px;
+  opacity: 0;
+  background: rgb(28 28 30 / 94%);
+  box-shadow: 0 10px 36px rgb(0 0 0 / 34%);
+  transform: scale(0.97);
+  transition:
+    opacity 120ms ease-in,
+    transform 120ms ease-in;
+}
+
+body.shown .composer {
+  opacity: 1;
+  transform: scale(1);
+  transition-duration: 140ms;
+  transition-timing-function: ease-out;
+}
+
+.composer-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 34px;
+}
+
+.agent-chip {
+  display: flex;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  align-items: center;
+  border: 0;
+  color: white;
+  cursor: pointer;
+  background: transparent;
+}
+
+.agent-avatar,
+.agent-avatar-mini {
+  display: grid;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  background: hsl(var(--agent-hue, 4) 58% 42%);
+}
+
+.agent-avatar {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+}
+
+.agent-avatar-mini {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.agent-avatar img,
+.agent-avatar-mini img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.agent-chevron {
+  width: 8px;
+  color: #8e8e93;
+  font-size: 11px;
+  transform: translateY(-1px);
+}
+
+.agent-chip:hover .agent-chevron,
+.agent-chip[aria-expanded="true"] .agent-chevron {
+  color: #f7f7f8;
+}
+
+#message {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: #f7f7f8;
+  font: 400 14px/1.4 inherit;
+  caret-color: #ff6b6b;
+  background: transparent;
+}
+
+#message::placeholder {
+  color: #8e8e93;
+  opacity: 1;
+}
+
+.send {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #1c1c1e;
+  cursor: pointer;
+  background: #ff6b6b;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.gear {
+  display: grid;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #8e8e93;
+  cursor: pointer;
+  font-size: 14px;
+  background: transparent;
+}
+
+.gear:hover,
+.gear[aria-expanded="true"] {
+  color: #f7f7f8;
+  background: rgb(255 255 255 / 7%);
+}
+
+.send:hover:not(:disabled) {
+  transform: scale(1.05);
+}
+
+.send:disabled {
+  cursor: default;
+  opacity: 0.34;
+}
+
+.send.sending,
+.send.accepted {
+  opacity: 1;
+}
+
+.send-icon {
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.send.sending .send-icon {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgb(28 28 30 / 35%);
+  border-top-color: #1c1c1e;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+.send.accepted .send-icon {
+  font-size: 16px;
+}
+
+.status {
+  max-height: 0;
+  margin: 0 0 0 46px;
+  overflow: hidden;
+  color: #ff7b7b;
+  font-size: 11px;
+  line-height: 16px;
+  opacity: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    max-height 120ms ease,
+    opacity 120ms ease;
+}
+
+.composer.has-error .status {
+  max-height: 16px;
+  opacity: 1;
+}
+
+.popover {
+  position: absolute;
+  z-index: 2;
+  top: 70px;
+  right: 8px;
+  left: 8px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 14px;
+  opacity: 0;
+  background: rgb(36 36 38 / 98%);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 38%);
+  transform: translateY(-4px);
+  transition:
+    opacity 100ms ease-out,
+    transform 100ms ease-out;
+}
+
+body.shown .popover:not([hidden]) {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.popover-title {
+  padding: 9px 12px 6px;
+  color: #8e8e93;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.agent-list {
+  max-height: 244px;
+  padding: 2px 6px 7px;
+  overflow-y: auto;
+}
+
+.agent-option {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 7px;
+  gap: 9px;
+  align-items: center;
+  border: 0;
+  border-radius: 9px;
+  color: #f7f7f8;
+  cursor: pointer;
+  font: 400 13px/1.3 inherit;
+  text-align: left;
+  background: transparent;
+}
+
+.agent-option:hover,
+.agent-option:focus-visible {
+  outline: 0;
+  background: rgb(255 255 255 / 8%);
+}
+
+.agent-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-check {
+  width: 16px;
+  color: #ff7b7b;
+  font-size: 13px;
+  text-align: center;
+}
+
+.shortcut-settings {
+  padding-bottom: 9px;
+}
+
+.shortcut-row {
+  display: flex;
+  padding: 4px 10px 2px;
+  gap: 7px;
+  align-items: center;
+}
+
+.shortcut-value {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  overflow: hidden;
+  border-radius: 7px;
+  color: #e5e5e7;
+  font: 500 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgb(0 0 0 / 22%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subtle-button {
+  height: 27px;
+  padding: 0 9px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 7px;
+  color: #d4d4d6;
+  cursor: pointer;
+  font: 500 11px/1 inherit;
+  background: rgb(255 255 255 / 5%);
+}
+
+.subtle-button:hover,
+.subtle-button:focus-visible {
+  outline: 0;
+  color: white;
+  background: rgb(255 255 255 / 10%);
+}
+
+.shortcut-error {
+  min-height: 14px;
+  margin: 3px 12px 0;
+  color: #ff7b7b;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 40ms !important;
+  }
+
+  .composer,
+  body.shown .composer {
+    transform: none;
+  }
+}

@@ -28,10 +28,12 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
   "operator.pairing",
 ] as const;
 const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.approvals",
+  "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write",
@@ -1051,6 +1053,7 @@ describe("GatewayBrowserClient", () => {
         "operator.admin",
         "operator.approvals",
         "operator.pairing",
+        "operator.questions",
         "operator.read",
         "operator.write",
       ],

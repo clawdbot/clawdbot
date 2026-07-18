@@ -6,6 +6,7 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -352,7 +353,7 @@ export async function listLocalOpenCodeSessionPage(value?: unknown): Promise<Ope
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
   try {
     const text = JSON.stringify(value);
-    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+    return text.length > maxLength ? `${truncateUtf16Safe(text, maxLength)}…` : text;
   } catch {
     return undefined;
   }

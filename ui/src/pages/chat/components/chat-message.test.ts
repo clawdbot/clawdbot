@@ -1074,6 +1074,34 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
+  it("renders the active plan card inside the working stream group", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamGroup(
+        [
+          { kind: "reading-indicator", key: "reading", startedAt: 1_000 },
+          { kind: "plan", key: "plan:main:active" },
+        ],
+        {
+          planActive: true,
+          planStatus: {
+            explanation: "Keep the change focused",
+            steps: [
+              { step: "Inspect", status: "completed" },
+              { step: "Implement", status: "in_progress" },
+            ],
+          },
+        },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-group--working .plan-checklist--card")).not.toBeNull();
+    expect(container.querySelectorAll(".plan-checklist__step")).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
+  });
+
   it("keeps the avatar once a stream part joins the reading indicator", () => {
     const container = document.createElement("div");
 
@@ -2129,6 +2157,61 @@ describe("grouped chat rendering", () => {
     ).toBe(expectedMetaUrl.replace("&meta=1", "&mediaTicket=ticket-local"));
   });
 
+  it("stops checking when local assistant attachment metadata fetch stalls", async () => {
+    vi.useFakeTimers();
+    const source = `/tmp/openclaw/${crypto.randomUUID()}-stalled.txt`;
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new DOMException("aborted", "AbortError"),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-media-stalled-metadata",
+          role: "assistant",
+          content: `Local document\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+
+    rerender();
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Checking...",
+    );
+
+    const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&meta=1`;
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, expectedMetaUrl);
+    await vi.advanceTimersByTimeAsync(30_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Unavailable",
+    );
+  });
+
   it("refreshes local assistant media tickets before expiry without another render", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
@@ -2593,6 +2676,108 @@ describe("grouped chat rendering", () => {
     });
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
     expectSameOriginGet(fetchInit);
+  });
+
+  it("bounds managed outgoing image blob URLs with least-recently-used eviction", async () => {
+    const imageUrls = Array.from(
+      { length: 65 },
+      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+    );
+    let objectUrlIndex = 0;
+    const createObjectURL = vi.fn(() => `blob:managed-image-${objectUrlIndex++}`);
+    const revokeObjectURL = vi.fn();
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      blob: async () => new Blob(["png"], { type: "image/png" }),
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: imageUrls.slice(0, 64).map((url, index) => ({
+        type: "image",
+        url,
+        alt: `Generated image ${index + 1}`,
+      })),
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(64));
+
+    const recentContainer = document.createElement("div");
+    renderAssistantMessage(recentContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[0], alt: "Recently viewed image" }],
+      timestamp: Date.now(),
+    });
+    expect(createObjectURL).toHaveBeenCalledTimes(64);
+
+    const overflowContainer = document.createElement("div");
+    renderAssistantMessage(overflowContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[64], alt: "Newest image" }],
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(imageUrls.length));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:managed-image-1");
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:managed-image-0");
+
+    const replace = vi.fn();
+    const close = vi.fn();
+    const openedWindow = {
+      opener: window,
+      location: { replace },
+      close,
+    };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(openedWindow as unknown as Window);
+    const evictedImage = container.querySelector<HTMLImageElement>('img[alt="Generated image 2"]');
+    expect(evictedImage).toBeInstanceOf(HTMLImageElement);
+    evictedImage!.click();
+
+    expect(openSpy).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(openedWindow.opener).toBeNull();
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(imageUrls.length + 1));
+    expect(replace).toHaveBeenCalledWith("blob:managed-image-65");
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("bounds managed outgoing image miss retention", async () => {
+    const imageUrls = Array.from(
+      { length: 65 },
+      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+    );
+    const fetchMock = vi.fn(async () => ({ ok: false }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: imageUrls.map((url, index) => ({
+        type: "image",
+        url,
+        alt: `Missing image ${index + 1}`,
+      })),
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length));
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const retryContainer = document.createElement("div");
+    renderAssistantMessage(retryContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[0], alt: "Oldest missing image" }],
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length + 1));
   });
 
   it("does not send auth to cross-origin managed-image-looking URLs", () => {

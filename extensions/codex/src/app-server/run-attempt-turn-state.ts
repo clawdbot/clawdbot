@@ -84,7 +84,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
   const turnAssistantCompletionIdleTimeoutMs = resolveCodexTurnAssistantCompletionIdleTimeoutMs(
-    options.turnAssistantCompletionIdleTimeoutMs,
+    options.turnAssistantCompletionIdleTimeoutMs ?? appServer.turnAssistantCompletionIdleTimeoutMs,
   );
   const postToolRawAssistantCompletionIdleTimeoutMs =
     resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(

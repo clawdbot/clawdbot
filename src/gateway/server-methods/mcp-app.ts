@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
 import { restoreMcpAppView } from "../mcp-app-reconstruction.js";
+import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function requireString(params: Record<string, unknown>, key: string): string {
@@ -145,6 +146,17 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
               throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
             }
             const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+            let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
+            try {
+              standalone = createMcpAppStandaloneTicket({
+                sessionKey: requireString(params, "sessionKey"),
+                view,
+              });
+            } catch (error) {
+              // Standalone links are additive; issuance must never break the
+              // existing authenticated Control UI view payload.
+              logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
+            }
             return {
               sandboxUrl: buildMcpAppSandboxPath(view.csp),
               sandboxPort,
@@ -153,6 +165,14 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
               ...(view.csp ? { csp: view.csp } : {}),
               toolInput: view.toolInput,
               toolResult: view.toolResult,
+              ...(standalone
+                ? {
+                    standaloneUrl: standalone.url,
+                    standaloneExpiresAtMs: standalone.expiresAtMs,
+                  }
+                : {}),
+              // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
+              messageSupported: view.allowedAppToolNames !== undefined && view.readOnly !== true,
             };
           },
           context.getRuntimeConfig(),

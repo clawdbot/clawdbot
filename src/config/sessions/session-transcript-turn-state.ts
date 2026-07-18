@@ -6,7 +6,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
   selected: T | undefined,
@@ -24,6 +24,12 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
       selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+        (expectedState.mainRestartRecoveryCycleId === undefined ||
+          selected.entry.mainRestartRecovery?.cycleId ===
+            expectedState.mainRestartRecoveryCycleId) &&
+        (expectedState.mainRestartRecoveryRevision === undefined ||
+          selected.entry.mainRestartRecovery?.revision ===
+            expectedState.mainRestartRecoveryRevision) &&
         selected.entry.restartRecoveryBeforeAgentReplyState ===
           expectedState.restartRecoveryBeforeAgentReplyState &&
         selected.entry.restartRecoveryDeliveryReceiptState ===

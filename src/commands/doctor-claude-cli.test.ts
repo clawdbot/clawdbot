@@ -219,6 +219,33 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("accepts Claude CLI apiKeyHelper without a stored auth profile", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "claude-cli/claude-sonnet-4-6" },
+            },
+          },
+        },
+        {
+          homeDir,
+          workspaceDir,
+          noteFn,
+          store: createStore(),
+          readClaudeCliCredentials: () => ({
+            type: "api_key_helper",
+          }),
+          resolveCommandPath: () => "/opt/homebrew/bin/claude",
+        },
+      );
+
+      expect(noteFn).not.toHaveBeenCalled();
+    });
+  });
+
   it("warns when Claude auth is not readable headlessly", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();

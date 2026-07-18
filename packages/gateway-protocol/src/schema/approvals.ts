@@ -141,8 +141,27 @@ const ApprovalRecordCommonFields = {
   presentation: ApprovalPresentationSchema,
 };
 
+/** Reviewer-safe origin attribution for terminal approval history. */
+const ApprovalHistorySourceAttributionSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
+});
+
+/** Reviewer attribution recorded by the durable approval ledger. */
+const ApprovalHistoryResolverAttributionSchema = closedObject({
+  kind: Type.Union([
+    Type.Literal("device"),
+    Type.Literal("channel"),
+    Type.Literal("runtime"),
+    Type.Literal("system"),
+  ]),
+  id: Type.Optional(NonEmptyString),
+});
+
 const ApprovalResolutionFields = {
   resolvedAtMs: Type.Integer({ minimum: 0 }),
+  source: Type.Optional(ApprovalHistorySourceAttributionSchema),
+  resolver: Type.Optional(ApprovalHistoryResolverAttributionSchema),
 };
 
 /** Approval that has not yet accepted a reviewer decision. */
@@ -208,6 +227,19 @@ export const ApprovalGetParamsSchema = closedObject({ id: ApprovalRecordCommonFi
 /** Current durable state for one authorized approval lookup. */
 export const ApprovalGetResultSchema = closedObject({ approval: ApprovalSnapshotSchema });
 
+/** Cursor-based query for the retained terminal approval ledger. */
+export const ApprovalHistoryParamsSchema = closedObject({
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  kind: Type.Optional(ApprovalKindSchema),
+});
+
+/** Newest-first page from the retained terminal approval ledger. */
+export const ApprovalHistoryResultSchema = closedObject({
+  items: Type.Array(TerminalApprovalSnapshotSchema),
+  nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+});
+
 /** Reviewer decision for one approval identified by its exact full id. */
 export const ApprovalResolveParamsSchema = closedObject({
   id: ApprovalRecordCommonFields.id,
@@ -270,6 +302,8 @@ export type PendingApprovalSnapshot = Static<typeof PendingApprovalSnapshotSchem
 export type ApprovalSnapshot = Static<typeof ApprovalSnapshotSchema>;
 export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
 export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
+export type ApprovalHistoryParams = Static<typeof ApprovalHistoryParamsSchema>;
+export type ApprovalHistoryResult = Static<typeof ApprovalHistoryResultSchema>;
 export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
 export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;
 export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;

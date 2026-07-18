@@ -69,14 +69,12 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  resolveGatewayInflightRequest as resolveIdempotentGatewayRequest,
+  runGatewayInflightWork,
+  type GatewayInflightResult as InflightResult,
+} from "./inflight.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-
-type InflightResult = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ReturnType<typeof errorShape>;
-  meta?: Record<string, unknown>;
-};
 
 type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
 
@@ -154,46 +152,6 @@ function resolveTrustedMessageActionToolContext(params: {
   };
 }
 
-const inflightByContext = new WeakMap<
-  GatewayRequestContext,
-  Map<string, Promise<InflightResult>>
->();
-
-const getInflightMap = (context: GatewayRequestContext) => {
-  let inflight = inflightByContext.get(context);
-  if (!inflight) {
-    inflight = new Map();
-    inflightByContext.set(context, inflight);
-  }
-  return inflight;
-};
-
-function resolveGatewayInflightMap(params: { context: GatewayRequestContext; dedupeKey: string }):
-  | {
-      kind: "cached";
-      cached: NonNullable<ReturnType<GatewayRequestContext["dedupe"]["get"]>>;
-    }
-  | {
-      kind: "inflight";
-      inflight: Promise<InflightResult>;
-    }
-  | {
-      kind: "ready";
-      inflightMap: Map<string, Promise<InflightResult>>;
-    } {
-  // Persistent dedupe wins before process-local in-flight joins for idempotent retries.
-  const cached = params.context.dedupe.get(params.dedupeKey);
-  if (cached) {
-    return { kind: "cached", cached };
-  }
-  const inflightMap = getInflightMap(params.context);
-  const inflight = inflightMap.get(params.dedupeKey);
-  if (inflight) {
-    return { kind: "inflight", inflight };
-  }
-  return { kind: "ready", inflightMap };
-}
-
 function resolveGatewayInflightRequest(params: {
   context: GatewayRequestContext;
   prefix: "message.action" | "poll" | "send";
@@ -216,46 +174,12 @@ function resolveGatewayInflightRequest(params: {
     params.prefix === "message.action"
       ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${idem}`
       : `${params.prefix}:${idem}`;
-  const inflight = resolveGatewayInflightMap({
+  return resolveIdempotentGatewayRequest({
     context: params.context,
     dedupeKey,
+    idempotencyKey: idem,
+    respond: params.respond,
   });
-  if (inflight.kind === "cached") {
-    params.respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
-      cached: true,
-    });
-    return { kind: "handled", done: Promise.resolve() };
-  }
-  if (inflight.kind === "inflight") {
-    return {
-      kind: "handled",
-      done: inflight.inflight.then((result) => {
-        const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-        params.respond(result.ok, result.payload, result.error, meta);
-      }),
-    };
-  }
-  return {
-    kind: "ready",
-    idem,
-    dedupeKey,
-    inflightMap: inflight.inflightMap,
-  };
-}
-
-async function runGatewayInflightWork(params: {
-  inflightMap: Map<string, Promise<InflightResult>>;
-  dedupeKey: string;
-  work: Promise<InflightResult>;
-  respond: RespondFn;
-}) {
-  params.inflightMap.set(params.dedupeKey, params.work);
-  try {
-    const result = await params.work;
-    params.respond(result.ok, result.payload, result.error, result.meta);
-  } finally {
-    params.inflightMap.delete(params.dedupeKey);
-  }
 }
 
 async function resolveRequestedChannel(params: {

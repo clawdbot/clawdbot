@@ -16,6 +16,8 @@ extension OnboardingView {
             self.cliPage()
         case 3:
             self.aiSetupPage(contentHeight: contentHeight)
+        case 4:
+            self.memoryImportPage(contentHeight: contentHeight)
         case 5:
             self.permissionsPage(contentHeight: contentHeight)
         case 9:
@@ -913,7 +915,7 @@ extension OnboardingView {
                 }
                 self.featureRow(
                     title: "Open the menu bar panel",
-                    subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
+                    subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
                     title: "Connect Discord, Slack, Telegram, WhatsApp, …",
@@ -929,7 +931,7 @@ extension OnboardingView {
                     systemImage: "waveform.circle")
                 self.featureRow(
                     title: "Use the panel + Canvas",
-                    subtitle: "Open the menu bar panel for quick chat; the agent can show previews " +
+                    subtitle: "Open the compact chat panel; the agent can show previews " +
                         "and richer visuals in Canvas.",
                     systemImage: "rectangle.inset.filled.and.person.filled")
                 self.featureActionRow(

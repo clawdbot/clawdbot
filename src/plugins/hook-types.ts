@@ -109,6 +109,7 @@ export type PluginHookName =
   | "subagent_spawning"
   | "subagent_delivery_target"
   | "subagent_spawned"
+  | "subagent_progress"
   | "subagent_ended"
   /** @deprecated Use gateway_stop. */
   | "deactivate"
@@ -153,6 +154,7 @@ const PLUGIN_HOOK_NAMES = [
   "subagent_spawning",
   "subagent_delivery_target",
   "subagent_spawned",
+  "subagent_progress",
   "subagent_ended",
   "deactivate",
   "gateway_start",
@@ -747,17 +749,23 @@ export type PluginHookSubagentContext = {
 
 type PluginHookSubagentTargetKind = "subagent" | "acp";
 
+type PluginHookSubagentRequester = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
+  /** Native source channel/conversation id, when distinct from the routable target. */
+  channelId?: string | number;
+  /** Native source message that initiated the parent run, when available. */
+  messageId?: string | number;
+};
+
 type PluginHookSubagentSpawnBase = {
   childSessionKey: string;
   agentId: string;
   label?: string;
   mode: "run" | "session";
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  requester?: PluginHookSubagentRequester;
   threadRequested: boolean;
 };
 
@@ -834,6 +842,22 @@ export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
   /** Provider prefix parsed from resolvedModel when the ref includes one. */
   resolvedProvider?: string;
 };
+
+/** Portable channel presentation signal for one background child run. */
+export type PluginHookSubagentProgressEvent =
+  | {
+      phase: "started";
+      runId: string;
+      childSessionKey: string;
+      requester?: PluginHookSubagentRequester;
+    }
+  | {
+      phase: "ended";
+      runId: string;
+      childSessionKey: string;
+      outcome: "ok" | "error" | "timeout" | "killed" | "unknown";
+      requester?: PluginHookSubagentRequester;
+    };
 
 export type PluginHookSubagentEndedEvent = {
   targetSessionKey: string;
@@ -1244,6 +1268,10 @@ export type PluginHookHandlerMap = {
     | void;
   subagent_spawned: (
     event: PluginHookSubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  subagent_progress: (
+    event: PluginHookSubagentProgressEvent,
     ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
   subagent_ended: (

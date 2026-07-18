@@ -14,11 +14,13 @@ import {
   AUTOMATION_SECTION_KEYS,
   COMMUNICATION_SECTION_KEYS,
   INFRASTRUCTURE_SECTION_KEYS,
+  SECURITY_SECTION_KEYS,
 } from "./config-sections.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
   GENERAL_SETTINGS_TARGET_IDS,
+  PROFILE_SETTINGS_TARGET_IDS,
 } from "./settings-targets.ts";
 
 type StaticSettingsBlockDescriptor = Omit<SettingsSearchBlock, "label"> & {
@@ -50,20 +52,16 @@ const GENERAL_SETTINGS_BLOCKS = {
     ],
   },
   channels: {
-    routeId: "config",
+    routeId: "channels",
     labelKey: "quickSettings.channels.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.channels}`,
-    searchKeys: [
-      "quickSettings.channels.connectedCount",
-      "quickSettings.channels.empty",
-      "quickSettings.channels.connect",
-    ],
+    hash: "",
+    searchKeys: ["quickSettings.channels.connect"],
     aliases: "telegram discord slack whatsapp signal imessage",
   },
   security: {
-    routeId: "config",
+    routeId: "security",
     labelKey: "quickSettings.security.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.security}`,
+    hash: "",
     searchKeys: [
       "quickSettings.security.gatewayAuth",
       "quickSettings.security.execPolicy",
@@ -85,24 +83,10 @@ const GENERAL_SETTINGS_BLOCKS = {
     ],
     aliases: "system uptime node address pid",
   },
-  appearance: {
-    routeId: "config",
-    labelKey: "quickSettings.appearance.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.appearance}`,
-    searchKeys: [
-      "quickSettings.appearance.theme",
-      "quickSettings.appearance.textSize",
-      "quickSettings.appearance.importedTheme",
-      "quickSettings.appearance.lobsterVisits",
-      "quickSettings.appearance.lobsterSounds",
-      "quickSettings.appearance.lobsterdex",
-    ],
-    aliases: "mode",
-  },
   personal: {
-    routeId: "config",
+    routeId: "profile",
     labelKey: "quickSettings.personal.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.personal}`,
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.identity}`,
     searchKeys: [
       "quickSettings.personal.user",
       "quickSettings.personal.assistant",
@@ -113,23 +97,6 @@ const GENERAL_SETTINGS_BLOCKS = {
       "quickSettings.personal.browserOnly",
     ],
     aliases: "avatar image",
-  },
-  automations: {
-    routeId: "config",
-    labelKey: "quickSettings.automation.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.automations}`,
-    searchKeys: [
-      "quickSettings.automation.scheduledTask",
-      "quickSettings.automation.scheduledTasks",
-      "quickSettings.automation.installedSkill",
-      "quickSettings.automation.installedSkills",
-      "quickSettings.automation.mcpServer",
-      "quickSettings.automation.mcpServers",
-      "quickSettings.automation.manage",
-      "quickSettings.automation.browse",
-      "quickSettings.automation.configure",
-    ],
-    aliases: "cron",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
@@ -174,6 +141,11 @@ const APPEARANCE_SETTINGS_BLOCKS = {
       "chat.followUpMode",
       "chat.followUpModeSteer",
       "chat.followUpModeQueue",
+      "chat.followUpModeServer",
+      "chat.followUpModeLoading",
+      "chat.followUpModeUsingServer",
+      "chat.followUpModeOverriding",
+      "chat.followUpModeReset",
       "chat.catalogOpenTarget",
       "chat.catalogOpenTargetViewer",
       "chat.catalogOpenTargetTerminal",
@@ -199,9 +171,8 @@ const APPEARANCE_SETTINGS_BLOCKS = {
 
 const COMMUNICATION_SETTINGS_BLOCKS = {
   notifications: {
-    routeId: "communications",
+    routeId: "notifications",
     labelKey: "configView.notifications.title",
-    search: "?section=__notifications__",
     hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
     searchKeys: [
       "configView.notifications.hint",
@@ -224,6 +195,7 @@ const STATIC_SETTINGS_BLOCKS: readonly StaticSettingsBlockDescriptor[] = [
 
 const COMMUNICATION_SECTIONS = new Set<string>(COMMUNICATION_SECTION_KEYS);
 const APPEARANCE_SECTIONS = new Set<string>(APPEARANCE_SECTION_KEYS);
+const SECURITY_SECTIONS = new Set<string>(SECURITY_SECTION_KEYS);
 const AUTOMATION_SECTIONS = new Set<string>(AUTOMATION_SECTION_KEYS);
 const INFRASTRUCTURE_SECTIONS = new Set<string>(INFRASTRUCTURE_SECTION_KEYS);
 const AI_AGENTS_SECTIONS = new Set<string>(AI_AGENTS_SECTION_KEYS);
@@ -248,6 +220,9 @@ function routeForConfigSection(key: string): RouteId {
   if (APPEARANCE_SECTIONS.has(key)) {
     return "appearance";
   }
+  if (SECURITY_SECTIONS.has(key)) {
+    return "security";
+  }
   if (AUTOMATION_SECTIONS.has(key)) {
     return "automation";
   }
@@ -257,7 +232,8 @@ function routeForConfigSection(key: string): RouteId {
   if (AI_AGENTS_SECTIONS.has(key)) {
     return "ai-agents";
   }
-  return "config";
+  // Sections without a curated home render on the Advanced page.
+  return "advanced";
 }
 
 export function findSettingsSearchBlocks(params: {

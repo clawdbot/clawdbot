@@ -18,6 +18,30 @@ describe("Workspaces document schema", () => {
     expect(validateWorkspaceDoc(validDoc())).toEqual(validDoc());
   });
 
+  it.each(["builtin:agent-status", "builtin:custom-widget-approvals"])("accepts %s", (kind) => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.kind = kind;
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe(kind);
+  });
+
+  it("accepts full-bleed tabs and rejects unknown layouts", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets = doc.tabs[0]!.widgets.slice(0, 1);
+    doc.tabs[0]!.layout = "full";
+    expect(validateWorkspaceDoc(doc).tabs[0]?.layout).toBe("full");
+    expectInvalid((invalid) => {
+      invalid.tabs[0]!.layout = "columns" as never;
+    }, 'layout must be "grid" or "full"');
+
+    expectInvalid((invalid) => {
+      invalid.tabs[0]!.layout = "full";
+      invalid.tabs[0]!.widgets.push({
+        ...structuredClone(invalid.tabs[0]!.widgets[0]!),
+        id: "second",
+      });
+    }, "at most one entry for full layout");
+  });
+
   it("rejects invalid tab slugs", () => {
     expectInvalid((doc) => {
       doc.tabs[0]!.slug = "Bad Slug";
@@ -40,6 +64,18 @@ describe("Workspaces document schema", () => {
     expectInvalid((doc) => {
       doc.tabs[0]!.widgets[0]!.kind = "builtin:unknown";
     }, "widgets[0].kind");
+  });
+
+  it("accepts the trusted builtin chart kind", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.kind = "builtin:chart";
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:chart");
+  });
+
+  it("accepts the trusted builtin preview kind", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.kind = "builtin:preview";
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:preview");
   });
 
   it("rejects a prototype-setter custom widget kind", () => {

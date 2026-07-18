@@ -28,6 +28,7 @@ import {
 import {
   activateSecretsRuntimeSnapshotState,
   graftActiveSecretsRuntimeAuthState,
+  getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   hasCurrentAuthStoreCredentialsRevision,
 } from "../secrets/runtime-state.js";
@@ -94,18 +95,6 @@ type GatewayStartupConfigMeasure = <T>(
   run: () => T | Promise<T>,
   options?: { omitErrorMessage?: boolean },
 ) => Promise<T>;
-
-/** Timeline attributes kept small and deterministic for startup secret preparation spans. */
-function secretsPrepareTimelineAttributes(
-  config: OpenClawConfig,
-  activationParams: RuntimeSecretsActivationParams,
-) {
-  return {
-    activate: activationParams.activate,
-    gatewayAuthSecretRef: hasActiveGatewayAuthSecretRef(config),
-    reason: activationParams.reason,
-  };
-}
 
 /** Config snapshot plus optional plugin metadata loaded before Gateway startup auth. */
 export type GatewayStartupConfigSnapshotLoadResult = {
@@ -334,12 +323,15 @@ export function createRuntimeSecretsActivator(params: {
             : await loadSecretsRuntime();
         const prepareRuntimeSecretsSnapshot =
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
+        const allowUnavailableSecretOwners =
+          activationParams.reason === "startup" && getActiveSecretsRuntimeSnapshot() === null;
         const prepared = await measureDiagnosticsTimelineSpan(
           "secrets.prepare",
           () =>
             prepareRuntimeSecretsSnapshot({
               config: sourceConfig,
               ...(assignmentConfig !== undefined ? { assignmentConfig } : {}),
+              allowUnavailableSecretOwners,
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
@@ -349,7 +341,11 @@ export function createRuntimeSecretsActivator(params: {
               ...(loadAuthStore ? { loadAuthStore } : {}),
             }),
           {
-            attributes: secretsPrepareTimelineAttributes(config, activationParams),
+            attributes: {
+              activate: activationParams.activate,
+              gatewayAuthSecretRef: hasActiveGatewayAuthSecretRef(config),
+              reason: activationParams.reason,
+            },
             config,
             env: activationParams.env ?? process.env,
             omitErrorMessage: true,

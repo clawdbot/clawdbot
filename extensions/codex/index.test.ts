@@ -121,7 +121,7 @@ describe("codex plugin", () => {
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
-      sourceVisibleReplies: "message_tool",
+      visibleReplies: "message_tool",
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
     expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
@@ -419,7 +419,7 @@ describe("codex plugin", () => {
       bindingStore: testCodexAppServerBindingStore,
     });
 
-    expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
+    expect(harness.deliveryDefaults?.visibleReplies).toBe("message_tool");
     expect(
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,

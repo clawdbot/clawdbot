@@ -1,0 +1,187 @@
+.custodian {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(860px, 100%);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 18px clamp(16px, 4vw, 36px) 22px;
+}
+
+.custodian__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.custodian__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.custodian__identity h1,
+.custodian__identity p {
+  margin: 0;
+}
+
+.custodian__identity h1 {
+  color: var(--text-strong);
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.custodian__identity p {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.custodian__mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 14px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.custodian__messages {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  padding: 24px 2px;
+}
+
+.custodian__message {
+  width: min(680px, 90%);
+}
+
+.custodian__message--assistant {
+  align-self: flex-start;
+}
+
+.custodian__message--user {
+  align-self: flex-end;
+  padding: 10px 14px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--accent);
+  color: var(--primary-foreground);
+}
+
+.custodian__message-text > :first-child {
+  margin-top: 0;
+}
+
+.custodian__message-text > :last-child {
+  margin-bottom: 0;
+}
+
+.custodian__message openclaw-option-card {
+  display: block;
+  margin-top: 14px;
+}
+
+.custodian__thinking {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  padding: 10px 12px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+}
+
+.custodian__thinking > span:not(.sr-only) {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: custodian-thinking 900ms ease-in-out infinite alternate;
+}
+
+.custodian__thinking > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.custodian__thinking > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+.custodian__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-lg);
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.custodian__composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.custodian__composer :is(input, textarea) {
+  min-height: 44px;
+  max-height: 140px;
+  resize: vertical;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+}
+
+.custodian__composer :is(input, textarea):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@keyframes custodian-thinking {
+  to {
+    opacity: 0.35;
+    transform: translateY(-2px);
+  }
+}
+
+@media (max-width: 600px) {
+  .custodian {
+    padding-inline: 12px;
+  }
+
+  .custodian__header {
+    align-items: flex-start;
+  }
+
+  .custodian__identity p {
+    display: none;
+  }
+
+  .custodian__message {
+    width: 96%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custodian__thinking > span:not(.sr-only) {
+    animation: none;
+  }
+}

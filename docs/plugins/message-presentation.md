@@ -77,6 +77,11 @@ type MessagePresentationAction =
       approvalKind: "exec" | "plugin";
       decision: "allow-once" | "allow-always" | "deny";
     }
+  | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
   | { type: "url"; url: string }
   | {
       type: "web-app";
@@ -136,6 +141,12 @@ Button semantics:
   encode that action into a transport-private callback and resolve it through
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
+- `action.type: "question"` identifies one choice for a live, runtime-authored
+  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
+  agents and plugins must not synthesize question IDs. Telegram, Discord, and
+  Slack map it to transport-private native callbacks and resolve the choice
+  through the Gateway. Other channels degrade the controls to label text, and
+  the user can answer with a plain-text reply.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch

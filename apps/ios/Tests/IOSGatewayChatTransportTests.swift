@@ -147,6 +147,35 @@ struct IOSGatewayChatTransportTests {
         #expect(request.params["thinkingLevel"]?.value as? String == "high")
     }
 
+    @Test func `verbosity patches preserve set and clear values`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some("full")))
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(nil)))
+
+        let requests = await recorder.all()
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0.method == "sessions.patch" })
+        #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+        #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+        #expect(requests[0].params["verboseLevel"]?.value as? String == "full")
+        #expect(requests[1].params["verboseLevel"]?.value is NSNull)
+        #expect(requests.allSatisfy { $0.params["model"] == nil })
+        #expect(requests.allSatisfy { $0.params["thinkingLevel"] == nil })
+    }
+
     @Test func `requests fail fast when gateway not connected`() async {
         let gateway = GatewayNodeSession()
         let transport = IOSGatewayChatTransport(gateway: gateway)

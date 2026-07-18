@@ -47,6 +47,7 @@ export type OpenClawPluginToolOptions = {
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
   allowGatewaySubagentBinding?: boolean;
+  toolBindings?: Readonly<Record<string, unknown>>;
 };
 
 /** Resolves plugin-tool context inputs from runtime options and config state. */
@@ -97,6 +98,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      toolBindings: options?.toolBindings,
       activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,

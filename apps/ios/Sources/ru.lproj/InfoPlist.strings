@@ -19,10 +19,10 @@
 "NSMicrophoneUsageDescription" = "OpenClaw использует микрофон для чата в реальном времени, голосовой активации, режима push-to-talk и голосовых заметок.";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClaw может использовать данные о движении для поддержки взаимодействий и автоматизаций с учетом устройства.";
-/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthShareUsageDescription" = "После включения сводок о здоровье OpenClaw считывает данные о шагах, сне, пульсе в состоянии покоя и тренировках, чтобы передавать запрошенные агрегированные данные настроенному поставщику ИИ.";
-/* OpenClaw source: "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthUpdateUsageDescription" = "OpenClaw не записывает и не изменяет данные Health. Сводки Health считывают шаги, сон, пульс в покое и тренировки, чтобы передать запрошенные агрегированные данные вашему настроенному AI-провайдеру.";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClaw считывает данные о шагах, сне, пульсе в состоянии покоя и тренировках из приложения Apple Health, чтобы создавать запрошенные вами сводки и отправлять их через ваш Gateway настроенному поставщику ИИ.";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw не записывает данные в приложение Apple Health. Он использует данные только для чтения, чтобы создавать запрошенные вами сводки и отправлять их через ваш Gateway настроенному поставщику ИИ.";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw позволяет вашему ассистенту читать разрешённые вами фотографии и позволяет вам выбирать фотографии для отправки.";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

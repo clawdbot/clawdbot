@@ -9,11 +9,24 @@ The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It connec
 
 The full chat window is a native split view:
 
-- **Sessions sidebar**: searchable session list with pinned and recent sections, unread indicators, and context menus for pin/unpin, copy session key, and delete. A toolbar button (or Cmd-N) creates a real new session via `sessions.create`.
-- **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), thinking-level picker, model picker, and a session actions menu (new session, refresh, copy session key, export transcript, compact, clear history).
-- **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy it.
+- **Sessions sidebar**: searchable session list with pinned and recent sections. Spawned child sessions nest beneath their parent when the Gateway provides hierarchy metadata; collapsed parents summarize running, failed, and unread descendants. Context menus support rename, pin, fork, read/unread, archive/restore, copy session key, and delete. A toolbar button (or Cmd-N) creates a real new session via `sessions.create`.
+- **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), model controls, and a session actions menu. Models are grouped by provider with the default provider first, while pinned and recent models remain at the top. The controls can inherit or override the model's thinking level, choose tool-call verbosity, and toggle Fast responses. The menu can rename or fork the current session and update its pin, read, or archive state. **Sessions…** (Shift-Cmd-S) opens the Active/Archived manager for gateway search, rename, pin, archive, and restore. Separate menu checkmarks show or hide assistant reasoning and tool activity; both are on by default and remembered across launches.
+- **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Empty chats offer desktop starter prompts. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy its visible Markdown without hidden reasoning. Truncated assistant messages also offer **Open Full Message**, which loads a selectable Markdown reader. Use **Listen** for gateway TTS with a local speech fallback.
+- **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
-The anchored quick-chat panel from the menu bar keeps the compact single-column layout with inline pickers.
+The anchored compact chat panel from the menu bar keeps the compact single-column layout with the same model, thinking, verbosity, and Fast controls inline, plus starter prompts, Talk Mode, voice notes, and Listen. Assistant reasoning and tool activity remain hidden in this compact surface.
+
+## Quick Chat bar
+
+Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Change the global shortcut with the recorder in **Settings → General → Quick Chat shortcut**.
+
+Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder), sends to that agent's main session, and leaves replies in the full chat window. With more than one agent configured, click the avatar to switch agents from a native menu. Press Return to send, Command-Return to send and open full chat, Shift-Return for a newline, or Escape to dismiss. Clicking outside the bar also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
+
+Command-Return opens the conversation of the agent that received the send, including when session scope is global.
+
+The camera button starts a window screenshot: every visible window gets a labeled overlay, and clicking one captures it and sends it (with any typed text as the caption) to the selected agent. The first use asks for macOS Screen Recording access. Escape or clicking empty space cancels.
+
+Disable the feature entirely with **Settings → General → Quick Chat**; the same section hosts the shortcut recorder.
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
 - **Remote mode**: forwards the Gateway control port over SSH and uses that tunnel as the data plane.
@@ -33,9 +46,10 @@ The anchored quick-chat panel from the menu bar keeps the compact single-column 
 
 ## How it is wired
 
-- Data plane: Gateway WS methods `chat.history`, `chat.send`, `chat.abort`, `chat.inject`, and events `chat`, `agent`, `presence`, `tick`, `health`.
+- Data plane: Gateway WS methods `chat.history`, `chat.message.get`, `chat.send`, `chat.abort`, `chat.inject`, and events `chat`, `agent`, `presence`, `tick`, `health`.
 - `chat.history` returns a display-normalized transcript: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, including truncated blocks) and leaked model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY`/`no_reply` are omitted, and oversized rows can be replaced with a truncated placeholder.
 - Session: defaults to the primary session as above; the UI can switch between sessions.
+- Unread state: after a session activates and its live history loads successfully, the app clears that session's unread marker. Failed history loads do not clear it; a transient patch failure retries on the next activation.
 - Onboarding uses a dedicated session to keep first-run setup separate.
 - Offline cache: the app keeps a small read-only cache of recent chat sessions and transcripts per gateway (`~/Library/Application Support/OpenClaw/chat-cache.sqlite`): cold opens paint the last known transcript immediately and refresh once the Gateway responds, and recent chats stay browsable while disconnected (sending stays disabled until the connection is back).
 

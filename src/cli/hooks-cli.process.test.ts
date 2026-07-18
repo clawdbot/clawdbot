@@ -6,13 +6,20 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  registerNativeHookRelay,
+  testing as nativeHookRelayTesting,
+} from "../agents/harness/native-hook-relay.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const outputTimeoutMs = 20_000;
 const exitAfterOutputTimeoutMs = 5_000;
+const exitOnlyTimeoutMs = 45_000;
 
 afterEach(async () => {
+  nativeHookRelayTesting.clearNativeHookRelaysForTests();
   await Promise.all(Array.from(activeChildren, terminateChild));
 });
 
@@ -104,6 +111,7 @@ async function createLingeringPreloadFixture(): Promise<{
 
 async function runHooksCli(params: {
   args: string[];
+  completion: "exit" | "output-then-exit";
   label: string;
   env?: NodeJS.ProcessEnv;
   stdin?: string;
@@ -133,13 +141,16 @@ async function runHooksCli(params: {
   }>((resolve, reject) => {
     let timedOut = false;
     let outputObserved = false;
+    // Silent relay success has no stream milestone. Give it an exit deadline
+    // while keeping the tighter post-output deadline for leaked handles.
+    const initialTimeoutMs = params.completion === "exit" ? exitOnlyTimeoutMs : outputTimeoutMs;
     let timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
-    }, outputTimeoutMs);
+    }, initialTimeoutMs);
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
-      if (outputObserved) {
+      if (params.completion === "exit" || outputObserved) {
         return;
       }
       outputObserved = true;
@@ -161,9 +172,12 @@ async function runHooksCli(params: {
       clearTimeout(timer);
       activeChildren.delete(child);
       if (timedOut) {
-        const timeoutMessage = outputObserved
-          ? `${params.label} did not exit within ${exitAfterOutputTimeoutMs}ms after emitting output`
-          : `${params.label} did not emit output within ${outputTimeoutMs}ms`;
+        const timeoutMessage =
+          params.completion === "exit"
+            ? `${params.label} did not exit within ${exitOnlyTimeoutMs}ms`
+            : outputObserved
+              ? `${params.label} did not exit within ${exitAfterOutputTimeoutMs}ms after emitting output`
+              : `${params.label} did not emit output within ${outputTimeoutMs}ms`;
         reject(new Error(`${timeoutMessage}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
         return;
       }
@@ -187,6 +201,7 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
       "--timeout",
       "50",
     ],
+    completion: params.event === "post_tool_use" ? "exit" : "output-then-exit",
     label: `hooks relay ${params.event}`,
     env: {
       LINGER_MARKER: fixture.markerPath,
@@ -202,6 +217,52 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
 }
 
 describe("hooks CLI process lifecycle", () => {
+  it("uses the explicit relay database when the child has a different state directory", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "process-explicit-state-db",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+    await expect
+      .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
+      .toBeDefined();
+
+    const childStateDir = path.join(tempDirs.make("openclaw-hooks-relay-other-state-"), "state");
+    await fs.mkdir(childStateDir, { recursive: true });
+    const result = await runHooksCli({
+      args: [
+        "hooks",
+        "relay",
+        "--provider",
+        "codex",
+        "--relay-id",
+        relay.relayId,
+        "--state-db",
+        resolveOpenClawStateSqlitePath(),
+        "--generation",
+        relay.generation,
+        "--event",
+        "post_tool_use",
+        "--timeout",
+        "5000",
+      ],
+      completion: "exit",
+      label: "hooks relay explicit state database",
+      env: {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_STATE_DIR: childStateDir,
+      },
+      stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("");
+  }, 60_000);
+
   it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
     const fixture = await createLingeringPluginFixture();
 
@@ -209,6 +270,7 @@ describe("hooks CLI process lifecycle", () => {
     // bootstraps sequential so low-core shards test lifecycle, not startup contention.
     const listResult = await runHooksCli({
       args: ["hooks", "list", "--json"],
+      completion: "output-then-exit",
       label: "hooks list",
       env: {
         LINGER_MARKER: fixture.markerPath,

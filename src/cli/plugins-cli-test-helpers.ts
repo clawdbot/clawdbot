@@ -86,6 +86,7 @@ export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistry: AsyncUnknownMock = vi.fn();
+export const notifyGatewayPluginMetadataChanged: AsyncUnknownMock = vi.fn();
 export const clearPluginRegistryLoadCache: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
@@ -182,6 +183,11 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
   writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
     runtime.writeJson(value, space),
+}));
+
+vi.mock("./plugins-update-gateway-signal.js", () => ({
+  notifyGatewayPluginMetadataChanged: (...args: unknown[]) =>
+    notifyGatewayPluginMetadataChanged(...args),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -728,6 +734,7 @@ export function resetPluginsCliTestState() {
   buildPluginCompatibilityNotices.mockReset();
   inspectPluginRegistry.mockReset();
   refreshPluginRegistry.mockReset();
+  notifyGatewayPluginMetadataChanged.mockReset();
   clearPluginRegistryLoadCache.mockReset();
   applyExclusiveSlotSelection.mockReset();
   planPluginUninstall.mockReset();
@@ -838,6 +845,7 @@ export function resetPluginsCliTestState() {
     current: defaultRegistryIndex,
   });
   refreshPluginRegistry.mockResolvedValue(defaultRegistryIndex);
+  notifyGatewayPluginMetadataChanged.mockResolvedValue(true);
   applyExclusiveSlotSelection.mockImplementation((({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],

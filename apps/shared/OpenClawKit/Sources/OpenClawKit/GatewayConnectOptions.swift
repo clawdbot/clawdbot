@@ -1,3 +1,7 @@
+public enum OpenClawGatewayClientCapability {
+    public static let inlineWidgets = "inline-widgets"
+}
+
 public struct GatewayConnectOptions: Sendable {
     public var role: String
     public var scopes: [String]

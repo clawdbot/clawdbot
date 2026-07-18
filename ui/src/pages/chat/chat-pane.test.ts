@@ -13,6 +13,7 @@ import type {
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -47,6 +48,7 @@ type TestChatPane = HTMLElement & {
   taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
+  paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
@@ -64,9 +66,30 @@ type TestChatPane = HTMLElement & {
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
   olderOffsetsSeen: Set<number>;
+  headerEditing: boolean;
+  headerRenameValue: string;
+  beginHeaderRename: (row: GatewaySessionRow) => void;
+  cancelHeaderRename: () => void;
+  commitHeaderRename: () => void;
+  handleHeaderMenuAction: (
+    action: "reveal" | "copy-path" | "copy-branch",
+    row: GatewaySessionRow,
+    workspaceRoot: string | null,
+    branch: string | null,
+    copy?: (value: string) => Promise<boolean>,
+  ) => void;
+  loadHeaderMenuData: (
+    row: GatewaySessionRow,
+    agentWorkspace: string | undefined,
+    workspaceGit: boolean,
+  ) => Promise<void>;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,
+    row: undefined,
+    catalog: boolean,
+    agentWorkspace: undefined,
+    workspaceGit: boolean,
   ) => TemplateResult;
 };
 
@@ -195,6 +218,237 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     __openclaw: { seq },
   };
 }
+
+describe("chat pane header state", () => {
+  it("commits a trimmed label and clears with null", async () => {
+    const patch = vi.fn(async () => ({}));
+    const sessions = { patch } as unknown as SessionCapability;
+    const { pane } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    pane.beginHeaderRename(session);
+    pane.headerRenameValue = "  Renamed session  ";
+    pane.commitHeaderRename();
+    expect(patch).toHaveBeenCalledWith(
+      session.key,
+      { label: "Renamed session" },
+      { agentId: "main" },
+    );
+
+    const labeled = { ...session, label: "Renamed session" };
+    pane.beginHeaderRename(labeled);
+    pane.headerRenameValue = "   ";
+    pane.commitHeaderRename();
+    expect(patch).toHaveBeenLastCalledWith(session.key, { label: null }, { agentId: "main" });
+  });
+
+  it("cancels and skips unchanged labels", () => {
+    const patch = vi.fn(async () => ({}));
+    const sessions = { patch } as unknown as SessionCapability;
+    const { pane } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    pane.paneTitle = "Derived title";
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    pane.beginHeaderRename(session);
+    pane.commitHeaderRename();
+    pane.beginHeaderRename(session);
+    pane.cancelHeaderRename();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("copies the resolved workspace path and branch", async () => {
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    const copy = vi.fn(async () => true);
+    pane.handleHeaderMenuAction("copy-path", session, "/src/openclaw", "feature/header", copy);
+    pane.handleHeaderMenuAction("copy-branch", session, "/src/openclaw", "feature/header", copy);
+    await Promise.resolve();
+    expect(copy).toHaveBeenNthCalledWith(1, "/src/openclaw");
+    expect(copy).toHaveBeenNthCalledWith(2, "feature/header");
+  });
+
+  it("does not query gateway-local branches for exec-node sessions", async () => {
+    const request = vi.fn();
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    await pane.loadHeaderMenuData(
+      {
+        key: "agent:main:remote",
+        kind: "direct",
+        updatedAt: 0,
+        execNode: "build-mac",
+        execCwd: "/remote/repo",
+      },
+      "/local/default",
+      true,
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("retries failed worktree metadata lookups on the next menu open", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({
+        worktrees: [{ id: "wt-1", path: "/src/worktree" }],
+      });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:worktree",
+      kind: "direct",
+      updatedAt: 0,
+      worktree: { id: "wt-1", branch: "feature", repoRoot: "/src/openclaw" },
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(session, "/src/default", true);
+    await pane.loadHeaderMenuData(session, "/src/default", true);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries failed branch metadata lookups on the next menu open", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({ headBranch: "feature/header" });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:plain",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(session, "/src/openclaw", true);
+    await pane.loadHeaderMenuData(session, "/src/openclaw", true);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("probes session-specific roots for a branch even when the agent workspace is not Git", async () => {
+    const request = vi.fn().mockResolvedValue({ headBranch: "spawned/topic" });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:spawned",
+      kind: "direct",
+      updatedAt: 0,
+      spawnedWorkspaceDir: "/src/spawned-repo",
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(session, "/plain/agent-workspace", false);
+    expect(request).toHaveBeenCalledWith("worktrees.branches", { repoRoot: "/src/spawned-repo" });
+
+    // The agent-workspace root keeps honoring the agent's workspaceGit flag.
+    request.mockClear();
+    const plain = {
+      key: "agent:main:plain2",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(plain, "/plain/agent-workspace", false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse worktree workspace facts after an in-place session reset", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "worktrees.list") {
+        return { worktrees: [{ id: "wt-1", path: "/src/worktree-checkout" }] };
+      }
+      return { headBranch: "main" };
+    });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const worktreeRow = {
+      key: "agent:main:reused",
+      kind: "direct",
+      updatedAt: 0,
+      worktree: { id: "wt-1", branch: "feature", repoRoot: "/src/openclaw" },
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(worktreeRow, "/src/agent-workspace", true);
+
+    // New Chat resets the same key in place and detaches the worktree; the
+    // branch probe must target the agent workspace, not the stale checkout.
+    const resetRow = {
+      key: "agent:main:reused",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(resetRow, "/src/agent-workspace", true);
+    expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
+      repoRoot: "/src/agent-workspace",
+    });
+  });
+
+  it("skips branch lookups while the session runs remotely", async () => {
+    const request = vi.fn().mockResolvedValue({ headBranch: "main" });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const dispatched = {
+      key: "agent:main:moves",
+      kind: "direct",
+      updatedAt: 0,
+      placement: { state: "active" } as GatewaySessionRow["placement"],
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(dispatched, "/src/openclaw", true);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the head branch on every menu open so checkouts do not go stale", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ headBranch: "main" })
+      .mockResolvedValueOnce({ headBranch: "feature/next" });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:plain",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    await pane.loadHeaderMenuData(session, "/src/openclaw", true);
+    await pane.loadHeaderMenuData(session, "/src/openclaw", true);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces resolved reveal failures in the chat error", async () => {
+    const request = vi.fn(async () => ({ ok: false, error: "No desktop available." }));
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
+    await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
+  });
+});
 
 describe("chat pane initialization", () => {
   it("sets the pane route before attaching outbox projection", () => {
@@ -454,6 +708,10 @@ describe("chat pane catalog session lifecycle", () => {
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
         createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        undefined,
+        true,
+        undefined,
+        false,
       ),
       container,
     );

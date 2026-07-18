@@ -246,6 +246,7 @@ describe("tool mutation helpers", () => {
       "image",
       "pdf",
       "read",
+      "conversations_list",
       "sessions_history",
       "sessions_list",
       "sessions_search",
@@ -478,6 +479,9 @@ describe("tool mutation helpers", () => {
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_spawn")).toBe(true);
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_send")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_turn")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_list")).toBe(false);
     expect(isLikelyMutatingToolName("sessions")).toBe(true);
     expect(isLikelyMutatingToolName("computer")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);

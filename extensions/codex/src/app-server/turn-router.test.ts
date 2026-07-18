@@ -115,6 +115,55 @@ describe("CodexAppServerTurnRouter", () => {
     expect(secondResponse).toEqual({ id: "request-2", result: { owner: "second" } });
   });
 
+  it("warns once only for a thread-correlated stale turn notification", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    const notifications = vi.fn();
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-1",
+      onNotification: notifications,
+    });
+    route.armTurn();
+    await route.bindTurn("turn-current");
+    const staleNotification = {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-stale",
+        itemId: "msg-stale",
+        delta: "ignored",
+      },
+    };
+
+    harness.send(staleNotification);
+    harness.send(staleNotification);
+    harness.send({
+      method: "thread/status/changed",
+      params: { threadId: "thread-1", status: { type: "active" } },
+    });
+    harness.send({ method: "configWarning", params: { message: "global" } });
+    await settleInput();
+
+    expect(notifications).toHaveBeenCalledOnce();
+    expect(notifications).toHaveBeenCalledWith(
+      {
+        method: "thread/status/changed",
+        params: { threadId: "thread-1", status: { type: "active" } },
+      },
+      { threadId: "thread-1" },
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("codex app-server notification ignored for inactive turn", {
+      eventKind: "item/agentMessage/delta",
+      activeThreadId: "thread-1",
+      activeTurnId: "turn-current",
+      threadId: "thread-1",
+      turnId: "turn-stale",
+      matchesActiveThread: true,
+      matchesActiveTurn: false,
+    });
+  });
+
   it("buffers pre-bind notifications in order and filters the bound turn", async () => {
     const harness = createHarness();
     const methods: string[] = [];

@@ -146,6 +146,26 @@ function createDiscordWidgetToolVariant(
       });
       let result: Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
       let deliveredResult: Awaited<ReturnType<typeof sendDiscordComponentMessage>> | undefined;
+      let deliveryRecord: Promise<void> | undefined;
+      let deliveryRecordError: Error | undefined;
+      const recordDelivery = async (
+        deliveryResult: Awaited<ReturnType<typeof sendDiscordComponentMessage>>,
+      ) => {
+        deliveredResult = deliveryResult;
+        deliveryRecord ??= deps.runtime.store.markWidgetDelivered(
+          widgetId,
+          deliveryResult.messageId,
+        );
+        try {
+          await deliveryRecord;
+        } catch (error) {
+          deliveryRecordError ??= new Error(
+            "Discord widget was delivered, but its delivery state could not be saved",
+            { cause: error },
+          );
+          throw deliveryRecordError;
+        }
+      };
       try {
         const components = buildDiscordPresentationComponents({
           blocks: [
@@ -170,16 +190,20 @@ function createDiscordWidgetToolVariant(
             cfg: cfg as OpenClawConfig,
             accountId: account.accountId,
             allowedMentions: { parse: [] },
-            onDeliveryResult: (deliveryResult) => {
-              deliveredResult = deliveryResult;
-            },
+            onDeliveryResult: recordDelivery,
           },
         );
+        await recordDelivery(result);
       } catch (error) {
+        if (deliveryRecordError) {
+          throw deliveryRecordError;
+        }
         if (!deliveredResult) {
           await deps.runtime.store.deleteWidget(widgetId);
           throw error;
         }
+        // sendDiscordComponentMessage awaits onDeliveryResult before later bookkeeping. Marker
+        // failures were surfaced above, so only post-delivery bookkeeping can reach this recovery.
         result = deliveredResult;
       }
       return jsonResult({ widgetId, messageId: result.messageId, channelId: result.channelId });

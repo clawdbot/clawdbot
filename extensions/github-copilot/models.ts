@@ -303,6 +303,8 @@ export async function fetchCopilotModelCatalog(
       signal: params.signal ?? controller?.signal,
     });
     if (!res.ok) {
+      // Static catalog fallback never consumes this body, so release the transport before cleanup.
+      await res.body?.cancel().catch(() => undefined);
       throw new Error(`Copilot /models fetch failed: HTTP ${res.status}`);
     }
     const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");

@@ -19,6 +19,7 @@ export type RealtimeTalkCallbacks = {
   onInputLevel?: (level: number) => void;
   onTranscript?: (entry: { role: "user" | "assistant"; text: string; final: boolean }) => void;
   onTalkEvent?: (event: RealtimeTalkEvent) => void;
+  onVideoStream?: (stream: MediaStream | null) => void;
 };
 
 type RealtimeTalkEventInput<TPayload = unknown> = {
@@ -107,6 +108,7 @@ export type RealtimeTalkTransportContext = {
   sessionKey: string;
   callbacks: RealtimeTalkCallbacks;
   inputDeviceId?: string;
+  videoEnabled?: boolean;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
 };

@@ -32,6 +32,11 @@ describe("byteplus plugin", () => {
     expect(planEntry?.reasoning).toBe(codingModel.reasoning);
     expect(planEntry?.input).toEqual([...codingModel.input]);
     expect(planEntry?.contextWindow).toBe(codingModel.contextWindow);
+    expect(BYTEPLUS_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
+      "ark-code-latest",
+      "glm-4.7",
+      "kimi-k2.5",
+    ]);
   });
 
   it("declares its coding provider auth alias in the manifest", () => {
@@ -47,11 +52,8 @@ describe("byteplus plugin", () => {
   it("keeps Kimi catalog metadata aligned with provider capabilities", () => {
     const standardKimi = BYTEPLUS_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2-5-260127");
     const planKimi = BYTEPLUS_CODING_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2.5");
-    const thinkingKimi = BYTEPLUS_CODING_MODEL_CATALOG.find(
-      (entry) => entry.id === "kimi-k2-thinking",
-    );
 
-    for (const entry of [standardKimi, planKimi, thinkingKimi]) {
+    for (const entry of [standardKimi, planKimi]) {
       expect(entry?.reasoning).toBe(true);
       expect(entry?.maxTokens).toBe(32768);
       expect(entry?.cost?.input).toBe(0.6);

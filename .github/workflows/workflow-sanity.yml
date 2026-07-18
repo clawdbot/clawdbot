@@ -231,7 +231,7 @@ jobs:
       - name: Check config docs drift statefile
         run: pnpm config:docs:check
 
-      - name: Check plugin SDK API baseline drift
+      - name: Check plugin SDK API contract manifest
         run: pnpm plugin-sdk:api:check
 
       - name: Check SQLite sessions/transcripts schema baseline drift

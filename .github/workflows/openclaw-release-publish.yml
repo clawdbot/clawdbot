@@ -72,7 +72,7 @@ on:
           - stable
           - full
       wait_for_clawhub:
-        description: Wait for ClawHub plugin publish before marking this workflow complete
+        description: Wait for and auto-approve ClawHub plugin publish; otherwise approve and monitor the detached runs separately
         required: true
         default: false
         type: boolean
@@ -401,6 +401,9 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Resolve checked-out release ref
@@ -499,7 +502,7 @@ jobs:
             echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
             exit 1
           fi
-          if [[ "$performance_blocking" != "true" ]]; then
+          if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]; then
             echo "Full release validation manifest does not record blocking product performance evidence." >&2
             exit 1
           fi
@@ -601,7 +604,27 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          install-deps: "false"
           install-bun: "false"
+
+      - name: Install trusted release tooling dependencies
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          install_args=(
+            --dir .release-harness
+            install
+            --frozen-lockfile
+            --prefer-offline
+            --config.engine-strict=false
+            --config.enable-pre-post-scripts=true
+            --config.side-effects-cache=true
+          )
+          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          # Node resolves --import tsx from the process cwd. Point that root at
+          # the trusted harness install instead of the frozen target checkout.
+          ln -s .release-harness/node_modules node_modules
 
       - name: Resolve ClawHub release plan
         id: clawhub_plan
@@ -2197,14 +2220,11 @@ jobs:
               fi
             fi
           else
+            # Detached mode deliberately leaves protected ClawHub approvals to
+            # the operator monitoring the linked child runs. Polling for those
+            # gates here would put plugin fan-out back on the core release path.
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
-              wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval" "${TARGET_SHA}"
-              if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"; then
-                :
-              else
-                echo "- plugin-clawhub-release.yml: child environment gate not ready; publish was left dispatched (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
-              fi
-              echo "- plugin-clawhub-release.yml: publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+              echo "- plugin-clawhub-release.yml: detached; approval and publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- plugin-clawhub-release.yml: no normal OIDC publish to await" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -2212,12 +2232,7 @@ jobs:
               if [[ "${plugin_clawhub_bootstrap_completed}" == "true" ]]; then
                 echo "- plugin-clawhub-new.yml: bootstrap already completed before continuing" >> "$GITHUB_STEP_SUMMARY"
               else
-                if approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"; then
-                  :
-                else
-                  echo "- plugin-clawhub-new.yml: child environment gates not ready; bootstrap was left dispatched (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
-                fi
-                echo "- plugin-clawhub-new.yml: bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
+                echo "- plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
               fi
             else
               echo "- plugin-clawhub-new.yml: no bootstrap publish to await" >> "$GITHUB_STEP_SUMMARY"

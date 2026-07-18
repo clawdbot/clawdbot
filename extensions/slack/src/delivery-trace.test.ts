@@ -2,7 +2,7 @@
 //
 // Drives the real dispatch wiring (dispatchPreparedSlackMessage → deliverSlackPayload
 // → native stream / draft preview / preview finalize / deliverReplies → sendMessageSlack)
-// with the core agent turn mocked at the dispatchReplyWithBufferedBlockDispatcher seam:
+// with the core agent turn mocked at the channel-inbound dispatch seam:
 // the scripted steps stand in for the reply dispatcher callbacks (typing, partials,
 // tool progress, per-payload deliver). OUT events are the Slack Web API calls observed
 // at a recording WebClient stand-in. Native streaming runs through the REAL
@@ -33,7 +33,7 @@ type RecordedWireCall = {
 
 type CapturedDispatcherOptions = {
   deliver: (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => Promise<unknown>;
-  onError?: (err: unknown, info: { kind: string }) => void;
+  onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
   typingCallbacks?: {
     onReplyStart?: () => Promise<void>;
     onIdle?: () => void;
@@ -90,31 +90,33 @@ const traceState = vi.hoisted(
 // deliver/typing/replyOptions wiring (dedupe, thread plan, native stream ladder,
 // draft preview, preview finalize, deliverReplies chunking, sendMessageSlack)
 // stays the real production code.
-vi.mock("./monitor/reply.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor/reply.runtime.js")>();
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
   return {
     ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: async (params: {
-      dispatcherOptions: unknown;
-      replyOptions?: unknown;
-    }) => {
+    dispatchChannelInboundTurn: async (params: DispatchParams) => {
       traceState.turn = {
-        options: params.dispatcherOptions as CapturedDispatcherOptions,
+        options: {
+          ...params.dispatcherOptions,
+          deliver: params.delivery.deliver,
+          onError: params.delivery.onError,
+        } as CapturedDispatcherOptions,
         replyOptions: (params.replyOptions ?? {}) as CapturedReplyOptions,
       };
       traceState.turnStarted?.resolve();
       if (!traceState.turnOutcome) {
         throw new Error("trace turn outcome gate not initialized");
       }
-      return await traceState.turnOutcome.promise;
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: params.route.sessionKey,
+        dispatchResult: await traceState.turnOutcome.promise,
+      };
     },
   };
-});
-
-// Session-store recording is not wire behavior; keep the turn hermetic.
-vi.mock("./monitor/conversation.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor/conversation.runtime.js")>();
-  return { ...actual, recordInboundSession: async () => {} };
 });
 
 // send.ts/actions.ts build their own WebClient from tokens; route every client
@@ -138,8 +140,7 @@ vi.mock("./client.js", async (importOriginal) => {
 import { dispatchPreparedSlackMessage } from "./monitor/message-handler/dispatch.js";
 
 afterAll(() => {
-  vi.doUnmock("./monitor/reply.runtime.js");
-  vi.doUnmock("./monitor/conversation.runtime.js");
+  vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
   vi.doUnmock("./client.js");
   vi.resetModules();
 });
@@ -547,7 +548,7 @@ async function setupSlackTrace(
     } catch (err) {
       // Mirrors the reply dispatcher: failed deliveries report onError and are
       // not counted as dispatched.
-      turn.options.onError?.(err, { kind });
+      await turn.options.onError?.(err, { kind });
     }
   };
 

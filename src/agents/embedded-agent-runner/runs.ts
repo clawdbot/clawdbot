@@ -298,19 +298,6 @@ function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): vo
 }
 
 /**
- * @deprecated Use queueEmbeddedAgentMessageWithOutcomeAsync for delivery decisions.
- * This boolean helper only reports immediate queue eligibility; it cannot surface
- * async runtime rejection from the active run.
- */
-export function queueEmbeddedAgentMessage(
-  sessionId: string,
-  text: string,
-  options?: EmbeddedAgentQueueMessageOptions,
-): boolean {
-  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
-}
-
-/**
  * @deprecated Prefer queueEmbeddedAgentMessageWithOutcomeAsync when callers need to
  * know whether steering was accepted. This sync helper is fire-and-forget after
  * initial eligibility and only logs later runtime rejection.
@@ -727,22 +714,22 @@ export async function waitForActiveEmbeddedRuns(
   }
 }
 
-export function waitForEmbeddedAgentRunEnd(
+function waitForCurrentEmbeddedAgentRunEnd(
   sessionId: string,
-  timeoutMs = 15_000,
+  timeoutMs: number | null,
 ): Promise<boolean> {
-  if (!sessionId) {
-    return Promise.resolve(true);
-  }
   if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
     return waitForReplyRunEndBySessionId(sessionId, timeoutMs);
   }
-  diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
+  const timeoutLabel = timeoutMs === null ? "none" : String(timeoutMs);
+  diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutLabel}`);
   return new Promise((resolve) => {
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
     const waiter: EmbeddedRunWaiter = {
       resolve,
-      timer: setTimeout(
+    };
+    if (timeoutMs !== null) {
+      waiter.timer = setTimeout(
         () => {
           waiters.delete(waiter);
           if (waiters.size === 0) {
@@ -752,8 +739,8 @@ export function waitForEmbeddedAgentRunEnd(
           resolve(false);
         },
         resolveTimerTimeoutMs(timeoutMs, 100, 100),
-      ),
-    };
+      );
+    }
     waiters.add(waiter);
     EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
     if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
@@ -761,10 +748,32 @@ export function waitForEmbeddedAgentRunEnd(
       if (waiters.size === 0) {
         EMBEDDED_RUN_WAITERS.delete(sessionId);
       }
-      clearTimeout(waiter.timer);
+      if (waiter.timer) {
+        clearTimeout(waiter.timer);
+      }
       resolve(true);
     }
   });
+}
+
+export async function waitForEmbeddedAgentRunEnd(
+  sessionId: string,
+  timeoutMs: number | null = 15_000,
+): Promise<boolean> {
+  if (!sessionId) {
+    return true;
+  }
+  const deadline = timeoutMs === null ? undefined : Date.now() + timeoutMs;
+  while (isEmbeddedAgentRunActive(sessionId)) {
+    const remainingMs = deadline === undefined ? null : deadline - Date.now();
+    if (remainingMs !== null && remainingMs <= 0) {
+      return false;
+    }
+    if (!(await waitForCurrentEmbeddedAgentRunEnd(sessionId, remainingMs))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export type AbortAndDrainEmbeddedAgentRunResult = {
@@ -813,7 +822,9 @@ function notifyEmbeddedRunEnded(sessionId: string) {
   EMBEDDED_RUN_WAITERS.delete(sessionId);
   diag.debug(`notifying waiters: sessionId=${sessionId} waiterCount=${waiters.size}`);
   for (const waiter of waiters) {
-    clearTimeout(waiter.timer);
+    if (waiter.timer) {
+      clearTimeout(waiter.timer);
+    }
     waiter.resolve(true);
   }
 }
@@ -932,7 +943,9 @@ const testing = {
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
       for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
+        if (waiter.timer) {
+          clearTimeout(waiter.timer);
+        }
         waiter.resolve(true);
       }
     }

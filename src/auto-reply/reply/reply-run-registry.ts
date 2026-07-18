@@ -30,6 +30,8 @@ type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
+  /** True when this queue item came from the channel's current user turn. */
+  isInboundUserMessage?: boolean;
   debounceMs?: number;
   /** Ordered current-turn images to inject with the steering text. */
   images?: ImageContent[];
@@ -209,7 +211,7 @@ type ReplyRunRegistry = {
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,
-    timeoutMs?: number,
+    timeoutMs?: number | null,
     opts?: { signal?: AbortSignal },
   ): Promise<boolean>;
   resolveSessionId(sessionKey: string): string | undefined;
@@ -1195,7 +1197,7 @@ export function clearReplyRunForResetBySessionId(sessionId: string): void {
 
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
-  timeoutMs: number,
+  timeoutMs?: number | null,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
   if (!waitKey) {

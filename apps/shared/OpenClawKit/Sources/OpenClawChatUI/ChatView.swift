@@ -49,6 +49,22 @@ func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
     }
 }
 
+public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
+    public let rawValue: UInt8
+
+    public init(rawValue: UInt8) {
+        self.rawValue = rawValue
+    }
+
+    public static let reasoning = Self(rawValue: 1 << 0)
+    public static let toolActivity = Self(rawValue: 1 << 1)
+    public static let assistantTrace: Self = [.reasoning, .toolActivity]
+
+    public static func assistantTrace(_ isVisible: Bool) -> Self {
+        isVisible ? .assistantTrace : []
+    }
+}
+
 @MainActor
 public struct OpenClawChatView: View {
     public enum Style {
@@ -77,19 +93,19 @@ public struct OpenClawChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
-    @State private var showSessions = false
     @State private var hasPerformedInitialScroll = false
     @State private var lastUserMessageID: UUID?
     @State private var hasNewerContentBelow = false
     @State private var followTarget: ScrollFollowTarget? = .latest
     @State private var isAtLiveEdge = true
     @State private var isUserScrolling = false
+    @State private var fullMessageRequest: ChatFullMessageReaderRequest?
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
     private let userAccent: Color?
-    private let showsAssistantTrace: Bool
+    private let displayOptions: OpenClawChatDisplayOptions
     private let assistantName: String?
     private let assistantAvatarText: String?
     private let assistantAvatarTint: Color?
@@ -135,6 +151,7 @@ public struct OpenClawChatView: View {
         #endif
     }
 
+    /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
         viewModel: OpenClawChatViewModel,
         drawsBackground: Bool = true,
@@ -142,6 +159,7 @@ public struct OpenClawChatView: View {
         style: Style = .standard,
         markdownVariant: ChatMarkdownVariant = .standard,
         userAccent: Color? = nil,
+        displayOptions: OpenClawChatDisplayOptions? = nil,
         showsAssistantTrace: Bool = false,
         assistantName: String? = nil,
         assistantAvatarText: String? = nil,
@@ -163,7 +181,7 @@ public struct OpenClawChatView: View {
         self.style = style
         self.markdownVariant = markdownVariant
         self.userAccent = userAccent
-        self.showsAssistantTrace = showsAssistantTrace
+        self.displayOptions = displayOptions ?? .assistantTrace(showsAssistantTrace)
         self.assistantName = assistantName
         self.assistantAvatarText = assistantAvatarText
         self.assistantAvatarTint = assistantAvatarTint
@@ -190,10 +208,15 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
-        .sheet(isPresented: self.$showSessions) {
-            if self.showsSessionSwitcher {
-                ChatSessionsSheet(viewModel: self.viewModel)
-            }
+        .sheet(item: self.$fullMessageRequest) { request in
+            ChatFullMessageReader(
+                request: request,
+                markdownVariant: self.markdownVariant,
+                load: {
+                    try await self.viewModel.transport.requestFullMessage(
+                        sessionKey: request.sessionKey,
+                        messageID: request.messageID)
+                })
         }
     }
 
@@ -203,6 +226,8 @@ public struct OpenClawChatView: View {
         VStack(spacing: Layout.stackSpacing) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
+            self.planPill
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
         }
@@ -213,6 +238,9 @@ public struct OpenClawChatView: View {
         VStack(spacing: 0) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
+            self.planPill
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
+                .padding(.top, Layout.stackSpacing)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
@@ -222,6 +250,15 @@ public struct OpenClawChatView: View {
         .frame(maxWidth: .infinity)
         .frame(maxHeight: .infinity, alignment: .top)
         #endif
+    }
+
+    @ViewBuilder
+    private var planPill: some View {
+        if self.viewModel.hasBlockingRunActivity, !self.viewModel.planSteps.isEmpty {
+            ChatPlanPill(
+                steps: self.viewModel.planSteps,
+                explanation: self.viewModel.planExplanation)
+        }
     }
 
     private var composer: some View {
@@ -383,7 +420,7 @@ public struct OpenClawChatView: View {
                 .equatable()
         }
 
-        if !self.viewModel.pendingToolCalls.isEmpty {
+        if self.displayOptions.contains(.toolActivity), !self.viewModel.pendingToolCalls.isEmpty {
             ChatPendingToolsBubble(
                 toolCalls: self.viewModel.pendingToolCalls,
                 isClean: self.composerChrome == .clean)
@@ -395,7 +432,7 @@ public struct OpenClawChatView: View {
             ChatStreamingAssistantBubble(
                 text: text,
                 markdownVariant: self.markdownVariant,
-                showsAssistantTrace: self.showsAssistantTrace,
+                showsReasoning: self.displayOptions.contains(.reasoning),
                 assistantName: self.assistantName,
                 assistantAvatarText: self.assistantAvatarText,
                 assistantAvatarTint: self.assistantAvatarTint,
@@ -415,13 +452,17 @@ public struct OpenClawChatView: View {
             style: self.style,
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
-            showsAssistantTrace: self.showsAssistantTrace,
+            displayOptions: self.displayOptions,
             assistantName: self.assistantName,
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             showsAssistantAvatar: self.showsAssistantAvatars,
             isClean: self.composerChrome == .clean,
-            contextWindowTokens: contextWindowTokens)
+            contextWindowTokens: contextWindowTokens,
+            inlineWidgetResolverReady: self.viewModel.healthOK,
+            inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
+                await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            })
             .frame(
                 maxWidth: .infinity,
                 alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
@@ -436,6 +477,8 @@ public struct OpenClawChatView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .contextMenu {
                 self.copyMessageButton(for: msg)
+                self.replyMessageButton(for: msg)
+                self.openFullMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -475,6 +518,9 @@ public struct OpenClawChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contextMenu {
+                self.copyMessageButton(for: msg)
+                self.replyMessageButton(for: msg)
+                self.openFullMessageButton(for: msg)
                 Button {
                     if speech.isActive(msg.id) {
                         speech.stop()
@@ -498,14 +544,12 @@ public struct OpenClawChatView: View {
                 }
             }
         } else {
-            #if os(macOS)
             bubble
                 .contextMenu {
                     self.copyMessageButton(for: msg)
+                    self.replyMessageButton(for: msg)
+                    self.openFullMessageButton(for: msg)
                 }
-            #else
-            bubble
-            #endif
         }
     }
 
@@ -526,32 +570,6 @@ public struct OpenClawChatView: View {
         default:
             nil
         }
-    }
-
-    @ViewBuilder
-    private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
-        let text = self.primaryText(in: message)
-        if !text.isEmpty {
-            Button {
-                Self.copyToClipboard(text)
-            } label: {
-                Label {
-                    Text("Copy Message")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "doc.on.doc")
-                }
-            }
-        }
-    }
-
-    private static func copyToClipboard(_ text: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #else
-        UIPasteboard.general.string = text
-        #endif
     }
 
     private var visibleMessages: [OpenClawChatMessage] {
@@ -662,12 +680,14 @@ public struct OpenClawChatView: View {
 
     private var hasVisibleStreamingAssistantText: Bool {
         guard let text = self.viewModel.streamingAssistantText else { return false }
-        return AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
+        return AssistantTextParser.hasVisibleContent(
+            in: text,
+            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
-            !self.viewModel.pendingToolCalls.isEmpty ||
+            (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
             self.hasVisibleStreamingAssistantText
     }
 
@@ -845,6 +865,18 @@ public struct OpenClawChatView: View {
         }
     }
 
+    private func dismissKeyboardIfNeeded() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil)
+        #endif
+    }
+}
+
+extension OpenClawChatView {
     private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var result: [OpenClawChatMessage] = []
         result.reserveCapacity(messages.count)
@@ -887,6 +919,8 @@ public struct OpenClawChatView: View {
                 role: last.role,
                 content: content,
                 timestamp: last.timestamp,
+                transcriptMessageID: last.transcriptMessageID,
+                isTruncated: last.isTruncated,
                 idempotencyKey: last.idempotencyKey,
                 toolCallId: last.toolCallId,
                 toolName: last.toolName,
@@ -905,29 +939,29 @@ public struct OpenClawChatView: View {
     }
 
     private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
+        let primaryText = self.primaryText(in: message)
         if self.hasInlineAttachments(in: message) {
             return true
         }
 
-        let primaryText = self.primaryText(in: message)
+        if self.isToolResultMessage(message) {
+            return self.displayOptions.contains(.toolActivity) && !primaryText.isEmpty
+        }
+
         if !primaryText.isEmpty {
             if message.role.lowercased() == "user" {
                 return true
             }
-            if AssistantTextParser.hasVisibleContent(in: primaryText, includeThinking: self.showsAssistantTrace) {
+            if AssistantTextParser.hasVisibleContent(
+                in: primaryText,
+                includeThinking: self.displayOptions.contains(.reasoning))
+            {
                 return true
             }
         }
 
-        guard self.showsAssistantTrace else {
-            return false
-        }
-
-        if self.isToolResultMessage(message) {
-            return !primaryText.isEmpty
-        }
-
-        return !self.toolCalls(in: message).isEmpty || !self.inlineToolResults(in: message).isEmpty
+        return self.displayOptions.contains(.toolActivity) &&
+            (!self.toolCalls(in: message).isEmpty || !self.inlineToolResults(in: message).isEmpty)
     }
 
     private func primaryText(in message: OpenClawChatMessage) -> String {
@@ -988,13 +1022,79 @@ public struct OpenClawChatView: View {
         self.primaryText(in: message)
     }
 
-    private func dismissKeyboardIfNeeded() {
-        #if canImport(UIKit)
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil)
+    @ViewBuilder
+    private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
+        let text = ChatMessageVisibleText.copyText(in: message)
+        if !text.isEmpty {
+            Button {
+                Self.copyToClipboard(text)
+            } label: {
+                Label {
+                    Text("Copy Message")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func openFullMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "assistant",
+           message.isTruncated,
+           let messageID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !messageID.isEmpty
+        {
+            Button {
+                self.fullMessageRequest = ChatFullMessageReaderRequest(
+                    sessionKey: self.viewModel.sessionKey,
+                    messageID: messageID)
+            } label: {
+                Label {
+                    Text("Open Full Message")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "doc.text.magnifyingglass")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func replyMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let text = ChatReplyQuote.targetText(ChatMessageVisibleText.visibleText(in: message))
+        if role == "user" || role == "assistant", !text.isEmpty {
+            Button {
+                self.viewModel.setReplyTarget(
+                    messageID: message.id,
+                    text: text,
+                    senderLabel: self.replySenderLabel(forRole: role))
+            } label: {
+                Label {
+                    Text(String(localized: "Reply"))
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrowshape.turn.up.left")
+                }
+            }
+        }
+    }
+
+    private func replySenderLabel(forRole role: String) -> String {
+        guard role == "assistant" else { return String(localized: "You") }
+        let name = self.assistantName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? String(localized: "Assistant") : name
+    }
+
+    fileprivate static func copyToClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
         #endif
     }
 }

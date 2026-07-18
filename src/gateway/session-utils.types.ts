@@ -2,6 +2,7 @@
 // Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionPlacement } from "../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -117,6 +118,10 @@ export type GatewaySessionRow = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   /** Resolved effective usage mode (session override → channel config → default → off). Populated by surfaces that have config access; absent from the raw session store row. */
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
+  /** Explicit per-session queue override, before channel/global defaults. */
+  queueMode?: QueueMode;
+  /** Queue mode for Control UI sends (session override → webchat config → global default). */
+  effectiveQueueMode?: QueueMode;
   modelProvider?: string;
   model?: string;
   modelSelectionLocked?: boolean;

@@ -231,6 +231,8 @@ async function resumeOrphanedSession(params: {
 export async function recoverOrphanedSubagentSessions(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
   getActiveRuns: () => Map<string, SubagentRunRecord>;
+  /** Test seam for transcript reads; production uses the canonical reader. */
+  readSessionMessages?: typeof readSessionMessagesAsync;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
   /** Exact stale generations whose terminal transition must retry without session state. */
@@ -249,6 +251,7 @@ export async function recoverOrphanedSubagentSessions(params: {
   };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
   const pendingStaleFinalizations = params.pendingStaleFinalizations ?? new Map<string, string>();
+  const readSessionMessages = params.readSessionMessages ?? readSessionMessagesAsync;
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
 
   try {
@@ -431,7 +434,7 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
-        const messages = await readSessionMessagesAsync(
+        const messages = await readSessionMessages(
           {
             agentId: resolveAgentIdFromSessionKey(childSessionKey),
             sessionEntry: entry,
@@ -592,6 +595,8 @@ async function finalizeInterruptedRunWithRetry(params: {
 export function scheduleOrphanRecovery(params: {
   getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
   getActiveRuns: () => Map<string, SubagentRunRecord>;
+  /** Test seam for transcript reads; production uses the canonical reader. */
+  readSessionMessages?: typeof readSessionMessagesAsync;
   delayMs?: number;
   maxRetries?: number;
 }): void {
@@ -617,6 +622,7 @@ export function scheduleOrphanRecovery(params: {
         const result = await recoverOrphanedSubagentSessions({
           gatewayRuntime,
           getActiveRuns: params.getActiveRuns,
+          readSessionMessages: params.readSessionMessages ?? readSessionMessagesAsync,
           resumedSessionKeys,
           pendingStaleFinalizations,
         });

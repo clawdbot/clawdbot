@@ -38,10 +38,37 @@ collapse it, hide it, or delete it.
 
 ## Built-in widgets
 
-Nine trusted widgets ship with the plugin and render as first-party UI:
+Thirteen trusted widgets ship with the plugin and render as first-party UI:
 
 `stat-card`, `markdown`, `table`, `iframe-embed`, `sessions`, `usage`, `cron`,
-`instances`, `activity`.
+`instances`, `activity`, `chart`, `preview`, `agent-status`,
+`custom-widget-approvals`.
+
+The `chart` widget renders dependency-free inline SVG as `line`, `bar`, `area`,
+`sparkline`, or `gauge`. Bind `value` to a numeric array or to an object shaped like
+`{ "points": [1, { "y": 2 }, { "value": 3 }] }`. Set `props.type` to select the
+visual and optionally set finite numeric `props.min` and `props.max` bounds. Invalid
+types, bounds, points, and series longer than 500 entries render a safe error state;
+empty series render an empty state.
+
+The `preview` widget embeds a live page with reload plus desktop, tablet, and mobile
+viewport controls. Set `props.url`, or bind `value` to a URL when the preview target is
+data-driven; a binding takes precedence over the prop. Relative and same-origin HTTP(S)
+URLs are allowed. External HTTP(S) URLs follow the gateway's external-embed policy, and
+other schemes are blocked. Preview frames share the `iframe-embed` sandbox ceiling and
+never receive same-origin access.
+
+The `agent-status` widget presents the current Busy or Idle state from a
+`sessions.list` RPC binding. Session-list events refresh it immediately, while the normal
+visibility-gated binding poll remains a fallback. The `custom-widget-approvals` widget
+lists only pending entries from the Workspaces custom-widget registry. Its Approve and
+Reject controls are disabled unless the current connection holds `operator.approvals`;
+it does not expose exec, plugin, or system-agent approvals.
+
+Tabs use the 12-column widget grid by default. A tab containing zero or one widget can
+instead use the `full` layout, which removes the widget card chrome and lets the widget
+fill the tab. Switch layouts with `openclaw workspaces tabs full <slug>` and
+`openclaw workspaces tabs grid <slug>`.
 
 Widgets declare data through **bindings**, they never fetch on their own:
 
@@ -88,12 +115,13 @@ per-invocation confirmation quoting the exact text, and passes a rate limit.
 ```sh
 openclaw workspaces tabs list
 openclaw workspaces tabs create --title Financials
+openclaw workspaces tabs full financials
 openclaw workspaces widget-scaffold revenue-chart --title "Revenue Chart"
 openclaw workspaces widget-approve revenue-chart
 ```
 
-`widget-approve` needs a device paired with the `operator.approvals` scope; approving from
-the Control UI does not, because the browser already holds it.
+`widget-approve` and the Control UI decision controls both need a device paired with the
+`operator.approvals` scope.
 
 ## Storage
 

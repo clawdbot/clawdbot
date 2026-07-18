@@ -796,6 +796,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "photos-limited-access")
     }
 
+    func testAppleHealthDisclosureIsVisible() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "apple-health-disclosure"))
+
+        let permissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
+        permissions.tap()
+
+        let appleHealth = try XCTUnwrap(self.app?.staticTexts["Apple Health Summaries"])
+        XCTAssertTrue(appleHealth.waitForExistence(timeout: 8))
+        XCTAssertTrue(self.app?.staticTexts["Apple Health"].exists == true)
+        self.attachScreenshot(named: "apple-health-disclosure")
+    }
+
     private func launchApp(
         for target: ScreenshotTarget,
         appearance: String? = "dark",

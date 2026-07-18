@@ -1,15 +1,15 @@
 /** Shared config mutations used by interactive and non-interactive onboarding. */
 import { setConfigValueAtPath } from "../config/config-paths.js";
-import type { DmScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
 
-/** Default DM scoping selected during local onboarding. */
-const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 /** Default tool profile selected during local onboarding. */
 const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 
 /** Applies local gateway/workspace defaults without overwriting explicit user defaults. */
+// Deliberately writes no session.dmScope: the schema default "main" (one rolling
+// personal-agent session across channels) is the product default. Multi-user DM
+// isolation is opt-in; `openclaw security audit` nudges it when traffic warrants.
 export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
@@ -26,10 +26,6 @@ export function applyLocalSetupWorkspaceConfig(
     gateway: {
       ...baseConfig.gateway,
       mode: "local",
-    },
-    session: {
-      ...baseConfig.session,
-      dmScope: baseConfig.session?.dmScope ?? ONBOARDING_DEFAULT_DM_SCOPE,
     },
     tools: {
       ...baseConfig.tools,

@@ -148,6 +148,54 @@ function isSuccessfulRecentRun(run, nowMs) {
   return run?.status === "completed" && run.conclusion === "success" && isRecentRun(run, nowMs);
 }
 
+const CI_GATE_CHECK_NAME = "openclaw/ci-gate";
+
+/**
+ * True when this run's own openclaw/ci-gate job already succeeded on the
+ * run's CURRENT attempt. The gate job needs every selected lane and fails on
+ * any non-success result, so a successful gate proves the merge-relevant
+ * outcome minutes before post-gate stragglers (timing summaries, artifact
+ * uploads) let the run itself reach completed. Check suites survive reruns,
+ * so binding goes through the attempt-scoped jobs listing: the job must carry
+ * the run's own run_attempt — a prior attempt's gate success can never vouch
+ * for a rerun that has not reached its gate yet.
+ */
+function hasSuccessfulCiGateJob(run, ciGateJobs, nowMs) {
+  if (!run?.id || !Array.isArray(ciGateJobs)) {
+    return false;
+  }
+  const runAttempt = run.run_attempt ?? 1;
+  return ciGateJobs.some((job) => {
+    if (job?.name !== CI_GATE_CHECK_NAME) {
+      return false;
+    }
+    // Workflow attempts share a run id and filter=latest keeps a not-yet-rerun
+    // job's prior-attempt execution, so bind to the attempt explicitly: the
+    // REST job payload exposes run_attempt, and jobs are fetched from the
+    // attempt-specific endpoint. Both must agree with the run's attempt.
+    if (job?.run_id !== run.id || (job?.run_attempt ?? runAttempt) !== runAttempt) {
+      return false;
+    }
+    if (job?.status !== "completed" || job?.conclusion !== "success") {
+      return false;
+    }
+    const completedAtMs = Date.parse(String(job?.completed_at ?? ""));
+    return (
+      Number.isFinite(completedAtMs) &&
+      completedAtMs >= nowMs - HOSTED_GATE_MAX_AGE_MS &&
+      completedAtMs <= nowMs + HOSTED_GATE_CLOCK_SKEW_MS
+    );
+  });
+}
+
+function isGateProvenInProgressRun(run, ciGateJobs, nowMs) {
+  return (
+    (run?.status === "in_progress" || run?.status === "queued") &&
+    isRecentRun(run, nowMs) &&
+    hasSuccessfulCiGateJob(run, ciGateJobs, nowMs)
+  );
+}
+
 function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
@@ -171,16 +219,46 @@ function successfulRunOrThrow(
   runs,
   workflowName,
   sha,
-  { allowManual = true, nowMs = Date.now() } = {},
+  { allowManual = true, nowMs = Date.now(), ciGateJobs = [] } = {},
 ) {
   const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual);
   const run = workflowName === "CI" ? preferredCiRun(matchingRuns, nowMs) : latestRun(matchingRuns);
-  if (!isSuccessfulRecentRun(run, nowMs)) {
-    throw new Error(
-      `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
-    );
+  if (isSuccessfulRecentRun(run, nowMs)) {
+    return run;
   }
-  return run;
+  if (workflowName === "CI") {
+    if (isGateProvenInProgressRun(run, ciGateJobs, nowMs)) {
+      return run;
+    }
+    // A terminal non-success stays blocking unless a NEWER pending SCHEDULED
+    // rerun on the same head has already passed its own gate — the gate needs
+    // every selected lane, so that attempt is authoritative proof the failure
+    // is re-resolved. The newer-than bound stops a stalled older run's gate
+    // from masking a later failure, and manual runs can never mask one.
+    if (run?.status === "completed" && run.conclusion !== "success") {
+      const failedRunCreatedAtMs = Date.parse(String(run?.created_at ?? ""));
+      const gateProvenRerun = matchingRuns.find((candidate) => {
+        if (candidate === run || candidate.event !== "pull_request") {
+          return false;
+        }
+        const candidateCreatedAtMs = Date.parse(String(candidate?.created_at ?? ""));
+        if (
+          !Number.isFinite(candidateCreatedAtMs) ||
+          !Number.isFinite(failedRunCreatedAtMs) ||
+          candidateCreatedAtMs <= failedRunCreatedAtMs
+        ) {
+          return false;
+        }
+        return isGateProvenInProgressRun(candidate, ciGateJobs, nowMs);
+      });
+      if (gateProvenRerun) {
+        return gateProvenRerun;
+      }
+    }
+  }
+  throw new Error(
+    `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
+  );
 }
 
 function hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs) {
@@ -267,6 +345,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadBranch = "",
   pullRequestHeadRepository = "",
   workflowRuns,
+  ciGateJobs = [],
   changelogOnly = false,
   nowMs = Date.now(),
 }) {
@@ -283,6 +362,8 @@ export function collectHostedGateEvidence({
         successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
           allowManual,
           nowMs,
+          // Gate proof only vouches for the exact head under verification.
+          ciGateJobs: evidenceSha === sha ? ciGateJobs : [],
         }),
       );
     }
@@ -476,6 +557,61 @@ function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
   return shas;
 }
 
+function loadCiGateJobs(repo, workflowRuns, sha, nowMs = Date.now()) {
+  // Only an in-progress exact-head CI run can benefit from gate proof.
+  const candidates = workflowRuns.filter(
+    (run) =>
+      run?.name === "CI" &&
+      run?.head_sha === sha &&
+      (run?.status === "in_progress" || run?.status === "queued") &&
+      isRecentRun(run, nowMs),
+  );
+  return candidates.flatMap((run) => {
+    const attempt = run.run_attempt ?? 1;
+    // The jobs endpoint pages at 100 and full-scope runs already sit near
+    // that; page until the gate job is visible so growth past one page can
+    // never silently disable the early-proof path.
+    const jobs = [];
+    for (let page = 1; page <= 5; page += 1) {
+      const payload = JSON.parse(
+        execGhApiRead(
+          `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`,
+          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        ),
+      );
+      const pageJobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+      jobs.push(...pageJobs);
+      const totalCount = Number(payload?.total_count ?? 0);
+      if (
+        pageJobs.length === 0 ||
+        jobs.length >= totalCount ||
+        jobs.some((job) => job?.name === CI_GATE_CHECK_NAME)
+      ) {
+        break;
+      }
+    }
+    // Re-read the run after fetching its attempt jobs and drop the evidence if
+    // the attempt advanced in between: otherwise a rerun starting in that
+    // window would let the just-fetched prior-attempt gate vouch for an
+    // attempt that has not reached its own gate. Same-attempt completion is
+    // fine — a run that finished successfully still proves this attempt, and
+    // a non-success completion must not be blessed by its own earlier gate.
+    const current = JSON.parse(
+      execGhApiRead(`repos/${repo}/actions/runs/${run.id}`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+    const sameAttempt = (current?.run_attempt ?? attempt) === attempt;
+    const stillPending = current?.status === "in_progress" || current?.status === "queued";
+    const completedSuccess = current?.status === "completed" && current?.conclusion === "success";
+    if (!sameAttempt || (!stillPending && !completedSuccess)) {
+      return [];
+    }
+    return jobs;
+  });
+}
+
 function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const pullRequest = JSON.parse(
@@ -494,6 +630,7 @@ function main(argv = process.argv.slice(2)) {
   if (headSha !== args.sha) {
     throw new Error(`PR #${args.pr} head changed from ${args.sha} to ${headSha}.`);
   }
+  const workflowRuns = loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch);
   const evidence = collectHostedGateEvidence({
     sha: args.sha,
     pr: args.pr,
@@ -501,7 +638,8 @@ function main(argv = process.argv.slice(2)) {
     pullRequestCommitShas: loadPullRequestCommitShas(args.repo, { baseSha, headSha }),
     pullRequestHeadBranch: headBranch,
     pullRequestHeadRepository: headRepository,
-    workflowRuns: loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch),
+    workflowRuns,
+    ciGateJobs: loadCiGateJobs(args.repo, workflowRuns, args.sha),
     changelogOnly: args.changelogOnly,
   });
   const evidenceHeadSha = evidence.evidenceHeadSha ?? args.sha;

@@ -1,4 +1,7 @@
-import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionApprovalReplay,
+  SystemAgentChatQuestion,
+} from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
 import type {
@@ -36,6 +39,7 @@ import type {
   BufferedAgentEvent,
   ChatAbortMarker,
   ChatRunEntry,
+  ChatRunPlanSnapshot,
   ChatRunRegistration,
 } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
@@ -63,6 +67,8 @@ export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
   clientIp?: string;
+  /** Client id verified against the server-approved device pairing record. */
+  pairedClientId?: string;
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
@@ -97,6 +103,7 @@ type GatewaySystemAgentSession = {
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
     }>;
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
@@ -106,6 +113,7 @@ type GatewaySystemAgentSession = {
     dispose: () => Promise<void>;
   };
   welcome: string;
+  welcomeQuestion?: SystemAgentChatQuestion;
   lastUsedAt: number;
   delegationKey?: string;
   pendingApproval?: { id: string; proposalHash: string };
@@ -117,6 +125,7 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
@@ -193,6 +202,7 @@ export type GatewayRequestContext = {
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;
   chatRunBuffers: Map<string, string>;
+  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
   chatDeltaLastBroadcastText: Map<string, string>;

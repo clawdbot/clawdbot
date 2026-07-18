@@ -1635,6 +1635,44 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("selects ordered Codex OAuth before an OpenAI API-key backup", async () => {
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const accessToken = "test-access-token";
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:media-api": {
+          type: "api_key",
+          provider: "openai",
+          key: "test-api-key",
+        },
+        "openai:qa-oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: accessToken,
+          refresh: "test-refresh",
+          expires: Date.UTC(2036, 0, 1),
+          accountId: "qa-codex-account",
+        },
+      },
+      order: { openai: ["openai:qa-oauth", "openai:media-api"] },
+    };
+
+    expect(resolveCodexAppServerAuthProfileId({ store: authProfileStore })).toBe("openai:qa-oauth");
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: "/tmp/openclaw-codex-auth-product-proof",
+      authProfileStore,
+    });
+
+    expect(request).toHaveBeenCalledWith("account/login/start", {
+      type: "chatgptAuthTokens",
+      accessToken,
+      chatgptAccountId: "qa-codex-account",
+      chatgptPlanType: null,
+    });
+  });
+
   it("does not select Codex profiles without inline OAuth credential material", () => {
     expect(
       resolveCodexAppServerAuthProfileId({

@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
   normalizeMessagePresentation,
-  resolveInteractiveTextFallback,
+  resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -299,7 +299,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     const payload = {
       ...ctx.payload,
       text:
-        resolveInteractiveTextFallback({
+        resolveLegacyInteractiveTextFallback({
           text: ctx.payload.text,
           interactive: ctx.payload.interactive,
         }) ?? "",

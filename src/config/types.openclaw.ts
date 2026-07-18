@@ -24,12 +24,7 @@ import type { HooksConfig } from "./types.hooks.js";
 import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
-import type {
-  AudioConfig,
-  BroadcastConfig,
-  CommandsConfig,
-  MessagesConfig,
-} from "./types.messages.js";
+import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.messages.js";
 import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
@@ -134,6 +129,10 @@ export type OpenClawConfig = {
       | undefined;
   };
   wizard?: {
+    /** Guided-onboarding discovery consent: "full" scans silently, "guarded" asks first. */
+    accessMode?: "full" | "guarded";
+    /** Offer installed-application plugin and skill recommendations during onboarding. */
+    appRecommendations?: boolean;
     /** Last setup wizard completion timestamp. */
     lastRunAt?: string;
     /** OpenClaw version used by the last completed wizard run. */
@@ -187,6 +186,27 @@ export type OpenClawConfig = {
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
     };
+    /**
+     * Operator display preferences. Canonical config home so agents can
+     * change them through the approval gate and clients stay in sync; the
+     * Control UI mirrors them into browser storage for instant boot.
+     */
+    prefs?: {
+      /** Control UI theme. */
+      theme?: "claw" | "knot" | "dash" | "custom";
+      /** Light/dark preference. */
+      themeMode?: "light" | "dark" | "system";
+      /** Text scale percentage stop. */
+      textScale?: 90 | 100 | 110 | 125 | 140;
+      /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
+      locale?: string;
+      /** Show model thinking output in chat. */
+      chatShowThinking?: boolean;
+      /** Show tool call cards in chat. */
+      chatShowToolCalls?: boolean;
+      /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
+      chatSendShortcut?: "enter" | "modifier-enter";
+    };
   };
   /** Terminal UI display settings. */
   tui?: {
@@ -218,8 +238,6 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  /** Audio command and media handling settings. */
-  audio?: AudioConfig;
   media?: {
     /** Preserve original uploaded filenames when storing inbound media. */
     preserveFilenames?: boolean;
@@ -285,6 +303,8 @@ export type RuntimeConfig = BrandedConfigState<"runtime">;
 export type ConfigValidationIssue = {
   /** Dot-path to the invalid or legacy config value. */
   path: string;
+  /** Structured validator path used internally for lossless source diagnostics. */
+  pathSegments?: Array<string | number>;
   /** Human-readable validation message. */
   message: string;
   /** Optional allowed values shown to the operator. */

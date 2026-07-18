@@ -165,6 +165,10 @@
       "destination": "/plugins/adding-capabilities"
     },
     {
+      "source": "/reference/code-mode",
+      "destination": "/tools/code-mode"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -1300,6 +1304,7 @@
                   "plugins/codex-computer-use",
                   "plugins/logbook",
                   "plugins/google-meet",
+                  "plugins/teams-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
@@ -1353,8 +1358,10 @@
                 "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
+                  "tools/ask-user",
                   "tools/btw",
                   "tools/code-execution",
+                  "tools/code-mode",
                   "tools/diffs",
                   "tools/show-widget",
                   "tools/elevated",
@@ -1527,7 +1534,6 @@
                   "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
-                  "providers/qwen-oauth",
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",
@@ -1664,6 +1670,7 @@
                       "gateway/security/secure-file-operations",
                       "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
+                      "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
@@ -1869,7 +1876,6 @@
                 "pages": [
                   "reference/rpc",
                   "gateway/external-apps",
-                  "reference/code-mode",
                   "reference/device-models"
                 ]
               },
@@ -1940,6 +1946,7 @@
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
+                  "reference/database-schemas",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
@@ -1960,6 +1967,12 @@
                 "group": "Project",
                 "pages": [
                   "reference/credits"
+                ]
+              },
+              {
+                "group": "Contributing",
+                "pages": [
+                  "reference/pull-request-review-flow"
                 ]
               },
               {

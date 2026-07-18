@@ -20,8 +20,6 @@ type SessionThreadBindingsConfigShape = {
   idleHours?: unknown;
   maxAgeHours?: unknown;
   spawnSessions?: unknown;
-  spawnSubagentSessions?: unknown;
-  spawnAcpSessions?: unknown;
   defaultSpawnContext?: unknown;
 };
 
@@ -170,12 +168,6 @@ function resolveChannelThreadBindings(params: {
   };
 }
 
-function resolveSpawnFlagKey(
-  kind: ThreadBindingSpawnKind,
-): "spawnSubagentSessions" | "spawnAcpSessions" {
-  return kind === "subagent" ? "spawnSubagentSessions" : "spawnAcpSessions";
-}
-
 function normalizeSpawnContext(value: unknown): ThreadBindingSpawnContext | undefined {
   return value === "isolated" || value === "fork" ? value : undefined;
 }
@@ -199,11 +191,8 @@ export function resolveThreadBindingSpawnPolicy(params: {
     normalizeBoolean(root?.enabled) ??
     normalizeBoolean(params.cfg.session?.threadBindings?.enabled) ??
     true;
-  const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
-    normalizeBoolean(account?.[spawnFlagKey]) ??
     normalizeBoolean(account?.spawnSessions) ??
-    normalizeBoolean(root?.[spawnFlagKey]) ??
     normalizeBoolean(root?.spawnSessions) ??
     normalizeBoolean(params.cfg.session?.threadBindings?.spawnSessions);
   const spawnEnabled = spawnEnabledRaw ?? true;

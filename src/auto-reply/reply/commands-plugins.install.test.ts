@@ -503,7 +503,12 @@ describe("handleCommands /plugins install", () => {
   });
 
   it("installs a bundled local path without --force", async () => {
-    const bundledPath = path.resolve("extensions/discord");
+    // Resolve the canonical bundled path from discovery: built checkouts
+    // resolve bundled sources to dist/extensions, not the source tree.
+    const { getProcessBundledPluginSources } = await import("../../plugins/bundled-sources.js");
+    const bundledPath =
+      getProcessBundledPluginSources().get("discord")?.localPath ??
+      path.resolve("extensions/discord");
     installPluginFromPathMock.mockResolvedValue({
       ok: true,
       pluginId: "discord",

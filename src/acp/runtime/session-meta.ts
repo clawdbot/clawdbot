@@ -73,7 +73,7 @@ function resolveStoreSessionKey(
 }
 
 /** Resolves the session store path that owns an ACP session key. */
-function resolveSessionStorePathForAcp(params: {
+export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

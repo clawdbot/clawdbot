@@ -21,6 +21,10 @@
     ],
     "assetScripts": {
       "build": "node scripts/bundle-a2ui.mjs",
+      "buildOutputs": [
+        "src/host/a2ui/.bundle.hash",
+        "src/host/a2ui/a2ui.bundle.js"
+      ],
       "copy": "node scripts/copy-a2ui.mjs"
     }
   }

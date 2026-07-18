@@ -1,6 +1,8 @@
 import { Type } from "typebox";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { UiCommand, UiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
+// The tool returns the Gateway result unchanged, so the wire schema remains the single owner.
+import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
@@ -101,6 +103,7 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
     description:
       "Drive operator web UI. Split panes, focus, panels, sidebar, navigate. Needs connected web client.",
     parameters: ScreenToolSchema,
+    outputSchema: UiCommandResultSchema,
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;

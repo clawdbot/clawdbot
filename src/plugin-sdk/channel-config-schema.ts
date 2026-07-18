@@ -26,4 +26,5 @@ export {
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
+export { ChannelImplicitMentionsSchema } from "../config/zod-schema.implicit-mentions.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";

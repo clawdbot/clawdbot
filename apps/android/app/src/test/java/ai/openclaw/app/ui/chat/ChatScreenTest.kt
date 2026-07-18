@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.PendingAssistantAutoSend
+import ai.openclaw.app.chat.ChatComposerOwner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -28,24 +30,37 @@ class ChatScreenTest {
 
   @Test
   fun resolvesPendingAssistantAutoSendOnlyWhenChatIsReady() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway", agentId = "main", sessionKey = "agent:main:device")
+    val pending = PendingAssistantAutoSend(prompt = "  summarize mail  ", owner = owner)
     assertNull(
       resolvePendingAssistantAutoSend(
-        pendingPrompt = "summarize mail",
+        pending = pending,
+        currentOwner = owner,
         healthOk = false,
         pendingRunCount = 0,
       ),
     )
     assertNull(
       resolvePendingAssistantAutoSend(
-        pendingPrompt = "summarize mail",
+        pending = pending,
+        currentOwner = owner,
         healthOk = true,
         pendingRunCount = 1,
       ),
     )
-    assertEquals(
-      "summarize mail",
+    assertNull(
       resolvePendingAssistantAutoSend(
-        pendingPrompt = "  summarize mail  ",
+        pending = pending,
+        currentOwner = owner.copy(sessionKey = "agent:main:other"),
+        healthOk = true,
+        pendingRunCount = 0,
+      ),
+    )
+    assertEquals(
+      pending,
+      resolvePendingAssistantAutoSend(
+        pending = pending,
+        currentOwner = owner,
         healthOk = true,
         pendingRunCount = 0,
       ),

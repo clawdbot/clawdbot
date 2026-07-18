@@ -6,6 +6,8 @@ export type SetupInferenceManualProvider = {
   id: string;
   label: string;
   hint?: string;
+  icon?: string;
+  website?: string;
 };
 
 export type SetupInferenceAuthOption = {
@@ -14,6 +16,8 @@ export type SetupInferenceAuthOption = {
   label: string;
   hint?: string;
   groupLabel?: string;
+  icon?: string;
+  website?: string;
   kind: "oauth" | "device-code";
   featured: boolean;
 };
@@ -41,6 +45,8 @@ export function listSetupInferenceManualProviders(
       id,
       label: choice.choiceLabel,
       ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
+      ...(choice.icon ? { icon: choice.icon } : {}),
+      ...(choice.website ? { website: choice.website } : {}),
     });
   }
   return [...choices.values()].toSorted(
@@ -73,6 +79,8 @@ export function listSetupInferenceAuthOptions(
         label: choice.choiceLabel,
         ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
         ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
+        ...(choice.icon ? { icon: choice.icon } : {}),
+        ...(choice.website ? { website: choice.website } : {}),
         kind: choice.appGuidedAuth,
         featured: choice.onboardingFeatured === true,
       },

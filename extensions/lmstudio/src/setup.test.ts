@@ -405,6 +405,34 @@ describe("lmstudio setup", () => {
     ).resolves.toBeNull();
   });
 
+  it("prefers the strongest tool-calling family among installed models", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "llama3.3-70b-instruct",
+          capabilities: { trained_for_tool_use: true },
+        },
+        {
+          type: "llm",
+          key: "qwen3.5-4b-instruct",
+          capabilities: { trained_for_tool_use: true },
+        },
+        {
+          type: "llm",
+          key: "nomic-embed-text",
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
+
+    expect(result?.defaultModel).toBe("lmstudio/qwen3.5-4b-instruct");
+  });
+
   it("non-interactive setup discovers catalog and writes LM Studio provider config", async () => {
     const ctx = buildNonInteractiveContext({
       customBaseUrl: "http://localhost:1234/api/v1/",
@@ -487,7 +515,7 @@ describe("lmstudio setup", () => {
     });
   });
 
-  it("non-interactive setup auto-selects a discovered LM Studio model when none is provided", async () => {
+  it("non-interactive setup selects the preferred discovered model when none is provided", async () => {
     const ctx = buildNonInteractiveContext({
       customBaseUrl: "http://localhost:1234/api/v1/",
     });
@@ -516,9 +544,11 @@ describe("lmstudio setup", () => {
     );
     const setupCtx = requireRecord(setupCall.ctx, "self-hosted setup context");
     expectRecordFields(setupCtx.opts, "self-hosted setup opts", {
-      customModelId: "phi-4",
+      customModelId: "qwen3-8b-instruct",
     });
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe("lmstudio/phi-4");
+    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+      "lmstudio/qwen3-8b-instruct",
+    );
     const models = requireProviderModels(requireNonInteractiveLmstudioProvider(result));
     expect(models).toHaveLength(2);
     expectModelFields(models[0], {

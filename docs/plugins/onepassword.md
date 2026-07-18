@@ -35,6 +35,10 @@ variables or resolve OpenClaw config secrets.
   value.
 - The plugin invokes `op` once per cache miss. It does not retry rate limits or
   other failures.
+- Each `op` call runs with a minimal environment that disables 1Password
+  desktop-app integration (`OP_LOAD_DESKTOP_APP_SETTINGS=false`,
+  `OP_BIOMETRIC_UNLOCK_ENABLED=false`), so a 1Password app installed on the
+  Gateway host never triggers biometric or macOS permission dialogs.
 
 Give the service account read access only to the vaults and items registered in
 the plugin config.

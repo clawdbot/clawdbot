@@ -4,7 +4,12 @@
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import {
+  cancelPendingAskUserForSession,
+  claimPendingAskUserAnswer,
+} from "../../tools/ask-user-tool.js";
 import { log } from "../logger.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
@@ -230,15 +235,33 @@ async function steerAndWaitForTranscriptCommit(
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  options:
-    | {
-        deliveryTimeoutMs?: number;
-        images?: ImageContent[];
-        waitForTranscriptCommit?: boolean;
-        userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-      }
-    | undefined,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  sessionKey?: string,
 ): Promise<void> {
+  const isInboundUserMessage = options?.isInboundUserMessage === true;
+  const isPlainTextAnswer = !options?.images?.length;
+  if (isInboundUserMessage && !isPlainTextAnswer) {
+    try {
+      await cancelPendingAskUserForSession({ sessionKey, resolvedBy: "image-reply" });
+    } catch (error) {
+      log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
+    }
+  }
+  if (
+    isInboundUserMessage &&
+    isPlainTextAnswer &&
+    (await claimPendingAskUserAnswer({
+      sessionKey,
+      text,
+      persist: options.userTurnTranscriptRecorder
+        ? async () => {
+            await options.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    }))
+  ) {
+    return;
+  }
   if (options?.waitForTranscriptCommit !== true) {
     if (options?.userTurnTranscriptRecorder) {
       await activeSession.steer(text, options.images, options.userTurnTranscriptRecorder);

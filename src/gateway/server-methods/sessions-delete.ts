@@ -390,8 +390,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
 
-    // Dirty or unpushed worktrees survive session deletion; tell the caller so
-    // operator UIs can point at the preserved checkout instead of orphaning it.
+    // Session deletion ends worktree ownership. Snapshot before removal so
+    // inherited unpushed history or local edits do not leave an ownerless checkout.
     let worktreePreserved: { id: string; branch: string; path: string } | undefined;
     if (deleted) {
       // requestedAgentId wins: "global" canonical keys resolve to the default store
@@ -400,12 +400,16 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         target.canonicalKey ?? key,
         requestedAgentId ?? resolveSessionStoreAgentId(cfg, target.canonicalKey ?? key),
       );
+      let worktree: ReturnType<typeof managedWorktrees.findLiveByOwner> = undefined;
       try {
-        const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
-        if (worktree && !(await managedWorktrees.removeIfLossless(worktree.id))) {
-          worktreePreserved = { id: worktree.id, branch: worktree.branch, path: worktree.path };
+        worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
+        if (worktree) {
+          await managedWorktrees.remove({ id: worktree.id, reason: "session-delete" });
         }
       } catch (error) {
+        if (worktree) {
+          worktreePreserved = { id: worktree.id, branch: worktree.branch, path: worktree.path };
+        }
         sessionLog.warn(
           `failed to clean up worktree for deleted session ${target.canonicalKey}: ${formatErrorMessage(error)}`,
         );
@@ -426,9 +430,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (deleted) {
       emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
-        ...(target.canonicalKey === "global" && requestedAgentId
-          ? { agentId: requestedAgentId }
-          : {}),
+        agentId: target.agentId,
         reason: "delete",
       });
     }

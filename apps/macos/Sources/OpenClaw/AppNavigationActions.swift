@@ -19,11 +19,15 @@ enum AppNavigationActions {
         }
     }
 
-    static func openChat() {
+    static func openChat(sessionKey: String? = nil, agentID: String? = nil) {
         NSApp.activate(ignoringOtherApps: true)
         Task { @MainActor in
-            let sessionKey = await WebChatManager.shared.preferredSessionKey()
-            WebChatManager.shared.show(sessionKey: sessionKey)
+            let resolvedSessionKey = if let sessionKey {
+                sessionKey
+            } else {
+                await WebChatManager.shared.preferredSessionKey()
+            }
+            WebChatManager.shared.show(sessionKey: resolvedSessionKey, agentID: agentID)
         }
     }
 

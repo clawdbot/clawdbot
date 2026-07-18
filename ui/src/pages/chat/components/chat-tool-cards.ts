@@ -5,6 +5,11 @@ import { keyed } from "lit/directives/keyed.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
+import {
+  dispatchWidgetPrompt,
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "../../../components/mcp-app-security.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -141,12 +146,8 @@ function handleRawDetailsToggle(event: Event) {
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
-/** Bubbling DOM event re-dispatched from the widget iframe once a prompt passes validation. */
-export const WIDGET_PROMPT_EVENT = "openclaw-widget-prompt";
-export type WidgetPromptEventDetail = { text: string };
-const WIDGET_PROMPT_MAX_CHARS = 4_000;
-const WIDGET_PROMPT_RATE_WINDOW_MS = 60_000;
-const WIDGET_PROMPT_RATE_MAX = 10;
+export { WIDGET_PROMPT_EVENT };
+export type { WidgetPromptEventDetail };
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -180,94 +181,12 @@ function registerWidgetFrame(event: Event) {
   }
 }
 
-/**
- * Widget prompts run the normal chat send path, which also interprets slash
- * commands. Widget code is agent-authored, so accepting a command here would
- * let a widget approve its own pending actions; plain conversational text only.
- */
-function resolveWidgetPromptText(raw: unknown): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const text = raw.trim();
-  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || text.startsWith("/")) {
-    return null;
-  }
-  return text;
-}
-
-// Prompt budgets are keyed by frame src (stable per hosted widget document), so
-// a widget cannot reset its budget and the map stays bounded like the heights map.
-const widgetPromptTimestampsBySrc = new Map<string, number[]>();
-
-function allowWidgetPrompt(src: string, nowMs: number): boolean {
-  const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
-  const timestamps = (widgetPromptTimestampsBySrc.get(src) ?? []).filter((ts) => ts > cutoff);
-  if (
-    !widgetPromptTimestampsBySrc.has(src) &&
-    widgetPromptTimestampsBySrc.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
-  ) {
-    const oldest = widgetPromptTimestampsBySrc.keys().next().value;
-    if (oldest !== undefined) {
-      widgetPromptTimestampsBySrc.delete(oldest);
-    }
-  }
-  if (timestamps.length >= WIDGET_PROMPT_RATE_MAX) {
-    widgetPromptTimestampsBySrc.set(src, timestamps);
-    return false;
-  }
-  timestamps.push(nowMs);
-  widgetPromptTimestampsBySrc.set(src, timestamps);
-  return true;
-}
-
-/**
- * A prompt must come from a widget the user can currently see and has clicked
- * into. `isConnected` + visibility drops hidden or collapsed frames, and the
- * focus requirement is the host-observed stand-in for user activation: the
- * parent cannot see clicks inside a cross-origin frame, but a click focuses the
- * iframe element, so a document that merely rendered (or restored from
- * history) cannot auto-send prompts.
- */
-function isWidgetFrameInteractable(frame: HTMLIFrameElement): boolean {
-  if (!frame.isConnected) {
-    return false;
-  }
-  const visible =
-    typeof frame.checkVisibility === "function"
-      ? frame.checkVisibility()
-      : frame.getClientRects().length > 0;
-  if (!visible) {
-    return false;
-  }
-  let active: Element | null = frame.ownerDocument.activeElement;
-  while (active?.shadowRoot?.activeElement) {
-    active = active.shadowRoot.activeElement;
-  }
-  return active === frame;
-}
-
 function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
   const payload = data as { type?: unknown; prompt?: unknown } | null;
   if (!payload || payload.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
     return;
   }
-  const text = resolveWidgetPromptText(payload.prompt);
-  if (!text || !isWidgetFrameInteractable(frame)) {
-    return;
-  }
-  if (!allowWidgetPrompt(frame.getAttribute("src") ?? "", Date.now())) {
-    return;
-  }
-  // Re-dispatch as a bubbling DOM event from the iframe so the owning chat
-  // pane — and only that pane — routes the prompt into its own send path.
-  frame.dispatchEvent(
-    new CustomEvent<WidgetPromptEventDetail>(WIDGET_PROMPT_EVENT, {
-      bubbles: true,
-      composed: true,
-      detail: { text },
-    }),
-  );
+  dispatchWidgetPrompt(frame, payload.prompt, frame.getAttribute("src") ?? "");
 }
 
 // Prompt authority is a MessagePort OFFERED by the trusted bridge script that

@@ -1254,6 +1254,48 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("clears automatic recovery quarantine state when a user turn rotates the session id", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    setDateOnlyFakeClockActive(true);
+    vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
+    const staleEntry = {
+      sessionId: "quarantined-session-id",
+      updatedAt: 0,
+      sessionStartedAt: 0,
+      lastInteractionAt: 0,
+      abortedLastRun: true,
+      restartRecoveryRuns: [
+        { runId: "initial-wedged-run", lifecycleGeneration: "gen-1" },
+        { runId: "recovery-run-1", lifecycleGeneration: "gen-2" },
+      ],
+      mainRestartRecovery: {
+        automaticAttempts: 2,
+        lastAttemptAt: 3,
+        lastRunId: "recovery-run-1",
+      },
+      subagentRecovery: {
+        automaticAttempts: 2,
+        lastAttemptAt: 3,
+        wedgedAt: 4,
+        wedgedReason: "automatic_attempt_budget_exceeded",
+      },
+    };
+    mockMainSessionEntry(staleEntry);
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-rotated-recovery-clear");
+
+    expect(capturedEntry.sessionId).not.toBe("quarantined-session-id");
+    expect(capturedEntry.abortedLastRun).toBeUndefined();
+    expect(capturedEntry.restartRecoveryRuns).toBeUndefined();
+    expect(capturedEntry.mainRestartRecovery).toBeUndefined();
+    expect(capturedEntry.subagentRecovery).toEqual({
+      automaticAttempts: 2,
+      lastAttemptAt: 3,
+      wedgedAt: 4,
+      wedgedReason: "automatic_attempt_budget_exceeded",
+    });
+  });
+
   it("drops a stale transcript path when a stale session rotates ids", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     setDateOnlyFakeClockActive(true);

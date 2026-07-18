@@ -1,7 +1,7 @@
 // Agent session command tests cover session resolution, agent scoping, and temp-home session stores.
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { updateSessionStoreAfterAgentRun } from "../agents/command/session-store.js";
 import { resolveSession } from "../agents/command/session.js";
@@ -74,6 +74,17 @@ async function withCrossAgentResumeFixture(
 
 beforeEach(() => {
   clearSessionStoreCacheForTest();
+  // Freshness fixtures seed times relative to Date.now(); near the 04:00
+  // local daily-reset boundary the seeded window straddles it and reuse
+  // scenarios flip to new sessions. Pin local noon so no timezone can hit it.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const localNoon = new Date();
+  localNoon.setHours(12, 0, 0, 0);
+  vi.setSystemTime(localNoon);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("agent session resolution", () => {

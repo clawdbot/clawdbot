@@ -47,6 +47,8 @@ export const TaskSummarySchema = closedObject({
   progressSummary: Type.Optional(Type.String()),
   terminalSummary: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),
+  /** Bounded task input. Returned by tasks.get; omitted from list/event summaries. */
+  prompt: Type.Optional(Type.String()),
 });
 
 /** Task list filters with bounded pagination. */

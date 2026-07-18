@@ -210,11 +210,12 @@ enum OpenClawBrand {
 
 struct OpenClawActivationGlyph: View {
     let size: CGFloat
+    var mood: OpenClawMascotMood = .idle
     /// Opt-in tap Easter eggs; leave off when the glyph sits inside a control.
     var interactive = false
 
     var body: some View {
-        OpenClawMascotView(floats: false, interactive: self.interactive)
+        OpenClawMascotView(floats: false, mood: self.mood, interactive: self.interactive)
             .frame(width: self.size, height: self.size)
             .shadow(
                 color: OpenClawBrand.activationGlow.opacity(0.18),

@@ -8,6 +8,7 @@ import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
+import "../../components/openclaw-mascot.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -75,6 +76,7 @@ type PluginsViewProps = {
   messages: Readonly<Record<string, PluginRowMessage>>;
   pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
+  iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   pageNotice: PluginRowMessage | null;
@@ -86,6 +88,7 @@ type PluginsViewProps = {
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: InstalledFilter) => void;
   onRefresh: () => void;
+  onIconError: (pluginId: string) => void;
   onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (rowKey: string, request: PluginInstallRequest) => void;
@@ -174,11 +177,31 @@ function matchesConnector(connector: ConnectorSuggestion, query: string): boolea
 }
 
 function sortCatalogPlugins(plugins: readonly PluginCatalogItem[]): PluginCatalogItem[] {
-  return plugins.toSorted(
-    (left, right) =>
+  return plugins.toSorted((left, right) => {
+    const featured = Number(Boolean(right.featured)) - Number(Boolean(left.featured));
+    if (featured !== 0) {
+      return featured;
+    }
+    if (left.featured && right.featured) {
+      const leftFeaturedAt = left.featuredAt;
+      const rightFeaturedAt = right.featuredAt;
+      if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
+        if (leftFeaturedAt === undefined) {
+          return 1;
+        }
+        if (rightFeaturedAt === undefined) {
+          return -1;
+        }
+        if (leftFeaturedAt !== rightFeaturedAt) {
+          return rightFeaturedAt - leftFeaturedAt;
+        }
+      }
+    }
+    return (
       (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER) ||
-      left.name.localeCompare(right.name),
-  );
+      left.name.localeCompare(right.name)
+    );
+  });
 }
 
 function installedPlugins(
@@ -263,11 +286,28 @@ const compactNumber = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 
-function renderArtTile(slug: string, name: string): TemplateResult {
+function renderArtTile(
+  slug: string,
+  name: string,
+  iconUrl?: string,
+  onIconError?: () => void,
+): TemplateResult {
   const art = pluginArtPath(slug);
   if (art) {
     return html`<span class="plugins-tile">
       <img src=${art} alt="" loading="lazy" decoding="async" />
+    </span>`;
+  }
+  if (iconUrl) {
+    return html`<span class="plugins-tile">
+      <img
+        class="plugins-icon"
+        src=${iconUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        @error=${onIconError}
+      />
     </span>`;
   }
   const [from, to] = pluginFallbackGradient(slug);
@@ -553,7 +593,9 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         }
       }}
     >
-      ${renderArtTile(plugin.id, plugin.name)}
+      ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
+        props.onIconError(plugin.id),
+      )}
       <div class="settings-row__text">
         <h3 class="settings-row__title">
           ${plugin.name}
@@ -722,16 +764,14 @@ function renderMcpForm(props: PluginsViewProps) {
 function renderInstalled(props: PluginsViewProps) {
   const plugins = installedPlugins(props.result?.plugins ?? [], props.query, props.installedFilter);
   const groups = groupInstalledByCategory(plugins);
+  const filtered = Boolean(props.query || props.installedFilter !== "all");
   return html`
     ${renderInstalledFilter(props)}
     ${groups.length === 0
       ? renderEmpty(
-          props.query || props.installedFilter !== "all"
-            ? t("pluginsPage.noInstalledMatchTitle")
-            : t("pluginsPage.noInstalledTitle"),
-          props.query || props.installedFilter !== "all"
-            ? t("pluginsPage.noMatchBody")
-            : t("pluginsPage.noInstalledBody"),
+          filtered ? t("pluginsPage.noInstalledMatchTitle") : t("pluginsPage.noInstalledTitle"),
+          filtered ? t("pluginsPage.noMatchBody") : t("pluginsPage.noInstalledBody"),
+          filtered ? "curious" : "sleepy",
         )
       : groups.map((group) =>
           renderSettingsSection(
@@ -765,7 +805,9 @@ function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): T
         }
       }}
     >
-      ${renderArtTile(plugin.id, plugin.name)}
+      ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
+        props.onIconError(plugin.id),
+      )}
       <div class="settings-row__text">
         <h3 class="settings-row__title">
           ${plugin.name}
@@ -989,7 +1031,11 @@ function renderDiscover(props: PluginsViewProps) {
   if (!featuredRows.length && !officialRows.length && !shelves.connectors.length) {
     return html`
       ${clawHub === nothing
-        ? renderEmpty(t("pluginsPage.noDiscoverMatchTitle"), t("pluginsPage.noMatchBody"))
+        ? renderEmpty(
+            t("pluginsPage.noDiscoverMatchTitle"),
+            t("pluginsPage.noMatchBody"),
+            "curious",
+          )
         : nothing}
       ${clawHub}
     `;
@@ -1065,7 +1111,9 @@ function renderDetailOverlay(props: PluginsViewProps) {
         >
           ${icons.x}
         </button>
-        ${renderDetailCover(plugin.id, plugin.name)}
+        ${renderDetailCover(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
+          props.onIconError(plugin.id),
+        )}
         <div class="plugins-detail__body">
           <div class="plugins-detail__title">
             <h2>${plugin.name}</h2>
@@ -1143,11 +1191,28 @@ function renderDetailOverlay(props: PluginsViewProps) {
   `;
 }
 
-function renderDetailCover(slug: string, name: string): TemplateResult {
+function renderDetailCover(
+  slug: string,
+  name: string,
+  iconUrl?: string,
+  onIconError?: () => void,
+): TemplateResult {
   const art = pluginArtPath(slug);
   if (art) {
     return html`<span class="plugins-cover">
       <img src=${art} alt="" loading="lazy" decoding="async" />
+    </span>`;
+  }
+  if (iconUrl) {
+    return html`<span class="plugins-cover">
+      <img
+        class="plugins-icon"
+        src=${iconUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        @error=${onIconError}
+      />
     </span>`;
   }
   const [from, to] = pluginFallbackGradient(slug);
@@ -1163,10 +1228,17 @@ function renderDetailCover(slug: string, name: string): TemplateResult {
 
 /* ---------------------------------- page shell ---------------------------------- */
 
-function renderEmpty(title: string, body: string) {
+function renderEmpty(title: string, body: string, mood?: "sleepy" | "curious") {
   return html`
     <div class="plugins-empty">
-      <span class="plugins-empty__icon" aria-hidden="true">${icons.puzzle}</span>
+      <!-- Sleepy marks truly empty inventory; curious marks a filter/search miss. -->
+      ${mood
+        ? html`<openclaw-mascot
+            class="plugins-empty__mascot"
+            .mood=${mood}
+            .size=${84}
+          ></openclaw-mascot>`
+        : html`<span class="plugins-empty__icon" aria-hidden="true">${icons.puzzle}</span>`}
       <h2>${title}</h2>
       <p>${body}</p>
     </div>

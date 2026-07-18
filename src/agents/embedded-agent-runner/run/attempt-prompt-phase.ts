@@ -1,5 +1,9 @@
 /** Runs prompt assembly, admission, submission, and prompt-local recovery. */
 import { formatErrorMessage } from "../../../infra/errors.js";
+import {
+  buildHeartbeatOutcomeContext,
+  claimHeartbeatOutcomeForRun,
+} from "../../../infra/heartbeat-outcome-store.js";
 import { releasePendingAgentSteeringItems } from "../../subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -156,8 +160,19 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
 
   try {
+    const heartbeatOutcomeContext =
+      attempt.trigger === "user" && attempt.sessionKey
+        ? buildHeartbeatOutcomeContext(
+            claimHeartbeatOutcomeForRun({
+              agentId: input.context.sessionAgentId,
+              sessionKey: attempt.sessionKey,
+              runId: attempt.runId,
+            }),
+          )
+        : undefined;
     const promptContext = prepareEmbeddedAttemptPromptContext({
       attempt,
+      ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
       messages: activeSession.messages,
       prompt: promptAssembly,
       replaceSessionMessages: (messages) => {

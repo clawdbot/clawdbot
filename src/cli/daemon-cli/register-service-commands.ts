@@ -54,6 +54,14 @@ function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Comman
   };
 }
 
+function resolveStopOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
+  const parentForce = inheritOptionFromParent<boolean>(command, "force");
+  return {
+    ...cmdOpts,
+    force: Boolean(cmdOpts.force || parentForce),
+  };
+}
+
 /** Attach Gateway service status/install/lifecycle subcommands to a parent command. */
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
@@ -115,15 +123,16 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .option("--force", "Allow stop from a non-interactive shell", false)
     .option("--json", "Output JSON", false)
     .option(
       "--disable",
       "Persistently suppress KeepAlive/RunAtLoad so the gateway does not respawn until next start (launchd only)",
       false,
     )
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonStop } = await loadDaemonLifecycleModule();
-      await runDaemonStop(cmdOpts);
+      await runDaemonStop(resolveStopOptions(cmdOpts, command));
     });
 
   parent

@@ -103,15 +103,18 @@ function makeRuntime(): GatewayPluginRuntime {
             };
           };
           const input = await params.adapter.ingest(params.raw);
-          const turn = (await params.adapter.resolveTurn(
+          await params.adapter.resolveTurn(
             input,
             {
               kind: "message",
               canStartAgentTurn: true,
             },
             {},
-          )) as { runDispatch: () => Promise<unknown> };
-          return { dispatchResult: await turn.runDispatch() };
+          );
+          return {
+            dispatched: true,
+            dispatchResult: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } },
+          };
         }),
       },
       text: {

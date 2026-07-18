@@ -3,17 +3,15 @@ summary: "Use Qwen Cloud through its OpenClaw plugin"
 read_when:
   - You want to use Qwen with OpenClaw
   - You have an Alibaba Cloud Token Plan subscription
-  - You previously used Qwen OAuth
 title: "Qwen"
 ---
 
-Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, independently owns Alibaba's documented `bailian-token-plan` custom-provider id, and exposes the Qwen Portal token flow as [`qwen-oauth`](/providers/qwen-oauth).
+Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, and independently owns Alibaba's documented `bailian-token-plan` custom-provider id.
 
 | Property               | Value                                      |
 | ---------------------- | ------------------------------------------ |
 | Provider               | `qwen`                                     |
 | Token Plan provider    | `qwen-token-plan`                          |
-| Portal provider        | [`qwen-oauth`](/providers/qwen-oauth)      |
 | Preferred env var      | `QWEN_API_KEY`                             |
 | Token Plan env var     | `QWEN_TOKEN_PLAN_API_KEY`                  |
 | Also accepted (compat) | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
@@ -180,43 +178,6 @@ Choose your plan type and follow the setup steps.
 
   </Tab>
 
-  <Tab title="Qwen OAuth / Portal">
-    **Best for:** a Qwen Portal token against `https://portal.qwen.ai/v1`.
-
-    See [Qwen OAuth / Portal](/providers/qwen-oauth) for the dedicated provider
-    page and migration notes.
-
-    <Steps>
-      <Step title="Provide your portal token">
-        ```bash
-        openclaw onboard --auth-choice qwen-oauth
-        ```
-      </Step>
-      <Step title="Set a default model">
-        ```json5
-        {
-          agents: {
-            defaults: {
-              model: { primary: "qwen-oauth/qwen3.5-plus" },
-            },
-          },
-        }
-        ```
-      </Step>
-      <Step title="Verify the model is available">
-        ```bash
-        openclaw models list --provider qwen-oauth
-        ```
-      </Step>
-    </Steps>
-
-    <Note>
-    `qwen-oauth` uses the same `QWEN_API_KEY` env var name as the Qwen Cloud
-    provider, but stores auth under the `qwen-oauth` provider id when configured
-    through OpenClaw onboarding.
-    </Note>
-
-  </Tab>
 </Tabs>
 
 ## Plan types and endpoints
@@ -225,7 +186,6 @@ Choose your plan type and follow the setup steps.
 | -------------------------- | ------ | -------------------------- | ---------------------------------------------------------------- |
 | Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`                               |
 | Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`                          |
-| Qwen Portal                | Global | `qwen-oauth`               | `portal.qwen.ai/v1`                                              |
 | Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`                      |
 | Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1`                 |
 | Token Plan (Team Edition)  | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
@@ -259,7 +219,6 @@ Plan configs omit models that only work on the Standard endpoint.
 | `qwen/glm-5`                | text        | 202,752   | GLM                     |
 | `qwen/glm-4.7`              | text        | 202,752   | GLM                     |
 | `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba |
-| `qwen-oauth/qwen3.5-plus`   | text, image | 1,000,000 | Qwen Portal default     |
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
@@ -311,7 +270,7 @@ requested on/off state.
 The `qwen` plugin exposes multimodal capabilities on the **Standard** DashScope
 endpoints only, not the Coding Plan endpoints:
 
-- **Image and video understanding** via `qwen-vl-max-latest`
+- **Image and video understanding** via `qwen3.6-plus`
 - **Wan video generation** via `wan2.6-t2v` (default), `wan2.6-i2v`, `wan2.6-r2v`, `wan2.6-r2v-flash`, `wan2.7-r2v`
 
 Media understanding is auto-resolved from the configured Qwen auth; no extra

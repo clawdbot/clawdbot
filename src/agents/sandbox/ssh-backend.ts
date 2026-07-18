@@ -21,6 +21,8 @@ import {
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
+import { resolveSandboxAgentId } from "./shared.js";
 import {
   buildRemoteCommand,
   buildRemoteWorkdirValidationCommand,
@@ -49,7 +51,8 @@ type ResolvedSshRuntimePaths = {
 /** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
 export const sshSandboxBackendManager: SandboxBackendManager = {
   async describeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return {
         running: false,
@@ -57,6 +60,11 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         configLabelMatch: false,
       };
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
@@ -83,10 +91,16 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
     }
   },
   async removeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return;
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,

@@ -1,10 +1,8 @@
-// Doctor-only import for the retired Web Push JSON stores.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { root, type Root } from "@openclaw/fs-safe";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
@@ -15,37 +13,26 @@ import {
 } from "./kysely-sync.js";
 import {
   createWebPushVapidKeyPair,
-  hashWebPushEndpoint,
-  isValidWebPushEndpoint,
-  isValidWebPushKey,
   webPushSubscriptionFromRow,
   webPushSubscriptionToRow,
   webPushSubscriptionsEqual,
   webPushVapidKeyPairToRow,
-  DEFAULT_WEB_PUSH_VAPID_SUBJECT,
   WEB_PUSH_VAPID_KEY_ID,
   type VapidKeyPair,
   type WebPushDatabase,
   type WebPushSubscription,
 } from "./push-web-store.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import {
+  parseLegacySubscriptions,
+  parseLegacyVapidKeys,
+} from "./state-migrations.web-push-parse.js";
 
 const LEGACY_SUBSCRIPTIONS_MAX_BYTES = 4 * 1024 * 1024;
 const LEGACY_VAPID_KEYS_MAX_BYTES = 64 * 1024;
 const MIGRATION_LOCK_TIMEOUT_MS = 250;
 const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-const SUBSCRIPTION_STORE_KEYS = new Set(["subscriptionsByEndpointHash"]);
-const SUBSCRIPTION_KEYS = new Set([
-  "subscriptionId",
-  "endpoint",
-  "keys",
-  "createdAtMs",
-  "updatedAtMs",
-]);
-const PUSH_KEYS = new Set(["p256dh", "auth"]);
-const VAPID_KEYS = new Set(["publicKey", "privateKey", "subject"]);
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type LegacySourceSnapshot = {
   sourcePath: string;
@@ -63,14 +50,10 @@ type ParsedLegacyState = {
   snapshots: LegacySourceSnapshot[];
 };
 
-function resolveLegacyWebPushPaths(stateDir: string): {
-  subscriptionsPath: string;
-  vapidKeysPath: string;
-} {
-  const pushDir = path.join(stateDir, "push");
+function resolveLegacyWebPushPaths(stateDir: string) {
   return {
-    subscriptionsPath: path.join(pushDir, "web-push-subscriptions.json"),
-    vapidKeysPath: path.join(pushDir, "vapid-keys.json"),
+    subscriptionsPath: path.join(stateDir, "push", "web-push-subscriptions.json"),
+    vapidKeysPath: path.join(stateDir, "push", "vapid-keys.json"),
   };
 }
 
@@ -96,13 +79,9 @@ function relativeLegacyPath(stateDir: string, filePath: string): string {
   return relativePath;
 }
 
-function sourceOrClaimMayExist(sourcePath: string): boolean {
-  return (
-    legacyPathMayExist(sourcePath) || legacyPathMayExist(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`)
-  );
-}
+const sourceOrClaimMayExist = (sourcePath: string) =>
+  legacyPathMayExist(sourcePath) || legacyPathMayExist(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);
 
-/** Detect retired Web Push state only when an explicit doctor flow opts in. */
 export function detectLegacyWebPush(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
@@ -184,94 +163,11 @@ async function recoverInterruptedClaim(
   await stateRoot.remove(claimRelativePath);
 }
 
-function assertOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  label: string,
-) {
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) {
-    throw new Error(`${label} has unexpected field ${unexpected}`);
-  }
-}
-
-function parseLegacySubscriptions(raw: string): Map<string, WebPushSubscription> {
-  const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed) || !isRecord(parsed.subscriptionsByEndpointHash)) {
-    throw new Error("legacy Web Push subscriptions must be an object");
-  }
-  assertOnlyKeys(parsed, SUBSCRIPTION_STORE_KEYS, "legacy Web Push subscriptions store");
-
-  const subscriptions = new Map<string, WebPushSubscription>();
-  const subscriptionIds = new Set<string>();
-  for (const [endpointHash, rawSubscription] of Object.entries(
-    parsed.subscriptionsByEndpointHash,
-  )) {
-    if (!isRecord(rawSubscription) || !isRecord(rawSubscription.keys)) {
-      throw new Error("legacy Web Push subscription is not an object");
-    }
-    assertOnlyKeys(rawSubscription, SUBSCRIPTION_KEYS, "legacy Web Push subscription");
-    assertOnlyKeys(rawSubscription.keys, PUSH_KEYS, "legacy Web Push subscription keys");
-    const { subscriptionId, endpoint, createdAtMs, updatedAtMs } = rawSubscription;
-    const p256dh = rawSubscription.keys.p256dh;
-    const auth = rawSubscription.keys.auth;
-    if (
-      typeof subscriptionId !== "string" ||
-      !UUID_RE.test(subscriptionId) ||
-      typeof endpoint !== "string" ||
-      !isValidWebPushEndpoint(endpoint) ||
-      hashWebPushEndpoint(endpoint) !== endpointHash ||
-      !isValidWebPushKey(p256dh) ||
-      !isValidWebPushKey(auth) ||
-      typeof createdAtMs !== "number" ||
-      !Number.isSafeInteger(createdAtMs) ||
-      createdAtMs < 0 ||
-      typeof updatedAtMs !== "number" ||
-      !Number.isSafeInteger(updatedAtMs) ||
-      updatedAtMs < createdAtMs
-    ) {
-      throw new Error("legacy Web Push subscription is invalid");
-    }
-    if (subscriptionIds.has(subscriptionId)) {
-      throw new Error("legacy Web Push subscriptions contain a duplicate subscription id");
-    }
-    subscriptionIds.add(subscriptionId);
-    subscriptions.set(endpointHash, {
-      subscriptionId,
-      endpoint,
-      keys: { p256dh, auth },
-      createdAtMs,
-      updatedAtMs,
-    });
-  }
-  return subscriptions;
-}
-
-function parseLegacyVapidKeys(raw: string): VapidKeyPair {
-  const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed)) {
-    throw new Error("legacy Web Push VAPID keys must be an object");
-  }
-  assertOnlyKeys(parsed, VAPID_KEYS, "legacy Web Push VAPID keys");
-  const subject =
-    parsed.subject === undefined || parsed.subject === ""
-      ? process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_WEB_PUSH_VAPID_SUBJECT
-      : parsed.subject;
-  if (
-    !isValidWebPushKey(parsed.publicKey) ||
-    !isValidWebPushKey(parsed.privateKey) ||
-    typeof subject !== "string" ||
-    subject.length > 512
-  ) {
-    throw new Error("legacy Web Push VAPID keys are invalid");
-  }
-  return createWebPushVapidKeyPair(parsed.publicKey, parsed.privateKey, subject);
-}
-
 async function readLegacyState(
   stateRoot: Root,
   stateDir: string,
   detected: LegacyStateDetection["webPush"],
+  env: NodeJS.ProcessEnv,
 ): Promise<ParsedLegacyState> {
   await recoverInterruptedClaim(
     stateRoot,
@@ -305,7 +201,7 @@ async function readLegacyState(
       detected.vapidKeysPath,
       LEGACY_VAPID_KEYS_MAX_BYTES,
     );
-    vapidKeys = parseLegacyVapidKeys(snapshot.raw);
+    vapidKeys = parseLegacyVapidKeys(snapshot.raw, env);
     snapshots.push(snapshot);
   }
   return { subscriptions, vapidKeys, snapshots };
@@ -582,6 +478,7 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
   stateRoot: Root;
   detected: LegacyStateDetection["webPush"];
   stateDir: string;
+  env: NodeJS.ProcessEnv;
   beforeClaim?: () => void;
   beforeVerify?: () => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
@@ -595,7 +492,7 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
 
   let legacy: ParsedLegacyState;
   try {
-    legacy = await readLegacyState(params.stateRoot, params.stateDir, params.detected);
+    legacy = await readLegacyState(params.stateRoot, params.stateDir, params.detected, params.env);
   } catch (error) {
     warnings.push(`Failed reading legacy Web Push state: ${String(error)}`);
     return { changes, warnings };
@@ -667,7 +564,6 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
   return { changes, warnings, notices };
 }
 
-/** Import both retired stores while excluding old Gateways that can recreate them. */
 export async function migrateLegacyWebPush(params: {
   detected: LegacyStateDetection["webPush"];
   stateDir: string;
@@ -720,6 +616,7 @@ export async function migrateLegacyWebPush(params: {
       });
       result = await migrateLegacyWebPushWithExclusiveStateOwnership({
         ...params,
+        env,
         stateRoot,
       });
     } catch (error) {

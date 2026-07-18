@@ -61,6 +61,7 @@ describe("embedded attempt phase lifecycle state", () => {
         },
         isCompactionInFlight: () => false,
         getCompactionCount: () => 0,
+        getCurrentAttemptAssistant: () => undefined,
         getUsageTotals: () => undefined,
       } as never,
       state: {

@@ -18,6 +18,8 @@ export type ReplyPayload = {
   sensitiveMedia?: boolean;
   /** Channel-agnostic rich presentation. Core degrades or asks the channel renderer to map it. */
   presentation?: MessagePresentation;
+  /** Runtime-authored text is the exact fallback, not additional native presentation content. */
+  presentationTextMode?: "fallback";
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
   delivery?: ReplyPayloadDelivery;
   /**

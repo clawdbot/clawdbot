@@ -43,6 +43,10 @@ type ApplyProviderAuthChoiceParams = {
   setDefaultModel: boolean;
   preserveExistingDefaultModel?: boolean;
   agentId?: string;
+  workspaceDir?: string;
+  signal?: AbortSignal;
+  isRemote?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   opts?: Partial<ProviderAuthOptionBag>;
 };
 
@@ -305,6 +309,9 @@ export async function runProviderPluginAuthMethod(params: {
   agentDir?: string;
   agentId?: string;
   workspaceDir?: string;
+  signal?: AbortSignal;
+  isRemote?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   emitNotes?: boolean;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
@@ -324,11 +331,18 @@ export async function runProviderPluginAuthMethod(params: {
     method: params.method,
     agentDir,
     workspaceDir,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     opts: params.opts,
   });
 
+  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
+    await params.prompter.note(result.notes.join("\n"), "Provider notes");
+  }
+
+  await params.beforePersistentEffect?.();
   for (const profile of result.profiles) {
     await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
@@ -341,10 +355,6 @@ export async function runProviderPluginAuthMethod(params: {
     config: params.config,
     result,
   });
-
-  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
-    await params.prompter.note(result.notes.join("\n"), "Provider notes");
-  }
 
   const defaultModel = result.defaultModel
     ? normalizeAgentModelRefForConfig(result.defaultModel)
@@ -361,7 +371,9 @@ export async function applyAuthChoiceLoadedPluginProvider(
 ): Promise<ApplyProviderAuthChoiceResult | null> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const workspaceDir =
-    resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
   let nextConfig = params.config;
   let enabledConfig = params.config;
   const {
@@ -480,6 +492,11 @@ export async function applyAuthChoiceLoadedPluginProvider(
     agentDir: params.agentDir,
     agentId: params.agentId,
     workspaceDir,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
+    ...(params.beforePersistentEffect
+      ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
     opts: params.opts,

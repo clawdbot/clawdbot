@@ -423,11 +423,14 @@ metadata:
     expect(entry?.metadata?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
 
-  it("warns with the malformed file and keeps loading sibling workspace skills", async () => {
+  it("warns for malformed files and keeps loading sibling workspace skills", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const brokenDir = path.join(workspaceDir, "skills", "broken");
     const brokenFile = path.join(brokenDir, "SKILL.md");
+    const unterminatedDir = path.join(workspaceDir, "skills", "unterminated");
+    const unterminatedFile = path.join(unterminatedDir, "SKILL.md");
     await fs.mkdir(brokenDir, { recursive: true });
+    await fs.mkdir(unterminatedDir, { recursive: true });
     await fs.writeFile(
       brokenFile,
       `---
@@ -435,6 +438,11 @@ name: [broken
 description: Broken skill
 ---
 `,
+      "utf8",
+    );
+    await fs.writeFile(
+      unterminatedFile,
+      "---\nname: unterminated\ndescription: Missing closing delimiter\n",
       "utf8",
     );
     await writeSkill({
@@ -451,6 +459,11 @@ description: Broken skill
     expect(entries.map((entry) => entry.skill.name)).not.toContain("broken");
     expect(warningText).toContain(brokenFile);
     expect(warningText).toContain("invalid frontmatter: BAD_INDENT");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("unterminated");
+    expect(warningText).toContain(unterminatedFile);
+    expect(warningText).toContain(
+      "invalid frontmatter: UNTERMINATED_FRONTMATTER: missing closing --- delimiter",
+    );
   });
 
   it("applies agent skill filters and replacement semantics", async () => {

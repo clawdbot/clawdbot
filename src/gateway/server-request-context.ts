@@ -64,6 +64,7 @@ type GatewayRequestContextParams = {
   chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
   chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
   chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
+  chatRunPlanSnapshots?: GatewayRequestContext["chatRunPlanSnapshots"];
   chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
   chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
   chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
@@ -154,6 +155,8 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    notifyPluginMetadataChanged: () =>
+      params.runtimeState.configReloader.notifyPluginMetadataChanged(),
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
@@ -290,6 +293,7 @@ export function createGatewayRequestContext(
     chatQueuedTurns: params.chatQueuedTurns,
     chatAbortedRuns: params.chatAbortedRuns,
     chatRunBuffers: params.chatRunBuffers,
+    chatRunPlanSnapshots: params.chatRunPlanSnapshots,
     chatDeltaSentAt: params.chatDeltaSentAt,
     chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,

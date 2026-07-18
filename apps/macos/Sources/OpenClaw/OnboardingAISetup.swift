@@ -36,6 +36,8 @@ final class OnboardingAISetupModel {
     private(set) var unavailableCandidates: [UnavailableCandidate] = []
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
+    private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
@@ -149,6 +151,8 @@ final class OnboardingAISetupModel {
 
     private struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
+            let icon: String?
+            let website: String?
             let kind: String
             let label: String
             let detail: String
@@ -160,6 +164,7 @@ final class OnboardingAISetupModel {
         let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
+        let recommendedInstalls: [RecommendedInstall]?
         let configuredModel: String?
         let setupComplete: Bool?
 
@@ -603,6 +608,8 @@ final class OnboardingAISetupModel {
         self.unavailableCandidates = []
         self.manualProviders = []
         self.authOptions = []
+        self.recommendedInstalls = []
+        self.candidatePresentation = [:]
         self.activeAuthOption = nil
         self.authStep = nil
         self.authError = nil
@@ -679,6 +686,12 @@ extension OnboardingAISetupModel {
             let manualProviders = result.manualProviders ?? []
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
+            self.recommendedInstalls = result.recommendedInstalls ?? []
+            self.candidatePresentation = Dictionary(
+                result.candidates.map { candidate in
+                    (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
+                },
+                uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
             self.providerAuthReconciliationPending = false
             if Self.canAcceptProviderAuthReconciliation(

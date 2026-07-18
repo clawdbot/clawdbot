@@ -34,7 +34,7 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
   if (!parsed) {
     return undefined;
   }
-  return /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1];
+  return /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed.rest)?.[1];
 }
 
 function buildSessionRegistryPreserveKeys(params: {

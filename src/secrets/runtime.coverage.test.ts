@@ -805,6 +805,8 @@ async function prepareAuthCoverageSnapshot(params: {
   const context = createResolverContext({
     sourceConfig,
     env: params.env,
+    // Auth eligibility consumes process-stable provider aliases; this harness has none.
+    manifestRegistry: { plugins: [] },
   });
 
   const authStores = params.agentDirs.map((agentDir) => {

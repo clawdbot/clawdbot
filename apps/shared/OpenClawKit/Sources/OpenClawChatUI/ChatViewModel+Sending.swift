@@ -288,9 +288,19 @@ extension OpenClawChatViewModel {
         let attachments: [OpenClawPendingAttachment]
         let trimmed: String
         let session: SessionSnapshot
+        let replyTarget: OpenClawChatReplyTarget?
+        let composerRevision: UInt64
 
         var messageText: String {
             self.trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : self.trimmed
+        }
+
+        var outgoingMessageText: String {
+            guard let replyTarget else { return self.messageText }
+            // Web quotes attachment-only replies with an empty typed prompt;
+            // retain that exact trailing separator rather than adding the
+            // native attachment fallback text.
+            return ChatReplyQuote.prepend(message: self.trimmed, replyTarget: replyTarget)
         }
     }
 
@@ -314,6 +324,8 @@ extension OpenClawChatViewModel {
 
         // Own every asynchronous validation/probe below. Slash catalog lookup
         // can suspend, so taking this gate later permits duplicate enqueues.
+        // It also makes the captured reply selection single-submission; exact
+        // target identity keeps a later re-selection safe from completion.
         // Keep it separate from isSending: local /compact checks that flag.
         self.isSubmittingDraft = true
         defer { self.isSubmittingDraft = false }
@@ -356,7 +368,9 @@ extension OpenClawChatViewModel {
             input: input,
             attachments: attachments,
             trimmed: trimmed,
-            session: self.currentSessionSnapshot())
+            session: self.currentSessionSnapshot(),
+            replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : self.replyTarget,
+            composerRevision: self.composerRevision(for: self.sessionKey))
     }
 
     private func validateSendDraft(_ draft: SendDraft) async -> Bool {
@@ -366,6 +380,10 @@ extension OpenClawChatViewModel {
             guard canRunCommand else { return false }
         }
         if await self.handleLocalSlashCommandIfNeeded(command, draftInput: draft.input) {
+            self.recordSuccessfulInput(
+                draft.trimmed,
+                submittedRevision: draft.composerRevision,
+                sessionKey: draft.session.key)
             return false
         }
         return await self.validateSlashCommandDraftForSend(
@@ -383,11 +401,15 @@ extension OpenClawChatViewModel {
             if !self.healthOK, self.outbox != nil {
                 self.logDiagnostic(
                     "chat.ui send queued offline sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
-                await self.enqueueOutboxCommand(
-                    text: draft.messageText,
+                let accepted = await self.enqueueOutboxCommand(
+                    text: draft.outgoingMessageText,
                     draftInput: draft.input,
+                    draftRevision: draft.composerRevision,
                     draftAttachments: draft.attachments,
                     session: draft.session)
+                if accepted {
+                    self.finishAcceptedComposerSend(draft)
+                }
                 return false
             }
         }
@@ -423,11 +445,15 @@ extension OpenClawChatViewModel {
         {
             self.logDiagnostic(
                 "chat.ui send routed behind outbox sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
-            await self.enqueueOutboxCommand(
-                text: draft.messageText,
+            let accepted = await self.enqueueOutboxCommand(
+                text: draft.outgoingMessageText,
                 draftInput: draft.input,
+                draftRevision: draft.composerRevision,
                 draftAttachments: draft.attachments,
                 session: draft.session)
+            if accepted {
+                self.finishAcceptedComposerSend(draft)
+            }
             return false
         }
         return true
@@ -475,6 +501,7 @@ extension OpenClawChatViewModel {
                 + "localRunId=\(runId) pending=\(self.pendingRunCount)")
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
+        self.clearPlan()
 
         // Production attachment sends enter the durable outbox above. Fixture,
         // preview, and embedded transports may intentionally have no outbox;
@@ -487,7 +514,7 @@ extension OpenClawChatViewModel {
                 content: attachment.data.base64EncodedString())
         }
         let userContent = Self.userContent(
-            messageText: draft.messageText,
+            messageText: draft.outgoingMessageText,
             attachments: draft.attachments,
             encodedAttachments: encodedAttachments)
         let userMessageTimestamp = Date().timeIntervalSince1970 * 1000
@@ -567,7 +594,7 @@ extension OpenClawChatViewModel {
                 sessionKey: sessionKey,
                 agentID: attempt.draft.session.deliveryAgentID,
                 expectedSessionRoutingContract: attempt.draft.session.sessionRoutingContract,
-                message: attempt.draft.messageText,
+                message: attempt.draft.outgoingMessageText,
                 thinking: thinkingLevel,
                 idempotencyKey: attempt.runId,
                 attachments: attempt.encodedAttachments)
@@ -588,6 +615,7 @@ extension OpenClawChatViewModel {
                 + "localRunId=\(attempt.runId) remoteRunId=\(response.runId)")
         if response.status != "error", response.status != "timeout" {
             self.haptics.perform(.messageSent)
+            self.finishAcceptedComposerSend(attempt.draft)
         }
         let reusedRunAlreadyFinal = response.runId == attempt.runId
             ? false
@@ -661,12 +689,13 @@ extension OpenClawChatViewModel {
             let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError)
             let preserved = await self.preserveFailedLiveSend(
                 runId: attempt.runId,
-                text: attempt.draft.messageText,
+                text: attempt.draft.outgoingMessageText,
                 thinking: self.effectiveThinkingLevelForSend(attempt.storedThinkingLevel),
                 messageID: attempt.userMessageID,
                 session: attempt.draft.session,
                 deliveryIsAmbiguous: deliveryIsAmbiguous)
             if preserved {
+                self.finishAcceptedComposerSend(attempt.draft)
                 self.applyTransportHealth(false)
                 let outcome = deliveryIsAmbiguous ? "delivery unconfirmed" : "queued after route change"
                 self.logDiagnostic(
@@ -678,7 +707,7 @@ extension OpenClawChatViewModel {
             // Refused persistence (queue full / broken store): restore the
             // draft so the text is not lost with the failed bubble.
             if self.input.isEmpty {
-                self.input = attempt.draft.messageText
+                self.input = attempt.draft.input
             }
         }
         self.restoreDraftAfterLiveSendFailure(attempt)
@@ -694,7 +723,7 @@ extension OpenClawChatViewModel {
 
     private func restoreDraftAfterLiveSendFailure(_ attempt: LiveSendAttempt) {
         if attempt.encodedAttachments.isEmpty, self.input.isEmpty {
-            self.input = attempt.draft.messageText
+            self.input = attempt.draft.input
         } else if !attempt.encodedAttachments.isEmpty {
             if self.input.isEmpty {
                 self.input = attempt.draft.input
@@ -705,5 +734,18 @@ extension OpenClawChatViewModel {
             }
             self.attachments.insert(contentsOf: removedDraftAttachments, at: 0)
         }
+    }
+
+    private static func isSlashCommandDraft(_ text: String) -> Bool {
+        text.hasPrefix("/") && !text.hasPrefix("//")
+    }
+
+    private func finishAcceptedComposerSend(_ draft: SendDraft) {
+        self.recordSuccessfulInput(
+            draft.trimmed,
+            transcriptEcho: draft.outgoingMessageText,
+            submittedRevision: draft.composerRevision,
+            sessionKey: draft.session.key)
+        self.consumeReplyTarget(draft.replyTarget)
     }
 }

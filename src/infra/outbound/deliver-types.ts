@@ -50,15 +50,20 @@ export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
 
 /**
- * Provider assertion that retrying cannot duplicate a recipient-visible send.
- * Never use this after a finalization/send call returned an ambiguous result.
+ * Provider assertion that no recipient-visible send began. Set retryable=false
+ * for permanent payload/policy rejection; never use after an ambiguous send.
  */
 export class PlatformMessageNotDispatchedError extends Error {
   readonly code = PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE;
+  readonly retryable: boolean;
 
-  constructor(message: string, options: { cause: unknown }) {
-    super(message, { cause: options.cause });
+  constructor(message: string, options: { cause: unknown; retryable?: boolean }) {
+    const retryable = options.retryable !== false;
+    super(retryable ? message : message.trim() || "Platform rejected the message before dispatch", {
+      cause: options.cause,
+    });
     this.name = "PlatformMessageNotDispatchedError";
+    this.retryable = retryable;
   }
 }
 
@@ -66,6 +71,12 @@ export function isPlatformMessageNotDispatchedError(
   error: unknown,
 ): error is PlatformMessageNotDispatchedError {
   return error instanceof PlatformMessageNotDispatchedError;
+}
+
+export function isPlatformMessageRejectedError(
+  error: unknown,
+): error is PlatformMessageNotDispatchedError & { readonly retryable: false } {
+  return error instanceof PlatformMessageNotDispatchedError && !error.retryable;
 }
 
 /** Per-payload delivery status emitted to callers and channel send summaries. */

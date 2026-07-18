@@ -656,7 +656,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openai](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Models](/concepts/models)
+    [OpenAI](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Models](/concepts/models)
 
     </div>
       </div>
@@ -684,7 +684,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Models](/concepts/models), [Models](/cli/models), [Openai](/providers/openai), [Agent Runtimes](/concepts/agent-runtimes)
+    [Models](/concepts/models), [Models](/cli/models), [OpenAI](/providers/openai), [Agent Runtimes](/concepts/agent-runtimes)
 
     </div>
       </div>
@@ -698,7 +698,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Models](/concepts/models), [Agent](/cli/agent), [Models](/cli/models), [Openai](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Subagents](/tools/subagents)
+    [Models](/concepts/models), [Agent](/cli/agent), [Models](/cli/models), [OpenAI](/providers/openai), [Anthropic](/providers/anthropic), [Google](/providers/google), [Subagents](/tools/subagents)
 
     </div>
       </div>
@@ -906,7 +906,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Groups](/channels/groups), [Discord](/channels/discord), [Googlechat](/channels/googlechat), [Signal](/channels/signal), [Matrix](/channels/matrix)
+    [Groups](/channels/groups), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [Matrix](/channels/matrix)
 
     </div>
       </div>
@@ -962,7 +962,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Line](/channels/line), [Signal](/channels/signal), [Googlechat](/channels/googlechat), [Matrix](/channels/matrix), [Discord](/channels/discord)
+    [Line](/channels/line), [Signal](/channels/signal), [Google Chat](/channels/googlechat), [Matrix](/channels/matrix), [Discord](/channels/discord)
 
     </div>
       </div>
@@ -1420,7 +1420,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Authentication](/gateway/authentication), [Models](/cli/models), [Openai](/providers/openai), [Oauth](/concepts/oauth), [Secrets](/gateway/secrets), [Secrets](/cli/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Audit Checks](/gateway/security/audit-checks)
+    [Authentication](/gateway/authentication), [Models](/cli/models), [OpenAI](/providers/openai), [Oauth](/concepts/oauth), [Secrets](/gateway/secrets), [Secrets](/cli/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Audit Checks](/gateway/security/audit-checks)
 
     </div>
       </div>
@@ -1517,7 +1517,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Poll](/automation/poll), [Message](/cli/message), [Telegram](/channels/telegram), [Msteams](/channels/msteams), [Background Process](/gateway/background-process)
+    [Poll](/automation/poll), [Message](/cli/message), [Telegram](/channels/telegram), [Microsoft Teams](/channels/msteams), [Background Process](/gateway/background-process)
 
     </div>
       </div>
@@ -1544,7 +1544,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Media Overview](/tools/media-overview), [Media Understanding](/nodes/media-understanding), [Secure File Operations](/gateway/security/secure-file-operations), [Pdf](/tools/pdf), [Image Generation](/tools/image-generation), [Qr](/cli/qr), [Line](/channels/line), [Whatsapp](/channels/whatsapp)
+    [Media Overview](/tools/media-overview), [Media Understanding](/nodes/media-understanding), [Secure File Operations](/gateway/security/secure-file-operations), [Pdf](/tools/pdf), [Image Generation](/tools/image-generation), [Qr](/cli/qr), [Line](/channels/line), [WhatsApp](/channels/whatsapp)
 
     </div>
       </div>
@@ -1600,7 +1600,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>69%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "69%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Audio](/nodes/audio), [Media Understanding](/nodes/media-understanding), [Media Overview](/tools/media-overview), [Whatsapp](/channels/whatsapp), [Images](/nodes/images), [Infer](/cli/infer), [Pdf](/tools/pdf)
+    [Audio](/nodes/audio), [Media Understanding](/nodes/media-understanding), [Media Overview](/tools/media-overview), [WhatsApp](/channels/whatsapp), [Images](/nodes/images), [Infer](/cli/infer), [Pdf](/tools/pdf)
 
     </div>
       </div>
@@ -1641,7 +1641,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openai](/providers/openai), [Google](/providers/google), [Sdk Provider Plugins](/plugins/sdk-provider-plugins), [Talk](/nodes/talk), [Control Ui](/web/control-ui)
+    [OpenAI](/providers/openai), [Google](/providers/google), [Sdk Provider Plugins](/plugins/sdk-provider-plugins), [Talk](/nodes/talk), [Control Ui](/web/control-ui)
 
     </div>
       </div>
@@ -1669,7 +1669,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Talk](/nodes/talk), [Openai](/providers/openai), [Google](/providers/google)
+    [Talk](/nodes/talk), [OpenAI](/providers/openai), [Google](/providers/google)
 
     </div>
       </div>
@@ -3140,7 +3140,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Linux](/platforms/linux), [Openclaw](/start/openclaw), [Doctor](/gateway/doctor)
+    [Linux](/platforms/linux), [OpenClaw](/start/openclaw), [Doctor](/gateway/doctor)
 
     </div>
       </div>
@@ -3325,7 +3325,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>87%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "87%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Discord](/channels/discord), [Openai](/providers/openai), [Elevenlabs](/providers/elevenlabs), [Qa E2e Automation](/concepts/qa-e2e-automation), [Config Channels](/gateway/config-channels)
+    [Discord](/channels/discord), [OpenAI](/providers/openai), [Elevenlabs](/providers/elevenlabs), [Qa E2e Automation](/concepts/qa-e2e-automation), [Config Channels](/gateway/config-channels)
 
     </div>
       </div>
@@ -3518,7 +3518,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Bluebubbles Imessage](/announcements/bluebubbles-imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels), [Imessage](/channels/imessage)
+    [Bluebubbles Imessage](/announcements/bluebubbles-imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels), [iMessage](/channels/imessage)
 
     </div>
       </div>
@@ -3532,7 +3532,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Imessage](/channels/imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels)
+    [iMessage](/channels/imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels)
 
     </div>
       </div>
@@ -3546,7 +3546,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Imessage](/channels/imessage)
+    [iMessage](/channels/imessage)
 
     </div>
       </div>
@@ -3560,7 +3560,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Imessage](/channels/imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels)
+    [iMessage](/channels/imessage), [Imessage From Bluebubbles](/channels/imessage-from-bluebubbles), [Config Channels](/gateway/config-channels)
 
     </div>
       </div>
@@ -3574,7 +3574,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Imessage](/channels/imessage)
+    [iMessage](/channels/imessage)
 
     </div>
       </div>
@@ -3601,7 +3601,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Whatsapp](/channels/whatsapp), [Config Channels](/gateway/config-channels), [Whatsapp](/plugins/reference/whatsapp), [Qa E2e Automation](/concepts/qa-e2e-automation), [Doctor](/gateway/doctor)
+    [WhatsApp](/channels/whatsapp), [Config Channels](/gateway/config-channels), [WhatsApp](/plugins/reference/whatsapp), [Qa E2e Automation](/concepts/qa-e2e-automation), [Doctor](/gateway/doctor)
 
     </div>
       </div>
@@ -3615,7 +3615,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Whatsapp](/channels/whatsapp), [Config Channels](/gateway/config-channels), [Qa E2e Automation](/concepts/qa-e2e-automation), [Pairing](/channels/pairing)
+    [WhatsApp](/channels/whatsapp), [Config Channels](/gateway/config-channels), [Qa E2e Automation](/concepts/qa-e2e-automation), [Pairing](/channels/pairing)
 
     </div>
       </div>
@@ -3629,7 +3629,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Whatsapp](/channels/whatsapp), [Group Messages](/channels/group-messages)
+    [WhatsApp](/channels/whatsapp), [Group Messages](/channels/group-messages)
 
     </div>
       </div>
@@ -3643,7 +3643,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Whatsapp](/channels/whatsapp)
+    [WhatsApp](/channels/whatsapp)
 
     </div>
       </div>
@@ -3657,7 +3657,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Whatsapp](/channels/whatsapp)
+    [WhatsApp](/channels/whatsapp)
 
     </div>
       </div>
@@ -3781,7 +3781,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Googlechat](/channels/googlechat), [Googlechat](/plugins/reference/googlechat), [Config Channels](/gateway/config-channels), [Wizard Cli Reference](/start/wizard-cli-reference), [Secrets](/gateway/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Health](/gateway/health), [Plugin Inventory](/plugins/plugin-inventory), [Index](/channels/index)
+    [Google Chat](/channels/googlechat), [Google Chat](/plugins/reference/googlechat), [Config Channels](/gateway/config-channels), [Wizard Cli Reference](/start/wizard-cli-reference), [Secrets](/gateway/secrets), [Secretref Credential Surface](/reference/secretref-credential-surface), [Health](/gateway/health), [Plugin Inventory](/plugins/plugin-inventory), [Index](/channels/index)
 
     </div>
       </div>
@@ -3795,7 +3795,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Googlechat](/channels/googlechat), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups), [Config Channels](/gateway/config-channels), [Bot Loop Protection](/channels/bot-loop-protection), [Channel Routing](/channels/channel-routing)
+    [Google Chat](/channels/googlechat), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups), [Config Channels](/gateway/config-channels), [Bot Loop Protection](/channels/bot-loop-protection), [Channel Routing](/channels/channel-routing)
 
     </div>
       </div>
@@ -3809,7 +3809,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Googlechat](/channels/googlechat), [Bot Loop Protection](/channels/bot-loop-protection), [Access Groups](/channels/access-groups), [Channel Routing](/channels/channel-routing)
+    [Google Chat](/channels/googlechat), [Bot Loop Protection](/channels/bot-loop-protection), [Access Groups](/channels/access-groups), [Channel Routing](/channels/channel-routing)
 
     </div>
       </div>
@@ -3823,7 +3823,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Googlechat](/channels/googlechat), [Message](/cli/message), [Media Understanding](/nodes/media-understanding), [Secretref Credential Surface](/reference/secretref-credential-surface)
+    [Google Chat](/channels/googlechat), [Message](/cli/message), [Media Understanding](/nodes/media-understanding), [Secretref Credential Surface](/reference/secretref-credential-surface)
 
     </div>
       </div>
@@ -3837,7 +3837,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Googlechat](/channels/googlechat), [Message](/cli/message), [Media Understanding](/nodes/media-understanding), [Secretref Credential Surface](/reference/secretref-credential-surface), [Reactions](/tools/reactions), [Slash Commands](/tools/slash-commands), [Config Agents](/gateway/config-agents), [Message Lifecycle Refactor](/concepts/message-lifecycle-refactor)
+    [Google Chat](/channels/googlechat), [Message](/cli/message), [Media Understanding](/nodes/media-understanding), [Secretref Credential Surface](/reference/secretref-credential-surface), [Reactions](/tools/reactions), [Slash Commands](/tools/slash-commands), [Config Agents](/gateway/config-agents), [Message Lifecycle Refactor](/concepts/message-lifecycle-refactor)
 
     </div>
       </div>
@@ -3864,7 +3864,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Msteams](/channels/msteams), [Msteams](/plugins/reference/msteams), [Config Channels](/gateway/config-channels), [Health](/gateway/health)
+    [Microsoft Teams](/channels/msteams), [Microsoft Teams](/plugins/reference/msteams), [Config Channels](/gateway/config-channels), [Health](/gateway/health)
 
     </div>
       </div>
@@ -3878,7 +3878,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Msteams](/channels/msteams), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups)
+    [Microsoft Teams](/channels/msteams), [Pairing](/channels/pairing), [Access Groups](/channels/access-groups)
 
     </div>
       </div>
@@ -3892,7 +3892,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Msteams](/channels/msteams), [Groups](/channels/groups), [Channel Routing](/channels/channel-routing)
+    [Microsoft Teams](/channels/msteams), [Groups](/channels/groups), [Channel Routing](/channels/channel-routing)
 
     </div>
       </div>
@@ -3906,7 +3906,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Msteams](/channels/msteams)
+    [Microsoft Teams](/channels/msteams)
 
     </div>
       </div>
@@ -3920,7 +3920,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Msteams](/channels/msteams), [Exec Approvals Advanced](/tools/exec-approvals-advanced)
+    [Microsoft Teams](/channels/msteams), [Exec Approvals Advanced](/tools/exec-approvals-advanced)
 
     </div>
       </div>
@@ -4311,7 +4311,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openai](/providers/openai), [Codex Harness](/plugins/codex-harness), [Models](/concepts/models), [Oauth](/concepts/oauth), [Codex Harness Reference](/plugins/codex-harness-reference), [Auth Monitoring](/automation/auth-monitoring)
+    [OpenAI](/providers/openai), [Codex Harness](/plugins/codex-harness), [Models](/concepts/models), [Oauth](/concepts/oauth), [Codex Harness Reference](/plugins/codex-harness-reference), [Auth Monitoring](/automation/auth-monitoring)
 
     </div>
       </div>
@@ -4325,7 +4325,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openai](/providers/openai), [Openresponses Http Api](/gateway/openresponses-http-api), [Openai Http Api](/gateway/openai-http-api), [Codex Native Plugins](/plugins/codex-native-plugins)
+    [OpenAI](/providers/openai), [Openresponses Http Api](/gateway/openresponses-http-api), [Openai Http Api](/gateway/openai-http-api), [Codex Native Plugins](/plugins/codex-native-plugins)
 
     </div>
       </div>
@@ -4353,7 +4353,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openai](/providers/openai), [Image Generation](/tools/image-generation), [Images](/nodes/images)
+    [OpenAI](/providers/openai), [Image Generation](/tools/image-generation), [Images](/nodes/images)
 
     </div>
       </div>
@@ -4367,7 +4367,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openai](/providers/openai), [Discord](/channels/discord), [Voice Call](/plugins/voice-call)
+    [OpenAI](/providers/openai), [Discord](/channels/discord), [Voice Call](/plugins/voice-call)
 
     </div>
       </div>

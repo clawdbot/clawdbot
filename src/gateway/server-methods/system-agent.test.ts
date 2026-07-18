@@ -29,11 +29,25 @@ const setupInferenceMocks = vi.hoisted(() => ({
   detectSetupInference: vi.fn(),
   verifySetupInference: vi.fn(),
 }));
+const providerAuthChoiceMocks = vi.hoisted(() => ({
+  applyAuthChoiceLoadedPluginProvider: vi.fn(),
+}));
+const setupSharedMocks = vi.hoisted(() => ({
+  readSetupConfigFileSnapshot: vi.fn(),
+  writeWizardConfigFile: vi.fn(),
+}));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
+}));
+vi.mock("../../plugins/provider-auth-choice.js", () => ({
+  applyAuthChoiceLoadedPluginProvider: providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider,
+}));
+vi.mock("../../wizard/setup.shared.js", () => ({
+  readSetupConfigFileSnapshot: setupSharedMocks.readSetupConfigFileSnapshot,
+  writeWizardConfigFile: setupSharedMocks.writeWizardConfigFile,
 }));
 
 type RespondCall = {
@@ -138,6 +152,16 @@ beforeEach(async () => {
     latencyMs: 10,
     binding: verifiedInference,
   });
+  setupSharedMocks.readSetupConfigFileSnapshot.mockResolvedValue({
+    exists: true,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    hash: "prepare-base-hash",
+    sourceConfig: verifiedConfig,
+    config: verifiedConfig,
+    issues: [],
+  });
+  setupSharedMocks.writeWizardConfigFile.mockImplementation(async (config) => config);
 });
 
 afterEach(() => {
@@ -145,6 +169,9 @@ afterEach(() => {
   setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
   setupInferenceMocks.verifySetupInference.mockReset();
+  providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
+  setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
+  setupSharedMocks.writeWizardConfigFile.mockReset();
   verifiedInference = undefined;
   verifiedInferenceDeps = undefined;
   resetCommandQueueStateForTest();
@@ -297,6 +324,72 @@ describe("openclaw.setup.auth.start", () => {
   });
 });
 
+describe("openclaw.setup.prepare.start", () => {
+  it("runs the selected provider method in a shared wizard session and commits its config", async () => {
+    const preparedConfig: OpenClawConfig = {
+      ...verifiedConfig,
+      models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
+    };
+    providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockImplementationOnce(
+      async (params) => {
+        await params.prompter.note("Model ready", "Ollama");
+        await params.beforePersistentEffect();
+        return { config: preparedConfig };
+      },
+    );
+    const wizardSessions = new Map();
+    const context = {
+      wizardSessions,
+      findRunningWizard: () => undefined,
+      purgeWizardSession: (id: string) => wizardSessions.delete(id),
+    } as unknown as GatewayRequestContext;
+    const { calls, respond } = makeRespond();
+
+    await expectDefined(
+      systemAgentHandlers["openclaw.setup.prepare.start"],
+      'systemAgentHandlers["openclaw.setup.prepare.start"] test invariant',
+    )({
+      params: {
+        sessionId: "prepare-session-1",
+        authChoice: "ollama",
+        workspace: "/tmp/models-workspace",
+      },
+      respond,
+      context,
+    } as never);
+
+    expect(calls[0]).toMatchObject({
+      ok: true,
+      payload: { sessionId: "prepare-session-1", done: false, status: "running" },
+    });
+    const session = wizardSessions.get("prepare-session-1");
+    const note = await session.next();
+    expect(note).toMatchObject({
+      done: false,
+      step: { type: "note", title: "Ollama", message: "Model ready" },
+    });
+    expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: "ollama",
+        config: verifiedConfig,
+        workspaceDir: "/tmp/models-workspace",
+        setDefaultModel: false,
+        preserveExistingDefaultModel: true,
+        signal: session.signal,
+        isRemote: true,
+      }),
+    );
+    await session.answer(note.step.id, null);
+    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
+      allowConfigSizeDrop: false,
+      baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
+      baseHash: "prepare-base-hash",
+      migrationBaseConfig: verifiedConfig,
+    });
+  });
+});
+
 describe("openclaw.chat", () => {
   it("refuses to create a session before inference is available", async () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce({
@@ -358,7 +451,10 @@ describe("openclaw.chat", () => {
       await release.promise;
       return {
         candidates: [],
+        unavailableCandidates: [],
         manualProviders: [],
+        authOptions: [],
+        recommendedInstalls: [],
         workspace: "/tmp/work",
         setupComplete: false,
       };

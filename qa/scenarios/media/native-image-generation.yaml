@@ -8,11 +8,12 @@ scenario:
       - media.image-generation
     secondary:
       - tools.native-image-generation
-  objective: Verify image_generate appears when configured and returns a real saved media artifact.
+  objective: Verify image_generate appears when configured, returns a real saved media artifact, and delivers it once.
   successCriteria:
     - image_generate appears in the effective tool inventory.
     - Agent triggers native image_generate.
     - Tool output returns a saved MEDIA path and the file exists.
+    - The generated-media completion produces exactly one outbound channel delivery.
   docsRefs:
     - docs/tools/image-generation.md
     - docs/providers/openai.md
@@ -85,4 +86,14 @@ flow:
         - assert:
             expr: "typeof generatedPath === 'string' && generatedPath.length > 0"
             message: image generation did not produce a saved media path
+        - call: sleep
+          args:
+            - 3000
+        - set: outboundMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator')"
+        - assert:
+            expr: "outboundMessages.length === 1"
+            message:
+              expr: "`expected exactly one generated-media delivery, saw ${outboundMessages.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-operator' })}`"
       detailsExpr: "`${outbound.text}\\nIMAGE_PATH:${generatedPath}`"

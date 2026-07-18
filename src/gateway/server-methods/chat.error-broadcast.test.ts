@@ -175,6 +175,7 @@ describe("chat.send error broadcast", () => {
           ],
         }),
       }),
+      { sessionKeys: ["agent:main:main"] },
     );
   });
 
@@ -211,6 +212,7 @@ describe("chat.send error broadcast", () => {
         agentId: "main",
         state: "error",
       }),
+      { sessionKeys: ["agent:main:global", "global"] },
     );
     expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
       "agent:main:global",

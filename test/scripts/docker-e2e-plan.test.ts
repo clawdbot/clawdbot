@@ -499,6 +499,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
         timeoutMs: 1_500_000,
         weight: 3,
       },
+      {
+        command:
+          "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade",
+        imageKind: "bare",
+        live: false,
+        name: "update-run-package-self-upgrade",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 2_700_000,
+        weight: 3,
+      },
     ]);
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
     expect(pluginsRuntimeServices.lanes.map(summarizeLane)).toEqual([
@@ -656,6 +667,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor",
       "root-managed-vps-upgrade",
       "update-restart-auth",
+      "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
       "plugins",

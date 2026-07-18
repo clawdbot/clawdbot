@@ -10,7 +10,7 @@
 }
 
 /* A collapsed rail renders nothing at all — the whole width goes back to the
-   thread. Reopen via the pane header / floating toggle or ⇧⌘B. */
+   thread. Reopen via the pane header or ⇧⌘B. */
 .chat-workbench--workspace-collapsed {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -48,36 +48,8 @@
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
 }
 
-/* Floating openers shown in single-pane mode while a rail is collapsed
-   (split panes host the same toggles in their header row instead). One
-   horizontal row inside the thread's titlebar band (see .chat-thread top
-   padding) so the buttons never cover the first message and the band stays
-   free as a window-drag surface in the native macOS app. */
-.chat-floating-toggles {
-  position: absolute;
-  /* 8px top + 2px row padding keeps the 28px buttons on the shared 24px
-     chrome centerline (sidebar brand row, pane-header actions). */
-  top: 8px;
-  right: 8px;
-  z-index: 12;
-  display: flex;
-  /* Same tight spacing as .chat-pane__actions so both rows read identical. */
-  gap: 2px;
-  /* Ghost buttons carry no chrome of their own, but scrolled thread content
-     passes under this row; a frosted wash keeps the icons legible without
-     reading as boxed buttons. Invisible over the empty titlebar band. */
-  padding: 2px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-/* Compact icon button shared by the split-pane header actions and the
-   floating toggles above: one borderless 28px design so both surfaces match.
-   Sizing only — chrome stays ghost; .btn--icon's 36px min-width/height would
-   win otherwise. The floating row sits in the thread's reserved titlebar band
-   (never over content), so it needs no backdrop of its own. */
+/* Compact icon button shared by the pane header actions. Sizing only — chrome
+   stays ghost; .btn--icon's 36px min-width/height would win otherwise. */
 .chat-icon-btn {
   width: 28px;
   min-width: 28px;
@@ -757,6 +729,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
+  cursor: pointer;
 }
 
 .chat-tasks-rail__task:hover,
@@ -764,11 +737,48 @@
   border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
 }
 
+.chat-tasks-rail__task--expanded {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+}
+
 .chat-tasks-rail__task-head {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.chat-tasks-rail__task-disclosure {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-tasks-rail__task-chevron {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--muted);
+}
+
+.chat-tasks-rail__task-chevron svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
 }
 
 /* openclaw-tooltip is display:contents, so the title span itself is the flex
@@ -891,6 +901,56 @@
   font-size: var(--control-ui-text-xs);
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__task-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 5px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
+  cursor: default;
+}
+
+.chat-tasks-rail__task-inspector-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-tasks-rail__task-inspector-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-tasks-rail__task-inspector pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__task-inspector-state {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.chat-tasks-rail__task-inspector-state--error {
+  color: var(--danger, #ef4444);
 }
 
 /* Quiet by default so a column of rows is not a column of accent links;
@@ -1516,9 +1576,6 @@
 }
 
 /* ── Session diff panel (sessions.diff sidebar content) ── */
-
-/* The floating diff opener sits in the .chat-floating-toggles row and shares
-   the .chat-icon-btn sizing/chrome rules near the top of this file. */
 
 .session-diff {
   display: flex;

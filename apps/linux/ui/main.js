@@ -189,6 +189,18 @@ async function connect() {
   try {
     const snapshot = await invoke("bootstrap");
     if (snapshot.phase === "missingCli") {
+      const buildInfo = await invoke("build_info").catch(() => null);
+      if (buildInfo?.releaseBuild === false) {
+        elements.channel.value = "dev";
+        render({
+          description:
+            "This companion is a development build, so its Gateway install should usually use the matching release channel.",
+          eyebrow: "FIRST-RUN SETUP",
+          showInstall: true,
+          title: "Choose a release channel",
+        });
+        return;
+      }
       render({
         activity: "Starting the bundled installer…",
         description: "OpenClaw is installing its managed CLI and Node runtime.",

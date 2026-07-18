@@ -324,7 +324,7 @@ class CustomWidgetFrameDirective extends AsyncDirective {
       return iframe;
     } catch (error) {
       // A directive's render runs at Lit COMMIT time, outside the try/catch in
-      // `renderWidgetBody`. A throw here would escape the per-cell error boundary
+      // `renderWorkspaceWidgetBody`. A throw here would escape the per-cell error boundary
       // and take down the whole tab, so the boundary has to exist here too.
       this.detach = null;
       this.iframe = null;

@@ -13,6 +13,7 @@ export const OLLAMA_CLOUD_DEFAULT_MODELS = [
 ] as const;
 
 export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
+export const OLLAMA_LOCAL_CONTEXT_TOKENS = 32_768;
 export const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 export const OLLAMA_DEFAULT_COST = {
   input: 0,

@@ -29,6 +29,7 @@ const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
   forceKillChildProcessTreeMock: vi.fn(),
   spawnMock: vi.fn(),
 }));
+const FAST_WAIT_OPTS = { interval: 1 } as const;
 
 function createSpawnMock(params?: { pid?: number }) {
   const child = Object.assign(new EventEmitter(), {
@@ -80,6 +81,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
   tempDirs.clear();
+  vi.resetModules();
 });
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -113,10 +115,14 @@ function writeRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: unknown): voi
     doctorHint?: unknown;
     stats?: unknown;
   };
+  const revision =
+    typeof (sentinel as { revision?: unknown }).revision === "number"
+      ? (sentinel as { revision: number }).revision
+      : Date.now();
   executeSqliteQuerySync(
     db,
     stateDb.insertInto("gateway_restart_sentinel").values({
-      sentinel_key: "current",
+      sentinel_key: record.kind === "revision-floor" ? "revision-floor" : "current",
       version: 1,
       kind: typeof record.kind === "string" ? record.kind : "update",
       status: typeof record.status === "string" ? record.status : "skipped",
@@ -136,22 +142,34 @@ function writeRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: unknown): voi
       doctor_hint: typeof record.doctorHint === "string" ? record.doctorHint : null,
       stats_json: record.stats ? JSON.stringify(record.stats) : null,
       payload_json: JSON.stringify(payload),
-      updated_at_ms: Date.now(),
+      updated_at_ms: revision,
     }),
   );
 }
 
-function readRestartSentinelPayload(env: NodeJS.ProcessEnv): unknown {
+function replaceRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: unknown): void {
+  const { db } = openOpenClawStateDatabase({ env });
+  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
+  executeSqliteQuerySync(
+    db,
+    stateDb.deleteFrom("gateway_restart_sentinel").where("sentinel_key", "=", "current"),
+  );
+  writeRestartSentinelRow(env, sentinel);
+}
+
+function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
   const { db } = openOpenClawStateDatabase({ env });
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,
     stateDb
       .selectFrom("gateway_restart_sentinel")
-      .select(["version", "payload_json"])
-      .where("sentinel_key", "=", "current"),
+      .select(["version", "payload_json", "updated_at_ms"])
+      .where("sentinel_key", "=", key),
   );
-  return row ? { version: row.version, payload: JSON.parse(row.payload_json) } : null;
+  return row
+    ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
+    : null;
 }
 
 async function runHelperWithExistingSentinel(params: {
@@ -159,6 +177,8 @@ async function runHelperWithExistingSentinel(params: {
   metaHandoffId?: string;
   prepareStateDatabase?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
   sentinel?: unknown;
+  parentExitTimeoutMs?: number;
+  whileHelperRunning?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
 }) {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -206,7 +226,7 @@ async function runHelperWithExistingSentinel(params: {
       {
         ...helperParams,
         parentPid: process.pid,
-        parentExitTimeoutMs: 1,
+        parentExitTimeoutMs: params.parentExitTimeoutMs ?? 1,
         stateDatabasePath: resolveOpenClawStateSqlitePath(env),
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
@@ -216,7 +236,7 @@ async function runHelperWithExistingSentinel(params: {
     )}\n`,
   );
 
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+  const resultPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve) => {
       execFile(process.execPath, [helperScriptPath, helperParamsPath], (err) => {
         const childError = err as (NodeJS.ErrnoException & { signal?: NodeJS.Signals }) | null;
@@ -227,6 +247,8 @@ async function runHelperWithExistingSentinel(params: {
       });
     },
   );
+  await params.whileHelperRunning?.(env);
+  const result = await resultPromise;
 
   return { result, env };
 }
@@ -374,40 +396,6 @@ exit 1
 }
 
 describe("managed service update handoff", () => {
-  it("reports started only after the detached helper signals readiness", async () => {
-    const child = createSpawnMock();
-    spawnMock.mockReturnValueOnce(child);
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-
-    const resultPromise = startManagedServiceUpdateHandoff({
-      root: "/tmp/openclaw",
-      restartDrainTimeoutMs: 300_000,
-      parentPid: 12345,
-      execPath: "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
-      meta: {},
-    });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
-
-    const pending = Symbol("pending");
-    await expect(
-      Promise.race([
-        resultPromise,
-        new Promise((resolve) => {
-          setImmediate(() => resolve(pending));
-        }),
-      ]),
-    ).resolves.toBe(pending);
-
-    signalHandoffReady(child);
-    await expect(resultPromise).resolves.toMatchObject({ status: "started", pid: 24680 });
-    expect(child.unref).toHaveBeenCalledTimes(1);
-    expect(child.listenerCount("exit")).toBe(0);
-    expect(child.listenerCount("error")).toBe(0);
-    expect(child.stdout.destroyed).toBe(true);
-  });
-
   it("rejects failed helper spawns and removes the sensitive handoff directory", async () => {
     const child = createSpawnMock();
     spawnMock.mockReturnValueOnce(child);
@@ -422,7 +410,7 @@ describe("managed service update handoff", () => {
       argv1: "/opt/openclaw/openclaw.mjs",
       meta: { sessionKey: "agent:test:webchat:dm:user-123" },
     });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
     const handoffDir = path.dirname(args[0] ?? "");
     tempDirs.add(handoffDir);
@@ -456,7 +444,7 @@ describe("managed service update handoff", () => {
       env: { PATH: binDir, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
       meta: {},
     });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
     const handoffDir = path.dirname(args.at(-2) ?? "");
     tempDirs.add(handoffDir);
@@ -489,7 +477,7 @@ describe("managed service update handoff", () => {
       meta: {},
     });
     const rejection = resultPromise.catch((err: unknown) => err);
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
     const handoffDir = path.dirname(args[0] ?? "");
     tempDirs.add(handoffDir);
@@ -770,6 +758,10 @@ describe("managed service update handoff", () => {
         serviceRecovery?: unknown;
       };
       expect(helperParams.serviceRecovery).toEqual(testCase.expected);
+      const child = spawnMock.mock.results.at(-1)?.value as
+        | ReturnType<typeof createSpawnMock>
+        | undefined;
+      child?.emit("exit", 0, null);
     }
   });
 
@@ -868,7 +860,7 @@ describe("managed service update handoff", () => {
     });
 
     expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelPayload(env)).toEqual(unrelatedSentinel);
+    expect(readRestartSentinelPayload(env)).toMatchObject(unrelatedSentinel);
   });
 
   it("does not overwrite a newer pending update handoff sentinel", async () => {
@@ -894,7 +886,74 @@ describe("managed service update handoff", () => {
     });
 
     expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelPayload(env)).toEqual(newerSentinel);
+    expect(readRestartSentinelPayload(env)).toMatchObject(newerSentinel);
+  });
+
+  it("preserves a newer sentinel written while the detached helper is active", async () => {
+    const oldSentinel = {
+      version: 1,
+      revision: 100,
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: 100,
+        stats: {
+          handoffId: "old-handoff",
+          reason: "managed-service-handoff-started",
+        },
+      },
+    };
+    const newerSentinel = {
+      version: 1,
+      revision: 200,
+      payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 200,
+      },
+    };
+    const { env } = await runHelperWithExistingSentinel({
+      handoffId: "old-handoff",
+      metaHandoffId: "old-handoff",
+      sentinel: oldSentinel,
+      parentExitTimeoutMs: 200,
+      whileHelperRunning: async (stateEnv) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+        replaceRestartSentinelRow(stateEnv, newerSentinel);
+      },
+    });
+
+    expect(readRestartSentinelPayload(env)).toMatchObject({
+      payload: newerSentinel.payload,
+      revision: 200,
+    });
+  });
+
+  it("advances the durable revision floor even when it is ahead of the clock", async () => {
+    const futureRevision = Date.now() + 60_000;
+    const { env } = await runHelperWithExistingSentinel({
+      handoffId: "handoff-future-revision",
+      metaHandoffId: "handoff-future-revision",
+      sentinel: {
+        version: 1,
+        revision: futureRevision,
+        payload: {
+          kind: "revision-floor",
+          status: "skipped",
+          ts: 123,
+          stats: {
+            handoffId: "handoff-future-revision",
+            reason: "managed-service-handoff-started",
+          },
+        },
+      },
+    });
+
+    expect(readRestartSentinelPayload(env, "revision-floor")).toMatchObject({
+      revision: futureRevision + 1,
+    });
   });
 
   it("sweeps stale handoff temp directories while keeping fresh handoff logs", async () => {

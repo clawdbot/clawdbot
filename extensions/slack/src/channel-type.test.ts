@@ -148,6 +148,41 @@ describe("resolveSlackChannelType", () => {
     expect(conversationsInfoMock).not.toHaveBeenCalled();
   });
 
+  it("uses the user token to open native IMs for user identity", async () => {
+    conversationsOpenMock.mockResolvedValueOnce({
+      channel: {
+        id: "D0AEWSDHAQH",
+        is_im: true,
+        user: "U09G2DJ0275",
+      },
+    });
+
+    await expect(
+      resolveSlackConversationInfo({
+        cfg: {
+          channels: {
+            slack: {
+              identity: "user",
+              userToken: "test-user-token",
+            },
+          },
+        } as never,
+        channelId: "D0AEWSDHAQH",
+        operation: "write",
+      }),
+    ).resolves.toEqual({
+      type: "dm",
+      user: "U09G2DJ0275",
+    });
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("test-user-token");
+    expect(conversationsOpenMock).toHaveBeenCalledWith({
+      channel: "D0AEWSDHAQH",
+      prevent_creation: true,
+      return_im: true,
+    });
+    expect(conversationsInfoMock).not.toHaveBeenCalled();
+  });
+
   it("uses an env user token for native IM reads with a configured bot token", async () => {
     vi.stubEnv("SLACK_USER_TOKEN", "envUsr");
     conversationsInfoMock.mockResolvedValueOnce({

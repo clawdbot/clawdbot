@@ -54,6 +54,7 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
 import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
 import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
@@ -712,26 +713,6 @@ function buildAnthropicAuthDoctorHint(params: {
     `- suggested profile: ${suggested}`,
     `Fix: run "${formatCliCommand("openclaw doctor --yes")}"`,
   ].join("\n");
-}
-
-function resolveClaudeCliSyntheticAuth() {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForRuntime();
-  if (!credential) {
-    return undefined;
-  }
-  return credential.type === "oauth"
-    ? {
-        apiKey: credential.access,
-        source: "Claude CLI native auth",
-        mode: "oauth" as const,
-        expiresAt: credential.expires,
-      }
-    : {
-        apiKey: credential.token,
-        source: "Claude CLI native auth",
-        mode: "token" as const,
-        expiresAt: credential.expires,
-      };
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {

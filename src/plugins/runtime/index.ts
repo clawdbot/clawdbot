@@ -37,6 +37,7 @@ import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
+const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("./runtime-tts-request.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
@@ -62,7 +63,9 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
 
 function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
+  const bindTtsRequestRuntime = createLazyRuntimeMethodBinder(loadTtsRequestRuntime);
   return {
+    prepareTtsRequest: bindTtsRequestRuntime((runtime) => runtime.prepareTtsRequest),
     textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
     textToSpeechStream: bindTtsRuntime((runtime) => runtime.textToSpeechStream),
     textToSpeechTelephony: bindTtsRuntime((runtime) => runtime.textToSpeechTelephony),
@@ -333,15 +336,26 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     logging: createRuntimeLogging(),
     state: {
       resolveStateDir,
+      openBlobStore: () => {
+        throw new Error("openBlobStore is only available through the plugin runtime proxy.");
+      },
       openKeyedStore: () => {
         throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
       },
       openSyncKeyedStore: () => {
         throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy.");
       },
+      withLease: async () => {
+        throw new Error("withLease is only available through the plugin runtime proxy.");
+      },
       openChannelIngressQueue: () => {
         throw new Error(
           "openChannelIngressQueue is only available through the plugin runtime proxy.",
+        );
+      },
+      openChannelIngressDrain: () => {
+        throw new Error(
+          "openChannelIngressDrain is only available through the plugin runtime proxy.",
         );
       },
     },

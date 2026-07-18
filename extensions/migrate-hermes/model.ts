@@ -59,9 +59,9 @@ const HERMES_PROVIDER_ALIASES: Record<string, string> = {
   "openai-codex": "openai",
   dashscope: "qwen",
   qwen: "qwen",
-  "qwen-cli": "qwen-oauth",
-  "qwen-oauth": "qwen-oauth",
-  "qwen-portal": "qwen-oauth",
+  "qwen-cli": "qwen",
+  "qwen-oauth": "qwen",
+  "qwen-portal": "qwen",
   "x-ai": "xai",
   "x-ai-oauth": "xai",
   "x.ai": "xai",
@@ -110,7 +110,6 @@ const HERMES_CANONICAL_PROVIDER_IDS = new Set([
   "opencode-go",
   "opencode-zen",
   "openrouter",
-  "qwen-oauth",
   "stepfun",
   "tencent-tokenhub",
   "xai",
@@ -125,6 +124,7 @@ const HERMES_DYNAMIC_KIMI_PROVIDER_IDS = new Set([
   "kimi-for-coding",
   "moonshot",
 ]);
+const HERMES_RETIRED_QWEN_PROVIDER_IDS = new Set(["qwen-cli", "qwen-oauth", "qwen-portal"]);
 
 export function normalizeHermesProviderId(provider: string): string {
   const normalized = normalizeHermesCustomProviderId(provider);
@@ -137,6 +137,25 @@ export function normalizeHermesCustomProviderId(provider: string): string {
     ? normalized.slice("custom:".length)
     : normalized;
   return withoutCustomPrefix.replaceAll(" ", "-");
+}
+
+function isRetiredHermesQwenProviderValue(value: string): boolean {
+  const slash = value.indexOf("/");
+  const provider = slash > 0 ? value.slice(0, slash) : value;
+  return HERMES_RETIRED_QWEN_PROVIDER_IDS.has(normalizeHermesCustomProviderId(provider));
+}
+
+export function usesRetiredHermesQwenProvider(config: Record<string, unknown>): boolean {
+  const model = asRecord(config.model);
+  return [
+    readString(config.provider),
+    typeof config.model === "string" ? config.model : undefined,
+    readString(model?.provider),
+    readString(model?.default),
+    readString(model?.model),
+    readString(config.default_model),
+    readString(config.model_name),
+  ].some((value) => value !== undefined && isRetiredHermesQwenProviderValue(value));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -218,7 +237,10 @@ function resolveHermesKimiProviderId(
 
 function hasExplicitHermesProvider(config: Record<string, unknown>, provider: string): boolean {
   const normalized = normalizeHermesCustomProviderId(provider);
-  if (HERMES_CANONICAL_PROVIDER_IDS.has(normalized)) {
+  if (
+    HERMES_CANONICAL_PROVIDER_IDS.has(normalized) ||
+    HERMES_RETIRED_QWEN_PROVIDER_IDS.has(normalized)
+  ) {
     return false;
   }
   const providers = config.providers;
@@ -261,6 +283,10 @@ function joinHermesProviderModel(
   env: Record<string, string>,
 ): string {
   if (!provider) {
+    const slash = model.indexOf("/");
+    if (slash > 0 && isRetiredHermesQwenProviderValue(model)) {
+      return `qwen/${model.slice(slash + 1)}`;
+    }
     return model;
   }
   if (provider.trim().toLowerCase() === "auto") {

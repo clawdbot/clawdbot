@@ -820,7 +820,8 @@ function classifyFailoverClassificationFromHttpStatus(
       messageReason === "session_expired" ||
       messageReason === "billing" ||
       messageReason === "auth_permanent" ||
-      messageReason === "auth"
+      messageReason === "auth" ||
+      messageReason === "format"
     ) {
       return messageClassification;
     }
@@ -998,6 +999,18 @@ function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
   return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
 }
 
+function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bdoes not support image inputs?\b/.test(normalized) ||
+    /\bunsupported image input\b/.test(normalized) ||
+    (/\bno endpoints found\b/.test(normalized) && /\bsupport image input\b/.test(normalized))
+  );
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -1008,6 +1021,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isUnsupportedImageInputErrorMessage(raw)) {
+    return toReasonClassification("format");
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");

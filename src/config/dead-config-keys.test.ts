@@ -19,6 +19,14 @@ function expectUnknownKey(params: { config: Record<string, unknown>; path: strin
 }
 
 describe("dead config keys", () => {
+  it("rejects retired audio.transcription", () => {
+    expectUnknownKey({
+      config: { audio: { transcription: { command: ["whisper"] } } },
+      path: "",
+      key: "audio",
+    });
+  });
+
   it("rejects legacy session.maintenance.rotateBytes", () => {
     expectUnknownKey({
       config: { session: { maintenance: { rotateBytes: "10mb" } } },

@@ -192,15 +192,16 @@ node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-mod
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-mock-model-config "$MOCK_PORT"
 
 echo "Running local agent turn against mocked OpenAI..."
-set +e
-openclaw agent --local \
+if openclaw agent --local \
   --agent main \
   --session-id npm-onboard-channel-agent \
   --message "Return the success marker from the test server." \
   --thinking off \
-  --json >/tmp/openclaw-agent.combined 2>&1
-agent_status=$?
-set -e
+  --json >/tmp/openclaw-agent.combined 2>&1; then
+  agent_status=0
+else
+  agent_status=$?
+fi
 if [ "$agent_status" -ne 0 ]; then
   dump_debug_logs "$agent_status"
   exit "$agent_status"

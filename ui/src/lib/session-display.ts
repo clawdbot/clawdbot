@@ -15,12 +15,6 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
-/** Human channel label for group headers and name fallbacks. */
-export function channelDisplayLabel(channel: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(channel);
-  return CHANNEL_LABELS[normalized] ?? capitalize(normalized || channel);
-}
-
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();

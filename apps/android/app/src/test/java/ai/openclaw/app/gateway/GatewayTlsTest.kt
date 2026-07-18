@@ -15,6 +15,24 @@ import kotlin.concurrent.thread
 
 class GatewayTlsTest {
   @Test
+  fun buildGatewayTlsConfig_exposesNormalizedExpectedRouteFingerprint() {
+    val expected = "ab".repeat(32)
+    val config: GatewayTlsConfig =
+      buildGatewayTlsConfig(
+        params =
+          GatewayTlsParams(
+            required = true,
+            expectedFingerprint = "SHA-256: $expected",
+            allowTOFU = false,
+            stableId = "gateway-1",
+          ),
+        defaultTrust = RecordingExtendedTrustManager(),
+      )
+
+    assertEquals(expected, config.effectiveFingerprintSha256)
+  }
+
+  @Test
   fun buildGatewayTlsConfig_forwardsPlatformTrustWithSocketAndEngineContext() {
     val defaultTrust = RecordingExtendedTrustManager()
     val config =

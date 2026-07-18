@@ -51,6 +51,8 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 - Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
 - Workspace access (`workspaceAccess`) is independent of bind modes.
 
+For a per-agent configuration with several host folders, access modes, and the external-source safety opt-in, see [Multiple folders for one agent](/gateway/sandboxing#multiple-folders-for-one-agent).
+
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:

@@ -5,17 +5,22 @@ import {
 } from "./generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "./task-runtime.test-helpers.js";
 import {
+  buildPendingGeneratedMediaSessionKeySet,
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
   hasPendingGeneratedMediaTaskForSessionKey,
 } from "./task-status-access.js";
 
-const mocks = vi.hoisted(() => ({ listTaskRecords: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  listTaskRecords: vi.fn(),
+  listTaskRecordsUnsorted: vi.fn(),
+}));
 
 vi.mock("./task-registry.js", () => ({
   findTaskByRunId: vi.fn(),
   getTaskById: vi.fn(),
   listTaskRecords: mocks.listTaskRecords,
+  listTaskRecordsUnsorted: mocks.listTaskRecordsUnsorted,
   listTasksForAgentId: vi.fn(),
   listTasksForSessionKey: vi.fn(),
 }));
@@ -26,6 +31,7 @@ describe("generated media task snapshots", () => {
   beforeEach(() => {
     resetGeneratedMediaTaskActivityForTests();
     mocks.listTaskRecords.mockReset();
+    mocks.listTaskRecordsUnsorted.mockReset();
   });
 
   it("detects only media admitted by the current exact-run attempt", () => {
@@ -69,5 +75,56 @@ describe("generated media task snapshots", () => {
     clearGeneratedMediaTaskActivity("tool:image_generate:run-1");
     expect(hasNewGeneratedMediaTaskForSessionKey(sessionKey, before)).toBe(true);
     expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
+  });
+});
+
+describe("buildPendingGeneratedMediaSessionKeySet", () => {
+  const sessionKey = "agent:main:cron:job:run:run-id";
+
+  beforeEach(() => {
+    resetGeneratedMediaTaskActivityForTests();
+    mocks.listTaskRecordsUnsorted.mockReset();
+  });
+
+  it("returns an empty set when no active media and no persisted tasks", () => {
+    mocks.listTaskRecordsUnsorted.mockReturnValue([]);
+    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set());
+  });
+
+  it("combines active, requester, and owner session keys in one unsorted snapshot", () => {
+    registerGeneratedMediaTaskActivity("tool:image_generate:run-1", "active-key");
+    mocks.listTaskRecordsUnsorted.mockReturnValue([
+      {
+        taskId: "img-task",
+        taskKind: "image_generation",
+        status: "queued",
+        requesterSessionKey: sessionKey,
+        ownerKey: "owner-key",
+      },
+    ]);
+    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(
+      new Set(["active-key", sessionKey, "owner-key"]),
+    );
+    expect(mocks.listTaskRecordsUnsorted).toHaveBeenCalledOnce();
+  });
+
+  it("excludes terminal and non-generated-media tasks", () => {
+    mocks.listTaskRecordsUnsorted.mockReturnValue([
+      {
+        taskId: "done-task",
+        taskKind: "image_generation",
+        status: "succeeded",
+        requesterSessionKey: sessionKey,
+        ownerKey: sessionKey,
+      },
+      {
+        taskId: "chat-task",
+        taskKind: "chat",
+        status: "running",
+        requesterSessionKey: sessionKey,
+        ownerKey: sessionKey,
+      },
+    ]);
+    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set());
   });
 });

@@ -5,10 +5,15 @@
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withPluginStateLease } from "../plugin-state/plugin-state-lease.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import type { MemorySearchManager } from "./memory-core-host-engine-storage.js";
-import type { OpenKeyedStoreOptions, PluginStateKeyedStore } from "./plugin-state-runtime.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+  PluginStateLeaseRunner,
+} from "./plugin-state-runtime.js";
 
 /** Doctor metadata for a built-in memory embedding provider. */
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
@@ -159,6 +164,8 @@ function loadFacadeModule(): FacadeModule {
 }
 
 const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
+const withLease: PluginStateLeaseRunner = (options, run) =>
+  withPluginStateLease("memory-core", options, run);
 /** Audit short-term promotion artifacts in an agent workspace. */
 export const auditShortTermPromotionArtifacts: FacadeModule["auditShortTermPromotionArtifacts"] = ((
   ...args
@@ -180,6 +187,7 @@ export const getMemorySearchManager: FacadeModule["getMemorySearchManager"] = ((
   const managerParams = {
     ...params,
     acquireLocalService,
+    withLease,
   };
   return loadFacadeModule()["getMemorySearchManager"](managerParams);
 }) as FacadeModule["getMemorySearchManager"];
@@ -195,6 +203,7 @@ export const MemoryIndexManager: FacadeModule["MemoryIndexManager"] = {
     const managerParams = {
       ...params,
       acquireLocalService,
+      withLease,
     };
     return await loadFacadeModule()["MemoryIndexManager"].get(managerParams);
   },

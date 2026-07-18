@@ -44,7 +44,9 @@ import {
   buildTelegramGroupFrom,
   buildTelegramInboundOriginTarget,
   describeReplyTarget,
+  getTelegramTextParts,
   normalizeForwardedContext,
+  resolveTelegramMediaPlaceholder,
   type TelegramReplyTarget,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -148,8 +150,19 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
   return withoutForwarded;
 }
 
+function formatTelegramForwardedMessageBody(params: {
+  body: string;
+  forwardedFrom?: string;
+  forwardedDate?: number;
+}): string {
+  const forwardedAt = timestampMsToIsoString(params.forwardedDate);
+  const forwardPrefix = params.forwardedFrom
+    ? `[Forwarded from ${params.forwardedFrom}${forwardedAt ? ` at ${forwardedAt}` : ""}]`
+    : undefined;
+  return [forwardPrefix, params.body].filter(Boolean).join("\n");
+}
+
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
-  const forwardedAt = timestampMsToIsoString(entry.forwardedDate);
   const mediaPath = entry.mediaPath ? resolveTelegramPromptMediaPath(entry.mediaPath) : undefined;
   const labels = [
     `${index + 1}. ${entry.sender ?? "unknown sender"}`,
@@ -158,10 +171,11 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
     entry.timestamp ? timestampMsToIsoString(entry.timestamp) : undefined,
   ].filter(Boolean);
   const bodyLines = [
-    entry.forwardedFrom
-      ? `[Forwarded from ${entry.forwardedFrom}${forwardedAt ? ` at ${forwardedAt}` : ""}]`
-      : undefined,
-    entry.isQuote && entry.body ? `"${entry.body}"` : entry.body,
+    formatTelegramForwardedMessageBody({
+      body: entry.isQuote && entry.body ? `"${entry.body}"` : (entry.body ?? ""),
+      forwardedFrom: entry.forwardedFrom,
+      forwardedDate: entry.forwardedDate,
+    }),
     entry.mediaType ? `<media:${entry.mediaType}>` : undefined,
     mediaPath ? `[media_path:${mediaPath}]` : undefined,
     entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
@@ -261,7 +275,8 @@ export async function buildTelegramInboundContextPayload(params: {
     sessionRuntime: sessionRuntimeOverride,
   } = params;
   const replyTarget = describeReplyTarget(msg);
-  const forwardOrigin = normalizeForwardedContext(msg);
+  const hasMultiMessageDebounceBatch = (options?.inboundDebounceMessages?.length ?? 0) > 1;
+  const forwardOrigin = hasMultiMessageDebounceBatch ? null : normalizeForwardedContext(msg);
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "telegram",
@@ -354,20 +369,48 @@ export async function buildTelegramInboundContextPayload(params: {
     return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
   });
   const visibleForwardOrigin = includeForwardOrigin ? forwardOrigin : null;
-  const visibleForwardOriginAt = timestampMsToIsoString(
-    visibleForwardOrigin?.date ? visibleForwardOrigin.date * 1000 : undefined,
-  );
+  const inboundDebounceBodySegments = hasMultiMessageDebounceBatch
+    ? options?.inboundDebounceMessages?.flatMap((debouncedMessage) => {
+        const segmentBody =
+          getTelegramTextParts(debouncedMessage).text ||
+          resolveTelegramMediaPlaceholder(debouncedMessage);
+        if (!segmentBody) {
+          return [];
+        }
+        const debouncedForwardOrigin = normalizeForwardedContext(debouncedMessage);
+        const visibleDebouncedForwardOrigin =
+          debouncedForwardOrigin &&
+          shouldIncludeGroupSupplementalContext({
+            kind: "forwarded",
+            senderId: debouncedForwardOrigin.fromId,
+            senderUsername: debouncedForwardOrigin.fromUsername,
+          })
+            ? debouncedForwardOrigin
+            : null;
+        return [
+          formatTelegramForwardedMessageBody({
+            body: segmentBody,
+            forwardedFrom: visibleDebouncedForwardOrigin?.from,
+            forwardedDate: visibleDebouncedForwardOrigin?.date
+              ? visibleDebouncedForwardOrigin.date * 1000
+              : undefined,
+          }),
+        ];
+      })
+    : undefined;
+  const visibleBodyText = inboundDebounceBodySegments?.length
+    ? inboundDebounceBodySegments.join("\n")
+    : formatTelegramForwardedMessageBody({
+        body: bodyText,
+        forwardedFrom: visibleForwardOrigin?.from,
+        forwardedDate: visibleForwardOrigin?.date ? visibleForwardOrigin.date * 1000 : undefined,
+      });
   const replySuffix =
     visibleReplyChain.length > 0
       ? `\n\n[Reply chain - nearest first]\n${visibleReplyChain
           .map(formatReplyChainEntry)
           .join("\n")}\n[/Reply chain]`
       : "";
-  const forwardPrefix = visibleForwardOrigin
-    ? `[Forwarded from ${visibleForwardOrigin.from}${
-        visibleForwardOriginAt ? ` at ${visibleForwardOriginAt}` : ""
-      }]\n`
-    : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
@@ -415,7 +458,7 @@ export async function buildTelegramInboundContextPayload(params: {
     channel: "Telegram",
     from: conversationLabel,
     timestamp: msg.date ? msg.date * 1000 : undefined,
-    body: `${forwardPrefix}${bodyText}${replySuffix}`,
+    body: `${visibleBodyText}${replySuffix}`,
     chatType: isGroup ? "group" : "direct",
     sender: {
       name: senderName,
@@ -511,6 +554,7 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
       mainSessionKey: route.mainSessionKey,
@@ -524,7 +568,7 @@ export async function buildTelegramInboundContextPayload(params: {
       inboundEventKind,
       body,
       rawBody,
-      bodyForAgent: bodyText,
+      bodyForAgent: hasMultiMessageDebounceBatch ? visibleBodyText : bodyText,
       commandBody,
       inboundHistory,
       sourceModality: msg.voice ? "voice" : undefined,

@@ -10,8 +10,6 @@ import "./usage-page.ts";
 
 type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
   usageSelectedSessions: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesLoading: boolean;
@@ -73,8 +71,6 @@ async function createPage(client: GatewayBrowserClient): Promise<TestUsagePage> 
   page.render = () => nothing;
   document.body.append(page);
   await page.updateComplete;
-  page.client = client;
-  page.connected = true;
   page.usageSelectedSessions = ["agent:main:detail"];
   return page;
 }

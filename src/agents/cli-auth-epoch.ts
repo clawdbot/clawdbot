@@ -47,7 +47,7 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
 /** Version salt for CLI auth epoch encoding semantics. */
-export const CLI_AUTH_EPOCH_VERSION = 6;
+export const CLI_AUTH_EPOCH_VERSION = 7;
 
 const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 
@@ -100,15 +100,18 @@ function encodeOAuthIdentity(credential: {
 }
 
 function encodeClaudeCredential(credential: ClaudeCliCredential): string {
-  // Identity-only hashing for both OAuth and token Claude CLI credentials.
+  if (credential.type === "api_key_helper") {
+    return JSON.stringify([credential.type, credential.provider, credential.helperHash]);
+  }
+  // Identity-only hashing for Claude CLI-managed credentials.
   // The Claude CLI keychain rewrite is not atomic: a token rotation can
   // briefly produce a partial read where `refreshToken` is missing, and the
   // parser falls back to a token-shaped credential. With the previous
   // token-inclusive hash, that transient race flipped the auth-epoch and
-  // forced a session reset on every rotation. Routing both branches through
-  // `encodeOAuthIdentity` collapses partial reads and rotations onto the
-  // same provider-keyed identity hash, while a real account switch would
-  // still surface as different identity fields. Fixes #74312.
+  // forced a session reset on every rotation. Routing these branches through
+  // `encodeOAuthIdentity` collapses partial reads and rotations onto the same
+  // provider-keyed identity hash. Helper auth stays distinct because changing
+  // its configured command can switch accounts. Fixes #74312.
   return encodeOAuthIdentity({
     type: "oauth",
     provider: credential.provider,
@@ -221,13 +224,15 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
 
 function getLocalCliCredential(provider: string): AuthProfileCredential | undefined {
   switch (provider) {
-    case "claude-cli":
-      return (
-        cliAuthEpochDeps.readClaudeCliCredentialsCached({
-          ttlMs: 0,
-          allowKeychainPrompt: false,
-        }) ?? undefined
-      );
+    case "claude-cli": {
+      const auth = cliAuthEpochDeps.readClaudeCliCredentialsCached({
+        ttlMs: 0,
+        allowKeychainPrompt: false,
+      });
+      // Helper auth has no persisted secret/profile shape; its opaque command
+      // fingerprint is already carried by getLocalCliCredentialFingerprint.
+      return auth?.type === "api_key_helper" ? undefined : (auth ?? undefined);
+    }
     case "codex-cli":
       return (
         cliAuthEpochDeps.readCodexCliCredentialsCached({

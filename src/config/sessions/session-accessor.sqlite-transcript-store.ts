@@ -23,7 +23,11 @@ import {
   readNextTranscriptSeq,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { indexAppendedTranscriptEventInTransaction } from "./session-transcript-index.js";
+import {
+  indexAppendedTranscriptEventInTransaction,
+  reconcileSessionTranscriptIndexInTransaction,
+} from "./session-transcript-index.js";
+import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -35,7 +39,12 @@ export function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
-  options: { dedupeByMessageIdempotency?: boolean; touchMutation?: boolean } = {},
+  options: {
+    dedupeByMessageIdempotency?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+    scheduleProjectionReconcile?: boolean;
+    touchMutation?: boolean;
+  } = {},
 ): boolean {
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(event) ?? Date.now();
@@ -68,14 +77,18 @@ export function appendTranscriptEventInTransaction(
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
   }
-  indexAppendedTranscriptEventInTransaction(database.db, {
+  const projectionNeedsRebuild = indexAppendedTranscriptEventInTransaction(database.db, {
     sessionId: scope.sessionId,
     seq,
     event,
     eventId: identity?.eventId ?? null,
     createdAt,
   });
+  if (projectionNeedsRebuild) {
+    options.onProjectionReconcileNeeded?.();
+  }
   if (!identity) {
+    scheduleTranscriptProjectionReconcile(database, scope, projectionNeedsRebuild, options);
     return true;
   }
   // Caller-checked appends may retain a duplicate key in the payload, but the
@@ -105,7 +118,26 @@ export function appendTranscriptEventInTransaction(
       })
       .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing()),
   );
+  scheduleTranscriptProjectionReconcile(database, scope, projectionNeedsRebuild, options);
   return true;
+}
+
+function scheduleTranscriptProjectionReconcile(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  projectionNeedsRebuild: boolean,
+  options: { scheduleProjectionReconcile?: boolean },
+): void {
+  if (!projectionNeedsRebuild || options.scheduleProjectionReconcile === false) {
+    return;
+  }
+  // setImmediate in the reconcile owner runs only after this synchronous
+  // SQLite transaction commits, keeping full-tree work off the writer stack.
+  startSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: database.path,
+    preferredSessionId: scope.sessionId,
+  });
 }
 
 export function appendTranscriptEventsInTransaction(
@@ -114,13 +146,23 @@ export function appendTranscriptEventsInTransaction(
   events: readonly TranscriptEvent[],
 ): number {
   let appended = 0;
+  let projectionNeedsRebuild = false;
   for (const event of events) {
-    if (appendTranscriptEventInTransaction(database, scope, event, { touchMutation: false })) {
+    if (
+      appendTranscriptEventInTransaction(database, scope, event, {
+        onProjectionReconcileNeeded: () => {
+          projectionNeedsRebuild = true;
+        },
+        scheduleProjectionReconcile: false,
+        touchMutation: false,
+      })
+    ) {
       appended += 1;
     }
   }
   if (appended > 0) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
+    scheduleTranscriptProjectionReconcile(database, scope, projectionNeedsRebuild, {});
   }
   return appended;
 }
@@ -291,6 +333,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
   }
   if (deleted || seq > 0) {
     touchTranscriptMutationInTransaction(database, resolved.sessionId);
+    reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
   }
 }
 

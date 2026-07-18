@@ -60,6 +60,8 @@ Scans OpenClaw state for:
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
+The `.env` scan covers the effective state directory and the directory containing the active config. When both paths name the same file, it is scanned once.
+
 Sensitive provider header detection is name-heuristic based: it flags headers whose name matches common auth/credential fragments (`authorization`, `x-api-key`, `token`, `secret`, `password`, `credential`).
 
 ```bash
@@ -108,6 +110,7 @@ Notes:
 - Supports creating new `auth-profiles.json` mappings directly in the picker flow.
 - Runs preflight resolution before apply.
 - Generated plans default to scrub options enabled (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson`). Apply is one-way for scrubbed plaintext values.
+- `--plan-out` refuses to create a plan whose UTF-8 serialized form exceeds 16 MiB (16,777,216 bytes), matching the `apply --from` input limit.
 - Without `--apply`, the CLI still prompts `Apply this plan now?` after preflight.
 - With `--apply` (and no `--yes`), the CLI prompts an extra irreversible-migration confirmation.
 - `--json` prints the plan + preflight report, but still requires an interactive TTY.
@@ -128,12 +131,14 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 
 `--dry-run` validates preflight without writing files; exec SecretRef checks are skipped by default in dry-run. Write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec`. Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
+`--from` must point to a regular file no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
+
 What `apply` may update:
 
 - `openclaw.json` (SecretRef targets + provider upserts/deletes)
 - `auth-profiles.json` (provider-target scrubbing)
 - legacy `auth.json` residues
-- `~/.openclaw/.env` known secret keys whose values were migrated
+- `.env` files in the effective state and active-config directories, for known secret keys whose values were migrated
 
 Plan contract details (allowed target paths, validation rules, failure semantics): [Secrets Apply Plan Contract](/gateway/secrets-plan-contract).
 

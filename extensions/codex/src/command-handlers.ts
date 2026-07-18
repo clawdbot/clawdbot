@@ -38,6 +38,10 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import {
+  parseCodexUserInputActionAnswer,
+  resolveCodexUserInputAction,
+} from "./app-server/user-input-actions.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import {
@@ -230,6 +234,7 @@ const CODEX_NATIVE_EXECUTION_SUBCOMMANDS = new Set([
   "permissions",
   "compact",
   "review",
+  "goal",
 ]);
 const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
   ...CODEX_NATIVE_EXECUTION_SUBCOMMANDS,
@@ -377,9 +382,28 @@ export async function handleCodexSubcommand(
   if (normalized === "help") {
     return { text: buildHelp() };
   }
+  if (normalized === "answer") {
+    if (rest.length !== 2) {
+      return { text: "Usage: /codex answer <request-token> <choice>" };
+    }
+    if (!canMutateCodexHost(ctx)) {
+      return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
+    }
+    const [token = "", encodedAnswer = ""] = rest;
+    const answer = parseCodexUserInputActionAnswer(encodedAnswer);
+    if (!answer) {
+      return { text: "Invalid Codex answer encoding." };
+    }
+    return {
+      text: resolveCodexUserInputAction(token, answer)
+        ? "Answered Codex."
+        : "That Codex question is no longer pending.",
+    };
+  }
   if (
     CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&
     !returnsBeforeNativeCodexExecution(normalized, rest) &&
+    !isReadOnlyCodexGoalCommand(normalized, rest) &&
     !canMutateCodexHost(ctx)
   ) {
     return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
@@ -424,6 +448,9 @@ export async function handleCodexSubcommand(
   }
   if (normalized === "threads") {
     return { text: await buildThreads(deps, ctx, options.pluginConfig, rest.join(" ")) };
+  }
+  if (normalized === "goal") {
+    return { text: await handleNativeGoal(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "sessions") {
     return { text: await buildCodexCliSessions(deps, rest) };
@@ -593,6 +620,9 @@ function resolveCodexNativeCommandSandboxBlock(
   subcommand: string,
   args: readonly string[],
 ): string | undefined {
+  if (isReadOnlyCodexGoalCommand(subcommand, args)) {
+    return undefined;
+  }
   if (!CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
     return undefined;
   }
@@ -614,6 +644,14 @@ function resolveCodexNativeCommandSandboxBlock(
     sessionId: ctx.sessionId,
     surface: `/${["codex", subcommand].join(" ")}`,
   });
+}
+
+function isReadOnlyCodexGoalCommand(subcommand: string, args: readonly string[]): boolean {
+  if (subcommand !== "goal" || args.length > 1) {
+    return false;
+  }
+  const action = (args[0] ?? "status").toLowerCase();
+  return action === "status" || action === "get";
 }
 
 function returnsBeforeNativeCodexExecution(subcommand: string, args: readonly string[]): boolean {
@@ -856,6 +894,107 @@ async function buildThreads(
     { config: ctx.config, ...scope },
   );
   return formatThreads(response);
+}
+
+async function handleNativeGoal(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  args: string[],
+): Promise<string> {
+  const action = (args[0] ?? "status").toLowerCase();
+  const objective = args.slice(1).join(" ").trim();
+  const target = await resolveControlTarget(ctx);
+  if (!target) {
+    return "Cannot manage the Codex goal because this command has no stable binding identity.";
+  }
+  const binding = await deps.bindingStore.read(target.identity);
+  if (!binding?.threadId) {
+    return "No Codex thread is attached to this OpenClaw session yet.";
+  }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding.authProfileId,
+    pluginConfig,
+  });
+  const goalRequestOptions: CodexControlRequestOptions = {
+    agentDir: target.agentDir,
+    authProfileId: connection.clientAuthProfileId,
+    config: ctx.config,
+    ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
+  };
+  if (action === "status" || action === "get") {
+    if (args.length > 1) {
+      return "Usage: /codex goal [status]";
+    }
+    const response = await deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.getThreadGoal,
+      { threadId: binding.threadId },
+      goalRequestOptions,
+    );
+    return formatNativeGoal(response);
+  }
+  if (action === "clear") {
+    if (args.length > 1) {
+      return "Usage: /codex goal clear";
+    }
+    const response = await deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.clearThreadGoal,
+      { threadId: binding.threadId },
+      goalRequestOptions,
+    );
+    return isJsonObject(response) && response.cleared === true
+      ? "Cleared the Codex goal."
+      : "No Codex goal was active.";
+  }
+  const requestedStatus =
+    action === "pause"
+      ? "paused"
+      : action === "resume"
+        ? "active"
+        : action === "block"
+          ? "blocked"
+          : action === "complete"
+            ? "complete"
+            : undefined;
+  const isObjectiveUpdate = action === "set";
+  if ((!requestedStatus && !isObjectiveUpdate) || (isObjectiveUpdate && !objective)) {
+    return "Usage: /codex goal [status|set <objective>|pause|resume|block|complete|clear]";
+  }
+  if (requestedStatus && args.length > 1) {
+    return `Usage: /codex goal ${action}`;
+  }
+  const response = await deps.codexControlRequest(
+    pluginConfig,
+    CODEX_CONTROL_METHODS.setThreadGoal,
+    {
+      threadId: binding.threadId,
+      ...(objective ? { objective } : {}),
+      // Upstream thread/goal/set creates or partially updates the native goal;
+      // omitted status and budget preserve Codex's canonical state.
+      ...(requestedStatus ? { status: requestedStatus } : {}),
+    },
+    goalRequestOptions,
+  );
+  return formatNativeGoal(response);
+}
+
+function formatNativeGoal(response: JsonValue | undefined): string {
+  const goal = isJsonObject(response) && isJsonObject(response.goal) ? response.goal : undefined;
+  if (!goal) {
+    return "No Codex goal is active.";
+  }
+  const objective = readString(goal, "objective") ?? "unknown";
+  const status = readString(goal, "status") ?? "unknown";
+  const tokensUsed = typeof goal.tokensUsed === "number" ? goal.tokensUsed : 0;
+  const tokenBudget = typeof goal.tokenBudget === "number" ? goal.tokenBudget : undefined;
+  return [
+    `Codex goal: ${formatCodexDisplayText(objective)}`,
+    `- Status: ${formatCodexDisplayText(status)}`,
+    `- Tokens: ${tokensUsed}${tokenBudget === undefined ? "" : ` / ${tokenBudget}`}`,
+  ].join("\n");
 }
 
 async function buildCodexCliSessions(deps: CodexCommandDeps, args: string[]): Promise<string> {

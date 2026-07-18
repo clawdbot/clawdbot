@@ -186,10 +186,24 @@ class WizardSessionPrompter implements WizardPrompter {
     return Boolean(res);
   }
 
-  progress(_label: string): WizardProgress {
+  progress(label: string): WizardProgress {
+    let stopped = false;
+    this.session.pushProgress(label);
     return {
-      update: (_message) => {},
-      stop: (_message) => {},
+      update: (message) => {
+        if (!stopped) {
+          this.session.pushProgress(message);
+        }
+      },
+      stop: (message) => {
+        if (stopped) {
+          return;
+        }
+        stopped = true;
+        if (message) {
+          this.session.pushProgress(message);
+        }
+      },
     };
   }
 
@@ -218,6 +232,8 @@ export class WizardSession {
   private readonly abortController = new AbortController();
   private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private currentStep: WizardStep | null = null;
+  private progressSteps: WizardStep[] = [];
+  private deliveredProgressStepIds = new Set<string>();
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
   private cancellationLocked = false;
@@ -251,6 +267,11 @@ export class WizardSession {
   }
 
   async next(): Promise<WizardNextResult> {
+    const progressStep = this.progressSteps.shift();
+    if (progressStep) {
+      this.rememberDeliveredProgressStep(progressStep.id);
+      return { done: false, step: progressStep, status: this.status };
+    }
     if (this.currentStep) {
       return { done: false, step: this.currentStep, status: this.status };
     }
@@ -292,6 +313,12 @@ export class WizardSession {
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
     const pending = this.answerDeferred.get(stepId);
     if (!pending) {
+      // Gateway-owned progress steps never block the provider run. Older
+      // clients still acknowledge every rendered step, so accept that stale
+      // acknowledgement while newer clients poll without an answer.
+      if (this.deliveredProgressStepIds.delete(stepId)) {
+        return undefined;
+      }
       throw new Error("wizard: no pending step");
     }
     const normalizedValue = pending.text ? normalizeTextAnswer(value) : value;
@@ -322,6 +349,8 @@ export class WizardSession {
       pending.deferred.reject(new WizardCancelledError());
     }
     this.answerDeferred.clear();
+    this.progressSteps = [];
+    this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
     return true;
   }
@@ -338,6 +367,41 @@ export class WizardSession {
   pushStep(step: WizardStep) {
     this.currentStep = step;
     this.resolveStep(step);
+  }
+
+  pushProgress(message: string) {
+    if (this.status !== "running") {
+      return;
+    }
+    const step: WizardStep = {
+      id: randomUUID(),
+      type: "progress",
+      message,
+      executor: "gateway",
+    };
+    if (this.stepDeferred) {
+      this.rememberDeliveredProgressStep(step.id);
+      this.resolveStep(step);
+      return;
+    }
+    // Keep the oldest unread event and the newest snapshot. This preserves the
+    // initial label while bounding bursty pull updates between client polls.
+    if (this.progressSteps.length >= 2) {
+      this.progressSteps[this.progressSteps.length - 1] = step;
+      return;
+    }
+    this.progressSteps.push(step);
+  }
+
+  private rememberDeliveredProgressStep(stepId: string) {
+    this.deliveredProgressStepIds.add(stepId);
+    if (this.deliveredProgressStepIds.size <= 64) {
+      return;
+    }
+    const oldest = this.deliveredProgressStepIds.values().next().value;
+    if (oldest) {
+      this.deliveredProgressStepIds.delete(oldest);
+    }
   }
 
   queueExternalUrl(url: string) {

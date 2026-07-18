@@ -215,6 +215,9 @@ describe("runGatewayUpdate", () => {
       );
       await fs.chmod(fakeGitPath, 0o755);
 
+      // Keep install-surface candidates on the fixture root so this test exercises
+      // one timed-out process tree instead of repeating the timeout for Vitest's cwd.
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempDir);
       let childPid: number | null = null;
       let childExited = false;
       try {
@@ -231,6 +234,7 @@ describe("runGatewayUpdate", () => {
         expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
         childExited = await waitForProcessExit(childPid);
       } finally {
+        cwdSpy.mockRestore();
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
@@ -408,7 +412,9 @@ describe("runGatewayUpdate", () => {
       deferConfiguredPluginInstallRepair?: boolean;
       allowGatewayServiceRepair?: boolean;
       allowGatewayActivation?: boolean;
-      beforeGitMutation?: () => Promise<{
+      beforeGitMutation?: (target: {
+        schemaVersions?: { state: number; agent: number };
+      }) => Promise<{
         allowGatewayServiceRepair?: boolean;
         allowGatewayActivation?: boolean;
       } | void>;
@@ -440,7 +446,9 @@ describe("runGatewayUpdate", () => {
       cwd?: string;
       devTargetRef?: string;
       deferConfiguredPluginInstallRepair?: boolean;
-      beforeGitMutation?: () => Promise<{
+      beforeGitMutation?: (target: {
+        schemaVersions?: { state: number; agent: number };
+      }) => Promise<{
         allowGatewayServiceRepair?: boolean;
         allowGatewayActivation?: boolean;
       } | void>;
@@ -636,6 +644,11 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
         stdout: `${upstreamSha}\n`,
       },
+      [`git -C ${tempDir} show ${upstreamSha}:package.json`]: {
+        stdout: JSON.stringify({
+          openclaw: { schemaVersions: { state: 3, agent: 11 } },
+        }),
+      },
       [`git -C ${tempDir} rebase ${upstreamSha}`]: { stdout: "" },
       "pnpm --version": { stdout: "10.0.0" },
       "pnpm install": { stdout: "" },
@@ -648,6 +661,9 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(beforeGitMutation).toHaveBeenCalledTimes(1);
+    expect(beforeGitMutation).toHaveBeenCalledWith({
+      schemaVersions: { state: 3, agent: 11 },
+    });
     expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
     expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
     const cleanupIndex = calls.findIndex(
@@ -660,6 +676,36 @@ describe("runGatewayUpdate", () => {
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
       calls.indexOf(`git -C ${tempDir} rebase ${upstreamSha}`),
     );
+  });
+
+  it("hands beforeGitMutation an unreadable marker when target metadata cannot be read", async () => {
+    await setupGitCheckout();
+    const upstreamSha = "b".repeat(40);
+    const beforeGitMutation = vi.fn(async () => {
+      throw new Error("refused by caller");
+    });
+    const { runner } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+        stdout: "origin/main",
+      },
+      [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
+      [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
+        stdout: `${upstreamSha}\n`,
+      },
+      [`git -C ${tempDir} show ${upstreamSha}:package.json`]: {
+        code: 128,
+        stderr: "fatal: path 'package.json' does not exist",
+      },
+    });
+
+    await expect(runWithRunner(runner, { channel: "dev", beforeGitMutation })).rejects.toThrow(
+      "refused by caller",
+    );
+    expect(beforeGitMutation).toHaveBeenCalledWith({
+      metadataUnreadable: expect.stringContaining("exited 128"),
+    });
   });
 
   it("does not use remote main fallback when existing local main has no upstream", async () => {
@@ -1091,7 +1137,6 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
-    expect(doctorEnv?.OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART).toBe("1");
@@ -2821,7 +2866,6 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(doctorCommand);
     expect(result.steps.map((step) => step.name)).toContain("openclaw doctor");
     expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
-    expect(doctorEnv?.OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("1");

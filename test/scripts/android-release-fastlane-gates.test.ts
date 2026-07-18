@@ -37,6 +37,8 @@ describe("Android Fastlane release upload gates", () => {
   it("preflights and records mobile release refs around Play build upload", () => {
     const fastfile = readFastfile();
     const uploadBuild = functionBody(fastfile, "upload_play_store_build!");
+    const atomicUpload = functionBody(fastfile, "upload_play_builds_atomically!");
+    const booleanEnv = functionBody(fastfile, "fastlane_boolean_env");
 
     expect(fastfile).toContain("def mobile_release_ref_command");
     expect(fastfile).toContain("def release_git_sha");
@@ -48,12 +50,25 @@ describe("Android Fastlane release upload gates", () => {
     expect(uploadBuild).toContain("record_mobile_release_ref!");
     expect(uploadBuild.match(/sha: release_sha/g)).toHaveLength(2);
     expect(uploadBuild.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
-      uploadBuild.indexOf("upload_to_play_store("),
+      uploadBuild.indexOf("upload_play_builds_atomically!("),
     );
     expect(uploadBuild.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
-      uploadBuild.indexOf("upload_to_play_store("),
+      uploadBuild.indexOf("upload_play_builds_atomically!("),
     );
     expect(uploadBuild).toContain("unless play_validate_only?");
+    expect(atomicUpload.match(/client\.upload_bundle\(/g)).toHaveLength(2);
+    expect(atomicUpload.match(/client\.begin_edit\(/g)).toHaveLength(1);
+    expect(atomicUpload.match(/client\.commit_current_edit!/g)).toHaveLength(1);
+    expect(atomicUpload).toContain("client.validate_current_edit!");
+    expect(atomicUpload).toContain("client.abort_current_edit");
+    expect(booleanEnv).toContain('["1", "yes", "true", "on"]');
+    expect(booleanEnv).toContain('["0", "no", "false", "off"]');
+    expect(atomicUpload).toContain(
+      'fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false)',
+    );
+    expect(atomicUpload).toContain(
+      'fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)',
+    );
   });
 
   it("generates fresh screenshots before building and uploading a release", () => {

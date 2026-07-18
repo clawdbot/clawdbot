@@ -4,7 +4,11 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { getBashShellConfig } from "../shell-utils.js";
+import {
+  buildShellCommandInvocation,
+  getBashShellConfig,
+  getBashShellEnv,
+} from "../shell-utils.js";
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
@@ -27,13 +31,17 @@ function executeWithConfiguredShell(command: string): {
   value: string | undefined;
 } {
   try {
-    const { shell, args } = getBashShellConfig();
-    const result = spawnSync(shell, [...args, command], {
+    const shellConfig = getBashShellConfig();
+    const invocation = buildShellCommandInvocation(command, shellConfig);
+    const [shell, ...args] = invocation.argv;
+    const result = spawnSync(shell, args, {
       encoding: "utf-8",
+      ...(invocation.input === undefined ? {} : { input: invocation.input }),
       timeout: 10000,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: [invocation.stdin, "pipe", "ignore"],
       shell: false,
       windowsHide: true,
+      env: getBashShellEnv(shellConfig.shell),
     });
 
     if (result.error) {

@@ -73,7 +73,7 @@ internal fun CommandPalette(
   onOpenSessions: () -> Unit,
   onOpenProviders: () -> Unit,
   onOpenSettings: () -> Unit,
-  onOpenSession: (String) -> Unit,
+  onOpenSession: (String, String?) -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -172,6 +172,7 @@ internal fun CommandPalette(
                 sessionRows.map { session ->
                   CommandSessionRow(
                     key = session.key,
+                    ownerAgentId = session.ownerAgentId,
                     title = commandSessionTitle(session.displayName),
                     subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw session"),
                     metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: nativeString("now"),
@@ -230,6 +231,7 @@ internal fun commandActionAccessibilityDescription(
 
 private data class CommandSessionRow(
   val key: String,
+  val ownerAgentId: String?,
   val title: String,
   val subtitle: String,
   val metadata: String,
@@ -273,11 +275,11 @@ private fun CommandActionRow(row: CommandItem) {
 @Composable
 private fun CommandSessionList(
   rows: List<CommandSessionRow>,
-  onOpen: (String) -> Unit,
+  onOpen: (String, String?) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      CommandSessionListRow(row = row, onClick = { onOpen(row.key) })
+      CommandSessionListRow(row = row, onClick = { onOpen(row.key, row.ownerAgentId) })
     }
   }
 }

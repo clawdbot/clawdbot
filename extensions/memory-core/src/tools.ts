@@ -10,6 +10,7 @@ import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
   readStringParam,
+  resolveMemoryDreamingPluginConfig,
   type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -18,10 +19,10 @@ import type {
   MemorySearchRuntimeDebug,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
-  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import {
@@ -433,6 +434,7 @@ export function createMemorySearchTool(options: {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
 }) {
   return createMemoryTool({
     options,
@@ -528,6 +530,7 @@ export function createMemorySearchTool(options: {
                           agentId,
                           purpose: memoryManagerPurpose,
                           acquireLocalService: options.acquireLocalService,
+                          withLease: options.withLease,
                         }),
                       );
                       return { context, resolvedMemoryBackend };
@@ -548,7 +551,7 @@ export function createMemorySearchTool(options: {
               mode: citationsMode,
               sessionKey: options.agentSessionKey,
             });
-            const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+            const pluginConfig = resolveMemoryDreamingPluginConfig(cfg);
             const dreamingEnabled = resolveMemoryDreamingConfig({
               pluginConfig,
               cfg,
@@ -635,6 +638,7 @@ export function createMemorySearchTool(options: {
                         agentId,
                         purpose: memoryManagerPurpose,
                         acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
                       }),
                     ),
                   );
@@ -816,6 +820,7 @@ export function createMemoryGetTool(options: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
 }) {
   return createMemoryTool({
     options,
@@ -881,6 +886,7 @@ export function createMemoryGetTool(options: {
           agentId,
           purpose: "status",
           acquireLocalService: options.acquireLocalService,
+          withLease: options.withLease,
         });
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });

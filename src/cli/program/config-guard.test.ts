@@ -183,7 +183,6 @@ describe("ensureConfigReady", () => {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
-        crossStateDirImports: false,
       });
     }
   });
@@ -205,9 +204,25 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
-      crossStateDirImports: false,
     });
   });
+
+  it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
+    "runs doctor flow when lightweight startup detection finds %s",
+    async (relativePath) => {
+      const root = useTempOpenClawHome();
+      writeStateMarker(root, relativePath);
+
+      await runEnsureConfigReady(["status"]);
+
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+        migrateState: true,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+      });
+    },
+  );
 
   it("runs doctor flow when lightweight startup detection finds a pending SQLite archive", async () => {
     const root = useTempOpenClawHome();
@@ -220,7 +235,6 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
-      crossStateDirImports: false,
     });
   });
 
@@ -231,7 +245,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
       requireStartupMigrationCheckpoint: true,
     });
   });
@@ -264,7 +277,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
     });
   });
 
@@ -288,7 +300,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
     });
   });
 
@@ -313,7 +324,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
     });
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       migratedSnapshot.runtimeConfig,
@@ -336,7 +346,7 @@ describe("ensureConfigReady", () => {
     { commandPath: ["plugins", "list"], source: "exec-approvals.json" },
     { commandPath: ["tasks", "list"], source: "plugin-binding-approvals.json" },
   ])(
-    "runs notice-only preflight for $commandPath with default-state $source",
+    "ignores default-state $source while $commandPath uses custom state",
     async ({ commandPath, source }) => {
       const root = useTempOpenClawHome();
       const stateDir = path.join(root, "custom-state");
@@ -347,14 +357,7 @@ describe("ensureConfigReady", () => {
 
       await runEnsureConfigReady(commandPath);
 
-      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-        migrateState: true,
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        ...(commandPath[0] === "status" ? { observe: false } : {}),
-        crossStateDirImports: false,
-      });
+      expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
       expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
       expect(fs.existsSync(path.join(stateDir, "exec-approvals.json"))).toBe(false);

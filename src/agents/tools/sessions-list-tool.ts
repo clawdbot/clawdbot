@@ -3,20 +3,13 @@
  *
  * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
  */
-import path from "node:path";
 import {
-  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveStorePath,
-} from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -24,7 +17,6 @@ import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
-import { normalizeFastModeAutoOnSeconds, normalizeFastModeSource } from "../../shared/fast-mode.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   optionalNonNegativeIntegerSchema,
@@ -52,6 +44,7 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
+  type GatewaySessionListRow,
   type SessionListRow,
   type SessionRunStatus,
 } from "./sessions-helpers.js";
@@ -68,6 +61,65 @@ const SessionsListToolSchema = Type.Object({
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
+
+const SessionListRowOutputSchema = Type.Object(
+  {
+    key: Type.String(),
+    agentId: Type.String(),
+    kind: Type.Union([
+      Type.Literal("main"),
+      Type.Literal("group"),
+      Type.Literal("cron"),
+      Type.Literal("hook"),
+      Type.Literal("node"),
+      Type.Literal("other"),
+    ]),
+    channel: Type.String(),
+    archived: Type.Boolean(),
+    pinned: Type.Boolean(),
+    label: Type.Optional(Type.String()),
+    displayName: Type.Optional(Type.String()),
+    derivedTitle: Type.Optional(Type.String()),
+    lastMessagePreview: Type.Optional(Type.String()),
+    parentSessionKey: Type.Optional(Type.String()),
+    updatedAt: Type.Optional(Type.Number()),
+    stateVersion: Type.Optional(Type.Number()),
+    model: Type.Optional(Type.String()),
+    contextTokens: Type.Optional(Type.Number()),
+    totalTokens: Type.Optional(Type.Number()),
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal("running"),
+        Type.Literal("done"),
+        Type.Literal("failed"),
+        Type.Literal("killed"),
+        Type.Literal("timeout"),
+      ]),
+    ),
+    abortedLastRun: Type.Optional(Type.Boolean()),
+    childSessions: Type.Optional(Type.Array(Type.String())),
+    messages: Type.Optional(Type.Array(Type.Unknown())),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsListOutputSchema = Type.Object(
+  {
+    count: Type.Number(),
+    sessions: Type.Array(SessionListRowOutputSchema),
+    visibility: Type.Optional(
+      Type.Object(
+        {
+          mode: Type.Union([Type.Literal("self"), Type.Literal("tree"), Type.Literal("agent")]),
+          restricted: Type.Literal(true),
+          warning: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 type GatewayCaller = typeof callGateway;
 
@@ -96,6 +148,7 @@ export function createSessionsListTool(opts?: {
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsListTool(),
     parameters: SessionsListToolSchema,
+    outputSchema: SessionsListOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? getRuntimeConfig();
@@ -133,7 +186,7 @@ export function createSessionsListTool(opts?: {
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
-      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await gatewayCall<{ sessions: Array<GatewaySessionListRow>; path: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -237,16 +290,7 @@ export function createSessionsListTool(opts?: {
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
         const deliveryContext = deliveryContextFromSession(entry);
         const deliveryChannel = readStringValue(deliveryContext?.channel);
-        const deliveryTo = readStringValue(deliveryContext?.to);
-        const deliveryAccountId = readStringValue(deliveryContext?.accountId);
-        const deliveryThreadId =
-          typeof deliveryContext?.threadId === "string" ||
-          (typeof deliveryContext?.threadId === "number" &&
-            Number.isFinite(deliveryContext.threadId))
-            ? deliveryContext.threadId
-            : undefined;
         const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
-        const lastAccountId = deliveryAccountId ?? readStringValue(entry.lastAccountId);
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -258,128 +302,67 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
         const resolvedAgentId = resolveAgentIdFromSessionKey(key);
-        let transcriptPath: string | undefined;
-        if (sessionId) {
-          try {
-            const trimmedStorePath = storePath?.trim();
-            let effectiveStorePath: string | undefined;
-            if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
-              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
-                effectiveStorePath = resolveStorePath(trimmedStorePath, {
-                  agentId: resolvedAgentId,
-                });
-              } else if (path.isAbsolute(trimmedStorePath)) {
-                effectiveStorePath = trimmedStorePath;
-              }
-            }
-            const filePathOpts = resolveSessionFilePathOptions({
-              agentId: resolvedAgentId,
-              storePath: effectiveStorePath,
-            });
-            transcriptPath = resolveSessionFilePath(
-              sessionId,
-              sessionFile ? { sessionFile } : undefined,
-              filePathOpts,
-            );
-          } catch {
-            transcriptPath = undefined;
-          }
-        }
-
-        const effectiveFastMode = normalizeFastMode(entry.effectiveFastMode);
-        const effectiveFastModeSource = normalizeFastModeSource(entry.effectiveFastModeSource);
-        const fastAutoOnSeconds = normalizeFastModeAutoOnSeconds(entry.fastAutoOnSeconds);
         // Version lookup keys on the store-owning agent (gateway row agentId), not the
         // key-derived agent: bare "global" keys parse to the default agent id.
         const stateVersionAgentId =
           typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
         const stateVersion = stateVersions[stateVersionAgentId]?.[key];
+        const rowLabel = readStringValue(entry.label);
+        const displayName = readStringValue(entry.displayName);
+        const derivedTitle = readStringValue(entry.derivedTitle);
+        const lastMessagePreview = readStringValue(entry.lastMessagePreview);
+        const parentSessionKeyRaw =
+          typeof entry.parentSessionKey === "string"
+            ? entry.parentSessionKey
+            : typeof entry.spawnedBy === "string"
+              ? entry.spawnedBy
+              : undefined;
+        const parentSessionKey = parentSessionKeyRaw
+          ? resolveDisplaySessionKey({
+              key: parentSessionKeyRaw,
+              alias,
+              mainKey,
+            })
+          : undefined;
+        const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : undefined;
+        const model = readStringValue(entry.model);
+        const contextTokens =
+          typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
+        const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
+        const status = readSessionRunStatus(entry.status);
+        const abortedLastRun =
+          typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined;
+        const childSessions = Array.isArray(entry.childSessions)
+          ? entry.childSessions
+              .filter((value): value is string => typeof value === "string")
+              .map((value) =>
+                resolveDisplaySessionKey({
+                  key: value,
+                  alias,
+                  mainKey,
+                }),
+              )
+          : undefined;
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,
-          origin:
-            originChannel ||
-            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
-              ? {
-                  provider: originChannel,
-                  accountId: readStringValue(entryOrigin?.accountId),
-                }
-              : undefined,
-          spawnedBy:
-            typeof entry.spawnedBy === "string"
-              ? resolveDisplaySessionKey({
-                  key: entry.spawnedBy,
-                  alias,
-                  mainKey,
-                })
-              : undefined,
-          label: readStringValue(entry.label),
-          displayName: readStringValue(entry.displayName),
-          derivedTitle: readStringValue(entry.derivedTitle),
-          lastMessagePreview: readStringValue(entry.lastMessagePreview),
-          parentSessionKey:
-            typeof entry.parentSessionKey === "string"
-              ? resolveDisplaySessionKey({
-                  key: entry.parentSessionKey,
-                  alias,
-                  mainKey,
-                })
-              : undefined,
-          deliveryContext:
-            deliveryChannel || deliveryTo || deliveryAccountId || deliveryThreadId
-              ? {
-                  channel: deliveryChannel,
-                  to: deliveryTo,
-                  accountId: deliveryAccountId,
-                  threadId: deliveryThreadId,
-                }
-              : undefined,
-          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
           archived: entry.archived === true,
-          archivedAt: typeof entry.archivedAt === "number" ? entry.archivedAt : undefined,
           pinned: entry.pinned === true,
-          pinnedAt: typeof entry.pinnedAt === "number" ? entry.pinnedAt : undefined,
-          sessionId,
+          ...(rowLabel ? { label: rowLabel } : {}),
+          ...(displayName ? { displayName } : {}),
+          ...(derivedTitle ? { derivedTitle } : {}),
+          ...(lastMessagePreview ? { lastMessagePreview } : {}),
+          ...(parentSessionKey ? { parentSessionKey } : {}),
+          ...(updatedAt !== undefined ? { updatedAt } : {}),
           ...(stateVersion ? { stateVersion } : {}),
-          model: readStringValue(entry.model),
-          contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
-          totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
-          estimatedCostUsd:
-            typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
-          status: readSessionRunStatus(entry.status),
-          startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
-          endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
-          runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,
-          childSessions: Array.isArray(entry.childSessions)
-            ? entry.childSessions
-                .filter((value): value is string => typeof value === "string")
-                .map((value) =>
-                  resolveDisplaySessionKey({
-                    key: value,
-                    alias,
-                    mainKey,
-                  }),
-                )
-            : undefined,
-          thinkingLevel: readStringValue(entry.thinkingLevel),
-          fastMode: normalizeFastMode(entry.fastMode),
-          ...(effectiveFastMode !== undefined ? { effectiveFastMode } : {}),
-          ...(effectiveFastModeSource !== undefined ? { effectiveFastModeSource } : {}),
-          ...(fastAutoOnSeconds !== undefined ? { fastAutoOnSeconds } : {}),
-          verboseLevel: readStringValue(entry.verboseLevel),
-          reasoningLevel: readStringValue(entry.reasoningLevel),
-          elevatedLevel: readStringValue(entry.elevatedLevel),
-          responseUsage: readStringValue(entry.responseUsage),
-          systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
-          abortedLastRun:
-            typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
-          sendPolicy: readStringValue(entry.sendPolicy),
-          lastChannel,
-          lastTo: deliveryTo ?? readStringValue(entry.lastTo),
-          lastAccountId,
-          transcriptPath,
+          ...(model ? { model } : {}),
+          ...(contextTokens !== undefined ? { contextTokens } : {}),
+          ...(totalTokens !== undefined ? { totalTokens } : {}),
+          ...(status ? { status } : {}),
+          ...(abortedLastRun !== undefined ? { abortedLastRun } : {}),
+          ...(childSessions ? { childSessions } : {}),
         };
         if (
           sessionId &&

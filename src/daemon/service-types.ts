@@ -31,6 +31,12 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
   disable?: boolean;
   warn?: (message: string) => void;
+  onMutation?: (mutation: GatewayLifecycleMutation) => void;
+};
+
+export type GatewayLifecycleMutation = {
+  mode: string;
+  pid?: number;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
@@ -74,6 +80,7 @@ export type GatewayServiceStartRepairIssue = {
 };
 
 export type GatewayServiceStartResult =
+  | { outcome: "already-running"; state: GatewayServiceState }
   | { outcome: "started"; state: GatewayServiceState }
   | { outcome: "scheduled"; state: GatewayServiceState }
   | { outcome: "missing-install"; state: GatewayServiceState }

@@ -292,7 +292,7 @@ describe("exec approvals store helpers", () => {
     }
   });
 
-  it("fails closed without writing target approvals before state migration runs", async () => {
+  it("keeps custom-state approvals independent from the default state", async () => {
     const dir = createHomeDir();
     const stateDir = path.join(dir, "custom-state");
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
@@ -312,6 +312,7 @@ describe("exec approvals store helpers", () => {
       })}\n`,
       "utf8",
     );
+    const defaultBefore = fs.readFileSync(approvalsFilePath(dir), "utf8");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     const resolved = await resolveExecApprovals("main", {
@@ -319,28 +320,25 @@ describe("exec approvals store helpers", () => {
       ask: "off",
     });
 
-    expect(resolved.agent.security).toBe("deny");
-    expect(resolved.agent.ask).toBe("always");
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
     expect(resolved.token).toBe("");
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
-    expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
 
     const ensured = ensureExecApprovals();
 
-    expect(ensured.defaults).toEqual({
-      security: "deny",
-      ask: "always",
-      askFallback: "deny",
-      autoAllowSkills: undefined,
-    });
-    expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
+    expect(ensured.socket?.token).not.toBe("legacy-token");
+    expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(true);
 
-    await expect(
-      updateExecApprovals({
-        update: (current) => ({ ...current, defaults: { security: "full" } }),
-      }),
-    ).rejects.toThrow("must be migrated");
-    expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
+    await updateExecApprovals({
+      update: (current) => ({ ...current, defaults: { security: "allowlist" } }),
+    });
+    const custom = JSON.parse(
+      fs.readFileSync(stateApprovalsFilePath(stateDir), "utf8"),
+    ) as ExecApprovalsFile;
+    expect(custom.defaults?.security).toBe("allowlist");
+    expect(fs.readFileSync(approvalsFilePath(dir), "utf8")).toBe(defaultBefore);
+    expect(fs.existsSync(`${approvalsFilePath(dir)}.migrated`)).toBe(false);
   });
 
   it("keeps named-profile approvals isolated from the default profile", () => {

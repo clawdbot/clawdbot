@@ -10,6 +10,7 @@ const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
 const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
+const SCENARIO_WORKFLOW = ".github/workflows/mantis-scenario.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
 const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
@@ -77,6 +78,17 @@ function filesUnder(root: string): string[] {
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
+  it("dispatches from the scenario workflow using the proof workflow input contract", () => {
+    const run = jobStep(SCENARIO_WORKFLOW, "dispatch", "Dispatch scenario").run ?? "";
+    const branch = run.match(/telegram-desktop-proof\)([\s\S]*?)\n\s*;;/)?.[1];
+
+    expect(branch).toBeDefined();
+    expect(branch).toContain('if [[ -z "${PR_NUMBER:-}" ]]');
+    expect(branch).toContain('-f "pr_number=${PR_NUMBER}"');
+    expect(branch).not.toContain("baseline_ref=");
+    expect(branch).not.toContain("candidate_ref=");
+  });
+
   it("uses repository pnpm setup defaults", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;

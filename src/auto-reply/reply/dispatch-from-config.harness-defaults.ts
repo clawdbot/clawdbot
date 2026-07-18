@@ -259,7 +259,9 @@ export function resolveHarnessSourceVisibleRepliesDefault(params: {
           params.entry?.modelSelectionLocked === true ? params.entry.agentHarnessId : undefined,
         agentHarnessRuntimeOverride,
       });
-      return harness.deliveryDefaults?.sourceVisibleReplies;
+      return (
+        harness.deliveryDefaults?.visibleReplies ?? harness.deliveryDefaults?.sourceVisibleReplies
+      );
     };
     const selectedModelCandidate =
       turnModelCandidate ?? storedModelCandidate ?? channelModelCandidate;

@@ -515,6 +515,19 @@ describe("LINE send helpers", () => {
     expect(getProfileMock).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds profile cache entries across distinct users", async () => {
+    getProfileMock.mockImplementation(async (userId: string) => ({
+      displayName: userId,
+    }));
+
+    for (let index = 0; index <= 1000; index += 1) {
+      await sendModule.getUserProfile(`U-profile-${index}`, { cfg: LINE_TEST_CFG });
+    }
+    await sendModule.getUserProfile("U-profile-0", { cfg: LINE_TEST_CFG });
+
+    expect(getProfileMock).toHaveBeenCalledTimes(1002);
+  });
+
   it("continues when loading animation is unsupported", async () => {
     showLoadingAnimationMock.mockRejectedValueOnce(new Error("unsupported"));
 

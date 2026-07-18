@@ -35,6 +35,8 @@ export type WorkspaceTab = {
   title: string;
   icon?: string;
   hidden: boolean;
+  /** Default grid, or a single app-like widget without grid chrome. */
+  layout?: "grid" | "full";
   createdBy: WorkspaceActor;
   widgets: WorkspaceWidget[];
 };
@@ -65,11 +67,15 @@ export const BUILTIN_WIDGET_KINDS = [
   "builtin:markdown",
   "builtin:table",
   "builtin:iframe-embed",
+  "builtin:preview",
   "builtin:sessions",
   "builtin:usage",
   "builtin:cron",
   "builtin:instances",
   "builtin:activity",
+  "builtin:chart",
+  "builtin:agent-status",
+  "builtin:custom-widget-approvals",
 ] as const;
 
 const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);
@@ -295,7 +301,11 @@ function validateWidget(value: unknown, path: string): WorkspaceWidget {
 
 function validateTab(value: unknown, path: string): WorkspaceTab {
   const record = assertRecord(value, path);
-  assertKnownKeys(record, ["slug", "title", "icon", "hidden", "createdBy", "widgets"], path);
+  assertKnownKeys(
+    record,
+    ["slug", "title", "icon", "hidden", "layout", "createdBy", "widgets"],
+    path,
+  );
   const slug = requireString(record, "slug", path);
   if (!TAB_SLUG_PATTERN.test(slug)) {
     throw new Error(`${path}.slug is invalid`);
@@ -308,15 +318,23 @@ function validateTab(value: unknown, path: string): WorkspaceTab {
   if (icon !== undefined && icon.length > 40) {
     throw new Error(`${path}.icon must be 40 characters or fewer`);
   }
+  const layout = record.layout;
+  if (layout !== undefined && layout !== "grid" && layout !== "full") {
+    throw new Error(`${path}.layout must be "grid" or "full"`);
+  }
   const widgets = requireArray(record.widgets, `${path}.widgets`);
   if (widgets.length > 24) {
     throw new Error(`${path}.widgets must contain at most 24 entries`);
+  }
+  if (layout === "full" && widgets.length > 1) {
+    throw new Error(`${path}.widgets must contain at most one entry for full layout`);
   }
   return {
     slug,
     title,
     ...(icon !== undefined ? { icon } : {}),
     hidden: requireBoolean(record, "hidden", path),
+    ...(layout !== undefined ? { layout } : {}),
     createdBy: validateActor(record.createdBy, `${path}.createdBy`),
     widgets: widgets.map((widget, index) => validateWidget(widget, `${path}.widgets[${index}]`)),
   };

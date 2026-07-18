@@ -1142,15 +1142,19 @@ def shell_join(parts)
   Shellwords.join(parts.compact)
 end
 
-def xcodebuild_shell_join(parts)
-  # Keep caller-provided pinned Swift tools ahead of Homebrew. Replacing PATH
-  # here makes archive build phases bypass the versions verified by the caller.
-  xcode_path = [
-    *ENV.fetch("PATH", "").split(File::PATH_SEPARATOR),
+def xcodebuild_shell_join(parts, system_tools_first: false)
+  caller_path = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
+  system_path = [
     "/usr/bin",
     "/bin",
     "/usr/sbin",
     "/sbin",
+  ]
+  # Archive build phases need caller-pinned Swift tools ahead of Homebrew.
+  # Export needs Apple's rsync ahead of incompatible Homebrew rsync helpers.
+  preferred_path = system_tools_first ? [*system_path, *caller_path] : [*caller_path, *system_path]
+  xcode_path = [
+    *preferred_path,
     "/opt/homebrew/bin",
     "/usr/local/bin",
   ].reject(&:empty?).uniq.join(File::PATH_SEPARATOR)
@@ -1341,16 +1345,19 @@ def build_app_store_release(context)
   )
 
   sh(
-    xcodebuild_shell_join([
-      "xcodebuild",
-      "-exportArchive",
-      "-archivePath",
-      archive_path,
-      "-exportPath",
-      output_directory,
-      "-exportOptionsPlist",
-      export_options_path,
-    ])
+    xcodebuild_shell_join(
+      [
+        "xcodebuild",
+        "-exportArchive",
+        "-archivePath",
+        archive_path,
+        "-exportPath",
+        output_directory,
+        "-exportOptionsPlist",
+        export_options_path,
+      ],
+      system_tools_first: true,
+    )
   )
 
   exported_ipas = Dir[File.join(output_directory, "*.ipa")]

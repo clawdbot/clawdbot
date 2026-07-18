@@ -1,5 +1,9 @@
 // Irc plugin module implements inbound behavior.
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  logInboundDrop,
+  resolveChannelInboundRouteEnvelope,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
@@ -9,7 +13,6 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   deliverFormattedTextWithAttachments,
   type OutboundReplyPayload,
@@ -371,7 +374,7 @@ export async function handleIrcInbound(params: {
       ? message.target
       : `#${message.target}`;
   const peerId = message.isGroup ? channelTarget : message.senderNick;
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -379,12 +382,10 @@ export async function handleIrcInbound(params: {
       kind: message.isGroup ? "group" : "direct",
       id: peerId,
     },
-    runtime: core.channel,
-    sessionStore: config.session?.store,
   });
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
-  const { storePath, body } = buildEnvelope({
+  const body = buildEnvelope({
     channel: "IRC",
     from: fromLabel,
     timestamp: message.timestamp,
@@ -394,41 +395,45 @@ export async function handleIrcInbound(params: {
   const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
-    To: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: message.isGroup ? "group" : "direct",
-    ConversationLabel: fromLabel,
-    SenderName: message.senderNick || undefined,
-    SenderId: senderDisplay,
-    GroupSubject: message.isGroup ? message.target : undefined,
-    GroupSystemPrompt: message.isGroup ? groupSystemPrompt : undefined,
-    Provider: CHANNEL_ID,
-    Surface: CHANNEL_ID,
-    WasMentioned: message.isGroup ? wasMentioned : undefined,
-    MessageSid: message.messageId,
-    Timestamp: message.timestamp,
-    OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
-    CommandAuthorized: commandAuthorized,
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: CHANNEL_ID,
+    accountId: route.accountId,
+    messageId: message.messageId,
+    timestamp: message.timestamp,
+    from: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
+    sender: { id: senderDisplay, name: message.senderNick || undefined },
+    conversation: {
+      kind: message.isGroup ? "group" : "direct",
+      id: peerId,
+      label: fromLabel,
+    },
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
+      originatingTo: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
+    },
+    message: { body, bodyForAgent: rawBody, rawBody, commandBody: rawBody },
+    access: {
+      commands: { authorized: commandAuthorized },
+      mentions: { canDetectMention: message.isGroup, wasMentioned },
+    },
+    extra: {
+      GroupSubject: message.isGroup ? message.target : undefined,
+      GroupSystemPrompt: message.isGroup ? groupSystemPrompt : undefined,
+    },
   });
 
-  await core.channel.inbound.dispatchReply({
+  await core.channel.inbound.dispatch({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route: { agentId: route.agentId, sessionKey: route.sessionKey },
     ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       deliver: async (payload) => {
         await deliverIrcReply({

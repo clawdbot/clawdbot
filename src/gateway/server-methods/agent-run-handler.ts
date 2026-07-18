@@ -1,5 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
+import {
+  releaseMainSessionRecoveryOwner,
+  type MainSessionRecoveryOwnerLease,
+} from "../../agents/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -46,6 +51,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     execApprovalFollowupApprovalId,
     normalizedSpawned,
     inputProvenance,
+    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState,
     sessionEffects,
     suppressVisibleSessionEffects,
@@ -73,6 +79,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     context,
     respond,
   });
+  const clearUnacceptedAgentDedupe = dedupeLifecycle.clearUnaccepted;
   const abortForLifecycleRotation = dedupeLifecycle.abortForLifecycleRotation;
   const routing = await prepareAgentRequestRouting({
     request,
@@ -105,6 +112,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   let agentId = routing.agentId;
   let requestedSessionKey = routing.requestedSessionKey;
   let gatewayAdmissionTransferred = false;
+  let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let releaseGatewayAdmission = () => {};
   const cronContinuation = createCronContinuationController({
     runId,
@@ -327,6 +335,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         sessionAgentId,
         mainSessionKey,
         lifecycleGeneration,
+        isRestartRecoveryResumeRun,
         runId,
         agentId,
         suppressVisibleSessionEffects,
@@ -353,6 +362,9 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         },
         getAdmittedSessionId: () => admittedSessionId,
         setCronContinuationClaim: cronContinuation.setClaim,
+        setMainRestartRecoveryOwnerLease: (lease) => {
+          mainRestartRecoveryOwnerLease = lease;
+        },
         respond,
       });
       if (!persistedSession) {
@@ -424,6 +436,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       pendingChatRun,
       inputProvenance,
       isOneShotModelRun,
+      isRestartRecoveryResumeRun,
       runId,
       agentDedupeKeys,
       context,
@@ -447,6 +460,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     gatewayAdmissionTransferred = true;
     startAgentRunExecution({
       prepared: preparedDispatch,
+      mainRestartRecoveryOwnerLease,
       request,
       cfg,
       cfgForAgent,
@@ -462,6 +476,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       isNewSession,
       isRawModelRun,
       isOneShotModelRun,
+      isRestartRecoveryResumeRun,
       suppressVisibleSessionEffects,
       message,
       images,
@@ -490,11 +505,28 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       respond,
       releaseCronContinuationClaimWithRecovery,
     });
+    mainRestartRecoveryOwnerLease = undefined;
   } finally {
-    if (!gatewayAdmissionTransferred) {
-      releaseGatewayAdmission();
-      await releaseCronContinuationClaimWithRecovery();
+    try {
+      if (!gatewayAdmissionTransferred) {
+        let pendingRecovery: Awaited<ReturnType<typeof releaseMainSessionRecoveryOwner>> =
+          undefined;
+        try {
+          pendingRecovery = await releaseMainSessionRecoveryOwner(mainRestartRecoveryOwnerLease);
+        } finally {
+          try {
+            releaseGatewayAdmission();
+          } finally {
+            try {
+              await releaseCronContinuationClaimWithRecovery();
+            } finally {
+              scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+            }
+          }
+        }
+      }
+    } finally {
+      clearUnacceptedAgentDedupe();
     }
-    dedupeLifecycle.clearUnaccepted();
   }
 };

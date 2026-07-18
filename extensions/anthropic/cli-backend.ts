@@ -45,6 +45,11 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     nativeToolMode: "selectable",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
+    // Anthropic routes direct anthropic-messages calls on subscription OAuth
+    // tokens to metered extra-usage billing (or rejects them without balance);
+    // opted-in embedded runs on subscription credentials execute through this
+    // backend on plan limits instead.
+    subscriptionAuthDispatch: true,
     config: {
       command: "claude",
       args: [

@@ -293,6 +293,8 @@ The web Control UI has a **Tasks** page in the sidebar with live active and rece
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent: running tasks and subagents with a stop control, a finished section, and View transcript links into each task's child session. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
+Select a task in the rail to inspect its bounded input prompt and latest output or error summary. Running work stays separate from finished work, and finished rows show whether the task completed or failed. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
+
 ## Status integration (task pressure)
 
 `openclaw status` includes an at-a-glance task line:

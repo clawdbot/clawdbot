@@ -43,7 +43,7 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
       capturePayload({
         provider: "fireworks",
         api: "openai-completions",
-        modelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        modelId: "accounts/fireworks/routers/kimi-k2p6-turbo",
       }),
     ).toEqual({ thinking: { type: "disabled" } });
   });
@@ -116,7 +116,7 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     const model = {
       api: "openai-completions",
       provider: "fireworks",
-      id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+      id: "accounts/fireworks/routers/kimi-k2p6-turbo",
     } as Model<"openai-completions">;
     const wrapped = wrapFireworksProviderStream({
       provider: "fireworks",
@@ -153,11 +153,11 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     expect(
       wrapFireworksProviderStream({
         provider: "fireworks",
-        modelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        modelId: "accounts/fireworks/routers/kimi-k2p6-turbo",
         model: {
           api: "openai-responses",
           provider: "fireworks",
-          id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+          id: "accounts/fireworks/routers/kimi-k2p6-turbo",
         } as Model<"openai-responses">,
         streamFn: undefined,
       } as never),
@@ -166,11 +166,11 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     expect(
       wrapFireworksProviderStream({
         provider: "fireworks-ai",
-        modelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        modelId: "accounts/fireworks/routers/kimi-k2p6-turbo",
         model: {
           api: "openai-completions",
           provider: "fireworks-ai",
-          id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+          id: "accounts/fireworks/routers/kimi-k2p6-turbo",
         } as Model<"openai-completions">,
         streamFn: undefined,
       } as never),

@@ -339,27 +339,23 @@ SDK.
 
   <Step title="Migrate channel route helpers">
     New channel route code uses `openclaw/plugin-sdk/channel-route`. The older
-    route-key and comparable-target names remain as compatibility aliases:
+    route-key names remain as compatibility aliases:
 
     | Old helper | Modern helper |
     | --- | --- |
     | `channelRouteIdentityKey(...)` | `channelRouteDedupeKey(...)` |
     | `channelRouteKey(...)` | `channelRouteCompactKey(...)` |
-    | `ComparableChannelTarget` | `ChannelRouteParsedTarget` |
-    | `comparableChannelTargetsMatch(...)` | `channelRouteTargetsMatchExact(...)` |
-    | `comparableChannelTargetsShareRoute(...)` | `channelRouteTargetsShareConversation(...)` |
 
     The modern route helpers normalize `{ channel, to, accountId, threadId }`
     consistently across native approvals, reply suppression, inbound dedupe,
     cron delivery, and session routing.
 
-    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget`, the
-    parser-backed loaded-route helpers (`parseExplicitTargetForLoadedChannel`,
-    `resolveRouteTargetForLoadedChannel`), or
-    `resolveChannelRouteTargetWithParser(...)` from `plugin-sdk/channel-route` -
-    those are deprecated and remain only for older plugins. New channel
-    plugins should use `messaging.targetResolver.resolveTarget(...)` for
-    target-id normalization and directory-miss fallback,
+    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
+    `resolveChannelRouteTargetWithParser(...)` from
+    `plugin-sdk/channel-route` - those are deprecated and remain only for older
+    plugins. New channel plugins should use
+    `messaging.targetResolver.resolveTarget(...)` for target-id normalization
+    and directory-miss fallback,
     `messaging.inferTargetChatType(...)` when core needs an early peer kind,
     and `messaging.resolveOutboundSessionRoute(...)` for provider-native
     session and thread identity.
@@ -506,8 +502,9 @@ SDK.
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text and offset-preserving range chunking helpers |
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
+  | `plugin-sdk/speech-settings` | Speech settings | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, the transport-independent session harness, audio-energy/speech-onset gates, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
   | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
@@ -921,8 +918,12 @@ Realtime voice, telephony, meeting, and browser Talk code shares one Talk
 session controller exported by `openclaw/plugin-sdk/realtime-voice`. The
 controller owns the common Talk event envelope, active turn state, capture
 state, output-audio state, recent event history, and stale-turn rejection.
-Provider plugins own vendor-specific realtime sessions; surface plugins own
-capture, playback, telephony, and meeting quirks.
+Provider plugins own vendor-specific realtime sessions. Browser-meeting plugins
+use `openclaw/plugin-sdk/meeting-runtime` for session, browser, audio, node-host,
+agent-consult, and voice-call mechanics, then implement `MeetingPlatformAdapter`
+for URL rules, DOM scripts, manual-action mapping, captions, creation, and dial-in
+plans. Platform REST APIs, OAuth, artifacts, selectors, and wire names remain in
+the plugin.
 
 All bundled surfaces run on the shared controller: browser relay,
 managed-room handoff, voice-call realtime, voice-call streaming STT, Google

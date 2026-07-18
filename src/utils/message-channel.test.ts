@@ -5,10 +5,13 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
+  isBrowserCopilotClient,
+  isBrowserOperatorUiClient,
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
   isNativeApprovalChannel,
+  isOperatorUiClient,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
 
@@ -70,6 +73,15 @@ describe("message-channel", () => {
     for (const mode of ["ui", "webchat", "node", "test", "unknown", undefined]) {
       expect(isEphemeralGatewayClient({ mode })).toBe(false);
     }
+  });
+
+  it("classifies the browser copilot as a dedicated browser operator UI", () => {
+    const client = { id: "openclaw-browser-copilot", mode: "ui" };
+    expect(isBrowserCopilotClient(client)).toBe(true);
+    expect(isBrowserOperatorUiClient(client)).toBe(true);
+    expect(isOperatorUiClient(client)).toBe(true);
+    expect(isBrowserCopilotClient({ id: "webchat", mode: "webchat" })).toBe(false);
+    expect(isBrowserCopilotClient({ id: "openclaw-browser-copilot", mode: "webchat" })).toBe(true);
   });
 
   it("normalizes plugin aliases when registered", () => {

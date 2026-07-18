@@ -399,6 +399,8 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
       reason: "reload",
     });
     await this.settingsManager.reload();
+    this.agent.steeringMode = this.settingsManager.getSteeringMode();
+    this.agent.followUpMode = this.settingsManager.getFollowUpMode();
     resetApiProviders(defaultApiRegistry);
     await this.sessionResourceLoader.reload();
     this.buildRuntime({

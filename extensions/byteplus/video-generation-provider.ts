@@ -31,7 +31,7 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import { BYTEPLUS_BASE_URL } from "./models.js";
 
-const DEFAULT_BYTEPLUS_VIDEO_MODEL = "seedance-1-0-lite-t2v-250428";
+const DEFAULT_BYTEPLUS_VIDEO_MODEL = "seedance-1-0-pro-250528";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
@@ -231,12 +231,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
     id: "byteplus",
     label: "BytePlus",
     defaultModel: DEFAULT_BYTEPLUS_VIDEO_MODEL,
-    models: [
-      DEFAULT_BYTEPLUS_VIDEO_MODEL,
-      "seedance-1-0-lite-i2v-250428",
-      "seedance-1-0-pro-250528",
-      "seedance-1-5-pro-251215",
-    ],
+    models: [DEFAULT_BYTEPLUS_VIDEO_MODEL, "seedance-1-5-pro-251215"],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "byteplus",
@@ -302,16 +297,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           capability: "video",
           transport: "http",
         });
-      // Seedance 1.0 has separate T2V and I2V model IDs (e.g. seedance-1-0-lite-t2v-250428 vs
-      // seedance-1-0-lite-i2v-250428). When input images are provided with a T2V model, auto-
-      // switch to the corresponding I2V variant so the API does not reject with task_type mismatch.
-      // 1.5 Pro uses a single model ID for both modes and is unaffected by this substitution.
-      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
-      const requestedModel = normalizeOptionalString(req.model) || DEFAULT_BYTEPLUS_VIDEO_MODEL;
-      const resolvedModel =
-        hasInputImages && requestedModel.includes("-t2v-")
-          ? requestedModel.replace("-t2v-", "-i2v-")
-          : requestedModel;
+      const resolvedModel = normalizeOptionalString(req.model) || DEFAULT_BYTEPLUS_VIDEO_MODEL;
 
       const content: Array<Record<string, unknown>> = [{ type: "text", text: req.prompt }];
       const imageUrl = resolveBytePlusImageUrl(req);

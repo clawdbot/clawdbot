@@ -4,9 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
 type HistoryMessage = {
@@ -92,6 +94,21 @@ describe("sessions_history redaction", () => {
     if (tempDir) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("declares complete success and closed error contracts", async () => {
+    const tool = createHistoryToolWithMessage("hello");
+    const result = await tool.execute("contract", { sessionKey: "main" });
+
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(Value.Check(tool.outputSchema!, { status: "error", error: "missing" })).toBe(true);
+    expect(
+      Value.Check(tool.outputSchema!, { status: "forbidden", error: "hidden", extra: true }),
+    ).toBe(false);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+    );
   });
 
   it("redacts recalled session text even when log redaction is disabled", async () => {

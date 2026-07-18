@@ -130,7 +130,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "google",
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
       prompt: "draw a cat",
       cfg: {},
       size: "1536x1024",
@@ -138,7 +138,7 @@ describe("Google image-generation provider", () => {
 
     const request = fetchRequest(fetchMock);
     expect(request.url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
     );
     expect(request.method).toBe("POST");
     expect(JSON.parse(request.body ?? "")).toEqual({
@@ -164,7 +164,7 @@ describe("Google image-generation provider", () => {
           fileName: "image-1.png",
         },
       ],
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
     });
   });
 
@@ -191,14 +191,14 @@ describe("Google image-generation provider", () => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
       finalUrl:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
       release: async () => {},
     });
 
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
       provider: "google",
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
       prompt: "draw a cat",
       cfg: {},
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
@@ -220,7 +220,7 @@ describe("Google image-generation provider", () => {
     await expect(
       provider.generateImage({
         provider: "google",
-        model: "gemini-3.1-flash-image-preview",
+        model: "gemini-3.1-flash-image",
         prompt: "draw a cat",
         cfg: {},
       }),
@@ -248,7 +248,7 @@ describe("Google image-generation provider", () => {
     await expect(
       provider.generateImage({
         provider: "google",
-        model: "gemini-3.1-flash-image-preview",
+        model: "gemini-3.1-flash-image",
         prompt: "draw a cat",
         cfg: {},
       }),
@@ -284,7 +284,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "google",
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
       prompt: "draw a dog",
       cfg: {},
     });
@@ -301,7 +301,7 @@ describe("Google image-generation provider", () => {
           fileName: "image-1.jpg",
         },
       ],
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
     });
   });
 
@@ -332,7 +332,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "google",
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
       prompt: "draw a cat",
       cfg: {},
     });
@@ -366,7 +366,7 @@ describe("Google image-generation provider", () => {
     await expect(
       provider.generateImage({
         provider: "google",
-        model: "gemini-3.1-flash-image-preview",
+        model: "gemini-3.1-flash-image",
         prompt: "draw a cat",
         cfg: {},
       }),
@@ -380,7 +380,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
       provider: "google",
-      model: "gemini-3-pro-image-preview",
+      model: "gemini-3-pro-image",
       prompt: "Change only the sky to a sunset.",
       cfg: {},
       resolution: "4K",
@@ -395,7 +395,7 @@ describe("Google image-generation provider", () => {
 
     const request = fetchRequest(fetchMock);
     expect(request.url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent",
     );
     expect(request.method).toBe("POST");
     expect(JSON.parse(request.body ?? "")).toEqual({
@@ -429,7 +429,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
       provider: "google",
-      model: "gemini-3-pro-image-preview",
+      model: "gemini-3-pro-image",
       prompt: "portrait photo",
       cfg: {},
       aspectRatio: "9:16",
@@ -437,7 +437,7 @@ describe("Google image-generation provider", () => {
 
     const request = fetchRequest(fetchMock);
     expect(request.url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent",
     );
     expect(request.method).toBe("POST");
     expect(JSON.parse(request.body ?? "")).toEqual({
@@ -464,7 +464,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
       provider: "google",
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
       prompt: "draw a fox",
       cfg: {},
     });
@@ -480,7 +480,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
       provider: "google",
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-3.1-flash-image",
       prompt: "draw a fox",
       cfg: {
         models: {
@@ -505,7 +505,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
       provider: "google",
-      model: "gemini-3-pro-image-preview",
+      model: "gemini-3-pro-image",
       prompt: "draw a cat",
       cfg: {
         models: {
@@ -521,7 +521,7 @@ describe("Google image-generation provider", () => {
 
     const request = fetchRequest(fetchMock);
     expect(request.url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent",
     );
     expect(typeof request.method).toBe("string");
   });
@@ -533,7 +533,7 @@ describe("Google image-generation provider", () => {
     const provider = buildGoogleImageGenerationProvider();
     await provider.generateImage({
       provider: "google",
-      model: "gemini-3-pro-image-preview",
+      model: "gemini-3-pro-image",
       prompt: "draw a fox",
       cfg: {
         models: {
@@ -549,7 +549,7 @@ describe("Google image-generation provider", () => {
 
     const request = fetchRequest(fetchMock);
     expect(request.url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent",
     );
     expect(typeof request.method).toBe("string");
   });

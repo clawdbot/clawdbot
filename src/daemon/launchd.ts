@@ -9,7 +9,7 @@ import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-f
 import { probePortUsage } from "../infra/ports-probe.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { parseTcpPort } from "../infra/tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
 import {
@@ -545,37 +545,9 @@ export async function disableCurrentOpenClawUpdateLaunchdJob(
   });
 }
 
-function parseGatewayPortFromProgramArguments(
-  programArguments: string[] | undefined,
-): number | null {
-  if (!Array.isArray(programArguments) || programArguments.length === 0) {
-    return null;
-  }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const current = programArguments[index]?.trim();
-    if (!current) {
-      continue;
-    }
-    if (current === "--port") {
-      const next = parseTcpPort(programArguments[index + 1] ?? "");
-      if (next !== null) {
-        return next;
-      }
-      continue;
-    }
-    if (current.startsWith("--port=")) {
-      const value = parseTcpPort(current.slice("--port=".length));
-      if (value !== null) {
-        return value;
-      }
-    }
-  }
-  return null;
-}
-
 async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
-  const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
+  const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {
     return fromArgs;
   }
@@ -635,12 +607,17 @@ async function bootstrapLaunchAgentOrThrow(params: {
   serviceTarget: string;
   plistPath: string;
   actionHint: string;
+  onMutation?: (mode: "enable" | "bootstrap") => void;
 }) {
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
-  await execLaunchctl(["enable", params.serviceTarget]);
+  const enable = await execLaunchctl(["enable", params.serviceTarget]);
+  if (enable.code === 0) {
+    params.onMutation?.("enable");
+  }
   const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
   if (boot.code === 0) {
+    params.onMutation?.("bootstrap");
     return;
   }
   const detail = (boot.stderr || boot.stdout).trim();
@@ -654,6 +631,7 @@ async function bootstrapLaunchAgentOrThrow(params: {
   if (isLaunchctlOperationAlreadyInProgress(detail)) {
     const state = await probeLaunchAgentState(params.serviceTarget);
     if (state.state === "running" || state.state === "stopped") {
+      params.onMutation?.("bootstrap");
       return;
     }
   }
@@ -913,6 +891,7 @@ async function bootoutLaunchAgentOrThrow(params: {
   serviceTarget: string;
   warning: string;
   stdout: NodeJS.WritableStream;
+  onMutation?: () => void;
 }): Promise<void> {
   const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
   if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
@@ -920,6 +899,7 @@ async function bootoutLaunchAgentOrThrow(params: {
       `${params.warning}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
     );
   }
+  params.onMutation?.();
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
 }
 
@@ -1006,6 +986,7 @@ export async function stopLaunchAgent({
   stdout,
   env,
   disable: persistDisable,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
@@ -1028,6 +1009,7 @@ export async function stopLaunchAgent({
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    onMutation?.({ mode: "bootout" });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
     return;
@@ -1041,11 +1023,13 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
+      onMutation: () => onMutation?.({ mode: "disable-bootout" }),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
+  onMutation?.({ mode: "disable" });
 
   // `launchctl stop` targets the plain label (not the fully-qualified service target).
   const stop = await execLaunchctl(["stop", label]);
@@ -1054,11 +1038,14 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
+      onMutation: () => onMutation?.({ mode: "disable-bootout" }),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
+
+  onMutation?.({ mode: "disable-stop" });
 
   const stopState = await waitForLaunchAgentStopped(serviceTarget);
   if (stopState.state !== "stopped" && stopState.state !== "not-loaded") {
@@ -1066,7 +1053,12 @@ export async function stopLaunchAgent({
       stopState.state === "unknown"
         ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
         : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
-    await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
+    await bootoutLaunchAgentOrThrow({
+      serviceTarget,
+      stdout,
+      warning,
+      onMutation: () => onMutation?.({ mode: "disable-bootout" }),
+    });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
@@ -1241,6 +1233,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   domain: string;
   serviceTarget: string;
   plistPath: string;
+  onMutation?: (mode: "enable" | "bootstrap") => void;
 }): Promise<void> {
   const probe = await execLaunchctl(["print", params.serviceTarget]);
   if (probe.code === 0) {
@@ -1252,6 +1245,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
       serviceTarget: params.serviceTarget,
       plistPath: params.plistPath,
       actionHint: "openclaw gateway start",
+      onMutation: params.onMutation,
     });
   } catch {
     // Best-effort only. Preserve the original kickstart failure below.
@@ -1262,12 +1256,20 @@ export async function restartLaunchAgent({
   stdout,
   env,
   warn,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
+  const reportMutation = (mode: string) => {
+    try {
+      onMutation?.({ mode });
+    } catch {
+      // Audit observers are diagnostic; never interrupt a multi-step restart.
+    }
+  };
 
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
@@ -1288,6 +1290,7 @@ export async function restartLaunchAgent({
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
+    reportMutation(plistReloadNeeded ? "handoff-reload" : "handoff-kickstart");
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
   }
@@ -1315,18 +1318,25 @@ export async function restartLaunchAgent({
 
   // `openclaw gateway restart` is an explicit operator request to bring the
   // LaunchAgent back, so clear any persisted disabled state before restart.
-  await execLaunchctl(["enable", serviceTarget]);
+  const enable = await execLaunchctl(["enable", serviceTarget]);
+  if (enable.code === 0) {
+    reportMutation("enable");
+  }
 
   if (plistReloadNeeded) {
     const bootout = await execLaunchctl(["bootout", serviceTarget]);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    if (bootout.code === 0) {
+      reportMutation("bootout");
+    }
     await bootstrapLaunchAgentOrThrow({
       domain,
       serviceTarget,
       plistPath,
       actionHint: "openclaw gateway restart",
+      onMutation: reportMutation,
     });
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
@@ -1334,12 +1344,18 @@ export async function restartLaunchAgent({
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
+    reportMutation("kickstart");
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }
 
   if (!isLaunchctlNotLoaded(start)) {
-    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
+    await ensureLaunchAgentLoadedAfterFailure({
+      domain,
+      serviceTarget,
+      plistPath,
+      onMutation: reportMutation,
+    });
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
@@ -1349,6 +1365,7 @@ export async function restartLaunchAgent({
     serviceTarget,
     plistPath,
     actionHint: "openclaw gateway restart",
+    onMutation: reportMutation,
   });
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };

@@ -16,7 +16,7 @@ import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
-  parseToolActivityEvent,
+  parseActivityEvent,
   updateToolActivity,
   type ActivityEntry,
   type ActivityStatus,
@@ -137,7 +137,7 @@ class ActivityPage extends OpenClawLightDomElement {
     if (eventName !== "agent" && eventName !== "session.tool") {
       return entries;
     }
-    const event = parseToolActivityEvent(payload, receivedAt);
+    const event = parseActivityEvent(payload, receivedAt);
     if (!event) {
       return entries;
     }
@@ -247,4 +247,6 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-activity-page", ActivityPage);
+if (!customElements.get("openclaw-activity-page")) {
+  customElements.define("openclaw-activity-page", ActivityPage);
+}

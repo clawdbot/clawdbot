@@ -206,13 +206,17 @@ struct ChatMessageBubble: View {
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
-    let showsAssistantTrace: Bool
+    let displayOptions: OpenClawChatDisplayOptions
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let contextWindowTokens: Int?
+    let inlineWidgetResolverReady: Bool
+    let inlineWidgetResourceResolver: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
     var body: some View {
         if self.isUser {
@@ -249,9 +253,11 @@ struct ChatMessageBubble: View {
             style: self.style,
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
-            showsAssistantTrace: self.showsAssistantTrace,
+            displayOptions: self.displayOptions,
             isClean: self.isClean,
-            contextWindowTokens: self.contextWindowTokens)
+            contextWindowTokens: self.contextWindowTokens,
+            inlineWidgetResolverReady: self.inlineWidgetResolverReady,
+            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver)
     }
 }
 
@@ -263,9 +269,13 @@ private struct ChatMessageBody: View {
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
-    let showsAssistantTrace: Bool
+    let displayOptions: OpenClawChatDisplayOptions
     let isClean: Bool
     let contextWindowTokens: Int?
+    let inlineWidgetResolverReady: Bool
+    let inlineWidgetResourceResolver: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
     var body: some View {
         let text = self.primaryText
@@ -293,8 +303,8 @@ private struct ChatMessageBody: View {
 
     private func messageContent(text: String, textColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            if self.isToolResultMessage, self.showsAssistantTrace {
-                if !text.isEmpty {
+            if self.isToolResultMessage {
+                if self.displayOptions.contains(.toolActivity), !text.isEmpty {
                     ToolResultCard(
                         title: self.toolResultTitle,
                         text: text,
@@ -312,7 +322,7 @@ private struct ChatMessageBody: View {
                 ChatAssistantTextBody(
                     text: text,
                     markdownVariant: self.markdownVariant,
-                    includesThinking: self.showsAssistantTrace)
+                    includesThinking: self.displayOptions.contains(.reasoning))
             }
 
             if self.showsLinkPreview, let previewURL = chatFirstPreviewURL(in: text) {
@@ -325,14 +335,21 @@ private struct ChatMessageBody: View {
                 }
             }
 
-            if self.showsAssistantTrace, !self.toolCalls.isEmpty {
+            ForEach(self.inlineWidgets.indices, id: \.self) { idx in
+                ChatInlineWidgetView(
+                    preview: self.inlineWidgets[idx],
+                    resolverReady: self.inlineWidgetResolverReady,
+                    resolveResource: self.inlineWidgetResourceResolver)
+            }
+
+            if self.displayOptions.contains(.toolActivity), !self.toolCalls.isEmpty {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
                         content: self.toolCalls[idx])
                 }
             }
 
-            if self.showsAssistantTrace, !self.inlineToolResults.isEmpty {
+            if self.displayOptions.contains(.toolActivity), !self.inlineToolResults.isEmpty {
                 ForEach(self.inlineToolResults.indices, id: \.self) { idx in
                     let toolResult = self.inlineToolResults[idx]
                     let display = ToolDisplayRegistry.resolve(name: toolResult.name ?? "tool", args: nil)
@@ -391,6 +408,17 @@ private struct ChatMessageBody: View {
             default:
                 false
             }
+        }
+    }
+
+    private var inlineWidgets: [OpenClawChatCanvasPreview] {
+        guard self.message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant"
+        else { return [] }
+        return self.message.content.compactMap { content in
+            guard (content.type ?? "").lowercased() == "canvas",
+                  content.preview?.inlineWidgetPath != nil
+            else { return nil }
+            return content.preview
         }
     }
 
@@ -827,7 +855,7 @@ extension View {
 struct ChatStreamingAssistantBubble: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
-    let showsAssistantTrace: Bool
+    let showsReasoning: Bool
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
@@ -848,7 +876,7 @@ struct ChatStreamingAssistantBubble: View {
                 ChatAssistantTextBody(
                     text: self.text,
                     markdownVariant: self.markdownVariant,
-                    includesThinking: self.showsAssistantTrace,
+                    includesThinking: self.showsReasoning,
                     isComplete: false)
             }
             .padding(self.isClean ? 4 : 12)

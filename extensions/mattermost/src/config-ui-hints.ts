@@ -10,6 +10,7 @@ export const mattermostChannelConfigUiHints = {
   ...createChannelConfigUiHints({
     channelLabel: "Mattermost",
     dmPolicy: { channelKey: "mattermost" },
+    implicitMentions: true,
   }),
   streaming: {
     label: "Mattermost Streaming Mode",

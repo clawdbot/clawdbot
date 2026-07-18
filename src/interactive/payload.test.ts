@@ -498,6 +498,41 @@ describe("interactive payload helpers", () => {
     });
   });
 
+  it("normalizes question actions without exposing their transport data", () => {
+    const action = {
+      type: "question" as const,
+      questionId: "ask_0123456789abcdef0123456789abcdef",
+      optionValue: "Production",
+    };
+    const presentation = normalizeMessagePresentation({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+
+    expect(presentation).toEqual({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+    expect(resolveMessagePresentationControlValue({ action })).toBeUndefined();
+    expect(renderMessagePresentationFallbackText({ presentation: presentation ?? undefined })).toBe(
+      "- Production",
+    );
+    expect(presentationToInteractiveReply(presentation ?? { blocks: [] })).toEqual({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+  });
+
+  it.each([
+    { type: "Question", questionId: "ask_1", optionValue: "Yes" },
+    { type: "question", questionId: "", optionValue: "Yes" },
+    { type: "question", questionId: "ask_\ud800", optionValue: "Yes" },
+    { type: "question", questionId: "ask_1", optionValue: "   " },
+  ])("rejects malformed question action %#", (action) => {
+    expect(
+      normalizeMessagePresentation({
+        blocks: [{ type: "buttons", buttons: [{ label: "Yes", action }] }],
+      }),
+    ).toBeUndefined();
+  });
+
   it("rejects malformed canonical actions instead of falling back to legacy fields", () => {
     expect(
       normalizeMessagePresentation({

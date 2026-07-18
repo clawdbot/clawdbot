@@ -296,6 +296,7 @@ jobs:
           head-branch: automation/control-ui-locale-refresh
           commit-message: "chore(ui): refresh control ui locales"
           pr-title: "chore(ui): refresh control ui locales"
+          auto-merge: "true"
           generated-paths: ui/src/i18n
           invalidation-paths: |
             ui/src/i18n/locales/en.ts

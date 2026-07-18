@@ -35,6 +35,33 @@ async function withStatusTempHome(run: (home: string) => Promise<void>): Promise
 }
 
 describe("resolveStatusTtsSnapshot", () => {
+  it("treats null prefs as empty settings", async () => {
+    await withStatusTempHome(async (home) => {
+      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, "null");
+
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "always",
+                provider: "edge",
+                prefsPath,
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "microsoft",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("uses prefs overrides without loading speech providers", async () => {
     await withStatusTempHome(async (home) => {
       const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");

@@ -670,6 +670,34 @@ describe("dependency guard script", () => {
     }
   });
 
+  it("retries transient GitHub API failures within the request timeout", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("unicorn", { status: 503, statusText: "Unavailable" }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+
+    await expect(
+      githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(
+        "/repos/openclaw/openclaw/pulls/1/files",
+      ),
+    ).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry non-idempotent GitHub API requests", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("unicorn", { status: 503, statusText: "Unavailable" }));
+
+    await expect(
+      githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(
+        "/repos/openclaw/openclaw/issues/1/comments",
+        { method: "POST", body: "{}" },
+      ),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds successful GitHub API response bodies", async () => {
     const request = githubApi("token", {
       responseMaxBodyBytes: 64,

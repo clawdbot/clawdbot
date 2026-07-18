@@ -308,6 +308,9 @@ function samePendingApprovalSnapshot(
   if (existing.publicKey !== incoming.publicKey) {
     return false;
   }
+  if (existing.browserOrigin !== incoming.browserOrigin) {
+    return false;
+  }
   if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
     return false;
   }
@@ -338,6 +341,9 @@ function incomingApprovalCoveredByExisting(
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
 ): boolean {
   if (existing.publicKey !== incoming.publicKey) {
+    return false;
+  }
+  if (existing.browserOrigin !== incoming.browserOrigin) {
     return false;
   }
   if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
@@ -376,6 +382,7 @@ function refreshPendingDevicePairingRequest(
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
+    browserOrigin: existing.browserOrigin,
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // If either request is interactive, keep the pending request visible for approval.
     silent: Boolean(existing.silent && incoming.silent),
@@ -421,6 +428,7 @@ function buildPendingDevicePairingRequest(params: {
     deviceFamily: params.req.deviceFamily,
     clientId: params.req.clientId,
     clientMode: params.req.clientMode,
+    browserOrigin: params.req.browserOrigin,
     role,
     roles: mergeRoles(params.req.roles, role),
     scopes: mergeScopes(params.req.scopes),
@@ -524,6 +532,7 @@ function buildApprovedPairedDevice(params: {
     deviceFamily: params.pending.deviceFamily,
     clientId: params.pending.clientId,
     clientMode: params.pending.clientMode,
+    browserOrigin: params.pending.browserOrigin,
     role: params.pending.role,
     roles: params.roles,
     scopes: params.approvedScopes,

@@ -752,10 +752,9 @@ describe("dispatchReplyFromConfig", () => {
     ) => {
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
-      // Shipped pre-2026.8 producer shape: plain string steps.
       await opts?.onPlanUpdate?.({
         phase: "update",
-        steps: ["Run command"],
+        steps: ["Run command"] as never,
       });
       await opts?.onApprovalEvent?.({ phase: "requested", command: "pnpm test" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
@@ -793,8 +792,7 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(onPlanUpdate).toHaveBeenCalledWith({
       phase: "update",
-      steps: ["Run command"],
-      planSteps: [{ step: "Run command", status: "pending" }],
+      steps: [{ step: "Run command", status: "pending" }],
     });
     expect(onApprovalEvent).toHaveBeenCalledWith({
       phase: "requested",

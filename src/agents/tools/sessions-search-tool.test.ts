@@ -1,7 +1,9 @@
 /** sessions_search visibility, bounds, redaction, and input tests. */
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { sessionVisibilityGatewayTesting } from "../../plugin-sdk/session-visibility.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
@@ -82,6 +84,23 @@ afterEach(() => {
 });
 
 describe("sessions_search tool", () => {
+  it("declares exact success and error result contracts", async () => {
+    const tool = createTool({ results: [hit()] });
+    const success = await tool.execute("success-contract", { query: "text" });
+    const error = await tool.execute("error-contract", {
+      query: "text",
+      sessionKey: "01234567-89ab-4def-8123-456789abcdef",
+    });
+
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, success.details)).toBe(true);
+    expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
+    expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; indexing?: true; truncated?: true } | { error: string; status: "error" | "forbidden" }',
+    );
+  });
+
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});
     await expect(tool.execute("call-1", { query: "   " })).rejects.toThrow(

@@ -79,8 +79,7 @@ describe("runCliAgentWithLifecycle", () => {
       title: "Plan updated",
       explanation: undefined,
       source: "codex-exec",
-      steps: ["Inspect", "Patch"],
-      planSteps: [
+      steps: [
         { step: "Inspect", status: "completed" },
         { step: "Patch", status: "pending" },
       ],
@@ -122,8 +121,7 @@ describe("runCliAgentWithLifecycle", () => {
 
     expect(onPlanUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        steps: ["Inspect", "Patch"],
-        planSteps: [
+        steps: [
           { step: "Inspect", status: "pending" },
           { step: "Patch", status: "pending" },
         ],

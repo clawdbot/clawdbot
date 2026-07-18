@@ -649,8 +649,8 @@ export function migrateLegacyPluginBindingApprovals(params: {
 }): { changes: string[]; warnings: string[] } {
   const changes: string[] = [];
   const warnings: string[] = [];
-  // hasLegacy is the detection verdict (it stays false for suppressed
-  // cross-state-dir sources); fileExists re-checks for races since detection.
+  // Detection requires the source to belong to this state root; fileExists
+  // re-checks for races before the import mutates the same trust scope.
   if (!params.detected.hasLegacy || !fileExists(params.detected.sourcePath)) {
     return { changes, warnings };
   }

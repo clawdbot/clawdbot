@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3 4 5; do
             rm -rf publish
-            if git clone \
+            if timeout --signal=TERM --kill-after=10s 120s git clone \
               "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
               publish; then
               exit 0

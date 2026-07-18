@@ -5,6 +5,7 @@ import {
   normalizeCommandBody,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import type { SignalIngressLifecycle } from "../signal-ingress.js";
 
 export type SignalInboundEntry = {
   senderName: string;
@@ -32,6 +33,7 @@ export type SignalInboundEntry = {
   replyToBody?: string;
   replyToSender?: string;
   replyToIsQuote?: boolean;
+  turnAdoptionLifecycle?: SignalIngressLifecycle;
 };
 
 type TrackedSignalInboundLane = {

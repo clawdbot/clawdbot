@@ -802,6 +802,9 @@ export async function buildSessionEntry(
       false;
     const allowArchiveRecordCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
+    // A heartbeat owns every generated response until the next user turn. The
+    // persisted runtime provenance makes this coupling safe from text spoofing.
+    let insideHeartbeatTurn = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -846,6 +849,14 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
+      const provenance = message.provenance as { kind?: unknown; sourceTool?: unknown } | undefined;
+      const isHeartbeatUser =
+        message.role === "user" &&
+        provenance?.kind === "internal_system" &&
+        provenance.sourceTool === "heartbeat";
+      if (message.role === "user") {
+        insideHeartbeatTurn = isHeartbeatUser;
+      }
       if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
@@ -853,17 +864,14 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
+
       // User text is not trusted archive-wide provenance. Per-message sanitization
       // drops cron prompts without clearing unrelated content from the archive.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
-        // Assistant-side machinery (silent replies, system wrappers) is already
-        // dropped by sanitizeSessionText. We deliberately do NOT use the prior
-        // user message's pattern-match to drop the next assistant message:
-        // user-typed text can match those same patterns (`[cron:...]`,
-        // `System (untrusted): ...`) and a cross-message drop would let users
-        // exfiltrate real assistant replies from the dreaming corpus by
-        // prefixing their own prompt. See PR #70737 review (aisle-research-bot).
+        continue;
+      }
+      if (insideHeartbeatTurn) {
         continue;
       }
       if (generatedByDreamingNarrative || generatedByCronRun) {

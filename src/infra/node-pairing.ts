@@ -578,10 +578,10 @@ export async function getPendingNodePairing(
   });
 }
 
-/** Update runtime node-surface metadata (connect stamps, remote skill bins). */
-export async function updatePairedNodeMetadata(
+/** Update the remote skill bins advertised by a paired node. */
+export async function updatePairedNodeBins(
   nodeId: string,
-  patch: { lastConnectedAtMs?: number; bins?: string[] },
+  bins: string[],
   baseDir?: string,
 ): Promise<boolean> {
   return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
@@ -591,13 +591,40 @@ export async function updatePairedNodeMetadata(
     }
     device.nodeSurface = {
       ...device.nodeSurface,
-      ...(patch.lastConnectedAtMs !== undefined
-        ? { lastConnectedAtMs: patch.lastConnectedAtMs }
-        : {}),
-      ...(patch.bins !== undefined ? { bins: patch.bins } : {}),
+      bins,
     };
     return { value: true, persist: true };
   });
+}
+
+type RecordPairedNodeConnectionResult =
+  | { recorded: false }
+  | { recorded: true; firstConnection: boolean };
+
+/** Atomically classify and persist one successful node connection. */
+export async function recordPairedNodeConnection(
+  nodeId: string,
+  connectedAtMs: number,
+  baseDir?: string,
+): Promise<RecordPairedNodeConnectionResult> {
+  return await withPairedDeviceRecords<RecordPairedNodeConnectionResult>(
+    baseDir,
+    (pairedByDeviceId) => {
+      const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
+      if (!device?.nodeSurface) {
+        return { value: { recorded: false }, persist: false };
+      }
+      // Read and write under the pairing lock. Concurrent rehandshakes must not
+      // both claim the same node's first connection and schedule duplicate alerts.
+      const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
+      const previousConnectedAtMs = device.nodeSurface.lastConnectedAtMs ?? connectedAtMs;
+      device.nodeSurface = {
+        ...device.nodeSurface,
+        lastConnectedAtMs: Math.max(previousConnectedAtMs, connectedAtMs),
+      };
+      return { value: { recorded: true, firstConnection }, persist: true };
+    },
+  );
 }
 
 /** Rename a paired node display name while preserving approval metadata. */

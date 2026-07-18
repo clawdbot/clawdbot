@@ -81,7 +81,16 @@ vi.mock("./backup-rotation.js", async (importOriginal) => {
 type ConfigIoOptions = Parameters<typeof createObservedConfigIO>[0];
 
 function createConfigIO(options: ConfigIoOptions = {}) {
-  return createObservedConfigIO({ observe: false, ...options });
+  const env = options.env ?? ({} as NodeJS.ProcessEnv);
+  if (!("NODE_ENV" in env)) {
+    // Route real SQLite state through Vitest's worker DB without adding a key to config env snapshots.
+    Object.defineProperty(env, "NODE_ENV", { configurable: true, value: "test" });
+  }
+  return createObservedConfigIO({
+    observe: false,
+    ...options,
+    env,
+  });
 }
 
 describe("config io write", () => {
@@ -115,7 +124,6 @@ describe("config io write", () => {
   });
 
   afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
     clearLoadPluginMetadataSnapshotMemo();
     mockMaintainConfigBackups.mockReset();
@@ -218,7 +226,10 @@ describe("config io write", () => {
       const warn = vi.fn();
       const io = createConfigIO({
         configPath,
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        env: {
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: { warn, error: vi.fn() },
         observe: true,

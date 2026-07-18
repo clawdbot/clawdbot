@@ -523,13 +523,13 @@ const descendant = spawn(process.execPath, [
   "--eval",
   ${JSON.stringify(
     `import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(readyPath)}, "ready");
 process.on("SIGTERM", () => {
   setTimeout(() => {
     writeFileSync(${JSON.stringify(donePath)}, "done");
     process.exit(0);
   }, 75);
 });
+writeFileSync(${JSON.stringify(readyPath)}, "ready");
 setInterval(() => {}, 1000);`,
   )},
 ], { stdio: "ignore" });
@@ -575,11 +575,11 @@ const descendant = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(
     `const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(descendantTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);`,
   )},
 ], { stdio: "ignore" });
@@ -654,12 +654,14 @@ setInterval(() => {}, 1000);
       `
 import fs from "node:fs";
 
-fs.writeFileSync(${JSON.stringify(mockPidPath)}, String(process.pid));
-process.stdout.write("mock-openai listening\\n");
+// Handler before the readiness line: SIGTERM arrives once the gateway spawn
+// fails, and a late-registered handler can lose it to the default disposition.
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(mockTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(mockPidPath)}, String(process.pid));
+process.stdout.write("mock-openai listening\\n");
 setInterval(() => {}, 1000);
 `,
     );
@@ -765,11 +767,19 @@ process.exit(2);
                 await waitFor(() => output().includes("mock-openai listening"));
                 return;
               }
-              await waitFor(() => fs.existsSync(gatewayGrandchildPidPath));
-              gatewayGrandchildPid = Number.parseInt(
-                fs.readFileSync(gatewayGrandchildPidPath, "utf8"),
-                10,
-              );
+              // Parse inside the poll: existsSync can observe writeFileSync's
+              // 0-byte open-truncate window, and a NaN pid would skip both the
+              // dead-check and the finally-block SIGKILL cleanup.
+              await waitFor(() => {
+                if (!fs.existsSync(gatewayGrandchildPidPath)) {
+                  return false;
+                }
+                gatewayGrandchildPid = Number.parseInt(
+                  fs.readFileSync(gatewayGrandchildPidPath, "utf8"),
+                  10,
+                );
+                return Number.isInteger(gatewayGrandchildPid) && gatewayGrandchildPid > 1;
+              });
               if (child.exitCode === null && child.signalCode === null) {
                 await new Promise<void>((resolve) => {
                   child.once("exit", () => resolve());
@@ -799,11 +809,15 @@ process.exit(2);
       `#!/usr/bin/env node
 import fs from "node:fs";
 
-fs.writeFileSync(${JSON.stringify(recorderPidPath)}, String(process.pid));
+// Arm the SIGTERM handler before publishing the pid file: the probe throws as
+// soon as the pid file exists and recordProbeVideo SIGTERMs the recorder in
+// its finally, so a handler installed after publish can lose that signal to
+// the default disposition and recorder.term is never written.
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(recorderTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(recorderPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);
 `,
     );

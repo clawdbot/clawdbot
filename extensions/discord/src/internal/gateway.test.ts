@@ -305,7 +305,7 @@ describe("GatewayPlugin", () => {
     expect(thirdResolved).toBe(true);
   });
 
-  it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
+  it("passes the raw MESSAGE_CREATE envelope to durable ingress", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     const dispatchGatewayEvent = vi.fn(async (_eventValue: string, _dataValue: unknown) => {});
     (gateway as unknown as { client: unknown }).client = {
@@ -337,10 +337,11 @@ describe("GatewayPlugin", () => {
     const dispatched = firstDispatchedData(dispatchGatewayEvent) as {
       author?: { id: string };
       message?: { author?: { id: string } | null; content?: string };
+      content?: string;
     };
     expect(dispatched.author?.id).toBe("u1");
-    expect(dispatched.message?.author?.id).toBe("u1");
-    expect(dispatched.message?.content).toBe("hello");
+    expect(dispatched.content).toBe("hello");
+    expect(dispatched.message).toBeUndefined();
   });
 
   it("tracks the live voice roster across guild snapshots and voice updates", async () => {

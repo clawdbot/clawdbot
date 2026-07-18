@@ -1,8 +1,9 @@
-// Systemd tests cover Linux service install, start, stop, and status behavior.
 import type { ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Systemd tests cover Linux service install, start, stop, and status behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ExecFileError = Error & {
@@ -2179,12 +2180,41 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     const write = vi.fn();
+    const onMutation = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await stopSystemdService({ stdout, env: {} });
+    await stopSystemdService({ stdout, env: {}, onMutation });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(requireFirstWrite(write)).toContain("Stopped systemd service");
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
+    expect(onMutation.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        write.mock.invocationCallOrder[0],
+        "write.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
+  });
+
+  it("audits a successful stop before a later output failure", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "stop", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    const onMutation = vi.fn();
+    const stdout = {
+      write: vi.fn(() => {
+        throw new Error("output failed");
+      }),
+    } as unknown as NodeJS.WritableStream;
+
+    await expect(stopSystemdService({ stdout, env: {}, onMutation })).rejects.toThrow(
+      "output failed",
+    );
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
   });
 
   it("allows stop when systemd status is degraded but available", async () => {

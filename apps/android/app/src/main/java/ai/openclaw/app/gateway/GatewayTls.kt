@@ -37,12 +37,16 @@ data class GatewayTlsParams(
   val stableId: String,
 )
 
-/** SSL primitives installed into OkHttp when a gateway needs TLS pinning/TOFU. */
-data class GatewayTlsConfig(
+/** SSL primitives and accepted route trust installed into OkHttp. */
+class GatewayTlsConfig internal constructor(
   val sslSocketFactory: SSLSocketFactory,
   val trustManager: X509TrustManager,
   val hostnameVerifier: HostnameVerifier,
-)
+  private val effectiveFingerprint: AtomicReference<String?>,
+) {
+  val effectiveFingerprintSha256: String?
+    get() = effectiveFingerprint.get()
+}
 
 /** Distinguishes non-TLS endpoints from unreachable endpoints during probing. */
 enum class GatewayTlsProbeFailure {
@@ -82,7 +86,13 @@ internal fun buildGatewayTlsConfig(
     params.expectedFingerprint
       ?.let(::normalizeGatewayTlsFingerprint)
       ?.takeIf { it.isNotBlank() }
+  val effectiveFingerprint = AtomicReference(expected)
   val usesPlatformTrust = expected == null && !params.allowTOFU
+
+  fun recordAcceptedFingerprint(chain: Array<X509Certificate>) {
+    val certificate = chain.firstOrNull() ?: return
+    effectiveFingerprint.set(sha256Hex(certificate.encoded))
+  }
 
   @SuppressLint("CustomX509TrustManager")
   val trustManager =
@@ -128,6 +138,7 @@ internal fun buildGatewayTlsConfig(
           if (fingerprint != expected) {
             throw CertificateException("gateway TLS fingerprint mismatch")
           }
+          effectiveFingerprint.set(fingerprint)
           return
         }
         if (params.allowTOFU) {
@@ -135,9 +146,11 @@ internal fun buildGatewayTlsConfig(
           // caller persists the fingerprint against the endpoint's stable id,
           // and later connects must come back through the pinned branch above.
           onStore?.invoke(fingerprint)
+          effectiveFingerprint.set(fingerprint)
           return
         }
         defaultTrust.checkServerTrusted(chain, authType)
+        effectiveFingerprint.set(fingerprint)
       }
 
       override fun checkServerTrusted(
@@ -148,6 +161,7 @@ internal fun buildGatewayTlsConfig(
         if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
           // Preserve the connected hostname for Android's domain-aware platform trust manager.
           defaultTrust.checkServerTrusted(chain, authType, socket)
+          recordAcceptedFingerprint(chain)
         } else {
           checkServerTrusted(chain, authType)
         }
@@ -160,6 +174,7 @@ internal fun buildGatewayTlsConfig(
       ) {
         if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
           defaultTrust.checkServerTrusted(chain, authType, engine)
+          recordAcceptedFingerprint(chain)
         } else {
           checkServerTrusted(chain, authType)
         }
@@ -181,6 +196,7 @@ internal fun buildGatewayTlsConfig(
     sslSocketFactory = context.socketFactory,
     trustManager = trustManager,
     hostnameVerifier = verifier,
+    effectiveFingerprint = effectiveFingerprint,
   )
 }
 

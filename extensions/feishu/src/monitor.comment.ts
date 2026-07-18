@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { raceWithTimeoutAndAbort } from "./async.js";
+import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
 import { createFeishuClient } from "./client.js";
 import {
   encodeQuery,
@@ -60,7 +60,7 @@ type ResolveDriveCommentEventParams = {
   createClient?: (account: ResolvedFeishuAccount) => FeishuRequestClient;
   verificationTimeoutMs?: number;
   logger?: (message: string) => void;
-  waitMs?: (ms: number) => Promise<void>;
+  abortSignal?: AbortSignal;
 };
 
 type ResolvedDriveCommentEventTurn = {
@@ -362,12 +362,6 @@ async function resolveParsedCommentContent(params: {
     ...parsed,
     linkedDocuments: resolvedLinkedDocuments,
   };
-}
-
-async function delayMs(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function buildDriveCommentTargetUrl(params: {
@@ -733,7 +727,7 @@ async function fetchDriveCommentContext(params: {
   timeoutMs: number;
   logger?: (message: string) => void;
   accountId: string;
-  waitMs: (ms: number) => Promise<void>;
+  abortSignal?: AbortSignal;
 }): Promise<{
   documentTitle?: string;
   documentUrl?: string;
@@ -828,12 +822,21 @@ async function fetchDriveCommentContext(params: {
     }
     if (params.replyId && !embeddedTargetReply && !fetchedMatchedReply) {
       for (let attempt = 1; attempt <= FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT; attempt += 1) {
+        if (params.abortSignal?.aborted) {
+          break;
+        }
         params.logger?.(
           `feishu[${params.accountId}]: retrying comment reply lookup comment=${params.commentId} ` +
             `requested_reply=${params.replyId} attempt=${attempt}/${FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT} ` +
             `delay_ms=${FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS}`,
         );
-        await params.waitMs(FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS);
+        const delayElapsed = await waitForAbortableDelay(
+          FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS,
+          params.abortSignal,
+        );
+        if (!delayElapsed) {
+          break;
+        }
         const retried = await fetchDriveCommentReplies(params);
         if (retried.replies.length > 0) {
           params.logger?.(
@@ -1232,7 +1235,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     createClient,
     verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
-    waitMs = delayMs,
+    abortSignal,
   } = params;
   const eventId = event.event_id?.trim();
   const commentId = event.comment_id?.trim();
@@ -1281,7 +1284,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     timeoutMs: verificationTimeoutMs,
     logger,
     accountId,
-    waitMs,
+    abortSignal,
   });
   return {
     eventId,

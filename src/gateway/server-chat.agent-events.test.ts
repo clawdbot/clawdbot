@@ -72,6 +72,13 @@ import {
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 describe("agent event handler", () => {
   beforeEach(() => {
     resetAgentEventsForTest({ preserveListeners: true });
@@ -223,6 +230,62 @@ describe("agent event handler", () => {
       clientRunId: "client-run",
       summary: "edit tool validation failed: edits: must be an array",
     });
+  });
+
+  it("records, replaces, dismisses, and clears normalized plan snapshots", () => {
+    const { chatRunState, handler } = createHarness();
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-1",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 1,
+      stream: "plan",
+      ts: 1_000,
+      data: {
+        phase: "update",
+        explanation: "  Initial plan  ",
+        steps: ["Legacy step", { step: "Active step", status: "in_progress" }],
+      },
+    });
+    expect(chatRunState.planSnapshots.get("client-run")).toEqual({
+      explanation: "Initial plan",
+      steps: [
+        { step: "Legacy step", status: "pending" },
+        { step: "Active step", status: "in_progress" },
+      ],
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: "plan",
+      ts: 1_100,
+      data: {
+        phase: "update",
+        steps: [{ step: "Replacement", status: "completed" }],
+      },
+    });
+    expect(chatRunState.planSnapshots.get("client-run")).toEqual({
+      steps: [{ step: "Replacement", status: "completed" }],
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 3,
+      stream: "plan",
+      ts: 1_200,
+      data: { phase: "update", steps: [] },
+    });
+    expect(chatRunState.planSnapshots.get("client-run")).toEqual({ steps: [] });
+
+    chatRunState.planSnapshots.set("client-run", {
+      steps: [{ step: "Temporary", status: "pending" }],
+    });
+    chatRunState.clearRun("client-run");
+    expect(chatRunState.planSnapshots.has("client-run")).toBe(false);
   });
 
   it.each([
@@ -2036,6 +2099,9 @@ describe("agent event handler", () => {
     expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
       new Set(["conn-run"]),
     );
+    expect(requireMockArg(broadcastToConnIds, 0, 3, "run tool options")).toEqual({
+      sessionKeys: ["session-1"],
+    });
   });
 
   it("projects tool-search bridge calls like native channel verbose tool events", () => {
@@ -2201,7 +2267,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(2);
@@ -2290,7 +2356,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(2);
@@ -2456,7 +2522,7 @@ describe("agent event handler", () => {
       observedAt: 2_100,
       persistence: expect.any(Promise),
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(markTrackedRunTerminalPersisted).toHaveBeenCalledWith({
         runId: "completed-during-marker-write",
         clientRunId: "completed-during-marker-write",
@@ -2529,7 +2595,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -2620,7 +2686,7 @@ describe("agent event handler", () => {
 
     currentRow = { ...currentRow, updatedAt: 2_101 };
     resolveRunA?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -2637,7 +2703,7 @@ describe("agent event handler", () => {
       abortedLastRun: false,
     };
     resolveRunB?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(2);
@@ -2709,7 +2775,7 @@ describe("agent event handler", () => {
     };
     resolvePersistence?.();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -2754,7 +2820,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -2979,7 +3045,7 @@ describe("agent event handler", () => {
       clientRunId: "client-run",
       sessionKey: "session-finished",
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -3305,7 +3371,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -3373,7 +3439,7 @@ describe("agent event handler", () => {
       data: { phase: "end", endedAt: 1_700 },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -3569,7 +3635,7 @@ describe("agent event handler", () => {
       data: { phase: "start" },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledTimes(1);
     });
     expect(logErrorMock).toHaveBeenCalledWith(

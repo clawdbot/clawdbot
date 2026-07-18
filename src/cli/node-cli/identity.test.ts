@@ -13,17 +13,27 @@ import { runNodeIdentityShow } from "./identity.js";
 describe("runNodeIdentityShow", () => {
   let stateDir: string;
   let prevStateDir: string | undefined;
+  let stdout: string[];
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let exitSpy: ReturnType<typeof vi.spyOn>;
+  let writeJsonSpy: ReturnType<typeof vi.spyOn>;
+  let writeStdoutSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-identity-"));
     prevStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    stdout = [];
     logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+    writeStdoutSpy = vi
+      .spyOn(defaultRuntime, "writeStdout")
+      .mockImplementation((value) => stdout.push(value));
+    writeJsonSpy = vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
+      defaultRuntime.writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+    });
   });
 
   afterEach(() => {
@@ -35,6 +45,8 @@ describe("runNodeIdentityShow", () => {
     logSpy.mockRestore();
     errorSpy.mockRestore();
     exitSpy.mockRestore();
+    writeJsonSpy.mockRestore();
+    writeStdoutSpy.mockRestore();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -45,12 +57,14 @@ describe("runNodeIdentityShow", () => {
     expect(fs.existsSync(path.join(stateDir, "identity", "device.json"))).toBe(false);
   });
 
-  it("prints deviceId and raw public key as JSON", () => {
+  it("writes deviceId and raw public key JSON to stdout", () => {
     const identity = loadOrCreateDeviceIdentity(path.join(stateDir, "identity", "device.json"));
     runNodeIdentityShow({ json: true });
     expect(exitSpy).not.toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledOnce();
-    const parsed = JSON.parse(String(logSpy.mock.calls[0]?.[0])) as {
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(writeStdoutSpy).toHaveBeenCalledOnce();
+    const parsed = JSON.parse(stdout.join("")) as {
       deviceId: string;
       publicKey: string;
     };

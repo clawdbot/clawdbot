@@ -1,7 +1,9 @@
 /** In-process Gateway calls for built-in agent tools. */
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
+  getInProcessGatewayRequestContext,
   hasInProcessGatewayContext,
 } from "../../gateway/server-plugins.js";
 import { callGatewayTool } from "./gateway.js";
@@ -13,6 +15,10 @@ export type InProcessGatewayCaller = <T = Record<string, unknown>>(
 
 export function hasInProcessGatewayToolContext(): boolean {
   return hasInProcessGatewayContext();
+}
+
+export function getInProcessGatewayToolContext(): GatewayRequestContext | undefined {
+  return getInProcessGatewayRequestContext();
 }
 
 export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(

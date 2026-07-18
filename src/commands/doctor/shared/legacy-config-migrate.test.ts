@@ -1807,31 +1807,42 @@ describe("legacy migrate audio transcription", () => {
   });
 
   it("drops invalid audio.transcription payloads", () => {
-    const res = migrateLegacyConfigForTest({
+    const raw = {
       audio: {
         transcription: {
           command: [{}],
         },
       },
-    });
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      {
+        path: "audio.transcription",
+        message: "Use tools.media.audio.models instead.",
+      },
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual(["Removed audio.transcription (invalid or empty command)."]);
-    expect(res.config?.audio).toBeUndefined();
+    expect(res.config).not.toHaveProperty("audio");
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
 
   it("rewrites legacy audio {input} placeholders to media templates", () => {
-    const res = migrateLegacyConfigForTest({
+    const raw = {
       audio: {
         transcription: {
           command: ["whisper-cli", "--model", "small", "{input}", "--input={input}"],
           timeoutSeconds: 30,
         },
       },
-    });
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["audio.transcription"]);
+    const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
-    expect(res.config?.audio).toBeUndefined();
+    expect(res.config).not.toHaveProperty("audio");
     expect(res.config?.tools?.media?.audio?.models).toEqual([
       {
         type: "cli",
@@ -4054,6 +4065,106 @@ describe("legacy model compat migrate", () => {
       'Removed models.providers.bailian.models.1.compat.thinkingFormat (unrecognized value "old-bailian"; runtime default applies).',
       'Removed models.providers.openrouter.models.0.compat.thinkingFormat (unrecognized value "openrouter-v0"; runtime default applies).',
     ]);
+  });
+});
+
+describe("legacy flat memory search field migrate", () => {
+  it("moves default flat fields to their canonical nested fields", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            chunkSize: 800,
+            chunkOverlap: 100,
+            maxResults: 5,
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "agents.defaults.memorySearch",
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+      enabled: true,
+      chunking: { tokens: 800, overlap: 100 },
+      query: { maxResults: 5 },
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
+      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
+      "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
+    ]);
+  });
+
+  it("moves a top-level legacy object and keeps explicit canonical values", () => {
+    const res = migrateLegacyConfigForTest({
+      memorySearch: {
+        enabled: true,
+        chunkSize: 800,
+        chunkOverlap: 100,
+        maxResults: 5,
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            chunking: { tokens: 1200 },
+            query: { maxResults: 9 },
+          },
+        },
+      },
+    });
+
+    expect(res.config).not.toHaveProperty("memorySearch");
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+      enabled: true,
+      chunking: { tokens: 1200, overlap: 100 },
+      query: { maxResults: 9 },
+    });
+    expect(res.changes).toEqual([
+      "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
+      "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
+      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
+      "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
+    ]);
+  });
+
+  it("moves per-agent flat fields independently", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [
+          { id: "agent-1", memorySearch: { chunkSize: 500 } },
+          { id: "agent-2", memorySearch: { chunkOverlap: 50, maxResults: 10 } },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.memorySearch).toEqual({
+      chunking: { tokens: 500 },
+    });
+    expect(res.config?.agents?.list?.[1]?.memorySearch).toEqual({
+      chunking: { overlap: 50 },
+      query: { maxResults: 10 },
+    });
+  });
+
+  it("is a no-op for canonical memory search fields", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            chunking: { tokens: 800, overlap: 100 },
+            query: { maxResults: 5 },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

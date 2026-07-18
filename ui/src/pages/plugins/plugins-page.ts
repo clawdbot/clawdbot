@@ -11,6 +11,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -32,7 +33,9 @@ import {
 } from "../../lib/plugins/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
 import type { ConnectorSuggestion } from "./presentation.ts";
+import { pluginArtPath } from "./presentation.ts";
 import {
   connectorRowKey,
   pluginRowKey,
@@ -149,6 +152,7 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private messages: Record<string, PluginRowMessage> = {};
   @state() private pendingRemoval: Record<string, boolean> = {};
   @state() private detailPluginId: string | null = null;
+  @state() private iconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
   @state() private mcpServers: McpServerSummary[] | null = null;
   @state() private mcpMessage: PluginRowMessage | null = null;
@@ -164,6 +168,12 @@ class PluginsPage extends OpenClawLightDomElement {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
+  private readonly iconMisses = new Set<string>();
+  private readonly iconRequests = new Map<
+    string,
+    { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
+  >();
+  private iconAuthCandidates: string[] = [];
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -203,6 +213,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.clearSearchTimer();
     this.invalidateRequests();
+    this.resetPluginIcons();
     super.disconnectedCallback();
   }
 
@@ -219,12 +230,24 @@ class PluginsPage extends OpenClawLightDomElement {
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) {
     const connectionChanged = snapshot.connected !== this.connected;
     const clientChanged = snapshot.client !== this.client;
+    const nextIconAuthCandidates = resolveControlUiAuthCandidates({
+      hello: snapshot.hello,
+      settings: { token: this.context.gateway.connection.token },
+      password: this.context.gateway.connection.password,
+    });
+    const iconAuthChanged =
+      nextIconAuthCandidates.length !== this.iconAuthCandidates.length ||
+      nextIconAuthCandidates.some(
+        (candidate, index) => candidate !== this.iconAuthCandidates[index],
+      );
+    this.iconAuthCandidates = nextIconAuthCandidates;
     const shouldRefreshAfterChange =
-      (sourceChanged || connectionChanged || clientChanged) &&
+      (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) &&
       snapshot.connected &&
       this.routeDataConsumed;
-    if (sourceChanged || connectionChanged || clientChanged) {
+    if (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) {
       this.invalidateRequests();
+      this.resetPluginIcons();
       this.client = snapshot.client;
       this.connected = snapshot.connected;
       this.loading = false;
@@ -253,7 +276,7 @@ class PluginsPage extends OpenClawLightDomElement {
       void this.context?.runtimeConfig.ensureLoaded().then(() => this.syncMcpServers());
     }
     if (
-      (sourceChanged || connectionChanged || clientChanged) &&
+      (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) &&
       snapshot.connected &&
       this.activeTab === "discover"
     ) {
@@ -283,7 +306,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.client = snapshot.client;
     this.connected = snapshot.connected;
     this.loading = false;
-    this.result = data.result;
+    this.replaceResult(data.result);
     this.error = data.error;
     this.ensureInitialData();
   }
@@ -295,6 +318,143 @@ class PluginsPage extends OpenClawLightDomElement {
     this.searchRequestGeneration += 1;
     this.clearSearchTimer();
     this.mutationTokens.clear();
+  }
+
+  private replaceResult(result: PluginListResult | null, preserveIcons = false) {
+    if (preserveIcons) {
+      this.reconcilePluginIcons(result);
+    } else {
+      this.resetPluginIcons();
+    }
+    this.result = result;
+    this.syncPluginIcons();
+  }
+
+  private reconcilePluginIcons(result: PluginListResult | null) {
+    const eligiblePluginIds = new Set(
+      (result?.plugins ?? [])
+        .filter((plugin) => plugin.hasIcon && !pluginArtPath(plugin.id))
+        .map((plugin) => plugin.id),
+    );
+    const nextUrls = { ...this.iconUrls };
+    let urlsChanged = false;
+    for (const [pluginId, url] of Object.entries(nextUrls)) {
+      if (!eligiblePluginIds.has(pluginId)) {
+        URL.revokeObjectURL(url);
+        delete nextUrls[pluginId];
+        urlsChanged = true;
+      }
+    }
+    if (urlsChanged) {
+      this.iconUrls = nextUrls;
+    }
+    for (const [pluginId, request] of this.iconRequests) {
+      if (!eligiblePluginIds.has(pluginId)) {
+        clearTimeout(request.timeout);
+        request.controller.abort();
+        this.iconRequests.delete(pluginId);
+      }
+    }
+    for (const pluginId of this.iconMisses) {
+      if (!eligiblePluginIds.has(pluginId)) {
+        this.iconMisses.delete(pluginId);
+      }
+    }
+  }
+
+  private resetPluginIcons() {
+    for (const request of this.iconRequests.values()) {
+      clearTimeout(request.timeout);
+      request.controller.abort();
+    }
+    for (const url of Object.values(this.iconUrls)) {
+      URL.revokeObjectURL(url);
+    }
+    this.iconRequests.clear();
+    this.iconMisses.clear();
+    this.iconUrls = {};
+  }
+
+  private syncPluginIcons() {
+    for (const plugin of this.result?.plugins ?? []) {
+      if (
+        !plugin.hasIcon ||
+        pluginArtPath(plugin.id) ||
+        this.iconUrls[plugin.id] ||
+        this.iconMisses.has(plugin.id) ||
+        this.iconRequests.has(plugin.id)
+      ) {
+        continue;
+      }
+      this.fetchPluginIcon(plugin.id);
+    }
+  }
+
+  private fetchPluginIcon(pluginId: string) {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new DOMException("plugin icon fetch timed out", "TimeoutError")),
+      10_000,
+    );
+    const request = { controller, timeout };
+    this.iconRequests.set(pluginId, request);
+    void fetchPluginIconBlobUrl({
+      pluginId,
+      basePath: this.context.basePath,
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      auth: {
+        hello: this.context.gateway.snapshot.hello,
+        settings: { token: this.context.gateway.connection.token },
+        password: this.context.gateway.connection.password,
+      },
+      signal: controller.signal,
+    })
+      .then((url) => {
+        if (this.iconRequests.get(pluginId) !== request || !this.isConnected) {
+          if (url) {
+            URL.revokeObjectURL(url);
+          }
+          return;
+        }
+        if (url) {
+          this.iconUrls = { ...this.iconUrls, [pluginId]: url };
+        } else {
+          this.iconMisses.add(pluginId);
+        }
+      })
+      .catch(() => {
+        if (this.iconRequests.get(pluginId) === request) {
+          this.iconMisses.add(pluginId);
+        }
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        if (this.iconRequests.get(pluginId) === request) {
+          this.iconRequests.delete(pluginId);
+        }
+      });
+  }
+
+  private handlePluginIconError(pluginId: string) {
+    this.invalidatePluginIcon(pluginId);
+    this.iconMisses.add(pluginId);
+  }
+
+  private invalidatePluginIcon(pluginId: string) {
+    const request = this.iconRequests.get(pluginId);
+    if (request) {
+      clearTimeout(request.timeout);
+      request.controller.abort();
+      this.iconRequests.delete(pluginId);
+    }
+    const url = this.iconUrls[pluginId];
+    if (url) {
+      URL.revokeObjectURL(url);
+    }
+    const next = { ...this.iconUrls };
+    delete next[pluginId];
+    this.iconUrls = next;
+    this.iconMisses.delete(pluginId);
   }
 
   private clearSearchTimer() {
@@ -338,7 +498,7 @@ class PluginsPage extends OpenClawLightDomElement {
     try {
       const result = await loadPluginCatalog(client);
       if (isCurrent()) {
-        this.result = result;
+        this.replaceResult(result);
       }
     } catch (error) {
       if (isCurrent()) {
@@ -523,7 +683,8 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private applyMutationResult(result: PluginMutationResult) {
-    this.result = withPlugin(this.result, result.plugin);
+    this.invalidatePluginIcon(result.plugin.id);
+    this.replaceResult(withPlugin(this.result, result.plugin), true);
   }
 
   /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
@@ -546,7 +707,7 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     if (catalogResult.status === "fulfilled") {
-      this.result = catalogResult.value;
+      this.replaceResult(catalogResult.value);
     } else {
       this.error = errorMessage(catalogResult.reason);
     }
@@ -863,6 +1024,7 @@ class PluginsPage extends OpenClawLightDomElement {
           messages: this.messages,
           pendingRemoval: this.pendingRemoval,
           detailPluginId: this.detailPluginId,
+          iconUrls: this.iconUrls,
           canMutate: this.canMutate(),
           mutationBlockedReason: blockedReason,
           pageNotice: this.pageNotice,
@@ -876,6 +1038,7 @@ class PluginsPage extends OpenClawLightDomElement {
             this.installedFilter = filter;
           },
           onRefresh: () => void this.refreshPage(),
+          onIconError: (pluginId) => this.handlePluginIconError(pluginId),
           onShowDetails: (pluginId) => {
             this.detailPluginId = pluginId;
           },

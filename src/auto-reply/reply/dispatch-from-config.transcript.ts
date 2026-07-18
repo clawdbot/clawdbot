@@ -98,7 +98,11 @@ function captureSuppressedTranscriptMirror(params: {
   ) {
     return undefined;
   }
-  const sourceMessageId = normalizeOptionalString(params.metadata.deliveryMirror?.sourceMessageId);
+  const deliveryMirror = params.metadata.deliveryMirror;
+  if (!deliveryMirror) {
+    return undefined;
+  }
+  const sourceMessageId = normalizeOptionalString(deliveryMirror.sourceMessageId);
   if (!sourceMessageId) {
     return undefined;
   }

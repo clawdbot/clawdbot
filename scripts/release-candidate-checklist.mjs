@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -544,6 +545,21 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       }
     }
     rmSync(tempRoot, { force: true, recursive: true });
+  }
+}
+
+export function isDirectReleaseCandidateExecution(
+  directPath,
+  modulePath,
+  resolveRealPath = realpathSync,
+) {
+  if (!directPath) {
+    return false;
+  }
+  try {
+    return resolveRealPath(directPath) === resolveRealPath(modulePath);
+  } catch {
+    return false;
   }
 }
 
@@ -1199,7 +1215,7 @@ export function validateFullManifest(manifest, params) {
       `full validation must record runReleaseSoak=true for ${params.releaseProfile} release candidates`,
     );
   }
-  if (manifest.controls?.performanceBlocking !== true) {
+  if (params.releaseProfile !== "beta" && manifest.controls?.performanceBlocking !== true) {
     throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }
@@ -1612,7 +1628,7 @@ async function main() {
   console.log(publishCommand);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectReleaseCandidateExecution(process.argv[1], fileURLToPath(import.meta.url))) {
   await main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));

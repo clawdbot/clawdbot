@@ -353,4 +353,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-memory-import-page", MemoryImportPage);
+if (!customElements.get("openclaw-memory-import-page")) {
+  customElements.define("openclaw-memory-import-page", MemoryImportPage);
+}

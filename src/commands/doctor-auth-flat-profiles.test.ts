@@ -1374,5 +1374,61 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
       JSON.parse(fs.readFileSync(`${authPath}.openai-provider-unification.789.bak`, "utf8")),
     ).toEqual(legacy);
   });
+
+  it("canonicalizes a mixed Codex store before importing it into SQLite", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:media-api": {
+          type: "api_key",
+          provider: "openai",
+          key: "test-api-key",
+        },
+        "openai-codex:qa-oauth": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "test-access",
+          refresh: "test-refresh",
+          expires: Date.UTC(2036, 0, 1),
+          accountId: "qa-codex-account",
+        },
+      },
+      order: {
+        openai: ["openai:media-api"],
+        "openai-codex": ["openai-codex:qa-oauth"],
+      },
+    });
+
+    const providerRepair = await maybeRepairOpenAICodexAuthProfileStores({
+      cfg: {},
+      env: state.env,
+      now: () => 790,
+    });
+    expect(providerRepair.warnings).toStrictEqual([]);
+
+    const sqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      env: state.env,
+      prompter: makePrompter(true),
+      now: () => 791,
+    });
+    expect(sqliteMigration.warnings).toStrictEqual([]);
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
+      profiles: {
+        "openai:media-api": {
+          type: "api_key",
+          provider: "openai",
+        },
+        "openai:qa-oauth": {
+          type: "oauth",
+          provider: "openai",
+          accountId: "qa-codex-account",
+        },
+      },
+      order: { openai: ["openai:qa-oauth", "openai:media-api"] },
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

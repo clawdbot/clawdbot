@@ -89,6 +89,38 @@ describe("loadOpenClawPlugins", () => {
     expect(metrics.loadAndRegisterMs).toEqual(expect.any(Number));
   });
 
+  it("passes normalized config payloads to mixed-case runtime plugin ids", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "Config-Probe",
+      filename: "config-probe.cjs",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { token: { type: "string" } },
+        required: ["token"],
+      },
+      body: `module.exports = {
+  id: "Config-Probe",
+  register(api) { globalThis.mixedCaseConfigProbe = api.pluginConfig; },
+};`,
+    });
+    const probe = globalThis as unknown as Record<string, unknown>;
+    delete probe.mixedCaseConfigProbe;
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["config-probe"],
+        entries: { "config-probe": { config: { token: "ok" } } },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "Config-Probe")?.status).toBe("loaded");
+    expect(probe.mixedCaseConfigProbe).toEqual({ token: "ok" });
+    delete probe.mixedCaseConfigProbe;
+  });
+
   it("resolves ${ENV_VAR} references in plugin config before handing config to the plugin", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

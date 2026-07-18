@@ -1,7 +1,7 @@
 // Imessage tests cover inbound processing plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
@@ -12,7 +12,7 @@ let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundCo
 let resolveIMessageReactionContext: InboundProcessingModule["resolveIMessageReactionContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 
-beforeEach(async () => {
+beforeAll(async () => {
   ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
   ({ buildIMessageInboundContext, resolveIMessageReactionContext, resolveIMessageInboundDecision } =
     await import("./inbound-processing.js"));

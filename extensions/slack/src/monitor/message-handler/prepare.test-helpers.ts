@@ -18,7 +18,6 @@ export function createInboundSlackTestContext(params: {
   defaultRequireMention?: boolean;
   replyToMode?: "off" | "all" | "first" | "batched";
   channelsConfig?: SlackChannelConfigEntries;
-  threadRequireExplicitMention?: boolean;
   dmHistoryLimit?: number;
   groupDmEnabled?: boolean;
   channelRuntime?: ChannelRuntimeSurface;
@@ -53,7 +52,6 @@ export function createInboundSlackTestContext(params: {
     replyToMode: params.replyToMode ?? "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
-    threadRequireExplicitMention: params.threadRequireExplicitMention ?? false,
     slashCommand: {
       enabled: false,
       name: "openclaw",
@@ -74,6 +72,7 @@ export function createSlackTestAccount(
   return {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",

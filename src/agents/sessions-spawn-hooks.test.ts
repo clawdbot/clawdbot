@@ -28,6 +28,7 @@ const hoisted = vi.hoisted(() => ({
 const hookRunnerMocks = vi.hoisted(() => ({
   hasSubagentEndedHook: true,
   runSubagentSpawned: vi.fn(async () => {}),
+  runSubagentProgress: vi.fn(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
@@ -109,6 +110,9 @@ async function spawn(params?: {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentMessageId?: string | number;
 }) {
   return await spawnSubagentDirect(
     {
@@ -128,6 +132,9 @@ async function spawn(params?: {
       agentAccountId: params?.agentAccountId,
       agentTo: params?.agentTo,
       agentThreadId: params?.agentThreadId,
+      currentMessagingTarget: params?.currentMessagingTarget,
+      currentChannelId: params?.currentChannelId,
+      currentMessageId: params?.currentMessageId,
     },
   );
 }
@@ -204,8 +211,10 @@ beforeAll(async () => {
     hookRunner: {
       hasHooks: (hookName: string) =>
         hookName === "subagent_spawned" ||
+        hookName === "subagent_progress" ||
         (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
       runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
+      runSubagentProgress: hookRunnerMocks.runSubagentProgress,
       runSubagentEnded: hookRunnerMocks.runSubagentEnded,
     },
     getSessionBindingService: () => bindingMocks,
@@ -221,6 +230,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     hoisted.updateSessionStoreMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawned.mockClear();
+    hookRunnerMocks.runSubagentProgress.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
     bindingMocks.getCapabilities.mockClear();
     bindingMocks.getCapabilities.mockReturnValue({
@@ -291,6 +301,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: 456,
+      currentMessagingTarget: "channel:source",
+      currentChannelId: "source-native",
+      currentMessageId: "message-789",
       context: "isolated",
     });
 
@@ -368,6 +381,27 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         childSessionKey: event.childSessionKey,
       },
       "spawned context",
+    );
+    expect(hookRunnerMocks.runSubagentProgress).toHaveBeenCalledWith(
+      {
+        phase: "started",
+        runId: "run-1",
+        childSessionKey: event.childSessionKey,
+        requester: {
+          channel: "discord",
+          accountId: "work",
+          to: "channel:source",
+          threadId: 456,
+          channelId: "source-native",
+          messageId: "message-789",
+        },
+      },
+      ctx,
+    );
+    expect(
+      hookRunnerMocks.runSubagentProgress.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    ).toBeLessThan(
+      hookRunnerMocks.runSubagentSpawned.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 

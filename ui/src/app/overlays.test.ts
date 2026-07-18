@@ -349,6 +349,28 @@ describe("application update overlays", () => {
     overlays.dispose();
   });
 
+  it("reports a concurrent managed update as rejected", async () => {
+    const request = vi.fn<RequestFn>().mockResolvedValue({
+      ok: false,
+      handoff: { status: "already-running" },
+      result: {
+        status: "skipped",
+        reason: "managed-service-handoff-already-running",
+      },
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    await overlays.runUpdate();
+
+    expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+    expect(overlays.snapshot.updateStatusBanner).toEqual({
+      tone: "warn",
+      text: "Update skipped: managed-service-handoff-already-running. Another managed update is already running. Wait for it to complete, then refresh update status.",
+    });
+    overlays.dispose();
+  });
+
   it("verifies on reconnect and survives updates within the connected epoch", async () => {
     vi.useFakeTimers();
     let statusRequests = 0;

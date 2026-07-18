@@ -259,7 +259,7 @@ async function inspectOrMigrateTarget(params: {
     return report;
   }
   if (params.mode === "compact") {
-    compactSqliteDatabase(params.target, report);
+    compactSqliteDatabase(params.target, report, { env: params.env });
     report.sqliteEntries = readSqliteEntryCount(params.target);
     appendSqliteDbStats(params.target, report);
     return report;
@@ -299,6 +299,7 @@ async function inspectOrMigrateTarget(params: {
       // databases and returns the pages the import churn freed.
       compactSqliteDatabase(params.target, report, {
         closeImportedHandle: true,
+        env: params.env,
         migrateOlderSchema: true,
       });
     }
@@ -988,15 +989,22 @@ function appendSqliteDbStats(
 function compactSqliteDatabase(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
-  options: { closeImportedHandle?: boolean; migrateOlderSchema?: boolean } = {},
+  options: {
+    closeImportedHandle?: boolean;
+    env?: NodeJS.ProcessEnv;
+    migrateOlderSchema?: boolean;
+  } = {},
 ): void {
   try {
     if (options.closeImportedHandle) {
       closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
     }
     report.compact = options.migrateOlderSchema
-      ? compactDoctorSessionSqliteTarget(target, { migrateOlderSchema: true })
-      : compactDoctorSessionSqliteTarget(target);
+      ? compactDoctorSessionSqliteTarget(target, {
+          env: options.env,
+          migrateOlderSchema: true,
+        })
+      : compactDoctorSessionSqliteTarget(target, { env: options.env });
   } catch (err) {
     report.issues.push({
       code: "sqlite_compact_failed",

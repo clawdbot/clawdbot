@@ -486,9 +486,6 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "openrouter",
   "qianfan",
   "qwen",
-  "qwen-cli",
-  "qwen-oauth",
-  "qwen-portal",
   "qwen-token-plan",
   "qwencloud",
   "sglang",
@@ -993,23 +990,6 @@ export const InboundDebounceSchema = z
   .object({
     debounceMs: z.number().int().nonnegative().optional(),
     byChannel: DebounceMsBySurfaceSchema,
-  })
-  .strict()
-  .optional();
-
-export const TranscribeAudioSchema = z
-  .object({
-    command: z.array(z.string()).superRefine((value, ctx) => {
-      const executable = value[0];
-      if (!isSafeExecutableValue(executable)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [0],
-          message: "expected safe executable name or path",
-        });
-      }
-    }),
-    timeoutSeconds: z.number().int().positive().optional(),
   })
   .strict()
   .optional();

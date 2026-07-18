@@ -883,10 +883,19 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.lanes.scripts).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+    expect(plan.commands.map((command) => command.args[0])).toContain("check:script-declarations");
+  });
+
+  it("keeps the declaration guard when another change selects the full lane", () => {
+    const result = detectChangedLanes(["package.json", "scripts/example.mjs"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.all).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("check:script-declarations");
   });
 
   it("routes Control UI i18n tooling changes through keyless catalog verification", () => {
-    const result = detectChangedLanes(["scripts/control-ui-i18n.ts"]);
+    const result = detectChangedLanes(["scripts/control-ui-i18n-verify.ts"]);
     const plan = createChangedCheckPlan(result);
 
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
@@ -1885,7 +1894,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API baseline",
+      name: "Plugin SDK API contract manifest",
       args: ["plugin-sdk:api:check"],
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain(
@@ -1911,7 +1920,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API baseline",
+      name: "Plugin SDK API contract manifest",
       args: ["plugin-sdk:api:check"],
     });
     expect(plan.commands).toContainEqual({

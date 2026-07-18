@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  channelDisplayLabel,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
@@ -130,13 +129,5 @@ describe("resolveChannelSessionInfo", () => {
     expect(resolveChannelSessionInfo("agent:main:dashboard:uuid")).toEqual({
       channelSession: false,
     });
-  });
-});
-
-describe("channelDisplayLabel", () => {
-  it("uses friendly names for known channels and capitalizes the rest", () => {
-    expect(channelDisplayLabel("imessage")).toBe("iMessage");
-    expect(channelDisplayLabel("telegram")).toBe("Telegram");
-    expect(channelDisplayLabel("mattermost")).toBe("Mattermost");
   });
 });

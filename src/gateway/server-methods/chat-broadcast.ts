@@ -79,7 +79,13 @@ export function broadcastChatFinal(params: {
     state: "final" as const,
     message: projectChatDisplayMessage(params.message),
   };
-  params.context.broadcast("chat", payload);
+  params.context.broadcast("chat", payload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
+      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+      sessionKey: params.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
   sendGlobalAwareNodeChatPayload({
     context: params.context,
     sessionKey: params.sessionKey,
@@ -114,7 +120,13 @@ export function broadcastSideResult(params: {
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
   };
-  params.context.broadcast("chat.side_result", payload);
+  params.context.broadcast("chat.side_result", payload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
+      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+      sessionKey: params.payload.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
   sendGlobalAwareNodeChatPayload({
     context: params.context,
     sessionKey: params.payload.sessionKey,
@@ -159,7 +171,13 @@ export function broadcastChatError(params: {
         }
       : {}),
   };
-  params.context.broadcast("chat", payload);
+  params.context.broadcast("chat", payload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
+      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+      sessionKey: params.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
   sendGlobalAwareNodeChatPayload({
     context: params.context,
     sessionKey: params.sessionKey,

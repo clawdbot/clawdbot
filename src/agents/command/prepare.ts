@@ -247,9 +247,15 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     agentId: agentIdOverride,
     clone: false,
   });
-
-  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
-    sessionResolution;
+  const {
+    sessionId,
+    sessionKey,
+    storePath,
+    isNewSession,
+    previousSessionId,
+    persistedThinking,
+    persistedVerbose,
+  } = sessionResolution;
   const harnessSessionError = sessionKey
     ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
     : undefined;
@@ -348,7 +354,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     const transcriptBody =
       opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
-    return {
+    const prepared = {
       opts: commandOpts,
       body,
       transcriptBody,
@@ -367,6 +373,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       sessionStore,
       storePath,
       isNewSession,
+      previousSessionId,
       persistedThinking,
       persistedVerbose,
       sessionAgentId,
@@ -383,6 +390,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       acpResolution,
       runLease,
     };
+    return prepared;
   } catch (error) {
     await runLease?.release();
     throw error;

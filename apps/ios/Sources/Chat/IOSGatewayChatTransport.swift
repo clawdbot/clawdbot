@@ -7,6 +7,7 @@ import OSLog
 struct IOSGatewayChatTransport: OpenClawChatTransport {
     static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ios.chat.transport")
     private let gateway: GatewayNodeSession
+    private let widgetGateway: GatewayNodeSession?
     private let globalAgentId: String?
     private let outboxGatewayID: String?
     private let sessionMutationRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)?
@@ -17,11 +18,13 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     init(
         gateway: GatewayNodeSession,
+        widgetGateway: GatewayNodeSession? = nil,
         globalAgentId: String? = nil,
         outboxGatewayID: String? = nil,
         sessionMutationRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)? = nil)
     {
         self.gateway = gateway
+        self.widgetGateway = widgetGateway
         let normalized = globalAgentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.globalAgentId = normalized?.isEmpty == false ? normalized : nil
         let normalizedGatewayID = outboxGatewayID?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -205,7 +208,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             sessionKey: target.sessionKey,
             agentID: target.agentID,
             model: patch.model,
-            thinkingLevel: patch.thinkingLevel)
+            thinkingLevel: patch.thinkingLevel,
+            verboseLevel: patch.verboseLevel)
         let response = if let expectedRoute {
             try await self.gateway.request(
                 request,
@@ -294,6 +298,36 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
+    }
+
+    func resolveInlineWidgetResource(
+        path: String,
+        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    {
+        let gateway = self.gateway
+        let widgetGateway = self.widgetGateway
+        return await OpenClawChatWidgetURLResolver.resolveResource(
+            target: path,
+            replacing: failedResource,
+            currentSurfaceRoutes: {
+                let node = await widgetGateway?.currentCanvasHostRoute()
+                let operatorSurface = await gateway.currentCanvasHostRoute()
+                return (node: node, operatorSurface: operatorSurface)
+            },
+            // Prefer the device's node route; operator rotation covers clients
+            // whose node role is unavailable or intentionally disabled.
+            refreshNodeSurfaceRoute: { observed in
+                await widgetGateway?.refreshCanvasHostRoute(replacing: observed?.url)
+            },
+            refreshOperatorSurfaceRoute: { observed in
+                await gateway.refreshCanvasHostRoute(replacing: observed?.url)
+            })
+    }
+
+    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
+        await self.resolveInlineWidgetResource(
+            path: path,
+            replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) })?.url
     }
 
     func requestHistory(

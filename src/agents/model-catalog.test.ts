@@ -2175,16 +2175,16 @@ describe("loadModelCatalog", () => {
   it("does not duplicate provider-owned supplemental models already present in ModelRegistry", async () => {
     mockAgentDiscoveryModels([
       {
-        id: "kilo/auto",
+        id: "kilo-auto/balanced",
         provider: "kilocode",
-        name: "Kilo Auto",
+        name: "Auto Balanced",
       },
     ]);
     augmentCatalogMock.mockResolvedValueOnce([
       {
         provider: "kilocode",
-        id: "kilo/auto",
-        name: "Configured Kilo Auto",
+        id: "kilo-auto/balanced",
+        name: "Configured Auto Balanced",
         reasoning: true,
         input: ["text", "image"],
         contextWindow: 1000000,
@@ -2194,10 +2194,10 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
     const matches = result.filter(
-      (entry) => entry.provider === "kilocode" && entry.id === "kilo/auto",
+      (entry) => entry.provider === "kilocode" && entry.id === "kilo-auto/balanced",
     );
     expect(matches).toHaveLength(1);
-    expect(matches[0]?.name).toBe("Kilo Auto");
+    expect(matches[0]?.name).toBe("Auto Balanced");
   });
 
   it("does not match models across provider id variants", () => {

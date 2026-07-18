@@ -34,6 +34,7 @@ const TARGET_TABLES = new Set([
   "session_entries",
   "transcript_events",
   "transcript_event_identities",
+  "session_transcript_active_events",
 ]);
 
 function sha256(value: string): string {

@@ -111,7 +111,7 @@ The shorthand is also accepted:
 MCP declarations are exposed through the read-only virtual API file surface in
 code mode. Guest code can call `API.list("mcp")` and
 `API.read("mcp/<server>.d.ts")` to inspect TypeScript-style signatures before
-calling `MCP.<server>.<tool>()`. See [Code mode](/reference/code-mode) for the
+calling `MCP.<server>.<tool>()`. See [Code Mode](/tools/code-mode) for the
 runtime contract, limits, and debugging steps.
 
 ### `tools.allow` / `tools.deny`
@@ -396,7 +396,8 @@ Configures inbound media understanding (image/audio/video):
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
 
-Default: `tree` (current session + sessions spawned by it, such as subagents).
+Default: `tree` (current session + sessions spawned by it, such as subagents, plus ambient
+watched group sessions for the same agent).
 
 ```json5
 {
@@ -412,7 +413,7 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 <AccordionGroup>
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
-    - `tree`: current session + sessions spawned by the current session (subagents).
+    - `tree`: current session + sessions spawned by the current session (subagents). For read operations, it also includes same-agent group sessions that the current session watches through ambient group awareness.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
@@ -422,6 +423,12 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 
   </Accordion>
 </AccordionGroup>
+
+With the default `session.dmScope: "main"`, human activity in a group makes that same-agent group
+session ambiently visible to the agent's main session. In a multi-user setup, `"main"` also shares
+one DM session across users, so each user routed there can read from ambiently watched groups,
+including through session-memory `memory_search`. Use a per-peer `dmScope` for DM isolation, or set
+`tools.sessions.visibility: "self"` to opt out of ambient watched-session reads.
 
 ### `tools.sessions_spawn`
 
@@ -774,8 +781,8 @@ Interactive custom-provider onboarding infers image input for known vision-model
       env: { SYNTHETIC_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-          models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
+          models: { "synthetic/hf:MiniMaxAI/MiniMax-M3": { alias: "MiniMax M3" } },
         },
       },
       models: {
@@ -787,12 +794,12 @@ Interactive custom-provider onboarding infers image input for known vision-model
             api: "anthropic-messages",
             models: [
               {
-                id: "hf:MiniMaxAI/MiniMax-M2.5",
-                name: "MiniMax M2.5",
+                id: "hf:MiniMaxAI/MiniMax-M3",
+                name: "MiniMax M3",
                 reasoning: true,
-                input: ["text"],
+                input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 192000,
+                contextWindow: 262144,
                 maxTokens: 65536,
               },
             ],

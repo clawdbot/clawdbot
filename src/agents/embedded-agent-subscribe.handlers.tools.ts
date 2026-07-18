@@ -12,6 +12,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { QuestionRequestQuestion } from "../../packages/gateway-protocol/src/schema/questions.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -37,7 +38,7 @@ import {
   parseInteractiveParam,
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
-import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { hasReplyPayloadContent, type MessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
@@ -89,6 +90,7 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { formatAgentHarnessUserInputPrompt } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
@@ -98,6 +100,13 @@ import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import {
+  cancelAskUserPromptDelivery,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+  settleAskUserPromptDelivery,
+  waitForAskUserPromptReady,
+} from "./tools/ask-user-tool.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -111,6 +120,45 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
+
+function buildAskUserQuestionPresentation(params: {
+  questionId: string;
+  questions: QuestionRequestQuestion[];
+}): MessagePresentation | undefined {
+  // Button taps resolve atomically, so v1 keeps multi-question records text-only.
+  if (params.questions.length !== 1) {
+    return undefined;
+  }
+  const [question] = params.questions;
+  if (!question || question.multiSelect || question.isSecret || question.options.length === 0) {
+    return undefined;
+  }
+  const presentationText = [
+    question.question,
+    "",
+    ...question.options.map(
+      (option) => `- ${option.label}${option.description ? `: ${option.description}` : ""}`,
+    ),
+    "",
+    "Tap an option, or reply with the option text or your own answer.",
+  ].join("\n");
+  return {
+    blocks: [
+      { type: "text", text: presentationText },
+      {
+        type: "buttons",
+        buttons: question.options.map((option) => ({
+          label: option.label,
+          action: {
+            type: "question",
+            questionId: params.questionId,
+            optionValue: option.label,
+          },
+        })),
+      },
+    ],
+  };
+}
 const fallbackToolTerminalObservers = new WeakMap<
   ToolHandlerContext["state"],
   ReturnType<typeof createToolTerminalObserver>
@@ -142,6 +190,24 @@ function readUpdatePlanResult(
   const steps = normalizeAgentPlanSteps(details.plan) ?? [];
   const explanation = readStringValue(details.explanation);
   return { ...(explanation ? { explanation } : {}), steps };
+}
+
+function buildAskUserPromptPayload(
+  toolCallId: string,
+  sessionKey: string | undefined,
+  args: unknown,
+) {
+  try {
+    const { questions } = normalizeAskUserParams(args);
+    const reservation = reserveAskUserPromptDelivery({ toolCallId, sessionKey, questions });
+    if (!reservation) {
+      return undefined;
+    }
+    return reservation;
+  } catch {
+    // Argument validation owns malformed calls; do not deliver an unusable prompt first.
+    return undefined;
+  }
 }
 
 function isMiddlewareToolResultError(result: unknown): boolean {
@@ -943,21 +1009,40 @@ export function handleToolExecutionStart(
     hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
-  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-      reason: "tool_start",
-      assistantMessageIndex: ctx.state.assistantMessageIndex,
-    });
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(() => {
-        continueToolExecutionStart();
-      });
+  const startToolName = normalizeToolName(evt.toolName);
+  const askUserPromptReservation =
+    startToolName === "ask_user" && ctx.params.onToolResult
+      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, evt.args)
+      : undefined;
+  const cancelAskUserPromptReservation = () => {
+    if (askUserPromptReservation) {
+      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey);
     }
-    continueToolExecutionStart();
-    return undefined;
+  };
+  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
+    let onBlockReplyFlushResult: void | Promise<void>;
+    try {
+      onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+        reason: "tool_start",
+        assistantMessageIndex: ctx.state.assistantMessageIndex,
+      });
+    } catch (error) {
+      cancelAskUserPromptReservation();
+      throw error;
+    }
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult.then(
+        () => continueToolExecutionStart(),
+        (error: unknown) => {
+          cancelAskUserPromptReservation();
+          throw error;
+        },
+      );
+    }
+    return continueToolExecutionStart();
   };
 
-  const continueToolExecutionStart = () => {
+  const continueToolExecutionStart = (): void | Promise<void> => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -1165,12 +1250,53 @@ export function handleToolExecutionStart(
         }
       }
     }
+
+    if (toolName === "ask_user" && ctx.params.onToolResult) {
+      const payload = askUserPromptReservation;
+      if (payload) {
+        const questionId = payload.questionId;
+        void waitForAskUserPromptReady(questionId)
+          .then((questions) => {
+            if (!questions) {
+              return;
+            }
+            const prompt = formatAgentHarnessUserInputPrompt(questions, {
+              intro: "Question for you:",
+            });
+            const presentation = buildAskUserQuestionPresentation({ questionId, questions });
+            return ctx.params.onToolResult?.({
+              text: `${prompt}\n\nReply with the number, the option text, or your own answer.`,
+              ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
+              channelData: { askUser: { questionId } },
+            });
+          })
+          .then(
+            () => settleAskUserPromptDelivery(questionId),
+            (error: unknown) => {
+              settleAskUserPromptDelivery(questionId, error);
+              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
+            },
+          );
+      }
+    }
   };
 
   // Flush pending block replies to preserve message boundaries before tool execution.
-  const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  let flushBlockReplyBufferResult: void | Promise<void>;
+  try {
+    flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  } catch (error) {
+    cancelAskUserPromptReservation();
+    throw error;
+  }
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(() => continueAfterBlockReplyFlush());
+    return flushBlockReplyBufferResult.then(
+      () => continueAfterBlockReplyFlush(),
+      (error: unknown) => {
+        cancelAskUserPromptReservation();
+        throw error;
+      },
+    );
   }
   return continueAfterBlockReplyFlush();
 }
@@ -1280,6 +1406,9 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
+  if (toolName === "ask_user") {
+    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey);
+  }
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;

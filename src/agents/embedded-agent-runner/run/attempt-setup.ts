@@ -16,6 +16,7 @@ import { log } from "../logger.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
+  createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
@@ -61,22 +62,13 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
   const prepStages = createEmbeddedRunStageTracker();
-  const emitPrepStageSummary = (phase: string) => {
-    const summary = prepStages.snapshot();
-    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
-    if (!shouldWarn && !log.isEnabled("trace")) {
-      return;
-    }
-    const message = formatEmbeddedRunStageSummary(
-      `[trace:embedded-run] prep stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
-      summary,
-    );
-    if (shouldWarn) {
-      log.warn(message);
-    } else {
-      log.trace(message);
-    }
-  };
+  const emitPrepStageSummary = createEmbeddedRunStageSummaryEmitter({
+    label: "prep stages",
+    log,
+    runId: params.runId,
+    sessionId: params.sessionId,
+    tracker: prepStages,
+  });
   const emitCorePluginToolStageSummary = (
     phase: string,
     summary: ReturnType<typeof prepStages.snapshot>,

@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 
 const CHANNEL_SOURCE_TURN_ID_PREFIX = "channel-user:v1:";
 const CHANNEL_SOURCE_TURN_ID = Symbol("openclaw.channelSourceTurnId");
@@ -15,6 +16,16 @@ type ChannelSourceTurnContext = object & {
   [CHANNEL_SOURCE_TURN_ID]?: string;
   [CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED]?: true;
 };
+
+/**
+ * Internal-origin turns (gateway chat.send stamps the internal channel as the
+ * ingress provider) carry run ids, not provider message ids. Minting a channel
+ * source-turn id from them breaks the run-keyed user-turn admission guard;
+ * gateway turns own restart via fingerprint admission and client retries.
+ */
+export function shouldMintChannelSourceTurnId(ingressProvider: string | undefined): boolean {
+  return !isInternalMessageChannel(ingressProvider);
+}
 
 /**
  * Identifies one inbound channel turn across shared sessions.

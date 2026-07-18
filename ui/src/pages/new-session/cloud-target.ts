@@ -464,6 +464,7 @@ export function renderCloudProfileMenuItems(params: {
   selectedId: string;
   submitting: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   onSelect: (profileId: string) => void;
 }) {
   return params.profiles.map((profile) =>
@@ -473,7 +474,10 @@ export function renderCloudProfileMenuItems(params: {
         label: t("newSession.cloudWorker", { profile: profile.id }),
         checked: params.selectedId === profile.id,
         disabled: params.disabled,
-        title: t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
+        title:
+          params.disabled && params.disabledReason
+            ? params.disabledReason
+            : t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
       },
       params.submitting,

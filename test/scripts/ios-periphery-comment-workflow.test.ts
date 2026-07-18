@@ -9,6 +9,7 @@ import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
 const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
+const MACOS_PRODUCER_WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
@@ -44,6 +45,7 @@ type ProducerWorkflow = {
       steps?: WorkflowStep[];
     };
     scan?: {
+      "runs-on"?: string;
       steps?: WorkflowStep[];
     };
   };
@@ -466,6 +468,13 @@ describe("iOS Periphery comment workflow", () => {
     expect(upload?.if).toBe("always()");
     expect(upload?.with?.path).toBe("${{ runner.temp }}/ios-periphery");
     expect(upload?.with?.["if-no-files-found"]).toBe("error");
+  });
+
+  it("uses hosted macOS capacity on retried scans", () => {
+    for (const workflowPath of [PRODUCER_WORKFLOW_PATH, MACOS_PRODUCER_WORKFLOW_PATH]) {
+      const workflow = parse(readFileSync(workflowPath, "utf8")) as ProducerWorkflow;
+      expect(workflow.jobs?.scan?.["runs-on"]).toContain("github.run_attempt > 1");
+    }
   });
 
   it("runs scope detection for PR transitions that can clear stale findings", () => {

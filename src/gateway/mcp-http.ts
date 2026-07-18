@@ -67,11 +67,7 @@ function createMcpJsonParseError(error: unknown): Error & { code: "mcp_json_pars
 }
 
 function isMcpJsonParseError(error: unknown): error is Error & { code: "mcp_json_parse_error" } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === "mcp_json_parse_error"
-  );
+  return isRecord(error) && error.code === "mcp_json_parse_error";
 }
 
 function parseMcpJsonBody(body: string): unknown {
@@ -313,6 +309,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
+          toolsAllow: requestContext.toolsAllow,
           senderIsOwner: requestContext.senderIsOwner,
           nodeExecAllowed: requestContext.nodeExecAllowed,
           execSession: requestContext.execSession,

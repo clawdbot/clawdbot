@@ -1,5 +1,5 @@
 // Covers device pairing, token, and role lifecycle behavior.
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -9,6 +9,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import {
   loadDevicePairingStoreState,
+  persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
 import {
@@ -190,14 +191,23 @@ async function clearPairedOperatorApprovalBaseline(baseDir: string) {
 }
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-device-pairing-" });
+let suiteBaseDir = "";
 
 async function makeDevicePairingDir(): Promise<string> {
-  return await suiteRootTracker.make("case");
+  if (!suiteBaseDir) {
+    throw new Error("device pairing test root is not initialized");
+  }
+  return suiteBaseDir;
 }
 
 describe("device pairing tokens", () => {
   beforeAll(async () => {
-    await suiteRootTracker.setup();
+    suiteBaseDir = await suiteRootTracker.setup();
+  });
+
+  beforeEach(() => {
+    persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, suiteBaseDir, "both");
+    persistDeviceBootstrapTokenRecords({}, suiteBaseDir);
   });
 
   afterAll(async () => {

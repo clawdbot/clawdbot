@@ -32,6 +32,7 @@ type NodeHostRunOptions = {
   gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
 };
 
 function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
@@ -192,6 +193,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     displayName: opts.displayName,
     fallbackDisplayName,
     gateway: plannedGateway,
+    installedAppsSharing: opts.installedAppsSharing,
   });
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
@@ -202,6 +204,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    installedAppsSharingEnabled: config.installedAppsSharing,
   });
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
@@ -209,6 +212,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   });
 
   const host = gateway.host ?? "127.0.0.1";
+  const urlHost =
+    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
   const contextPath = gateway.contextPath
@@ -216,7 +221,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       ? gateway.contextPath
       : `/${gateway.contextPath}`
     : "";
-  const url = `${scheme}://${host}:${port}${contextPath}`;
+  const url = `${scheme}://${urlHost}:${port}${contextPath}`;
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
   let gatewayHelloReceived = false;
 

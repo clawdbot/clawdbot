@@ -41,6 +41,7 @@ import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolu
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
@@ -50,6 +51,7 @@ type SessionResolution = {
   sessionStore?: Record<string, SessionEntry>;
   storePath: string;
   isNewSession: boolean;
+  previousSessionId?: string;
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
 };
@@ -90,6 +92,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     sessionStartedAt: undefined,
     lastInteractionAt: undefined,
   };
+  transitionMainSessionRecovery(next, { kind: "clear" });
   clearAllCliSessions(next);
   return next;
 }
@@ -472,6 +475,7 @@ export function resolveSession(opts: {
     sessionStore,
     storePath,
     isNewSession,
+    previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
     persistedThinking,
     persistedVerbose,
   };

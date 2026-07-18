@@ -15,13 +15,17 @@ import { invokeNodeClaudeCliRun } from "../gateway/node-agent-cli-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
   setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -93,6 +97,7 @@ beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
+  startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
   restoreCliRunnerPrepareTestDeps();
@@ -374,6 +379,31 @@ async function withTempOpenClawHome(run: (home: string) => Promise<void>): Promi
   }
 }
 
+type ModelCallLifecycleEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "model.call.started" | "model.call.completed" | "model.call.error" }
+>;
+
+function captureModelCallDiagnostics(runId: string) {
+  const events: Array<{
+    event: ModelCallLifecycleEvent;
+    privateData: DiagnosticEventPrivateData;
+  }> = [];
+  const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (
+      event.type !== "model.call.started" &&
+      event.type !== "model.call.completed" &&
+      event.type !== "model.call.error"
+    ) {
+      return;
+    }
+    if (event.runId === runId) {
+      events.push({ event, privateData });
+    }
+  });
+  return { events, stop };
+}
+
 describe("runCliAgent spawn path", () => {
   it("formats output digests without logging response content", () => {
     expect(formatCliBackendOutputDigest("one")).toBe("outBytes=3 outHash=7692c3ad3540");
@@ -599,13 +629,28 @@ describe("runCliAgent spawn path", () => {
       },
     });
     context.params.abortSignal = controller.signal;
+    const diagnostics = captureModelCallDiagnostics("run-node-abort");
 
-    const run = executePreparedCliRun(context);
-    await vi.waitFor(() => expect(invokeNode).toHaveBeenCalledOnce());
-    controller.abort();
+    try {
+      const run = executePreparedCliRun(context);
+      await vi.waitFor(() => expect(invokeNode).toHaveBeenCalledOnce());
+      controller.abort();
 
-    await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(invokeNode.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+      await expect(run).rejects.toMatchObject({ name: "AbortError" });
+      await waitForDiagnosticEventsDrained();
+      expect(invokeNode.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        transport: "paired-node-cli",
+        observationUnit: "turn",
+        failureKind: "aborted",
+      });
+    } finally {
+      diagnostics.stop();
+    }
   });
 
   it("uses the canonical exec approval flow before retrying a node Claude run", async () => {
@@ -921,6 +966,310 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.input).toContain("Explain this diff");
     expect(input.argv).not.toContain("Explain this diff");
+  });
+
+  it("emits metadata-only one-shot Claude model-call diagnostics with aggregate usage", async () => {
+    const prompt = "Trace this turn";
+    const stdout =
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "cli-trace-1" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "traced reply" }],
+            usage: {
+              input_tokens: 11,
+              output_tokens: 6,
+              cache_read_input_tokens: 125,
+              cache_creation_input_tokens: 7,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "cli-trace-1",
+          result: "traced reply",
+          usage: {
+            input_tokens: 30,
+            output_tokens: 15,
+            cache_read_input_tokens: 300,
+            cache_creation_input_tokens: 12,
+            total_tokens: 357,
+          },
+        }),
+      ].join("\n") + "\n";
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const diagnostics = captureModelCallDiagnostics("run-claude-model-call-metadata");
+
+    try {
+      const output = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          runId: "run-claude-model-call-metadata",
+          prompt,
+        }),
+      );
+      await waitForDiagnosticEventsDrained();
+
+      expect(output.usage).toEqual({
+        input: 11,
+        output: 6,
+        cacheRead: 125,
+        cacheWrite: 7,
+        total: undefined,
+      });
+      expect(output.diagnosticUsage).toEqual({
+        input: 30,
+        output: 15,
+        cacheRead: 300,
+        cacheWrite: 12,
+        total: 357,
+      });
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.completed",
+      ]);
+      const started = diagnostics.events[0];
+      const completed = diagnostics.events[1];
+      expect(started?.event).toMatchObject({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        api: "claude-code",
+        transport: "stdio",
+        observationUnit: "turn",
+        promptStats: {
+          inputMessagesCount: 1,
+          inputMessagesChars: prompt.length,
+          systemPromptChars: "You are a helpful assistant.".length,
+          totalChars: prompt.length + "You are a helpful assistant.".length,
+        },
+      });
+      expect(completed?.event).toMatchObject({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        api: "claude-code",
+        transport: "stdio",
+        requestPayloadBytes: Buffer.byteLength(prompt),
+        responseStreamBytes: Buffer.byteLength(stdout),
+        timeToFirstByteMs: expect.any(Number),
+        usage: {
+          input: 30,
+          output: 15,
+          cacheRead: 300,
+          cacheWrite: 12,
+          total: 357,
+        },
+      });
+      expect(completed?.event.callId).toBe(started?.event.callId);
+      expect(completed?.event).not.toHaveProperty("upstreamRequestIdHash");
+      expect(started?.privateData.modelContent).toBeUndefined();
+      expect(completed?.privateData.modelContent).toBeUndefined();
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it("captures only representable Claude prompt, system, and assistant content when opted in", async () => {
+    const prompt = "Explain the trace";
+    const stdout =
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            stop_reason: "end_turn",
+            content: [
+              { type: "text", text: "visible answer" },
+              { type: "thinking", thinking: "visible reasoning", signature: "opaque-signature" },
+              {
+                type: "tool_use",
+                id: "tool-1",
+                name: "Read",
+                input: { path: "/private/path" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({ type: "result", result: "visible answer" }),
+      ].join("\n") + "\n";
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const diagnostics = captureModelCallDiagnostics("run-claude-model-call-content");
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          runId: "run-claude-model-call-content",
+          prompt,
+          config: {
+            diagnostics: {
+              enabled: true,
+              otel: {
+                enabled: true,
+                traces: true,
+                captureContent: {
+                  enabled: true,
+                  inputMessages: true,
+                  outputMessages: true,
+                  systemPrompt: true,
+                  toolDefinitions: true,
+                },
+              },
+            },
+          },
+        }),
+      );
+      await waitForDiagnosticEventsDrained();
+
+      const completed = diagnostics.events.find(
+        ({ event }) => event.type === "model.call.completed",
+      );
+      expect(completed?.privateData.modelContent).toEqual({
+        inputMessages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        systemPrompt: "You are a helpful assistant.",
+        outputMessages: [
+          {
+            role: "assistant",
+            stopReason: "end_turn",
+            content: [
+              { type: "text", text: "visible answer" },
+              { type: "thinking", thinking: "visible reasoning" },
+              { type: "tool_call", id: "tool-1", name: "Read" },
+            ],
+          },
+        ],
+      });
+      expect(completed?.privateData.modelContent?.toolDefinitions).toBeUndefined();
+      expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("/private/path");
+      expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("opaque-signature");
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it("emits one Claude model-call error when one-shot process startup fails", async () => {
+    supervisorSpawnMock.mockRejectedValueOnce(new Error("claude process spawn failed"));
+    const diagnostics = captureModelCallDiagnostics("run-claude-model-call-spawn-error");
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId: "run-claude-model-call-spawn-error",
+            prompt: "fail now",
+          }),
+        ),
+      ).rejects.toThrow("claude process spawn failed");
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        errorCategory: "Error",
+        requestPayloadBytes: Buffer.byteLength("fail now"),
+      });
+      expect(diagnostics.events[1]?.privateData.errorMessage).toBe("claude process spawn failed");
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it.each([
+    {
+      label: "timeout",
+      runId: "run-claude-model-call-timeout",
+      exit: {
+        reason: "overall-timeout" as const,
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      },
+      errorCategory: "timeout",
+      failureKind: "timeout",
+    },
+    {
+      label: "parse failure",
+      runId: "run-claude-model-call-parse-error",
+      exit: {
+        reason: "exit" as const,
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: `${JSON.stringify({ type: "system", subtype: "unexpected" })}\n`,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      errorCategory: "unknown",
+      failureKind: undefined,
+    },
+  ])("emits one Claude model-call error for $label", async (testCase) => {
+    supervisorSpawnMock.mockResolvedValueOnce(createManagedRun(testCase.exit));
+    const diagnostics = captureModelCallDiagnostics(testCase.runId);
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId: testCase.runId,
+          }),
+        ),
+      ).rejects.toThrow();
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        errorCategory: testCase.errorCategory,
+      });
+      if (testCase.failureKind) {
+        expect(diagnostics.events[1]?.event).toMatchObject({
+          failureKind: testCase.failureKind,
+        });
+      } else {
+        expect(diagnostics.events[1]?.event).not.toHaveProperty("failureKind");
+      }
+    } finally {
+      diagnostics.stop();
+    }
   });
 
   it("passes Claude system prompts through a file instead of argv", async () => {
@@ -1685,6 +2034,210 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("keeps one managed Claude model call open until background task results drain", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const cancel = vi.fn();
+    const interimChunk =
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "live-trace" }),
+        JSON.stringify({
+          type: "assistant",
+          session_id: "live-trace",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "working" }],
+            usage: { input_tokens: 4, output_tokens: 1, cache_read_input_tokens: 20 },
+          },
+        }),
+        JSON.stringify({
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-1", task_type: "local_agent", description: "research" }],
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "live-trace",
+          result: "working",
+          usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 25 },
+        }),
+      ].join("\n") + "\n";
+    const finalChunk =
+      [
+        JSON.stringify({ type: "system", subtype: "background_tasks_changed", tasks: [] }),
+        JSON.stringify({
+          type: "assistant",
+          session_id: "live-trace",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "finished" }],
+            usage: { input_tokens: 6, output_tokens: 2, cache_read_input_tokens: 30 },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "live-trace",
+          result: "finished",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 3,
+            cache_read_input_tokens: 50,
+            cache_creation_input_tokens: 2,
+          },
+        }),
+      ].join("\n") + "\n";
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        stdoutListener?.(interimChunk);
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-model-call",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+    const diagnostics = captureModelCallDiagnostics("run-live-model-call-background");
+
+    try {
+      const run = executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          runId: "run-live-model-call-background",
+          prompt: "research this",
+          backend: { liveSession: "claude-stdio" },
+          config: {
+            diagnostics: {
+              enabled: true,
+              otel: {
+                enabled: true,
+                traces: true,
+                captureContent: {
+                  enabled: true,
+                  inputMessages: true,
+                  outputMessages: true,
+                  systemPrompt: true,
+                },
+              },
+            },
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(writes).toHaveLength(1));
+      await waitForDiagnosticEventsDrained();
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual(["model.call.started"]);
+
+      stdoutListener?.(finalChunk);
+      const output = await run;
+      await waitForDiagnosticEventsDrained();
+
+      expect(output.text).toContain("working");
+      expect(output.text).toContain("finished");
+      expect(output.usage).toEqual({
+        input: 6,
+        output: 2,
+        cacheRead: 30,
+        cacheWrite: undefined,
+        total: undefined,
+      });
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.completed",
+      ]);
+      const completed = diagnostics.events[1];
+      expect(completed?.event).toMatchObject({
+        api: "claude-code",
+        transport: "stdio-live",
+        observationUnit: "turn",
+        requestPayloadBytes: Buffer.byteLength(writes[0] ?? ""),
+        responseStreamBytes: Buffer.byteLength(interimChunk) + Buffer.byteLength(finalChunk),
+        usage: {
+          input: 10,
+          output: 3,
+          cacheRead: 50,
+          cacheWrite: 2,
+        },
+      });
+      expect(completed?.privateData.modelContent?.outputMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "working" }] },
+        { role: "assistant", content: [{ type: "text", text: "finished" }] },
+      ]);
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it("emits one terminal model-call error for a managed Claude result failure", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          `${JSON.stringify({
+            type: "result",
+            subtype: "error_during_execution",
+            is_error: true,
+            session_id: "live-error",
+            result: "managed turn failed",
+            usage: { input_tokens: 8, output_tokens: 2, cache_read_input_tokens: 40 },
+          })}\n`,
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-model-call-error",
+        pid: 2346,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+    const diagnostics = captureModelCallDiagnostics("run-live-model-call-error");
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId: "run-live-model-call-error",
+            backend: { liveSession: "claude-stdio" },
+          }),
+        ),
+      ).rejects.toThrow(/managed turn failed/i);
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        transport: "stdio-live",
+        usage: { input: 8, output: 2, cacheRead: 40 },
+      });
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
   it("reuses a Claude live session process across turns", async () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     const agentEvents: unknown[] = [];
@@ -2294,6 +2847,43 @@ describe("runCliAgent spawn path", () => {
     expect(logWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining("outer resource cleanup failed after confirmed message delivery"),
     );
+  });
+
+  it("emits a model-call error when successful Claude output is followed by cleanup failure", async () => {
+    const runId = "run-claude-cleanup-failure";
+    const diagnostics = captureModelCallDiagnostics(runId);
+    const cleanupError = new Error("system prompt cleanup failed");
+    setCliRunnerExecuteTestDeps({
+      writeCliSystemPromptFile: async () => ({
+        filePath: "/tmp/system-prompt.md",
+        cleanup: async () => {
+          throw cleanupError;
+        },
+      }),
+    });
+    mockSuccessfulClaudeJsonlRun();
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId,
+          }),
+        ),
+      ).rejects.toThrow("system prompt cleanup failed");
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event.callId).toBe(diagnostics.events[0]?.event.callId);
+    } finally {
+      diagnostics.stop();
+      setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
+    }
   });
 
   it("wraps primitive and frozen failures to preserve delivery evidence", () => {

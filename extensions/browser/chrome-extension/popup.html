@@ -65,6 +65,10 @@
         background: #3a3a3c;
         color: #f2f2f7;
       }
+      button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
       .hidden {
         display: none;
       }
@@ -86,6 +90,7 @@
     </div>
     <div id="connectedSection" class="hidden">
       <p id="statusLine"></p>
+      <button id="copilotButton" disabled>Open tab copilot</button>
       <button id="shareButton"></button>
       <button id="unpairButton" class="secondary">Unpair</button>
     </div>

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  approveWidget,
   cancelWorkspaceLoadIntent,
   clearActiveDrag,
   getWorkspaceState,
@@ -61,6 +62,59 @@ function sampleWorkspace(overrides: Partial<WorkspaceDocument> = {}): WorkspaceD
     ...overrides,
   };
 }
+
+describe("approveWidget", () => {
+  it("suppresses duplicate decisions while the first request is pending", async () => {
+    const state = getWorkspaceState({});
+    state.workspace = sampleWorkspace({
+      widgetsRegistry: { "sales-map": { status: "pending" } },
+    });
+    let resolveRequest!: () => void;
+    const request = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const client = mockClient({ request: request as never });
+
+    const first = approveWidget(state, client, { name: "sales-map", decision: "approved" });
+    const duplicate = approveWidget(state, client, { name: "sales-map", decision: "rejected" });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.pendingApprovalNames.has("sales-map")).toBe(true);
+    await duplicate;
+    resolveRequest();
+    await first;
+    expect(state.pendingApprovalNames.has("sales-map")).toBe(true);
+
+    const refreshed = sampleWorkspace({
+      workspaceVersion: 4,
+      widgetsRegistry: { "sales-map": { status: "approved" } },
+    });
+    await loadWorkspace(
+      state,
+      mockClient({
+        request: vi.fn(async () => ({ doc: refreshed, workspaceVersion: 4 })) as never,
+      }),
+    );
+    expect(state.pendingApprovalNames.has("sales-map")).toBe(false);
+  });
+
+  it("unlocks a pending custom widget after a failed decision", async () => {
+    const state = getWorkspaceState({});
+    const client = mockClient({
+      request: vi.fn(async () => {
+        throw new Error("decision failed");
+      }) as never,
+    });
+
+    await approveWidget(state, client, { name: "sales-map", decision: "approved" });
+
+    expect(state.pendingApprovalNames.has("sales-map")).toBe(false);
+    expect(state.actionError).toBe("decision failed");
+  });
+});
 
 describe("loadWorkspace", () => {
   it("fetches and stores the workspace, seeding the active slug", async () => {

@@ -516,8 +516,16 @@ describe("user turn transcript persistence", () => {
         createMockPluginRegistry([
           {
             hookName: "before_message_write",
-            handler: () => {
+            handler: (event) => {
               hookCalls += 1;
+              const message = (event as { message: Record<string, unknown> }).message;
+              const meta = message["__openclaw"] as {
+                transport?: { conversationRef?: string; messageId?: string };
+              };
+              if (meta.transport) {
+                meta.transport.conversationRef = "conv_tampered";
+                meta.transport.messageId = "tampered-message";
+              }
               return {
                 message: castAgentMessage({
                   role: "user",
@@ -540,6 +548,12 @@ describe("user turn transcript persistence", () => {
           senderIsOwner: true,
           provenance,
           sender: { id: "user-42", name: "Ada" },
+          transport: {
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            messageId: "inbound-1",
+            replyToId: "outbound-1",
+          },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -551,6 +565,12 @@ describe("user turn transcript persistence", () => {
           senderIsOwner: true,
           provenance,
           sender: { id: "user-42", name: "Ada" },
+          transport: {
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            messageId: "inbound-1",
+            replyToId: "outbound-1",
+          },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -564,6 +584,12 @@ describe("user turn transcript persistence", () => {
           __openclaw: {
             hookOwned: true,
             senderIsOwner: true,
+            transport: {
+              channel: "reef",
+              conversationRef: "conv_0123456789abcdef0123456789abcdef",
+              messageId: "inbound-1",
+              replyToId: "outbound-1",
+            },
           },
         }),
       ]);

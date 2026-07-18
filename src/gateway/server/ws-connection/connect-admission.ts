@@ -1,8 +1,10 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -19,8 +21,12 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { isBrowserOperatorUiClient, isOperatorUiClient } from "../../../utils/message-channel.js";
-import { checkBrowserOrigin } from "../../origin-check.js";
+import {
+  isBrowserCopilotClient,
+  isBrowserOperatorUiClient,
+  isOperatorUiClient,
+} from "../../../utils/message-channel.js";
+import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -143,7 +149,42 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   connectParams.role = role;
   connectParams.scopes = scopes;
 
-  const isControlUi = isOperatorUiClient(connectParams.client);
+  const isBrowserCopilot = isBrowserCopilotClient(connectParams.client);
+  const browserCopilotOrigin = isBrowserCopilot
+    ? normalizeChromeExtensionOrigin(requestOrigin ?? undefined)
+    : undefined;
+  if (
+    isBrowserCopilot &&
+    (connectParams.client.mode !== GATEWAY_CLIENT_MODES.UI ||
+      !hasGatewayClientCap(connectParams.caps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS) ||
+      !hasGatewayClientCap(connectParams.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS))
+  ) {
+    const message =
+      "browser copilot requires ui mode with run-tool-bindings and session-scoped-events capabilities";
+    markHandshakeFailure("invalid-client", {
+      client: connectParams.client.id,
+      mode: connectParams.client.mode,
+    });
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+    close(1008, truncateCloseReason(message));
+    return undefined;
+  }
+  if (isBrowserCopilot && !browserCopilotOrigin) {
+    const message = "browser copilot requires a canonical Chrome extension origin";
+    markHandshakeFailure("origin-mismatch", {
+      origin: requestOrigin ?? "n/a",
+      client: connectParams.client.id,
+    });
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message, {
+      details: {
+        code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        reason: "invalid browser copilot origin",
+      },
+    });
+    close(1008, truncateCloseReason(message));
+    return undefined;
+  }
+  const isControlUi = isOperatorUiClient(connectParams.client) && !isBrowserCopilot;
   const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
   const isWebchat = isWebchatConnect(connectParams);
   const isNativeAppUi =
@@ -151,7 +192,13 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     (connectParams.client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
       connectParams.client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
       connectParams.client.id === GATEWAY_CLIENT_IDS.ANDROID_APP);
-  if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
+  // Extension origins cannot match the gateway host. Admission validates their
+  // canonical shape; device approval binds the exact origin before token issue.
+  const hasCopilotExtensionOrigin = Boolean(browserCopilotOrigin);
+  if (
+    !hasCopilotExtensionOrigin &&
+    (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat)
+  ) {
     const hostHeaderOriginFallbackEnabled =
       configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
     const originCheck = checkBrowserOrigin({

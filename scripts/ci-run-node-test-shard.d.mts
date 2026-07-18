@@ -17,6 +17,12 @@ export type ShardGroupPlan = {
 
 export type ShardPlan = ShardTargetPlan | ShardGroupPlan;
 
+export type FsModuleCachePruneResult = {
+  beforeBytes: number;
+  afterBytes: number;
+  removedFiles: number;
+};
+
 export function resolveShardPlans(env?: Record<string, string | undefined>): ShardPlan[];
 
 export function buildChildEnv(
@@ -24,8 +30,10 @@ export function buildChildEnv(
   baseEnv: Record<string, string | undefined>,
   scratchDir: string,
   index: number,
-  options?: { serial?: boolean },
+  options?: { serial?: boolean; cacheSlot?: number },
 ): Record<string, string | undefined>;
+
+export function pruneFsModuleCache(root: string, maxBytes?: number): FsModuleCachePruneResult;
 
 export function resolveShardChildCommand(
   args: string[],
@@ -37,6 +45,8 @@ export function runShardPlans(
   options?: {
     concurrency?: number;
     env?: Record<string, string | undefined>;
+    fsModuleCacheMaxBytes?: number;
+    nodeCompileCacheMaxBytes?: number;
     runChild?: (
       args: string[],
       childEnv: Record<string, string | undefined>,

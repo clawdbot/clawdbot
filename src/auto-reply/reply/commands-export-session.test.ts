@@ -1,7 +1,11 @@
-// Tests session export command packaging, filesystem writes, and prompt bundle capture.
+// Tests session and trajectory export command packaging, filesystem writes, and approval routing.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FsSafeError } from "../../infra/fs-safe.js";
+import { buildExportSessionReply } from "./commands-export-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+// Tests session export command packaging, filesystem writes, and prompt bundle capture.
 
 const hoisted = await vi.hoisted(async () => {
   const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
@@ -60,9 +64,9 @@ vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
 }));
 
-vi.mock("./commands-export-session-file.js", () => {
-  return { writeSessionExportFile: hoisted.writeSessionExportFileMock };
-});
+vi.mock("./commands-export-session-file.js", () => ({
+  writeSessionExportFile: hoisted.writeSessionExportFileMock,
+}));
 
 vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/sessions/session-manager.js")>();
@@ -112,9 +116,6 @@ vi.mock("node:fs/promises", async () => {
     default: mockedFsPromises,
   };
 });
-
-import { FsSafeError } from "../../infra/fs-safe.js";
-import { buildExportSessionReply } from "./commands-export-session.js";
 
 function makeParams(): HandleCommandsParams {
   return {
@@ -776,3 +777,6 @@ describe("buildExportSessionReply", () => {
     expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
   });
 });
+
+await import("./commands-export-session-file.test-support.js");
+await import("./commands-export-trajectory.test-support.js");

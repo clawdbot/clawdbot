@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -348,6 +349,44 @@ test("sessions.reset emits internal command hook with reason", async () => {
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
+});
+
+test("sessions.reset removes automatic recovery state from the replacement session", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-recovery", "hello");
+  await writeMainSessionEntry("sess-recovery", {
+    abortedLastRun: true,
+    restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "generation-1" }],
+    mainRestartRecovery: {
+      cycleId: "cycle-1",
+      revision: 5,
+      chargedAttempts: 3,
+      foregroundClaims: {
+        lifecycleGeneration: "generation-1",
+        tokens: ["foreground-owner"],
+      },
+      tombstone: {
+        reason: "exhausted",
+      },
+    },
+    subagentRecovery: {
+      automaticAttempts: 2,
+      lastAttemptAt: 10,
+      lastRunId: "child-recovery-run",
+      wedgedAt: 20,
+      wedgedReason: "child exhausted",
+    },
+  });
+
+  await resetMainSession();
+
+  const store = await loadGatewaySessionStoreForKey("main");
+  const replacement = store["agent:main:main"];
+  expect(replacement?.sessionId).not.toBe("sess-recovery");
+  expect(replacement?.abortedLastRun).toBe(false);
+  expect(replacement?.restartRecoveryRuns).toBeUndefined();
+  expect((replacement as InternalSessionEntry | undefined)?.mainRestartRecovery).toBeUndefined();
+  expect(replacement?.subagentRecovery).toBeUndefined();
 });
 
 test("sessions.reset does not begin cleanup after losing lifecycle ownership", async () => {

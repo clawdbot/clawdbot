@@ -276,8 +276,10 @@ function readRequiredBoolean(record: Record<string, unknown>, key: string): bool
   return value;
 }
 
-function readTabPatch(value: unknown): Partial<Pick<WorkspaceTab, "title" | "icon" | "hidden">> {
-  const patch = readParams(value, ["title", "icon", "hidden"]);
+function readTabPatch(
+  value: unknown,
+): Partial<Pick<WorkspaceTab, "title" | "icon" | "hidden" | "layout">> {
+  const patch = readParams(value, ["title", "icon", "hidden", "layout"]);
   const title = readOptionalString(patch, "title");
   if (title !== undefined && (title.length < 1 || title.length > 80)) {
     throw new Error("patch.title must be 1-80 characters");
@@ -287,10 +289,15 @@ function readTabPatch(value: unknown): Partial<Pick<WorkspaceTab, "title" | "ico
     throw new Error("patch.icon must be 40 characters or fewer");
   }
   const hidden = readBooleanPatch(patch, "hidden");
+  const layout = patch.layout;
+  if (layout !== undefined && layout !== "grid" && layout !== "full") {
+    throw new Error('patch.layout must be "grid" or "full"');
+  }
   return {
     ...(title !== undefined ? { title } : {}),
     ...(icon !== undefined ? { icon } : {}),
     ...(hidden !== undefined ? { hidden } : {}),
+    ...(layout !== undefined ? { layout } : {}),
   };
 }
 

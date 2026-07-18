@@ -86,6 +86,19 @@ describe("googlechat message actions", () => {
     expect(googlechatMessageActions.supportsAction?.({ action: "upload-file" })).toBe(false);
   });
 
+  it("does not expose actions for configured-unavailable file credentials", () => {
+    listEnabledGoogleChatAccounts.mockReturnValueOnce([
+      {
+        enabled: true,
+        credentialSource: "file",
+        tokenStatus: "configured_unavailable",
+        config: {},
+      },
+    ]);
+
+    expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
+  });
+
   it("keeps the legacy reaction gate from changing account-scoped discovery", () => {
     resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
       enabled: true,

@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
@@ -578,126 +578,42 @@ describe("openai-compatible generic embedding provider", () => {
     expect(server.getBodyBytesSent()).toBeLessThan(server.getPlannedBodyBytes() / 2);
   });
 
-  it("resolves env SecretRef API keys on the memory search secret surface", async () => {
-    const token = "env-secret-token";
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_API_KEY";
-    const server = await startEmbeddingServer({ token });
-
-    await withEnvAsync({ [envVar]: token }, async () => {
-      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+  it("rejects unresolved API-key refs instead of re-resolving runtime config", async () => {
+    const server = await startEmbeddingServer();
+    await expect(
+      createOpenAICompatibleEmbeddingProvider(
         createOptions({
           model: "text-embedding-bge-m3",
           remote: {
             baseUrl: server.baseUrl,
-            apiKey: { source: "env", provider: "default", id: envVar },
+            apiKey: { source: "env", provider: "default", id: "MISSING_TEST_VALUE" },
           },
         }),
-      );
-
-      await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
-    });
+      ),
+    ).rejects.toBeInstanceOf(UnresolvedSecretInputError);
+    expect(server.requests).toHaveLength(0);
   });
 
-  it("enforces configured env SecretRef allowlists for API keys", async () => {
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_BLOCKED_API_KEY";
+  it("rejects unresolved header refs instead of re-resolving runtime config", async () => {
     const server = await startEmbeddingServer();
-
-    await withEnvAsync({ [envVar]: "blocked-token" }, async () => {
-      await expect(
-        createOpenAICompatibleEmbeddingProvider(
-          createOptions({
-            config: {
-              secrets: {
-                providers: {
-                  default: { source: "env", allowlist: ["OPENCLAW_ALLOWED_ONLY"] },
-                },
-              },
-            } as EmbeddingProviderCreateOptions["config"],
-            model: "text-embedding-bge-m3",
-            remote: {
-              baseUrl: server.baseUrl,
-              apiKey: { source: "env", provider: "default", id: envVar },
-            },
-          }),
-        ),
-      ).rejects.toThrow("SecretRef is unresolved");
-      expect(server.requests).toHaveLength(0);
-    });
-  });
-
-  it("enforces configured env SecretRef allowlists for custom headers", async () => {
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_BLOCKED_HEADER";
-    const server = await startEmbeddingServer();
-
-    await withEnvAsync({ [envVar]: "blocked-header" }, async () => {
-      await expect(
-        createOpenAICompatibleEmbeddingProvider(
-          createOptions({
-            config: {
-              secrets: {
-                providers: {
-                  default: { source: "env", allowlist: ["OPENCLAW_ALLOWED_ONLY"] },
-                },
-              },
-            } as EmbeddingProviderCreateOptions["config"],
-            model: "text-embedding-bge-m3",
-            remote: {
-              baseUrl: server.baseUrl,
-              headers: {
-                "x-tenant-token": {
-                  source: "env",
-                  provider: "default",
-                  id: envVar,
-                } as unknown as string,
-              },
-            },
-          }),
-        ),
-      ).rejects.toThrow("SecretRef is unresolved");
-      expect(server.requests).toHaveLength(0);
-    });
-  });
-
-  it("resolves env-template API key strings before treating them as inline secrets", async () => {
-    const token = "env-template-token";
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_TEMPLATE_KEY";
-    const server = await startEmbeddingServer({ token });
-
-    await withEnvAsync({ [envVar]: token }, async () => {
-      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+    await expect(
+      createOpenAICompatibleEmbeddingProvider(
         createOptions({
           model: "text-embedding-bge-m3",
           remote: {
             baseUrl: server.baseUrl,
-            apiKey: `\${${envVar}}`,
+            headers: {
+              "x-tenant-value": {
+                source: "env",
+                provider: "default",
+                id: "MISSING_TEST_VALUE",
+              } as unknown as string,
+            },
           },
         }),
-      );
-
-      await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
-    });
-  });
-
-  it("does not treat missing env-template API key strings as inline secrets", async () => {
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_MISSING_TEMPLATE_KEY";
-    const server = await startEmbeddingServer();
-
-    await withEnvAsync({ [envVar]: undefined }, async () => {
-      await expect(
-        createOpenAICompatibleEmbeddingProvider(
-          createOptions({
-            model: "text-embedding-bge-m3",
-            remote: {
-              baseUrl: server.baseUrl,
-              apiKey: `\${${envVar}}`,
-            },
-          }),
-        ),
-      ).rejects.toThrow(`SecretRef is unresolved (env:default:${envVar})`);
-      expect(server.requests).toHaveLength(0);
-    });
+      ),
+    ).rejects.toBeInstanceOf(UnresolvedSecretInputError);
+    expect(server.requests).toHaveLength(0);
   });
 
   it("reads connection settings from configured explicit OpenAI-compatible providers", async () => {

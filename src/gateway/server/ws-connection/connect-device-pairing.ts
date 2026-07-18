@@ -26,8 +26,10 @@ import {
   resolveBootstrapProfileScopesForRoles,
 } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing-auto-approve.js";
+import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
   isControlUiOperatorBootstrapProfile,
@@ -50,8 +52,16 @@ export async function authorizeGatewayConnectDevice(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): Promise<DeviceAuthorizedGatewayConnect | undefined> {
-  const { connId, buildRequestContext, close, send, setHandshakeState, setCloseCause, logGateway } =
-    context.handler;
+  const {
+    connId,
+    buildRequestContext,
+    close,
+    send,
+    setHandshakeState,
+    setCloseCause,
+    logGateway,
+    requestOrigin,
+  } = context.handler;
   const {
     frame,
     connectParams,
@@ -77,6 +87,11 @@ export async function authorizeGatewayConnectDevice(
     skipControlUiPairingForDevice,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
+  let pairedClientId: string | undefined;
+  let pairedBrowserOrigin: string | undefined;
+  const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
+    ? normalizeChromeExtensionOrigin(requestOrigin)
+    : undefined;
   if (device && devicePublicKey) {
     const formatAuditList = (items: string[] | undefined): string => {
       const normalized = normalizeSortedUniqueTrimmedStringList(items);
@@ -97,6 +112,7 @@ export async function authorizeGatewayConnectDevice(
       deviceFamily: connectParams.client.deviceFamily,
       clientId: connectParams.client.id,
       clientMode: connectParams.client.mode,
+      ...(browserCopilotOrigin ? { browserOrigin: browserCopilotOrigin } : {}),
       role,
       scopes,
       remoteIp: reportedClientIp,
@@ -430,6 +446,11 @@ export async function authorizeGatewayConnectDevice(
         if (!ok) {
           return undefined;
         }
+        const approvedDevice = await getPairedDevice(device.id);
+        pairedClientId =
+          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
+        pairedBrowserOrigin =
+          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.browserOrigin : undefined;
         hasServerApprovedDeviceTokenBaseline = true;
       } else if (
         skipControlUiPairingForDevice ||
@@ -438,6 +459,8 @@ export async function authorizeGatewayConnectDevice(
         hasServerApprovedDeviceTokenBaseline = true;
       }
     } else {
+      pairedClientId = paired.clientId;
+      pairedBrowserOrigin = paired.browserOrigin;
       hasServerApprovedDeviceTokenBaseline = true;
       const existingDevice = await authorizeExistingGatewayDevice({
         context,
@@ -454,6 +477,26 @@ export async function authorizeGatewayConnectDevice(
       }
       handoffBootstrapProfile = existingDevice.handoffBootstrapProfile;
     }
+  }
+
+  const browserCopilotIdentityMismatch =
+    pairedClientId !== connectParams.client.id &&
+    (isBrowserCopilotClient(connectParams.client) ||
+      isBrowserCopilotClient({ id: pairedClientId }));
+  const browserCopilotOriginMismatch =
+    isBrowserCopilotClient(connectParams.client) &&
+    (!pairedBrowserOrigin || !browserCopilotOrigin || pairedBrowserOrigin !== browserCopilotOrigin);
+  if (browserCopilotIdentityMismatch || browserCopilotOriginMismatch) {
+    const message = "browser copilot requires a dedicated paired device identity";
+    setHandshakeState("failed");
+    send({
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: errorShape(ErrorCodes.NOT_PAIRED, message),
+    });
+    close(1008, truncateCloseReason(message));
+    return undefined;
   }
 
   const { deviceToken, bootstrapDeviceTokens } = await issueGatewayConnectDeviceTokens({

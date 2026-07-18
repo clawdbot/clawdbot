@@ -1,4 +1,9 @@
-// Telegram plugin module implements message dispatch dedupe behavior.
+// Telegram dispatch dedupe: a PERMANENT second layer above the ingress spool,
+// not a leftover to delete on drain adoption. The spool tombstones transport
+// update_ids; debounce/media-group flushes merge N update_ids into one
+// dispatched turn, so a constituent message re-arriving under a *fresh*
+// update_id is invisible to the update_id tombstone. This guard keys the
+// logical (chat_id, message_id) — the only identity that catches that replay.
 import path from "node:path";
 import type { Message } from "grammy/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

@@ -75,6 +75,7 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
       signal: controller.signal,
     });
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`HTTP ${response.status}`);
     }
     const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {

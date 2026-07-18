@@ -10,7 +10,7 @@ import {
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 import { buildMoonshotProvider } from "./provider-catalog.js";
-import { KIMI_K2_7_CODE_MODEL_ID, resolveThinkingProfile } from "./provider-policy-api.js";
+import { isMoonshotAlwaysThinkingModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
@@ -28,7 +28,7 @@ export default defineSingleProviderPluginEntry({
       {
         methodId: "api-key",
         label: "Kimi API key (.ai)",
-        hint: "Kimi K2.6 + Kimi",
+        hint: "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -36,13 +36,13 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfig(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.6)",
+          groupLabel: "Moonshot AI (Kimi)",
         },
       },
       {
         methodId: "api-key-cn",
         label: "Kimi API key (.cn)",
-        hint: "Kimi K2.6 + Kimi",
+        hint: "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -50,7 +50,7 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfigCn(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.6)",
+          groupLabel: "Moonshot AI (Kimi)",
         },
       },
     ],
@@ -70,11 +70,11 @@ export default defineSingleProviderPluginEntry({
       }),
     ...moonshotThinkingStreamHooks,
     wrapSimpleCompletionStreamFn: (ctx) =>
-      ctx.modelId.trim().toLowerCase() === KIMI_K2_7_CODE_MODEL_ID
+      isMoonshotAlwaysThinkingModelId(ctx.modelId)
         ? moonshotThinkingStreamHooks.wrapStreamFn?.(ctx)
         : ctx.streamFn,
     resolveThinkingProfile,
-    isModernModelRef: ({ modelId }) => modelId.trim().toLowerCase() === KIMI_K2_7_CODE_MODEL_ID,
+    isModernModelRef: ({ modelId }) => isMoonshotAlwaysThinkingModelId(modelId),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

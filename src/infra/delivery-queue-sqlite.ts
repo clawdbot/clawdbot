@@ -13,6 +13,9 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 type QueueStatus = "pending" | "failed" | "completed";
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
+
+export type DeliveryQueueCompletionRetention = "permanent";
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
 export type DeliveryQueueRowMetadata = {
@@ -28,6 +31,9 @@ export type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
+  /** Durable delivery-call count reserved before invoking the provider path. */
+  attemptCount?: number;
+  completionRetention?: DeliveryQueueCompletionRetention;
   acknowledgedAt?: number;
   lastAttemptAt?: number;
   lastError?: string;
@@ -191,15 +197,18 @@ export function upsertDeliveryQueueEntry(params: UpsertDeliveryQueueEntryParams)
   return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir));
 }
 
-/** Atomically publish a queue row only while its staging row still exists. */
-export function commitStagedDeliveryQueueEntry(params: {
+type CommitStagedDeliveryQueueEntryParams = {
   queueName: string;
   entry: DeliveryQueueEntryState;
   metadata?: DeliveryQueueRowMetadata;
   stagingId: string;
   stagingQueueName: string;
   stateDir?: string;
-}): boolean {
+};
+
+function commitStagedDeliveryQueueEntryInternal(
+  params: CommitStagedDeliveryQueueEntryParams,
+): "created" | "existing" | "missing" {
   const database = openStateDatabase(params.stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   return runSqliteImmediateTransactionSync(
@@ -215,7 +224,7 @@ export function commitStagedDeliveryQueueEntry(params: {
           .where("status", "=", "pending"),
       ) as { id: string } | undefined;
       if (!staging) {
-        return false;
+        return "missing";
       }
       const inserted = upsertDeliveryQueueEntryInDatabase(
         {
@@ -227,9 +236,7 @@ export function commitStagedDeliveryQueueEntry(params: {
         database,
       );
       if (!inserted) {
-        throw new Error(
-          `Delivery queue entry already exists: ${params.queueName}/${params.entry.id}`,
-        );
+        return "existing";
       }
       const deleted = executeSqliteQuerySync(
         database.db,
@@ -244,13 +251,31 @@ export function commitStagedDeliveryQueueEntry(params: {
           `Delivery queue staging row changed during commit: ${params.stagingQueueName}/${params.stagingId}`,
         );
       }
-      return true;
+      return "created";
     },
     {
       databaseLabel: "openclaw-state",
       operationLabel: "commit staged delivery queue entry",
     },
   );
+}
+
+/** Atomically publish a queue row only while its staging row still exists. */
+export function commitStagedDeliveryQueueEntry(
+  params: CommitStagedDeliveryQueueEntryParams,
+): boolean {
+  const result = commitStagedDeliveryQueueEntryInternal(params);
+  if (result === "existing") {
+    throw new Error(`Delivery queue entry already exists: ${params.queueName}/${params.entry.id}`);
+  }
+  return result === "created";
+}
+
+/** Atomically publishes a stable queue id while preserving prior ownership. */
+export function commitStagedDeliveryQueueEntryOnce(
+  params: CommitStagedDeliveryQueueEntryParams,
+): "created" | "existing" | "missing" {
+  return commitStagedDeliveryQueueEntryInternal(params);
 }
 
 /**
@@ -414,11 +439,19 @@ export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir
 /** Retain a delivered row as a durable idempotency tombstone. */
 export function completeDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
   const now = Date.now();
+  const current = loadDeliveryQueueEntry(queueName, id, stateDir);
+  const retainPermanently = current?.completionRetention === "permanent";
   const tombstone = {
     id,
     enqueuedAt: now,
     retryCount: 0,
     acknowledgedAt: now,
+    ...(retainPermanently
+      ? {
+          completionRetention: "permanent" as const,
+          recoveryState: PERMANENT_COMPLETION_RECOVERY_STATE,
+        }
+      : {}),
   };
   const completed = upsertDeliveryQueueEntry({
     queueName,
@@ -434,7 +467,8 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
     }
     throw enoent(queueName, id);
   }
-  // Thirty days covers delayed producer replays while bounding successful-row growth.
+  // Ordinary receipts expire after thirty days. Permanent producer receipts
+  // survive because their source intent can outlive any bounded retry window.
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   executeSqliteQuerySync(
@@ -443,7 +477,13 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
       .deleteFrom("delivery_queue_entries")
       .where("queue_name", "=", queueName)
       .where("status", "=", "completed")
-      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
+      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS)
+      .where((eb) =>
+        eb.or([
+          eb("recovery_state", "is", null),
+          eb("recovery_state", "!=", PERMANENT_COMPLETION_RECOVERY_STATE),
+        ]),
+      ),
   );
 }
 
@@ -459,6 +499,59 @@ export function updateDeliveryQueueEntry(
     throw enoent(queueName, id);
   }
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
+}
+
+type ReserveDeliveryQueueAttemptResult =
+  | { status: "reserved"; attemptCount: number }
+  | { status: "exhausted"; attemptCount: number };
+
+/** Atomically reserve one provider-delivery call before executing it. */
+export function reserveDeliveryQueueEntryAttempt(params: {
+  queueName: string;
+  id: string;
+  maxAttempts: number;
+  stateDir?: string;
+}): ReserveDeliveryQueueAttemptResult {
+  if (!Number.isInteger(params.maxAttempts) || params.maxAttempts <= 0) {
+    throw new Error(`Invalid delivery attempt budget: ${params.maxAttempts}`);
+  }
+  const database = openStateDatabase(params.stateDir);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      if (!current) {
+        throw enoent(params.queueName, params.id);
+      }
+      const persistedAttemptCount =
+        typeof current.attemptCount === "number" &&
+        Number.isInteger(current.attemptCount) &&
+        current.attemptCount >= 0
+          ? current.attemptCount
+          : 0;
+      const attemptCount = Math.max(persistedAttemptCount, current.retryCount);
+      if (attemptCount >= params.maxAttempts) {
+        return { status: "exhausted", attemptCount };
+      }
+      const reservedAttemptCount = attemptCount + 1;
+      const updated = upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: { ...current, attemptCount: reservedAttemptCount },
+          updatePendingOnly: true,
+        },
+        database,
+      );
+      if (!updated) {
+        throw enoent(params.queueName, params.id);
+      }
+      return { status: "reserved", attemptCount: reservedAttemptCount };
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: `reserve ${params.queueName} delivery attempt`,
+    },
+  );
 }
 
 /** Dead-lettered entry counts for one queue namespace. */

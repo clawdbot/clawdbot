@@ -1183,7 +1183,9 @@ if (isPrlctl) {
   it("seeds agent workspace state before OS smoke agent turns", () => {
     const workspace = readFileSync(TS_PATHS.agentWorkspace, "utf8");
 
-    expect(workspace).toContain("workspace-state.json");
+    // workspace-state.json was retired (b6535fb8de5: stop writing retired
+    // smoke state); identity/bootstrap seeding remains the contract.
+    expect(workspace).not.toContain("workspace-state.json");
     expect(workspace).toContain("IDENTITY.md");
     expect(workspace).toContain("BOOTSTRAP.md");
 

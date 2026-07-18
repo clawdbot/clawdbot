@@ -92,7 +92,7 @@ describe("check-cli-startup-memory", () => {
   });
 
   it("keeps status startup headroom above Linux runner RSS variance", () => {
-    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(425);
+    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(450);
   });
 
   it("uses the median of three cold-start RSS samples", () => {
@@ -115,10 +115,11 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const helpSamplesMb = [120, 110, 80];
+    const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
+    const helpSamplesMb = [helpLimitMb + 20, helpLimitMb + 10, 80];
 
     expect(() => runStartupMemoryCheckWithHelpSamples(helpSamplesMb)).toThrow(
-      "--help median max RSS 110.0 MB exceeded 100 MB",
+      `--help median max RSS ${(helpLimitMb + 10).toFixed(1)} MB exceeded ${helpLimitMb} MB`,
     );
   });
 

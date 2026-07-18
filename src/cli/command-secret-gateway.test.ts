@@ -26,7 +26,14 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../secrets/runtime-web-tools.js", () => ({
-  resolveRuntimeWebTools: vi.fn(async () => ({})),
+  resolveRuntimeWebTools: vi.fn(async () => ({
+    metadata: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    degradedOwners: [],
+  })),
 }));
 
 vi.mock("../utils/message-channel.js", () => ({

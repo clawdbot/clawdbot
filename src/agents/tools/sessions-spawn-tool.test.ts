@@ -9,10 +9,12 @@ const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
+  const runSubagentProgressMock = vi.fn(async () => {});
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
     registerSubagentRunMock,
+    runSubagentProgressMock,
   };
 });
 
@@ -31,6 +33,13 @@ vi.mock("../acp-spawn.js", () => ({
 
 vi.mock("../subagent-registry.js", () => ({
   registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: (hookName: string) => hookName === "subagent_progress",
+    runSubagentProgress: hoisted.runSubagentProgressMock,
+  }),
 }));
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
@@ -55,6 +64,7 @@ describe("sessions_spawn tool", () => {
       runId: "run-acp",
     });
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.runSubagentProgressMock.mockClear();
   });
 
   function registerAcpBackendForTest() {
@@ -1015,6 +1025,9 @@ describe("sessions_spawn tool", () => {
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
+      currentMessagingTarget: "channel:source",
+      currentChannelId: "source-native",
+      currentMessageId: "message-789",
     });
 
     const result = await tool.execute("call-2", {
@@ -1053,6 +1066,26 @@ describe("sessions_spawn tool", () => {
     expect(registration.cleanup).toBe("keep");
     expect(registration.spawnMode).toBe("session");
     expect(registration.expectsCompletionMessage).toBe(true);
+    expect(hoisted.runSubagentProgressMock).toHaveBeenCalledWith(
+      {
+        phase: "started",
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requester: {
+          channel: "quietchat",
+          accountId: "default",
+          to: "channel:source",
+          threadId: "456",
+          channelId: "source-native",
+          messageId: "message-789",
+        },
+      },
+      {
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requesterSessionKey: "agent:main:main",
+      },
+    );
   });
 
   it("passes inherited tool denies to ACP spawns", async () => {

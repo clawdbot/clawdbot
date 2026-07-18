@@ -67,18 +67,14 @@ export async function requireCatalogEligibleThread(
     });
     const candidate = page.sessions.find((session) => session.threadId === threadId);
     if (candidate) {
-      if (candidate.source === "cli" || candidate.source === "vscode") {
+      if (isInteractiveThreadSource(candidate.source)) {
         return candidate;
       }
-      throw new CatalogParamsError(
-        "Codex session is not a non-archived interactive CLI or VS Code session",
-      );
+      throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
     }
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
-      throw new CatalogParamsError(
-        "Codex session is not a non-archived interactive CLI or VS Code session",
-      );
+      throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
     }
     if (seenCursors.has(nextCursor)) {
       throw new CatalogParamsError("Codex session eligibility could not be verified");
@@ -177,9 +173,7 @@ async function resolveNodeCatalogEligibleThread(params: {
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
-  throw new CatalogParamsError(
-    "Codex session is not a non-archived interactive CLI or VS Code session",
-  );
+  throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
 }
 
 export async function openCodexCatalogTerminal(params: {

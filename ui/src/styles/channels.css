@@ -3,6 +3,16 @@
    shared settings design language. */
 
 /* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
+.channels-empty {
+  display: grid;
+  place-items: center;
+  padding-top: var(--space-4);
+}
+
+.channels-empty .settings-empty {
+  padding-top: var(--space-1);
+}
+
 .channels-item {
   width: 100%;
   text-align: left;

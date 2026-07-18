@@ -201,84 +201,140 @@ function hardenStateDatabaseFiles() {
   }
 }
 
-function readRestartSentinelPayload() {
-  const db = openStateDatabase();
-  if (!db) {
+function parseJsonColumn(value) {
+  if (typeof value !== "string" || !value) {
     return null;
   }
   try {
-    const row = db
-      .prepare("SELECT version, payload_json FROM gateway_restart_sentinel WHERE sentinel_key = ?")
-      .get("current");
-    if (!row || row.version !== 1 || typeof row.payload_json !== "string") {
-      return null;
-    }
-    return JSON.parse(row.payload_json);
+    return JSON.parse(value);
   } catch {
     return null;
-  } finally {
-    hardenStateDatabaseFiles();
-    try {
-      db.close();
-    } catch {}
   }
 }
 
-function writeRestartSentinelPayload(payload) {
-  const db = openStateDatabase();
-  if (!db) {
-    return;
+function readRestartSentinelRecord(db) {
+  const row = db
+    .prepare(
+      [
+        "SELECT version, kind, status, ts, session_key, thread_id,",
+        "delivery_channel, delivery_to, delivery_account_id, message, continuation_json,",
+        "doctor_hint, stats_json, updated_at_ms",
+        "FROM gateway_restart_sentinel WHERE sentinel_key = ?",
+      ].join(" "),
+    )
+    .get("current");
+  if (
+    !row ||
+    row.version !== 1 ||
+    typeof row.kind !== "string" ||
+    typeof row.status !== "string" ||
+    typeof row.ts !== "number" ||
+    typeof row.updated_at_ms !== "number"
+  ) {
+    return null;
   }
-  try {
-    const updatedAtMs = Date.now();
-    db.prepare(
+  const payload = {
+    kind: row.kind,
+    status: row.status,
+    ts: row.ts,
+  };
+  if (typeof row.session_key === "string") payload.sessionKey = row.session_key;
+  if (typeof row.thread_id === "string") payload.threadId = row.thread_id;
+  const deliveryContext = {};
+  if (typeof row.delivery_channel === "string") deliveryContext.channel = row.delivery_channel;
+  if (typeof row.delivery_to === "string") deliveryContext.to = row.delivery_to;
+  if (typeof row.delivery_account_id === "string") deliveryContext.accountId = row.delivery_account_id;
+  if (Object.keys(deliveryContext).length > 0) payload.deliveryContext = deliveryContext;
+  if (typeof row.message === "string") payload.message = row.message;
+  const continuation = parseJsonColumn(row.continuation_json);
+  if (continuation) payload.continuation = continuation;
+  if (typeof row.doctor_hint === "string") payload.doctorHint = row.doctor_hint;
+  const stats = parseJsonColumn(row.stats_json);
+  if (stats) payload.stats = stats;
+  return { revision: row.updated_at_ms, payload };
+}
+
+function readRestartSentinelRevisionFloor(db) {
+  const row = db
+    .prepare("SELECT updated_at_ms FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+    .get("revision-floor");
+  if (!row) return null;
+  if (!Number.isSafeInteger(row.updated_at_ms)) {
+    throw new Error("restart sentinel revision floor is outside the safe integer range");
+  }
+  return row.updated_at_ms;
+}
+
+function advanceRestartSentinelRevisionFloor(db, revision) {
+  const payloadJson = JSON.stringify({ kind: "restart", status: "skipped", ts: revision });
+  db.prepare(
+    [
+      "INSERT INTO gateway_restart_sentinel (",
+      "sentinel_key, version, kind, status, ts, session_key, thread_id,",
+      "delivery_channel, delivery_to, delivery_account_id, message, continuation_json,",
+      "doctor_hint, stats_json, payload_json, updated_at_ms",
+      ") VALUES ('revision-floor', 1, 'restart', 'skipped', ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)",
+      "ON CONFLICT(sentinel_key) DO UPDATE SET",
+      "ts = excluded.ts, payload_json = excluded.payload_json, updated_at_ms = excluded.updated_at_ms",
+    ].join(" "),
+  ).run(revision, payloadJson, revision);
+}
+
+function writeRestartSentinelPayload(db, payload, currentRevision) {
+  const revisionFloor = readRestartSentinelRevisionFloor(db);
+  const updatedAtMs = Math.max(Date.now(), Math.max(currentRevision || 0, revisionFloor || 0) + 1);
+  if (!Number.isSafeInteger(updatedAtMs)) {
+    throw new Error("restart sentinel revision exhausted the safe integer range");
+  }
+  const values = [
+    payload.kind,
+    payload.status,
+    payload.ts,
+    payload.sessionKey || null,
+    payload.threadId || null,
+    payload.deliveryContext && typeof payload.deliveryContext.channel === "string"
+      ? payload.deliveryContext.channel
+      : null,
+    payload.deliveryContext && typeof payload.deliveryContext.to === "string"
+      ? payload.deliveryContext.to
+      : null,
+    payload.deliveryContext && typeof payload.deliveryContext.accountId === "string"
+      ? payload.deliveryContext.accountId
+      : null,
+    payload.message || null,
+    payload.continuation ? JSON.stringify(payload.continuation) : null,
+    payload.doctorHint || null,
+    payload.stats ? JSON.stringify(payload.stats) : null,
+    JSON.stringify(payload),
+    updatedAtMs,
+  ];
+  let changed;
+  if (currentRevision === null) {
+    changed = db.prepare(
       [
         "INSERT INTO gateway_restart_sentinel (",
         "sentinel_key, version, kind, status, ts, session_key, thread_id,",
         "delivery_channel, delivery_to, delivery_account_id, message, continuation_json,",
         "doctor_hint, stats_json, payload_json, updated_at_ms",
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        "ON CONFLICT(sentinel_key) DO UPDATE SET",
-        "version = excluded.version, kind = excluded.kind, status = excluded.status,",
-        "ts = excluded.ts, session_key = excluded.session_key, thread_id = excluded.thread_id,",
-        "delivery_channel = excluded.delivery_channel, delivery_to = excluded.delivery_to,",
-        "delivery_account_id = excluded.delivery_account_id, message = excluded.message,",
-        "continuation_json = excluded.continuation_json, doctor_hint = excluded.doctor_hint,",
-        "stats_json = excluded.stats_json, payload_json = excluded.payload_json,",
-        "updated_at_ms = excluded.updated_at_ms",
+        ") VALUES ('current', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       ].join(" "),
-    ).run(
-      "current",
-      1,
-      payload.kind,
-      payload.status,
-      payload.ts,
-      payload.sessionKey || null,
-      payload.threadId || null,
-      payload.deliveryContext && typeof payload.deliveryContext.channel === "string"
-        ? payload.deliveryContext.channel
-        : null,
-      payload.deliveryContext && typeof payload.deliveryContext.to === "string"
-        ? payload.deliveryContext.to
-        : null,
-      payload.deliveryContext && typeof payload.deliveryContext.accountId === "string"
-        ? payload.deliveryContext.accountId
-        : null,
-      payload.message || null,
-      payload.continuation ? JSON.stringify(payload.continuation) : null,
-      payload.doctorHint || null,
-      payload.stats ? JSON.stringify(payload.stats) : null,
-      JSON.stringify(payload),
-      updatedAtMs,
-    );
-  } catch (err) {
-    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
-  } finally {
-    hardenStateDatabaseFiles();
-    try {
-      db.close();
-    } catch {}
+    ).run(...values).changes === 1;
+  } else {
+    changed = db.prepare(
+      [
+        "UPDATE gateway_restart_sentinel SET",
+        "version = 1, kind = ?, status = ?, ts = ?, session_key = ?, thread_id = ?,",
+        "delivery_channel = ?, delivery_to = ?, delivery_account_id = ?, message = ?,",
+        "continuation_json = ?, doctor_hint = ?, stats_json = ?, payload_json = ?, updated_at_ms = ?",
+        "WHERE sentinel_key = 'current' AND updated_at_ms = ?",
+      ].join(" "),
+    ).run(...values, currentRevision).changes === 1;
   }
+  if (changed) {
+    // This runs inside the same BEGIN IMMEDIATE section as the guarded current-row write.
+    advanceRestartSentinelRevisionFloor(db, updatedAtMs);
+  }
+  return changed;
 }
 
 function buildFallbackFailurePayload(reason) {
@@ -312,22 +368,77 @@ function buildFallbackFailurePayload(reason) {
 }
 
 function markUpdateSentinelFailureIfPending(reason) {
-  let payload = readRestartSentinelPayload();
-  if (payload && (payload.kind !== "update" || !isPendingUpdatePayload(payload))) {
+  const snapshotDb = openStateDatabase();
+  if (!snapshotDb) return;
+  let snapshot;
+  try {
+    snapshot = readRestartSentinelRecord(snapshotDb);
+  } catch {
     return;
+  } finally {
+    try {
+      snapshotDb.close();
+    } catch {}
   }
-  const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
-  if (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId)) {
-    return;
+  const fallbackPayload = snapshot === null ? buildFallbackFailurePayload(reason) : null;
+
+  const db = openStateDatabase();
+  if (!db) return;
+  let transactionOpen = false;
+  try {
+    db.exec("BEGIN IMMEDIATE;");
+    transactionOpen = true;
+    const current = readRestartSentinelRecord(db);
+    if (
+      (snapshot === null && current !== null) ||
+      (snapshot !== null &&
+        (current === null || current.revision !== snapshot.revision))
+    ) {
+      db.exec("COMMIT;");
+      transactionOpen = false;
+      return;
+    }
+
+    let payload = current && current.payload;
+    if (payload && (payload.kind !== "update" || !isPendingUpdatePayload(payload))) {
+      db.exec("COMMIT;");
+      transactionOpen = false;
+      return;
+    }
+    const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
+    if (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId)) {
+      db.exec("COMMIT;");
+      transactionOpen = false;
+      return;
+    }
+    if (payload) {
+      payload = { ...payload, status: "error" };
+      delete payload.continuation;
+      payload.stats = { ...(payload.stats || {}), reason };
+    } else {
+      payload = fallbackPayload;
+    }
+    if (!payload) {
+      throw new Error("restart sentinel disappeared before guarded failure write");
+    }
+    if (!writeRestartSentinelPayload(db, payload, current ? current.revision : null)) {
+      throw new Error("restart sentinel changed before guarded failure write");
+    }
+    db.exec("COMMIT;");
+    transactionOpen = false;
+  } catch (err) {
+    if (transactionOpen) {
+      try {
+        db.exec("ROLLBACK;");
+      } catch {}
+    }
+    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
+  } finally {
+    hardenStateDatabaseFiles();
+    try {
+      db.close();
+    } catch {}
   }
-  if (payload) {
-    payload = { ...payload, status: "error" };
-    delete payload.continuation;
-    payload.stats = { ...(payload.stats || {}), reason };
-  } else {
-    payload = buildFallbackFailurePayload(reason);
-  }
-  writeRestartSentinelPayload(payload);
 }
 
 function runServiceCommand(command, args) {
@@ -462,12 +573,37 @@ function startGatewayServiceBestEffort() {
 });
 `;
 
-type ManagedServiceUpdateHandoffResult = {
+type ManagedServiceUpdateHandoffParams = {
+  root: string;
+  timeoutMs?: number;
+  restartDrainTimeoutMs: number | undefined;
+  channel?: UpdateChannel;
+  restartDelayMs?: number;
+  meta: UpdateRestartSentinelMeta;
+  handoffId?: string;
+  supervisor?: RespawnSupervisor | null;
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+  argv1?: string;
+  parentPid?: number;
+};
+
+type StartedManagedServiceUpdateHandoff = {
   status: "started";
   pid?: number;
   command: string;
   logPath: string;
+  handoffId?: string;
 };
+
+type ManagedServiceUpdateHandoffResult = Omit<StartedManagedServiceUpdateHandoff, "status"> & {
+  status: "started" | "joined";
+};
+
+// Keep one helper per Gateway process through its lifetime. Readiness only
+// means it loaded its parameters; spawning another helper before it exits races
+// update mutation, service recovery, and restart sentinel ownership.
+let activeManagedServiceUpdateHandoff: Promise<StartedManagedServiceUpdateHandoff> | null = null;
 
 function isNodeLikeRuntime(execPath: string | undefined): boolean {
   if (!execPath?.trim()) {
@@ -728,20 +864,10 @@ async function resolveHandoffSpawn(params: {
   };
 }
 
-export async function startManagedServiceUpdateHandoff(params: {
-  root: string;
-  timeoutMs?: number;
-  restartDrainTimeoutMs: number | undefined;
-  channel?: UpdateChannel;
-  restartDelayMs?: number;
-  meta: UpdateRestartSentinelMeta;
-  handoffId?: string;
-  supervisor?: RespawnSupervisor | null;
-  env?: NodeJS.ProcessEnv;
-  execPath?: string;
-  argv1?: string;
-  parentPid?: number;
-}): Promise<ManagedServiceUpdateHandoffResult> {
+async function spawnManagedServiceUpdateHandoff(
+  params: ManagedServiceUpdateHandoffParams,
+  onExit: () => void,
+): Promise<StartedManagedServiceUpdateHandoff> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
   const scriptPath = path.join(dir, "handoff.cjs");
   const paramsPath = path.join(dir, "handoff.json");
@@ -782,7 +908,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };
 
-  let child: HandoffChild;
+  let child!: HandoffChild;
   try {
     await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
@@ -807,10 +933,13 @@ export async function startManagedServiceUpdateHandoff(params: {
       detached: true,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    // systemd-run can spawn before the user manager accepts the scope. Only let
-    // callers terminate the Gateway after the helper itself loads its params.
+    child.once("exit", onExit);
+    // systemd-run --scope remains synchronous until the helper exits, so this
+    // child's exit owns the full handoff lifetime. Readiness still must wait
+    // until the helper loads its params before callers terminate the Gateway.
     await waitForHandoffReady(child);
   } catch (err) {
+    child?.removeListener("exit", onExit);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
@@ -821,7 +950,32 @@ export async function startManagedServiceUpdateHandoff(params: {
     ...(child.pid ? { pid: child.pid } : {}),
     command: commandLabel,
     logPath,
+    ...(params.handoffId ? { handoffId: params.handoffId } : {}),
   };
+}
+
+export async function startManagedServiceUpdateHandoff(
+  params: ManagedServiceUpdateHandoffParams,
+): Promise<ManagedServiceUpdateHandoffResult> {
+  const active = activeManagedServiceUpdateHandoff;
+  if (active) {
+    return { ...(await active), status: "joined" };
+  }
+
+  const flight = spawnManagedServiceUpdateHandoff(params, () => {
+    if (activeManagedServiceUpdateHandoff === flight) {
+      activeManagedServiceUpdateHandoff = null;
+    }
+  });
+  activeManagedServiceUpdateHandoff = flight;
+  try {
+    return await flight;
+  } catch (err) {
+    if (activeManagedServiceUpdateHandoff === flight) {
+      activeManagedServiceUpdateHandoff = null;
+    }
+    throw err;
+  }
 }
 
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {

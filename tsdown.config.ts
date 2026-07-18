@@ -280,6 +280,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-transcript-reconcile.worker":
+      "src/config/sessions/session-transcript-reconcile.worker.ts",
+    "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -356,24 +359,16 @@ function buildAgentCoreDistEntries(): Record<string, string> {
     agent: "packages/agent-core/src/agent.ts",
     "agent-loop": "packages/agent-core/src/agent-loop.ts",
     llm: "packages/agent-core/src/llm.ts",
-    node: "packages/agent-core/src/node.ts",
     "runtime-deps": "packages/agent-core/src/runtime-deps.ts",
     types: "packages/agent-core/src/types.ts",
     validation: "packages/agent-core/src/validation.ts",
-    "harness/agent-harness": "packages/agent-core/src/harness/agent-harness.ts",
-    "harness/types": "packages/agent-core/src/harness/types.ts",
     "harness/messages": "packages/agent-core/src/harness/messages.ts",
     "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
-    "harness/session": "packages/agent-core/src/harness/session/session.ts",
-    "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
-    "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
-    "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
     "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
     "harness/branch-summarization":
       "packages/agent-core/src/harness/compaction/branch-summarization.ts",
     "harness/prompt-template-arguments":
       "packages/agent-core/src/harness/prompt-template-arguments.ts",
-    "harness/skills": "packages/agent-core/src/harness/skills.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
   };
 }

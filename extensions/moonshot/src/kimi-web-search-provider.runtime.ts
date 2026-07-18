@@ -40,10 +40,7 @@ import {
 
 const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
 const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
-/** Models that require explicit thinking disablement for web search.
- * Reasoning variants (kimi-k2-thinking, kimi-k2-thinking-turbo) are excluded
- * because they default to thinking-enabled and disabling it would defeat their
- * purpose; they are also unlikely to be used for web search. */
+/** Models that require explicit thinking disablement for web search. */
 const KIMI_THINKING_MODELS = new Set(["kimi-k2.6", "kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",

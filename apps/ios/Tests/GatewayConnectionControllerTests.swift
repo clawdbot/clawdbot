@@ -231,6 +231,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
 
             #expect(caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
+            #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
@@ -322,6 +323,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
         #expect(!withoutApprovalScope.scopesAreExplicit)
+        #expect(withoutApprovalScope.caps == [OpenClawGatewayClientCapability.inlineWidgets])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
         #expect(withAdminScope.scopes.contains("operator.admin"))

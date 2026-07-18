@@ -3,6 +3,7 @@
  * All terminal-facing text is sanitized here so callers can reuse the same failure surface.
  */
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { DedupeCache } from "../infra/dedupe.js";
 import { extractErrorCode } from "../infra/errors.js";
 
 /** Minimal validation issue shape accepted from schema and mutation validation paths. */
@@ -32,13 +33,12 @@ function logInvalidConfigOnce(params: {
   configPath: string;
   details: string;
   logger: Pick<typeof console, "error">;
-  loggedConfigPaths: Set<string>;
+  loggedConfigPaths: DedupeCache;
 }): void {
-  if (params.loggedConfigPaths.has(params.configPath)) {
+  if (params.loggedConfigPaths.check(params.configPath)) {
     // Avoid repeating the same invalid config block when multiple callers observe the same path.
     return;
   }
-  params.loggedConfigPaths.add(params.configPath);
   params.logger.error(formatInvalidConfigLogMessage(params.configPath, params.details));
 }
 
@@ -64,7 +64,7 @@ export function throwInvalidConfig(params: {
   configPath: string;
   issues: ConfigValidationIssueLike[];
   logger: Pick<typeof console, "error">;
-  loggedConfigPaths: Set<string>;
+  loggedConfigPaths: DedupeCache;
 }): never {
   const details = formatInvalidConfigDetails(params.issues);
   logInvalidConfigOnce({

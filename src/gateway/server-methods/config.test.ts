@@ -9,9 +9,9 @@ import {
   clearConfigSchemaResponseCacheForTests,
   configHandlers,
   loadConfigSchemaResponseForTests,
-  resolveConfigOpenCommand,
 } from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
+import { resolveOpenPathCommand } from "./open-path.js";
 
 const { runExecMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
   runExecMock: vi.fn(),
@@ -47,23 +47,23 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("resolveConfigOpenCommand", () => {
+describe("resolveOpenPathCommand", () => {
   it("uses open on macOS", () => {
-    expect(resolveConfigOpenCommand("/tmp/openclaw.json", "darwin")).toEqual({
+    expect(resolveOpenPathCommand("/tmp/openclaw.json", "darwin")).toEqual({
       command: "open",
       args: ["/tmp/openclaw.json"],
     });
   });
 
   it("uses xdg-open on Linux", () => {
-    expect(resolveConfigOpenCommand("/tmp/openclaw.json", "linux")).toEqual({
+    expect(resolveOpenPathCommand("/tmp/openclaw.json", "linux")).toEqual({
       command: "xdg-open",
       args: ["/tmp/openclaw.json"],
     });
   });
 
   it("uses a quoted PowerShell FilePath on Windows", () => {
-    expect(resolveConfigOpenCommand(String.raw`C:\tmp\o'hai & calc.json`, "win32")).toEqual({
+    expect(resolveOpenPathCommand(String.raw`C:\tmp\o'hai & calc.json`, "win32")).toEqual({
       command: "powershell.exe",
       args: [
         "-NoProfile",

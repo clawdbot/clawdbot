@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_DEVICE_APPS_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FILE_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
@@ -33,7 +34,7 @@ const ANDROID_DEVICE_COMMANDS = [
   ...MOBILE_NODE_COMMANDS.device,
   "device.permissions",
   "device.health",
-  "device.apps",
+  NODE_DEVICE_APPS_COMMAND,
 ];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
@@ -136,6 +137,7 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
+    NODE_DEVICE_APPS_COMMAND,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -420,6 +422,9 @@ function resolveNodeCommandAllowlistInternal(
     if (trimmed) {
       allow.add(trimmed);
     }
+  }
+  if (cfg.wizard?.appRecommendations === false) {
+    allow.delete(NODE_DEVICE_APPS_COMMAND);
   }
   // In pairing mode, denylisted dangerous defaults stay declarable so a node
   // retains the surface it can later be armed for: arming removes them from

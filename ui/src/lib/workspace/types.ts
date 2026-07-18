@@ -12,6 +12,7 @@ export const WORKSPACE_GRID_COLUMNS = 12;
 export type WorkspaceCreatedBy = string;
 
 type WorkspaceWidgetKind = string;
+type WorkspaceTabLayout = "grid" | "full";
 
 type WorkspaceBindingSource = "rpc" | "file" | "static";
 
@@ -51,6 +52,7 @@ export type WorkspaceTab = {
   title: string;
   icon?: string;
   hidden: boolean;
+  layout?: WorkspaceTabLayout;
   createdBy?: WorkspaceCreatedBy;
   widgets: WorkspaceWidget[];
 };

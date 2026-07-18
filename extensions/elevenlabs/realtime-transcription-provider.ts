@@ -14,7 +14,7 @@ import {
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
-import { normalizeElevenLabsBaseUrl } from "./shared.js";
+import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
 
 type ElevenLabsRealtimeTranscriptionProviderConfig = {
   apiKey?: string;
@@ -128,12 +128,6 @@ function normalizeProviderConfig(
       2_000,
     ),
   };
-}
-
-function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
-  const url = new URL(normalizeElevenLabsBaseUrl(value));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  return url.toString().replace(/\/+$/, "");
 }
 
 function toElevenLabsRealtimeWsUrl(config: ElevenLabsRealtimeTranscriptionSessionConfig): string {
@@ -277,7 +271,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
       return createElevenLabsRealtimeTranscriptionSession({
         ...req,
         apiKey,
-        baseUrl: normalizeElevenLabsBaseUrl(config.baseUrl),
+        baseUrl: normalizeElevenLabsRealtimeBaseUrl(config.baseUrl),
         modelId: config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL,
         audioFormat: config.audioFormat ?? ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT,
         sampleRate: config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE,

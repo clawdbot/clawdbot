@@ -1057,6 +1057,27 @@ describe("reply run registry", () => {
     }
   });
 
+  it("waits for reply-run completion without a timer when requested", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:unbounded",
+        sessionId: "session-unbounded",
+        resetTriggered: false,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const waitPromise = waitForReplyRunEndBySessionId("session-unbounded", null);
+
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+      operation.complete();
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("queues messages only through the active running backend", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({

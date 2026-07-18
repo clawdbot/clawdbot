@@ -653,9 +653,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     });
 
     try {
-      const result = await executePreparedCliRun(
-        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
-      );
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      context.params.onExecutionPhase = vi.fn();
+      const result = await executePreparedCliRun(context);
       const spawnInput = requireSupervisorSpawnInput();
 
       expect(spawnInput.captureOutput).toBe(false);
@@ -664,6 +664,13 @@ describe("executePreparedCliRun supervisor output capture", () => {
         { text: "Hello", delta: "Hello" },
         { text: "Hello world", delta: " world" },
       ]);
+      expect(context.params.onExecutionPhase).toHaveBeenCalledTimes(2);
+      expect(context.params.onExecutionPhase).toHaveBeenNthCalledWith(2, {
+        phase: "assistant_output_started",
+        provider: "claude-cli",
+        model: "model",
+        backend: "claude-cli",
+      });
     } finally {
       stop();
     }
@@ -1381,7 +1388,24 @@ describe("executePreparedCliRun supervisor output capture", () => {
     try {
       const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
       context.mcpDeliveryCapture = true;
-      await expect(executePreparedCliRun(context)).rejects.toThrow("exceeded timeout");
+      context.params.onExecutionPhase = vi.fn();
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+        message: expect.stringMatching(/exceeded timeout/i),
+        code: "cli_overall_timeout",
+        cliTimeout: {
+          mode: "overall",
+          timeoutSeconds: 1,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 0,
+        },
+      });
+      expect(context.params.onExecutionPhase).toHaveBeenCalledWith({
+        phase: "tool_execution_started",
+        provider: "claude-cli",
+        model: "model",
+        backend: "claude-cli",
+      });
     } finally {
       stop();
     }

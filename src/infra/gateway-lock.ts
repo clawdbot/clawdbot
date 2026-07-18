@@ -1,5 +1,6 @@
 // Coordinates gateway lock files, ports, and stale owner detection.
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -28,6 +29,7 @@ const DEFAULT_STALE_MS = 30_000;
 
 type LockPayload = {
   pid: number;
+  ownerId?: string;
   createdAt: string;
   configPath: string;
   port?: number;
@@ -38,6 +40,7 @@ type LockPayload = {
 
 const LockPayloadSchema = z.object({
   pid: z.number(),
+  ownerId: z.string().min(1).optional(),
   createdAt: z.string(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
@@ -54,6 +57,28 @@ type GatewayLockHandle = {
 };
 
 type GatewayLockRole = "gateway" | "sqlite-maintenance";
+
+export type GatewayLockIdentity = {
+  pid: number;
+  ownerId?: string;
+  createdAt: string;
+  port: number;
+  startTime?: number;
+};
+
+export function isSameGatewayLockIdentity(
+  previous: GatewayLockIdentity,
+  current: GatewayLockIdentity,
+): boolean {
+  if (previous.ownerId && current.ownerId) {
+    return previous.ownerId === current.ownerId;
+  }
+  return (
+    previous.pid === current.pid &&
+    previous.createdAt === current.createdAt &&
+    previous.startTime === current.startTime
+  );
+}
 
 export type GatewayLockOptions = {
   env?: NodeJS.ProcessEnv;
@@ -285,16 +310,25 @@ export async function readActiveGatewayLockPort(
     "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
   > = {},
 ): Promise<number | undefined> {
-  const env = opts.env ?? process.env;
-  const { configLockPath, stateLockPath } = resolveGatewayLockPaths(env, opts.lockDir);
-  const configPort = await readVerifiedGatewayLockPort(configLockPath, opts);
-  return configPort ?? (await readVerifiedGatewayLockPort(stateLockPath, opts));
+  return (await readActiveGatewayLockIdentity(opts))?.port;
 }
 
-async function readVerifiedGatewayLockPort(
+export async function readActiveGatewayLockIdentity(
+  opts: Pick<
+    GatewayLockOptions,
+    "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
+  > = {},
+): Promise<GatewayLockIdentity | undefined> {
+  const env = opts.env ?? process.env;
+  const { configLockPath, stateLockPath } = resolveGatewayLockPaths(env, opts.lockDir);
+  const configIdentity = await readVerifiedGatewayLockIdentity(configLockPath, opts);
+  return configIdentity ?? (await readVerifiedGatewayLockIdentity(stateLockPath, opts));
+}
+
+async function readVerifiedGatewayLockIdentity(
   lockPath: string,
   opts: Pick<GatewayLockOptions, "platform" | "readProcessCmdline" | "readProcessStartTime">,
-): Promise<number | undefined> {
+): Promise<GatewayLockIdentity | undefined> {
   const payload = await readLockPayload(lockPath);
   if (!payload?.port || payload.role === "sqlite-maintenance") {
     return undefined;
@@ -307,7 +341,16 @@ async function readVerifiedGatewayLockPort(
     opts.readProcessStartTime,
     { trustUnknownCmdlineOwner: false },
   );
-  return ownerStatus === "alive" ? payload.port : undefined;
+  if (ownerStatus !== "alive") {
+    return undefined;
+  }
+  return {
+    pid: payload.pid,
+    ...(payload.ownerId ? { ownerId: payload.ownerId } : {}),
+    createdAt: payload.createdAt,
+    port: payload.port,
+    ...(payload.startTime !== undefined ? { startTime: payload.startTime } : {}),
+  };
 }
 
 export async function acquireGatewayLock(
@@ -319,6 +362,7 @@ export async function acquireGatewayLock(
     return null;
   }
   const role = opts.role ?? "gateway";
+  const ownerId = randomUUID();
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
   const stateLock = await acquireLockFile({
     ...opts,
@@ -327,6 +371,7 @@ export async function acquireGatewayLock(
     lockPath: paths.stateLockPath,
     role,
     stateDir: paths.stateDir,
+    ownerId,
   });
   const shouldAcquireConfigLock =
     role === "sqlite-maintenance" || env.OPENCLAW_ALLOW_MULTI_GATEWAY !== "1";
@@ -345,6 +390,7 @@ export async function acquireGatewayLock(
       lockPath: paths.configLockPath,
       role,
       stateDir: paths.stateDir,
+      ownerId,
     });
     return {
       ...configLock,
@@ -384,6 +430,7 @@ async function acquireLockFile(
     lockPath: string;
     role: GatewayLockRole;
     stateDir: string;
+    ownerId: string;
   },
 ): Promise<Omit<GatewayLockHandle, "stateLockPath">> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS, 0);
@@ -481,6 +528,7 @@ async function acquireLockFile(
             )(process.pid);
             const payload: LockPayload = {
               pid: process.pid,
+              ownerId: opts.ownerId,
               createdAt: resolveTimestampMsToIsoString(now()),
               configPath,
               stateDir,

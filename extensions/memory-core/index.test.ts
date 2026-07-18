@@ -5,12 +5,13 @@ import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-r
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
 const createMemoryRuntimeMock = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
     closeAllMemorySearchManagers: vi.fn(async () => {}),
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: getMemorySearchManagerMock,
@@ -31,6 +32,15 @@ import plugin from "./index.js";
 const hostRuntime = {
   llm: {
     acquireLocalService: async () => undefined,
+  },
+  state: {
+    withLease: vi.fn(),
+    openKeyedStore: vi.fn(() => ({
+      lookup: vi.fn(),
+      register: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(),
+    })),
   },
 } as unknown as OpenClawPluginApi["runtime"];
 
@@ -132,7 +142,20 @@ describe("memory-core plugin runtime registration", () => {
 
     await runtime.getMemorySearchManager({ cfg, agentId: "main" });
 
-    expect(createMemoryRuntimeMock).toHaveBeenCalledWith(hostRuntime.llm.acquireLocalService);
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
+      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      withLease: expect.any(Function),
+    });
+  });
+
+  it("binds the host SQLite lease hook to tools and CLI runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
+
+    const host = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+    expect(host?.withLease).toEqual(expect.any(Function));
   });
 });
 

@@ -135,41 +135,63 @@ describe("resolveTelegramToken", () => {
     expect(res).toEqual({ token: "env-token", source: "env" });
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked tokenFile paths", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const dir = createTempDir();
-    const tokenFile = path.join(dir, "token.txt");
-    const tokenLink = path.join(dir, "token-link.txt");
-    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-    fs.symlinkSync(tokenFile, tokenLink);
+  it.runIf(process.platform !== "win32")(
+    "marks symlinked tokenFile paths configured-unavailable",
+    () => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+      const dir = createTempDir();
+      const tokenFile = path.join(dir, "token.txt");
+      const tokenLink = path.join(dir, "token-link.txt");
+      fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+      fs.symlinkSync(tokenFile, tokenLink);
 
-    const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
-    expect(() => resolveTelegramToken(cfg)).toThrow(
-      /channels\.telegram\.tokenFile.*must not be a symlink/,
-    );
-  });
+      const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
+      const result = resolveTelegramToken(cfg);
+      expect(result).toEqual({
+        token: "",
+        source: "tokenFile",
+        credentialDiagnostics: [
+          {
+            code: "CREDENTIAL_FILE_UNAVAILABLE",
+            path: "channels.telegram.tokenFile",
+            reason: "symlink",
+          },
+        ],
+      });
+      expect(JSON.stringify(result)).not.toContain(tokenLink);
+    },
+  );
 
-  it.runIf(process.platform !== "win32")("rejects symlinked account-level tokenFile paths", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const dir = createTempDir();
-    const tokenFile = path.join(dir, "token.txt");
-    const tokenLink = path.join(dir, "token-link.txt");
-    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-    fs.symlinkSync(tokenFile, tokenLink);
+  it.runIf(process.platform !== "win32")(
+    "marks symlinked account-level tokenFile paths configured-unavailable",
+    () => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+      const dir = createTempDir();
+      const tokenFile = path.join(dir, "token.txt");
+      const tokenLink = path.join(dir, "token-link.txt");
+      fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+      fs.symlinkSync(tokenFile, tokenLink);
 
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            work: { tokenFile: tokenLink },
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              work: { tokenFile: tokenLink },
+            },
           },
         },
-      },
-    } as OpenClawConfig;
-    expect(() => resolveTelegramToken(cfg, { accountId: "work" })).toThrow(
-      /channels\.telegram\.accounts\.work\.tokenFile.*must not be a symlink/,
-    );
-  });
+      } as OpenClawConfig;
+      const result = resolveTelegramToken(cfg, { accountId: "work" });
+      expect(result.credentialDiagnostics).toEqual([
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.telegram.accounts.work.tokenFile",
+          reason: "symlink",
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain(tokenLink);
+    },
+  );
 
   it("does not fall back to config when tokenFile is missing", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
@@ -180,7 +202,15 @@ describe("resolveTelegramToken", () => {
     } as OpenClawConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expect(res.source).toBe("tokenFile");
+    expect(res.credentialDiagnostics).toEqual([
+      {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.telegram.tokenFile",
+        reason: "not-found",
+      },
+    ]);
+    expect(JSON.stringify(res)).not.toContain(tokenFile);
   });
 
   it("resolves per-account tokens when the config account key casing doesn't match routing normalization", () => {

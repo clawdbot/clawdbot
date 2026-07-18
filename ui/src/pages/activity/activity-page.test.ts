@@ -40,6 +40,7 @@ function staleEntry(): ActivityEntry {
     toolCallId: "stale",
     runId: "stale",
     toolName: "stale",
+    entryKind: "tool",
     status: "done",
     startedAt: 0,
     updatedAt: 0,

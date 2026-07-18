@@ -214,11 +214,18 @@ public enum GatewayTLSStore {
     }
 }
 
+protocol GatewayTLSRouteMetadataProviding: AnyObject {
+    var effectiveTLSFingerprintSHA256: String? { get }
+}
+
 public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate,
-GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Sendable {
+    GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, GatewayTLSRouteMetadataProviding,
+    @unchecked Sendable
+{
     private let params: GatewayTLSParams
     private let failureLock = NSLock()
     private var lastTLSFailure: GatewayTLSValidationFailure?
+    private var acceptedTLSFingerprintSHA256: String?
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -227,11 +234,20 @@ GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Se
 
     public init(params: GatewayTLSParams) {
         self.params = params
+        self.acceptedTLSFingerprintSHA256 = params.expectedFingerprint
+            .map(normalizeFingerprint)
+            .flatMap { $0.count == 64 ? $0 : nil }
         super.init()
     }
 
     public var allowsDeviceTokenRetryAuth: Bool {
         self.params.expectedFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var effectiveTLSFingerprintSHA256: String? {
+        self.failureLock.lock()
+        defer { self.failureLock.unlock() }
+        return self.acceptedTLSFingerprintSHA256
     }
 
     public func consumeLastTLSFailure() -> GatewayTLSValidationFailure? {
@@ -248,9 +264,12 @@ GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Se
         self.failureLock.unlock()
     }
 
-    private func clearTLSFailure() {
+    private func recordTLSAcceptance(_ fingerprint: String?) {
         self.failureLock.lock()
         self.lastTLSFailure = nil
+        if let fingerprint {
+            self.acceptedTLSFingerprintSHA256 = fingerprint
+        }
         self.failureLock.unlock()
     }
 
@@ -283,7 +302,7 @@ GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Se
         if let fingerprint {
             if let expected {
                 if fingerprint == expected {
-                    self.clearTLSFailure()
+                    self.recordTLSAcceptance(fingerprint)
                     completionHandler(.useCredential, URLCredential(trust: trust))
                 } else {
                     self.recordTLSFailure(GatewayTLSValidationFailure(
@@ -302,7 +321,7 @@ GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Se
                     if let storeKey = params.storeKey {
                         GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
                     }
-                    self.clearTLSFailure()
+                    self.recordTLSAcceptance(fingerprint)
                     completionHandler(.useCredential, URLCredential(trust: trust))
                     return
                 }
@@ -310,7 +329,7 @@ GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Se
         }
 
         if systemTrustOk || !self.params.required {
-            self.clearTLSFailure()
+            self.recordTLSAcceptance(fingerprint)
             completionHandler(.useCredential, URLCredential(trust: trust))
         } else {
             self.recordTLSFailure(GatewayTLSValidationFailure(

@@ -1,6 +1,6 @@
 ---
 name: openclaw-ci-limits
-description: Manage OpenClaw GitHub Actions and Blacksmith CI capacity, runner-registration budgets, fanout caps, main-push debounce, shard sizing, hosted-runner offload, queue health, and safe ramp-down/ramp-up changes. Use when tuning `.github/workflows/*`, `docs/ci.md`, CI runner labels, matrix `max-parallel`, ClawSweeper/Blacksmith burst protection, CodeQL runner placement, or investigating slow/queued OpenClaw CI.
+description: Manage OpenClaw GitHub Actions and Blacksmith CI capacity, runner-registration budgets, fanout caps, main-push single-flight, shard sizing, hosted-runner offload, queue health, and safe ramp-down/ramp-up changes. Use when tuning `.github/workflows/*`, `docs/ci.md`, CI runner labels, matrix `max-parallel`, ClawSweeper/Blacksmith burst protection, CodeQL runner placement, or investigating slow/queued OpenClaw CI.
 ---
 
 # OpenClaw CI Limits
@@ -84,12 +84,11 @@ and register more runners before the window resets. Use job duration, retries,
 and queue turnover to justify any lower estimate. Add non-matrix Blacksmith jobs
 such as `preflight`, `security-fast`, `build-artifacts`, and platform lanes.
 
-For repeated pushes, multiply by the number of runs expected to reach
-Blacksmith admission in the same 5-minute window, including runs canceled after
-admission. The debounce only suppresses pushes that arrive while
-`runner-admission` is still sleeping; once Blacksmith jobs register, those
-registrations are spent even if a later push cancels the run. If timing is
-uncertain, count every sequential push in the window.
+For repeated pull-request pushes, multiply by the number of runs expected to
+reach Blacksmith admission in the same 5-minute window, including runs canceled
+after admission. Canonical `main` is single-flight: one run completes while
+GitHub's default single pending slot is replaced by the newest push. Count one
+active main matrix plus its next pending matrix, not every intermediate merge.
 
 Reject a change unless the org-level worst case stays below about 60% of the
 live bucket. With the current 10,000-registration bucket, keep planned
@@ -100,10 +99,9 @@ ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
 Prefer these in order:
 
-1. Add or preserve concurrency groups that cancel superseded PR and canonical
-   `main` runs before Blacksmith work starts.
-2. Keep the `runner-admission` hosted debounce for canonical `main` pushes.
-   Change `OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS` only with evidence.
+1. Preserve cancel-in-progress for superseded pull-request heads.
+2. Preserve canonical `main` single-flight without canceling its running
+   integration cycle; GitHub's default pending slot coalesces to the newest tip.
 3. Move high-frequency, short, non-build jobs to `ubuntu-24.04`.
 4. Reduce matrix rows by bundling related tests inside one runner job when the
    combined job stays under timeout and keeps useful failure names.
@@ -120,18 +118,17 @@ Do not:
 - raise all `max-parallel` values at once;
 - make manual `workflow_dispatch` runs cancel normal push/PR validation;
 - delete coverage just to reduce runner count;
-- treat cancelled superseded runs as failures without checking the newest run
-  for the same ref.
+- treat cancelled superseded pull-request runs as failures without checking the
+  newest run for the same ref.
 
 ## Current OpenClaw Knobs
 
 These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 
-- `CI` concurrency key version and `cancel-in-progress` for PRs and canonical
-  `main` pushes.
-- `runner-admission` on `ubuntu-24.04` with
-  `OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS=90`.
-- `preflight` and `security-fast` needing `runner-admission`.
+- `CI` concurrency key version, PR cancellation, and non-canceling canonical
+  `main` single-flight with one coalesced pending tip.
+- `preflight` and hosted `security-fast` start immediately without a debounce
+  or standalone admission job.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
   Android at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;

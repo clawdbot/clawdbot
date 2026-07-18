@@ -3,8 +3,14 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
-const { spawnMock } = vi.hoisted(() => ({
+const { readFileSyncMock, spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+  readFileSyncMock: vi.fn(),
   spawnMock: vi.fn(),
+  spawnSyncMock: vi.fn(),
+}));
+
+vi.mock("node:fs", () => ({
+  readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -13,6 +19,7 @@ vi.mock("node:child_process", async () => {
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
       spawn: (...args: unknown[]) => spawnMock(...args),
+      spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
     },
   );
 });
@@ -32,6 +39,18 @@ function expectTaskkillCall(index: number, args: string[]) {
   ]);
 }
 
+function mockIsProcessGroupLeader(...pids: number[]) {
+  spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+    if (command === "ps" && args[0] === "-p" && args[2] === "-o" && args[3] === "pgid=") {
+      const pid = Number.parseInt(args[1] ?? "", 10);
+      if (pids.includes(pid)) {
+        return { status: 0, stdout: String(pid) };
+      }
+    }
+    return { status: 1, stdout: "" };
+  });
+}
+
 describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
@@ -40,7 +59,12 @@ describe("killProcessTree", () => {
   });
 
   beforeEach(() => {
+    readFileSyncMock.mockReset();
+    readFileSyncMock.mockImplementation(() => {
+      throw new Error("proc unavailable");
+    });
     spawnMock.mockClear();
+    spawnSyncMock.mockClear();
     killSpy = vi.spyOn(process, "kill");
     vi.useFakeTimers();
   });
@@ -101,6 +125,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(3333);
       killProcessTree(3333, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -120,6 +145,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(4444);
       killProcessTree(4444, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -133,6 +159,7 @@ describe("killProcessTree", () => {
     killSpy.mockImplementation(() => true);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(4949);
       killProcessTree(4949, { force: true });
       await vi.advanceTimersByTimeAsync(60_000);
 
@@ -154,6 +181,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(4545);
       killProcessTree(4545, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -185,7 +213,7 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix uses group kill by default (detached:true preserved as the existing behavior)", async () => {
+  it("on Unix uses group kill when the omitted option resolves to a group leader", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       if (pid === -6666 && signal === 0) {
         throw new Error("ESRCH");
@@ -197,6 +225,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(6666);
       killProcessTree(6666, { graceMs: 10 });
       await vi.advanceTimersByTimeAsync(10);
 
@@ -204,10 +233,69 @@ describe("killProcessTree", () => {
     });
   });
 
+  it.each([
+    [
+      "throws",
+      () => {
+        throw new Error("ps ENOENT");
+      },
+    ],
+    ["exits non-zero", () => ({ status: 1, stdout: "" })],
+    ["returns non-numeric output", () => ({ status: 0, stdout: "not-a-pgid" })],
+    ["returns empty output", () => ({ status: 0, stdout: "" })],
+  ])("on Unix falls back to single-pid kill when ps %s", async (_label, psResult) => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("darwin", async () => {
+      spawnSyncMock.mockImplementation(psResult);
+      killProcessTree(8888, { graceMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(8888, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-8888, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-8888, "SIGKILL");
+    });
+  });
+
+  it("on Unix falls back to single-pid kill when ps returns different PGID", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+        if (command === "ps" && args[0] === "-p" && args[2] === "-o" && args[3] === "pgid=") {
+          const pid = Number.parseInt(args[1] ?? "", 10);
+          if (pid === 9999) {
+            return { status: 0, stdout: "12345\n" };
+          }
+        }
+        return { status: 1, stdout: "" };
+      });
+      killProcessTree(9999, { graceMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(9999, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGKILL");
+    });
+  });
+
+  it("on Linux reads process-group ownership from procfs without spawning ps", async () => {
+    killSpy.mockImplementation(() => true);
+    readFileSyncMock.mockReturnValue("7777 (shell worker) S 1 7777 7777 0");
+
+    await withMockedPlatform("linux", async () => {
+      signalProcessTree(7777, "SIGTERM");
+
+      expect(killSpy).toHaveBeenCalledWith(-7777, "SIGTERM");
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("on Unix sends a single requested tree signal without scheduling escalation", async () => {
     killSpy.mockImplementation(() => true);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(7777);
       signalProcessTree(7777, "SIGTERM");
 
       await vi.advanceTimersByTimeAsync(60_000);

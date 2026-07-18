@@ -6,6 +6,7 @@ import type { ActiveWebListener } from "./inbound/types.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 export const WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY = "connection-controller";
+export const WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY = "connection-owner-pending";
 
 type WhatsAppConnectionControllerHandle = {
   getActiveListener(): ActiveWebListener | null;
@@ -23,4 +24,15 @@ export function getWhatsAppConnectionController(
     capability: WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
   });
   return (context as WhatsAppConnectionControllerHandle | undefined) ?? null;
+}
+
+export function hasPendingWhatsAppConnectionOwner(accountId: string): boolean {
+  return Boolean(
+    getChannelRuntimeContext({
+      channelRuntime: getOptionalWhatsAppRuntime()?.channel,
+      channelId: "whatsapp",
+      accountId,
+      capability: WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,
+    }),
+  );
 }

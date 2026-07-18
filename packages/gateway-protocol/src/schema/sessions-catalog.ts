@@ -59,6 +59,7 @@ export const SessionCatalogSchema = closedObject({
 
 const SessionsCatalogListCommonProperties = {
   agentId: Type.Optional(NonEmptyString),
+  progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),
@@ -78,6 +79,17 @@ export const SessionsCatalogListParamsSchema = Type.Union([
 
 export const SessionsCatalogListResultSchema = closedObject({
   catalogs: Type.Array(SessionCatalogSchema),
+});
+
+const SessionsCatalogHostEventCatalogSchema = closedObject({
+  ...SessionCatalogSchema.properties,
+  hosts: Type.Array(SessionCatalogHostSchema, { minItems: 1, maxItems: 1 }),
+});
+
+export const SessionsCatalogHostEventSchema = closedObject({
+  progressId: Type.String({ minLength: 1, maxLength: 128 }),
+  agentId: NonEmptyString,
+  catalog: SessionsCatalogHostEventCatalogSchema,
 });
 
 export const SessionCatalogTranscriptItemSchema = closedObject({
@@ -137,6 +149,7 @@ export type SessionCatalogHost = Static<typeof SessionCatalogHostSchema>;
 export type SessionCatalog = Static<typeof SessionCatalogSchema>;
 export type SessionsCatalogListParams = Static<typeof SessionsCatalogListParamsSchema>;
 export type SessionsCatalogListResult = Static<typeof SessionsCatalogListResultSchema>;
+export type SessionsCatalogHostEvent = Static<typeof SessionsCatalogHostEventSchema>;
 export type SessionCatalogTranscriptItem = Static<typeof SessionCatalogTranscriptItemSchema>;
 export type SessionsCatalogReadParams = Static<typeof SessionsCatalogReadParamsSchema>;
 export type SessionsCatalogReadResult = Static<typeof SessionsCatalogReadResultSchema>;

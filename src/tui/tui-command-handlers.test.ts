@@ -1827,6 +1827,19 @@ describe("tui command handlers", () => {
     expectSendChatFields(sendChat, { message: "/queue:followup" });
   });
 
+  it("routes /queue directives through the local backend", async () => {
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/queue followup");
+
+    expectSendChatFields(sendChat, { message: "/queue followup" });
+    expect(addSystem).not.toHaveBeenCalledWith("/queue is unavailable in local mode");
+  });
+
   it("blocks /queue while optimistic user message is pending", async () => {
     const { handleCommand, sendChat, addSystem } = createHarness({
       activeChatRunId: "run-active",

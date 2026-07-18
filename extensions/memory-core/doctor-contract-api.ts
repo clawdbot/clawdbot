@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 // Memory Core doctor contract migrates shipped workspace dreaming state.
 import fsSync from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { reclaimDefinitelyStaleFileLock } from "openclaw/plugin-sdk/file-lock";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   ensureMemoryIndexSchema,
@@ -46,6 +48,12 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./src/dreaming-state.js";
 import { dreamingStateComparison } from "./src/migration/dreaming-state-comparison.js";
+import {
+  CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL,
+  LEGACY_MEMORY_FTS_MATCH_TABLE,
+  buildLegacyMemoryFtsCopySql,
+  buildLegacyMemoryFtsMatchSql,
+} from "./src/migration/legacy-memory-sidecar-fts.js";
 import {
   SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
   SHORT_TERM_STORE_RELATIVE_PATH,
@@ -392,36 +400,23 @@ function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
   if (!tableExists(db, "main", MEMORY_INDEX_FTS_TABLE)) {
     return;
   }
-  db.exec(`
-    INSERT INTO main.${MEMORY_INDEX_FTS_TABLE} (
-      text, id, path, source, model, start_line, end_line
-    )
-    SELECT legacy.text, legacy.id, legacy.path, legacy.source, legacy.model,
-           legacy.start_line, legacy.end_line
-    FROM ${schema}.chunks AS legacy
-    JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
-    WHERE NOT EXISTS (
-      SELECT 1 FROM main.${MEMORY_INDEX_FTS_TABLE} AS canonical
-      WHERE canonical.id = legacy.id
+  if (!db.prepare(`SELECT 1 FROM ${schema}.chunks LIMIT 1`).get()) {
+    return;
+  }
+  db.exec(CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL);
+  try {
+    db.exec(buildLegacyMemoryFtsMatchSql(schema));
+    assertLegacyDerivedRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM temp.${LEGACY_MEMORY_FTS_MATCH_TABLE}
+       WHERE exact = 0`,
+      "fts",
     );
-  `);
-  assertLegacyDerivedRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.chunks AS legacy
-     JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_FTS_TABLE} AS canonical
-       WHERE canonical.id = legacy.id
-         AND canonical.text IS legacy.text
-         AND canonical.path IS legacy.path
-         AND canonical.source IS legacy.source
-         AND canonical.model IS legacy.model
-         AND canonical.start_line IS legacy.start_line
-         AND canonical.end_line IS legacy.end_line
-     )`,
-    "fts",
-  );
+    db.exec(buildLegacyMemoryFtsCopySql(schema));
+  } finally {
+    db.exec(`DROP TABLE temp.${LEGACY_MEMORY_FTS_MATCH_TABLE}`);
+  }
 }
 
 function copyLegacyMemoryIndexRows(
@@ -1040,6 +1035,52 @@ async function collectLegacySources(
   return sources;
 }
 
+const RETIRED_QMD_GLOBAL_LOCK_NAME = "embed.lock.lock";
+const RETIRED_QMD_AGENT_LOCK_NAME = "qmd-write.lock.lock";
+
+async function readDirectoryEntries(directoryPath: string): Promise<Dirent[]> {
+  try {
+    return (await fs.readdir(directoryPath, { withFileTypes: true })).toSorted((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function collectRetiredQmdFileLocks(stateDir: string): Promise<string[]> {
+  const stateEntries = await readDirectoryEntries(stateDir);
+  const lockPaths: string[] = [];
+
+  if (stateEntries.some((entry) => entry.name === "qmd" && entry.isDirectory())) {
+    const qmdDir = path.join(stateDir, "qmd");
+    const qmdEntries = await readDirectoryEntries(qmdDir);
+    if (qmdEntries.some((entry) => entry.name === RETIRED_QMD_GLOBAL_LOCK_NAME && entry.isFile())) {
+      lockPaths.push(path.join(qmdDir, RETIRED_QMD_GLOBAL_LOCK_NAME));
+    }
+  }
+
+  if (!stateEntries.some((entry) => entry.name === "agents" && entry.isDirectory())) {
+    return lockPaths;
+  }
+  const agentsDir = path.join(stateDir, "agents");
+  for (const entry of await readDirectoryEntries(agentsDir)) {
+    if (!entry.isDirectory() || entry.name !== normalizeAgentId(entry.name)) {
+      continue;
+    }
+    const agentDir = path.join(agentsDir, entry.name);
+    const agentEntries = await readDirectoryEntries(agentDir);
+    if (
+      agentEntries.some(
+        (agentEntry) => agentEntry.name === RETIRED_QMD_AGENT_LOCK_NAME && agentEntry.isFile(),
+      )
+    ) {
+      lockPaths.push(path.join(agentDir, RETIRED_QMD_AGENT_LOCK_NAME));
+    }
+  }
+  return lockPaths;
+}
+
 async function migrateDailyIngestion(source: LegacySource): Promise<number> {
   const state = normalizeDailyIngestionState(await readJsonFile(source.filePath));
   await writeMemoryCoreWorkspaceEntries({
@@ -1261,6 +1302,43 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             changes,
             warnings,
           });
+        }
+      }
+      return { changes, warnings };
+    },
+  },
+  {
+    id: "memory-core-qmd-file-locks-to-sqlite-leases",
+    label: "Memory Core retired QMD file locks",
+    async detectLegacyState(params) {
+      const lockPaths = await collectRetiredQmdFileLocks(params.stateDir);
+      if (lockPaths.length === 0) {
+        return null;
+      }
+      return {
+        preview: lockPaths.map(
+          (lockPath) =>
+            `- Retired Memory Core QMD file lock: ${lockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
+        ),
+      };
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      for (const lockPath of await collectRetiredQmdFileLocks(params.stateDir)) {
+        try {
+          const result = await reclaimDefinitelyStaleFileLock(lockPath);
+          if (result === "removed") {
+            changes.push(`Removed retired Memory Core QMD file lock: ${lockPath}`);
+          } else if (result === "retained") {
+            warnings.push(
+              `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${lockPath}`,
+            );
+          }
+        } catch (err) {
+          warnings.push(
+            `Failed removing retired Memory Core QMD file lock ${lockPath}: ${String(err)}`,
+          );
         }
       }
       return { changes, warnings };

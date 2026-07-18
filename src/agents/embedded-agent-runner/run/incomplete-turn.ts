@@ -750,8 +750,14 @@ export function resolveToolUseTerminalContinuationInstruction(params: {
         return block?.type === "toolCall" ? [typeof block.id === "string" ? block.id : null] : [];
       })
     : [];
+  // Scan only results AFTER the terminal assistant: the snapshot spans the whole
+  // session, and a prior turn's toolResult with a model-reused id would otherwise
+  // prove "completion" for a batch that never dispatched. Assistant not found in
+  // the snapshot fails closed to the existing incomplete-turn error.
+  const snapshot = params.attempt.messagesSnapshot ?? [];
+  const assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
   const completedToolCallIds = new Set(
-    (params.attempt.messagesSnapshot ?? []).flatMap((message) => {
+    (assistantIndex >= 0 ? snapshot.slice(assistantIndex + 1) : []).flatMap((message) => {
       const result = message as { role?: unknown; toolCallId?: unknown; isError?: unknown };
       return result.role === "toolResult" &&
         result.isError !== true &&

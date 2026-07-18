@@ -5,35 +5,21 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
+import { signalReplyAuthorState, type SignalReplyContextRecord } from "./reply-authors-state.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
 const PERSISTENT_NAMESPACE = "signal.reply-authors.v1";
 const PERSISTENT_MAX_ENTRIES = 5000;
 const DEFAULT_REPLY_AUTHOR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-type SignalReplyContextRecordBase = {
-  accountId: string;
-  conversationKey: string;
-  replyToId: string;
-  sourceTimestamp: number;
-  registeredAt: number;
-};
-type SignalReplyContextRecord = SignalReplyContextRecordBase &
-  ({ kind: "resolved"; author: string; body?: string } | { kind: "ambiguous" });
-
-type MemoryReplyContextRecord = SignalReplyContextRecord & {
-  expiresAt: number;
-};
-
 type SignalPersistedReplyContext =
   | { author: string; body?: string; ambiguous?: never }
   | { ambiguous: true; author?: never; body?: never };
 
-const memoryReplyContexts = new Map<string, MemoryReplyContextRecord>();
-let persistentStoreDisabled = false;
+const { memoryReplyContexts } = signalReplyAuthorState;
 
 function openSignalReplyAuthorStore() {
-  if (persistentStoreDisabled) {
+  if (signalReplyAuthorState.persistentStoreDisabled) {
     return undefined;
   }
   const runtime = getOptionalSignalRuntime();
@@ -44,7 +30,7 @@ function openSignalReplyAuthorStore() {
       defaultTtlMs: DEFAULT_REPLY_AUTHOR_TTL_MS,
     });
   } catch (error) {
-    persistentStoreDisabled = true;
+    signalReplyAuthorState.persistentStoreDisabled = true;
     runtime?.logging
       .getChildLogger({ plugin: "signal", feature: "reply-author-state" })
       .warn("Signal persistent reply author state unavailable", { error: String(error) });
@@ -167,7 +153,7 @@ export async function registerSignalReplyContext(params: {
     const next = mergeReplyContext(memoryReplyContexts.get(key), record);
     memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
-    persistentStoreDisabled = true;
+    signalReplyAuthorState.persistentStoreDisabled = true;
     getOptionalSignalRuntime()
       ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
       .warn("Signal persistent reply author state lacks atomic updates");

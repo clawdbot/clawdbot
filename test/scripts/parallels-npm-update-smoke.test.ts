@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  posixAgentWorkspaceScript,
+  windowsAgentWorkspaceScript,
+} from "../../scripts/e2e/parallels/agent-workspace.ts";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -269,6 +273,24 @@ exit 1
     expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
+  });
+
+  it("does not recreate retired workspace setup state in release smoke scripts", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.2",
+      updateTarget: "2026.7.2-beta.2",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("IDENTITY.md");
+      expect(script).not.toContain("workspace-state.json");
+    }
+    expect(windowsUpdateScript(input)).toContain("IDENTITY.md");
+    expect(windowsUpdateScript(input)).not.toContain("workspace-state.json");
+
+    expect(posixAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
+    expect(windowsAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
   });
 
   it("accepts keyed and nested npm metadata for published update targets", () => {

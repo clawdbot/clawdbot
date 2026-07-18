@@ -157,7 +157,7 @@ const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn<
   gatewayHealth: "live",
 }));
 const waitForEmbeddedAgentRunEndMock = vi.fn<typeof embeddedRuns.waitForEmbeddedAgentRunEnd>(
-  async (_sessionId: string, _timeoutMs?: number) => true,
+  async (_sessionId: string, _timeoutMs?: number | null) => true,
 );
 const embeddedRunMock = {
   isEmbeddedAgentRunActive: embeddedAgentRunActiveMock,

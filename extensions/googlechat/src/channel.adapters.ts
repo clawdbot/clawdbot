@@ -170,7 +170,7 @@ export const googlechatPairingTextAdapter = {
     accountId?: string | null;
   }) => {
     const account = resolveGoogleChatAccount({ cfg, accountId });
-    if (account.credentialSource === "none") {
+    if (account.credentialSource === "none" || account.tokenStatus === "configured_unavailable") {
       return;
     }
     const user = normalizeGoogleChatTarget(id) ?? id;

@@ -96,7 +96,10 @@ export async function runLocalCommandToFile(params: {
         terminationStarted = true;
         const pid = child.pid;
         if (typeof pid === "number" && pid > 0) {
-          killProcessTree(pid, { graceMs: COMMAND_KILL_GRACE_MS });
+          killProcessTree(pid, {
+            graceMs: COMMAND_KILL_GRACE_MS,
+            detached: process.platform !== "win32",
+          });
         } else {
           child.kill("SIGTERM");
         }
@@ -104,7 +107,7 @@ export async function runLocalCommandToFile(params: {
         // shutdown so placement replacement cannot wait forever on that pipe.
         terminationTimer = setTimeout(() => {
           if (typeof pid === "number" && pid > 0) {
-            killProcessTree(pid, { force: true });
+            killProcessTree(pid, { force: true, detached: process.platform !== "win32" });
           } else {
             child.kill("SIGKILL");
           }

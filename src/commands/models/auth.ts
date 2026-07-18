@@ -130,13 +130,20 @@ const password = async (params: Parameters<typeof clackPassword>[0]) =>
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
   guardCancel(await clackSelect(styleSelectParams(params)));
 
+const MODELS_AUTH_STDIN_MAX_BYTES = 1024 * 1024;
+
 async function readPipedStdin(): Promise<string> {
-  process.stdin.setEncoding("utf8");
-  let input = "";
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of process.stdin) {
-    input += String(chunk);
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    totalBytes += buffer.byteLength;
+    if (totalBytes > MODELS_AUTH_STDIN_MAX_BYTES) {
+      throw new Error(`Piped auth input exceeds ${MODELS_AUTH_STDIN_MAX_BYTES} bytes.`);
+    }
+    chunks.push(buffer);
   }
-  return input;
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
 async function readPastedSecret(params: {

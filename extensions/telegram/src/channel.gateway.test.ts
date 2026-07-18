@@ -332,10 +332,11 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const { task } = startTelegramAccount();
+    const { ctx, task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
     expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 15_000, {
+      abortSignal: ctx.abortSignal,
       accountId: "default",
       proxyUrl: undefined,
       network: undefined,
@@ -561,10 +562,11 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const { task } = startTelegramAccount("ops", { timeoutSeconds: 60 });
+    const { ctx, task } = startTelegramAccount("ops", { timeoutSeconds: 60 });
 
     await expect(task).resolves.toBeUndefined();
     expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 60_000, {
+      abortSignal: ctx.abortSignal,
       accountId: "ops",
       proxyUrl: undefined,
       network: undefined,

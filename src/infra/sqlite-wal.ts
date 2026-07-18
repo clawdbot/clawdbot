@@ -1,9 +1,8 @@
 // Configures SQLite WAL and related pragmas for local stores.
-import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
+import type { Result } from "@openclaw/normalization-core/result";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
@@ -19,6 +18,8 @@ const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
+// Filesystem classification runs during database open, so never let the fallback probe stall it.
+const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
@@ -145,36 +146,57 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   for (const line of contents.split("\n")) {
     const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
     if (linuxMatch) {
-      entries.push({
-        source: linuxMatch[1],
-        mountPoint: expectDefined(linuxMatch[2], "linux match capture group 2"),
-        fsType: expectDefined(linuxMatch[3], "linux match capture group 3"),
-      });
+      const source = linuxMatch[1];
+      const mountPoint = linuxMatch[2];
+      const fsType = linuxMatch[3];
+      if (source && mountPoint && fsType) {
+        entries.push({ source, mountPoint, fsType });
+      }
       continue;
     }
     const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
     if (bsdMatch) {
-      entries.push({
-        source: bsdMatch[1],
-        mountPoint: expectDefined(bsdMatch[2], "bsd match capture group 2"),
-        fsType: expectDefined(bsdMatch[3], "bsd match capture group 3"),
-      });
+      const source = bsdMatch[1];
+      const mountPoint = bsdMatch[2];
+      const fsType = bsdMatch[3];
+      if (source && mountPoint && fsType) {
+        entries.push({ source, mountPoint, fsType });
+      }
     }
   }
   return entries;
 }
 
-function readMountEntries(): MountEntry[] {
+function isMountCommandTimeout(error: unknown): boolean {
+  return (
+    error !== null && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT"
+  );
+}
+
+function readMountEntries(): Result<MountEntry[], "timeout"> {
   try {
-    return parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8"));
+    return {
+      ok: true,
+      value: parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")),
+    };
   } catch {
     // macOS/BSD expose filesystem type names in `mount` output instead of
     // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
-    return parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
-  } catch {
-    return [];
+    return {
+      ok: true,
+      value: parseMountCommandEntries(
+        String(
+          process.getBuiltinModule("node:child_process").execFileSync("mount", [], {
+            killSignal: "SIGKILL",
+            timeout: MOUNT_COMMAND_TIMEOUT_MS,
+          }),
+        ),
+      ),
+    };
+  } catch (error) {
+    return isMountCommandTimeout(error) ? { ok: false, error: "timeout" } : { ok: true, value: [] };
   }
 }
 
@@ -228,9 +250,12 @@ function resolveMountEntryJournalPolicy(
 function combineMountEntryJournalPolicies(
   targetPaths: readonly string[],
 ): SqliteFilesystemJournalPolicy {
-  const mountEntries = readMountEntries();
+  const mountResult = readMountEntries();
+  if (!mountResult.ok) {
+    return "rollback";
+  }
   const policies = new Set(
-    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountEntries)),
+    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountResult.value)),
   );
   if (policies.has("unsupported")) {
     return "unsupported";

@@ -33,7 +33,10 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import { listMemoryPromptSupplements } from "./memory-state.test-fixtures.js";
+import {
+  listMemoryPromptPreparations,
+  listMemoryPromptSupplements,
+} from "./memory-state.test-fixtures.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 afterEach(globalAfterEach0);
@@ -617,6 +620,21 @@ describe("loadOpenClawPlugins", () => {
             message: "memory prompt supplement registration missing builder",
           });
           expect(listMemoryPromptSupplements()).toStrictEqual([]);
+        },
+      },
+      {
+        label: "rejects malformed memory prompt preparation registration",
+        pluginId: "memory-prompt-preparation-malformed",
+        body: `module.exports = { id: "memory-prompt-preparation-malformed", register(api) {
+    api.registerMemoryPromptPreparation({ id: "broken-memory-prompt" });
+  } };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectRegistryErrorDiagnostic({
+            registry,
+            pluginId: "memory-prompt-preparation-malformed",
+            message: "memory prompt preparation registration missing prepare function",
+          });
+          expect(listMemoryPromptPreparations()).toStrictEqual([]);
         },
       },
       {

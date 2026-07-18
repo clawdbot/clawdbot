@@ -15,7 +15,10 @@ const providerId = "googlechat";
 
 function listEnabledAccounts(cfg: OpenClawConfig) {
   return listEnabledGoogleChatAccounts(cfg).filter(
-    (account) => account.enabled && account.credentialSource !== "none",
+    (account) =>
+      account.enabled &&
+      account.credentialSource !== "none" &&
+      account.tokenStatus !== "configured_unavailable",
   );
 }
 
@@ -47,7 +50,10 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
     const accounts = accountId
       ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
-          (account) => account.enabled && account.credentialSource !== "none",
+          (account) =>
+            account.enabled &&
+            account.credentialSource !== "none" &&
+            account.tokenStatus !== "configured_unavailable",
         )
       : listEnabledAccounts(cfg);
     if (accounts.length === 0) {
@@ -77,7 +83,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId,
     });
-    if (account.credentialSource === "none") {
+    if (account.credentialSource === "none" || account.tokenStatus === "configured_unavailable") {
       throw new Error("Google Chat credentials are missing.");
     }
 

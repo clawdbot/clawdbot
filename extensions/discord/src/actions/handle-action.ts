@@ -10,7 +10,7 @@ import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   adaptMessagePresentationForChannel,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -153,7 +153,7 @@ export async function handleDiscordMessageAction(
       ? undefined
       : (params.components ??
         presentationComponents ??
-        buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive)));
+        buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");

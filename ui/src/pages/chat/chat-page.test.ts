@@ -23,9 +23,9 @@ type RenderedPane = HTMLElement & {
   chatMessagesBySession: ChatMessageCache;
   sessionKey: string;
   active: boolean;
-  showPaneHeader: boolean;
   paneTitle: string;
   narrow: boolean;
+  mergedChrome: boolean;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
 };
@@ -104,9 +104,9 @@ function setNavigationContext(page: ChatPage) {
 function stubMatchMedia(matches: boolean) {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({
+    vi.fn((query: string) => ({
       matches,
-      media: "(max-width: 1099px)",
+      media: query,
       onchange: null,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -142,14 +142,26 @@ describe("chat page split layout host", () => {
     expect(itemAt(panes, 0, "rendered pane").paneId).toBe("p1");
     expect(itemAt(panes, 0, "rendered pane").sessionKey).toBe("main");
     expect(itemAt(panes, 0, "rendered pane").active).toBe(true);
-    expect(itemAt(panes, 0, "rendered pane").showPaneHeader).toBe(false);
+    expect(itemAt(panes, 0, "rendered pane").mergedChrome).toBe(false);
     expect(itemAt(panes, 0, "rendered pane").classList.contains("chat-split-view__pane")).toBe(
       false,
     );
     expect(page.querySelector("resizable-divider")).toBeNull();
-    // The pane renders the opener in its floating toggle cluster; the page
-    // only hands down the callback on wide single-pane layouts.
+    // The always-on pane header owns the classic split-view opener.
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
+  });
+
+  it("passes merged chrome from the shared mobile-nav query", async () => {
+    stubMatchMedia(true);
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pane = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
+    expect(pane.mergedChrome).toBe(true);
+    expect(matchMedia).toHaveBeenCalledWith("(max-width: 1099px)");
+    expect(matchMedia).toHaveBeenCalledWith("(max-width: 1100px)");
   });
 
   it("retains the classic pane element while split view opens and closes", async () => {
@@ -180,7 +192,6 @@ describe("chat page split layout host", () => {
       "surviving pane",
     );
     expect(survivingPane).toBe(classicPane);
-    expect(survivingPane.showPaneHeader).toBe(false);
     expect(survivingPane.classList.contains("chat-split-view__pane")).toBe(false);
   });
 
@@ -244,13 +255,15 @@ describe("chat page split layout host", () => {
     expect(getLayout(page)).toBeUndefined();
   });
 
-  it("withholds the split-view opener on narrow single-pane viewports", async () => {
+  it("withholds the header split-view opener on narrow single-pane viewports", async () => {
     stubMatchMedia(true);
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     document.body.append(page);
     await page.updateComplete;
 
+    // Narrow split view renders only the active pane, so offering the opener
+    // there would silently hide the second pane it creates.
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
     expect(pane?.onOpenSplitView).toBeUndefined();
   });
@@ -301,7 +314,6 @@ describe("chat page split layout host", () => {
         .querySelector(".chat-split-view__cell--active")
         ?.contains(itemAt(panes, 1, "rendered pane")),
     ).toBe(true);
-    expect(panes.map((pane) => pane.showPaneHeader)).toEqual([true, true]);
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
     expect(panes[0]?.chatMessagesBySession).toBe(panes[1]?.chatMessagesBySession);
   });
@@ -317,7 +329,6 @@ describe("chat page split layout host", () => {
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     expect(panes.map((pane) => pane.paneId)).toEqual(["p2"]);
     expect(itemAt(panes, 0, "rendered pane").active).toBe(true);
-    expect(itemAt(panes, 0, "rendered pane").showPaneHeader).toBe(true);
     expect(itemAt(panes, 0, "rendered pane").narrow).toBe(true);
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
@@ -379,8 +390,24 @@ describe("chat page split layout host", () => {
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
     expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
 
+    // Rows arrive under the canonical agent key while the route still says
+    // "main"; hello-default resolution plus equivalence matching must find
+    // the label anyway — including non-default agent ids.
+    (page as unknown as { context: { gateway?: unknown; sessions: unknown } }).context.gateway = {
+      snapshot: {
+        hello: {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "dev",
+              mainKey: "main",
+              mainSessionKey: "agent:dev:main",
+            },
+          },
+        },
+      },
+    };
     sessionsState.result = {
-      sessions: [{ key: "main", displayName: "Main desk" }],
+      sessions: [{ key: "agent:dev:main", displayName: "Main desk" }],
     };
     notify();
     await page.updateComplete;

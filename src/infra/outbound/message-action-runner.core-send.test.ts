@@ -343,6 +343,66 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
+  it("carries a prepared conversation-turn id to the channel send", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "correlated hello",
+      },
+      preparedMessageId: "platform-message-1",
+      dryRun: false,
+    });
+
+    expect(firstMockArg(sendText, "send text").preparedMessageId).toBe("platform-message-1");
+  });
+
+  it("uses an active gateway-mode adapter directly when the Gateway owns the turn", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "reef-message-1",
+      chatId: "molty",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "gateway",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:C123",
+        message: "correlated hello",
+      },
+      preparedMessageId: "reef-message-1",
+      gatewayOwnedDelivery: true,
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      kind: "send",
+      sendResult: { via: "direct", result: { messageId: "reef-message-1" } },
+    });
+  });
+
   it("prepends messages.responsePrefix to message-tool sends", async () => {
     const sendText = registerSlackTextPlugin();
 

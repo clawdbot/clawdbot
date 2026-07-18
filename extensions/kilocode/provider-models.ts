@@ -14,9 +14,9 @@ import {
 const log = createSubsystemLogger("kilocode-models");
 
 export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
-export const KILOCODE_DEFAULT_MODEL_ID = "kilo/auto";
+export const KILOCODE_DEFAULT_MODEL_ID = "kilo-auto/balanced";
 export const KILOCODE_DEFAULT_MODEL_REF = `kilocode/${KILOCODE_DEFAULT_MODEL_ID}`;
-export const KILOCODE_DEFAULT_MODEL_NAME = "Kilo Auto";
+export const KILOCODE_DEFAULT_MODEL_NAME = "Auto Balanced";
 
 type KilocodeModelCatalogEntry = {
   id: string;
@@ -37,12 +37,12 @@ export const KILOCODE_MODEL_CATALOG: KilocodeModelCatalogEntry[] = [
 ];
 
 export const KILOCODE_DEFAULT_CONTEXT_WINDOW = 1000000;
-export const KILOCODE_DEFAULT_MAX_TOKENS = 128000;
+export const KILOCODE_DEFAULT_MAX_TOKENS = 65536;
 export const KILOCODE_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
+  input: 0.325,
+  output: 1.95,
+  cacheRead: 0.0325,
+  cacheWrite: 0.40625,
 };
 
 export const KILOCODE_MODELS_URL = `${KILOCODE_BASE_URL}models`;

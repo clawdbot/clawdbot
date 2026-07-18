@@ -1176,11 +1176,7 @@ describe("github-copilot plugin", () => {
         accessTokenPolls += 1;
         return {
           response: new Response(
-            JSON.stringify(
-              accessTokenPolls === 1
-                ? { error: "authorization_pending" }
-                : { access_token: "refreshed-token", token_type: "bearer" },
-            ),
+            JSON.stringify({ access_token: "refreshed-token", token_type: "bearer" }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
           finalUrl: params.url,
@@ -1193,13 +1189,14 @@ describe("github-copilot plugin", () => {
         expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS),
       );
       await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
-      expect(accessTokenPolls).toBe(1);
+      expect(accessTokenPolls).toBe(0);
 
       await vi.advanceTimersByTimeAsync(3_000_000_000 - MAX_TIMER_TIMEOUT_MS);
       await expect(flow).resolves.toEqual({
         status: "authorized",
         accessToken: "refreshed-token",
       });
+      expect(accessTokenPolls).toBe(1);
     } finally {
       vi.useRealTimers();
     }

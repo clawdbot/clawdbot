@@ -8,6 +8,8 @@ export type PanelTabStripTab = {
   title?: string | null;
   icon?: TemplateResult | typeof nothing | null;
   statusLabel?: string | null;
+  /** Short ownership marker (e.g. "agent") rendered as a pill after the label. */
+  badge?: string | null;
   className?: string;
   closeLabel: string;
 };
@@ -70,6 +72,7 @@ export function renderPanelTabStrip(params: {
               ? nothing
               : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`}
             <span class="tabstrip-tab__label">${tab.label}</span>
+            ${tab.badge ? html`<span class="tabstrip-tab__badge">${tab.badge}</span>` : nothing}
             ${tab.statusLabel
               ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`
               : nothing}
@@ -155,6 +158,15 @@ export const panelTabStripStyles = css`
   .tabstrip-tab__status {
     font-size: 11px;
     color: var(--muted, #8a919e);
+  }
+  .tabstrip-tab__badge {
+    border: 1px solid color-mix(in srgb, var(--accent, #4ec9a8) 45%, transparent);
+    border-radius: 999px;
+    color: var(--accent, #4ec9a8);
+    font-size: 9px;
+    line-height: 14px;
+    padding: 0 5px;
+    text-transform: uppercase;
   }
   /* Each close button sits right after its tab in the nav slot; the pair is
      styled as one surface (shared hover background, shared active underline)

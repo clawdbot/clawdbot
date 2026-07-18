@@ -1,5 +1,4 @@
 // Discord plugin module implements inbound job behavior.
-import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,
@@ -13,6 +12,7 @@ type DiscordInboundJobRuntimeField =
   | "abortSignal"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
   | "discordRestFetch";
 
@@ -24,7 +24,10 @@ export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayClaims?: readonly ChannelReplayClaimHandle[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+  };
 };
 
 function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
@@ -43,13 +46,14 @@ function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): 
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayClaims?: readonly ChannelReplayClaimHandle[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
     discordRestFetch,
     message,
@@ -75,10 +79,11 @@ export function buildDiscordInboundJob(
       abortSignal,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
       discordRestFetch,
     },
-    replayClaims: options?.replayClaims,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 

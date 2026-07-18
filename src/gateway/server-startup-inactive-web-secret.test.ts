@@ -1,6 +1,7 @@
 /** Gateway startup coverage for active and inactive web-provider SecretRefs. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
@@ -130,6 +131,7 @@ describe("gateway startup web-provider SecretRefs", () => {
   afterEach(async () => {
     await server?.close();
     server = undefined;
+    setActiveDegradedSecretOwners([]);
   });
 
   it("starts and warns when an unresolved web secret is provably inactive", async () => {
@@ -147,13 +149,27 @@ describe("gateway startup web-provider SecretRefs", () => {
     });
   });
 
-  it("fails closed when the unresolved web secret is active", async () => {
-    await withEnvAsync({ [ACTIVE_SECRET_ENV]: undefined }, async () => {
-      await writeConfig(buildConfig({ enabled: true, envVar: ACTIVE_SECRET_ENV }));
+  it("starts with only the explicit active web provider unavailable", async () => {
+    await withEnvAsync(
+      {
+        [ACTIVE_SECRET_ENV]: undefined,
+        GEMINI_API_KEY: "test-gemini-api-key",
+      },
+      async () => {
+        await writeConfig(buildConfig({ enabled: true, envVar: ACTIVE_SECRET_ENV }));
 
-      await expect(
-        startGatewayServer(await getFreePort(), { auth: { mode: "none" } }),
-      ).rejects.toThrow(/Startup failed: required secrets are unavailable/);
-    });
+        server = await startGatewayServer(await getFreePort(), { auth: { mode: "none" } });
+
+        const snapshot = getActiveSecretsRuntimeSnapshot();
+        expect(snapshot?.degradedOwners).toContainEqual(
+          expect.objectContaining({
+            ownerKind: "capability",
+            ownerId: "web-search:gemini",
+            state: "unavailable",
+            paths: [SECRET_PATH],
+          }),
+        );
+      },
+    );
   });
 });

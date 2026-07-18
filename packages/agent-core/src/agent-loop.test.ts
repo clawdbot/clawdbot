@@ -242,6 +242,109 @@ describe("agentLoop continuation guards", () => {
       role: "assistant",
     });
   });
+
+  it("delivers a queued follow-up before continuing from a tool result", async () => {
+    let requestContext: Context | undefined;
+    const streamFn: StreamFn = (activeModel, context) => {
+      requestContext = context;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            api: activeModel.api,
+            provider: activeModel.provider,
+            model: activeModel.id,
+            usage: TEST_USAGE,
+            stopReason: "stop",
+            timestamp: 3,
+          },
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const agent = new Agent({
+      initialState: {
+        model,
+        systemPrompt: "",
+        tools: [],
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-finish",
+            toolName: "finish",
+            content: [{ type: "text", text: "finished" }],
+            details: {},
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      },
+      convertToLlm: (messages) => messages as Message[],
+      streamFn,
+    });
+    agent.followUp({ role: "user", content: "queued after end", timestamp: 2 });
+
+    await agent.continue();
+
+    expect(requestContext?.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "queued after end",
+    });
+  });
+
+  it("keeps a queued follow-up behind a trailing user continuation", async () => {
+    const requestContexts: Context[] = [];
+    const streamFn: StreamFn = (activeModel, context) => {
+      requestContexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `answer ${requestContexts.length}` }],
+            api: activeModel.api,
+            provider: activeModel.provider,
+            model: activeModel.id,
+            usage: TEST_USAGE,
+            stopReason: "stop",
+            timestamp: requestContexts.length + 1,
+          },
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const agent = new Agent({
+      initialState: {
+        model,
+        systemPrompt: "",
+        tools: [],
+        messages: [{ role: "user", content: "retry this turn", timestamp: 1 }],
+      },
+      convertToLlm: (messages) => messages as Message[],
+      streamFn,
+    });
+    agent.followUp({ role: "user", content: "queued after retry", timestamp: 2 });
+
+    await agent.continue();
+
+    expect(requestContexts).toHaveLength(2);
+    expect(requestContexts[0]?.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "retry this turn",
+    });
+    expect(requestContexts[1]?.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "queued after retry",
+    });
+  });
 });
 
 describe("agentLoop streaming updates", () => {
@@ -1700,6 +1803,104 @@ describe("agentLoop tool termination", () => {
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
+  it("normalizes a tool result with missing content before the next model turn", async () => {
+    const contexts: Context[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = (_activeModel, context) => {
+      contexts.push(context);
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-empty", name: "empty", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({ type: "done", reason: turn === 1 ? "toolUse" : "stop", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const tool: AgentTool = {
+      name: "empty",
+      label: "empty",
+      description: "returns no display content",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => ({ details: { ok: true } }) as AgentToolResult<unknown>,
+    };
+
+    await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        config,
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(contexts).toHaveLength(2);
+    expect(contexts[1]?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "empty",
+        content: [],
+      }),
+    );
+  });
+
+  it("preserves extra tool result fields when an after hook patches the result", async () => {
+    const extra = { deliveryId: "delivery-1" };
+    const originalResult = {
+      content: [{ type: "text" as const, text: "sent" }],
+      details: { phase: "original" },
+      extra,
+    };
+    const tool: AgentTool = {
+      name: "patched",
+      label: "patched",
+      description: "returns extended result metadata",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => originalResult,
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-patched", name: tool.name, arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          afterToolCall: async () => ({ details: { phase: "patched" }, terminate: true }),
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(endEvent?.result).toMatchObject({
+      content: originalResult.content,
+      details: { phase: "patched" },
+      extra,
+      terminate: true,
+    });
+  });
+
   it("marks policy-blocked tool calls as not executed", async () => {
     const executed: string[] = [];
     let turn = 0;
@@ -2130,6 +2331,79 @@ describe("agentLoop tool termination", () => {
       "agent_end",
     ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
+});
+
+describe("Agent next-turn preparation", () => {
+  it("forwards completed-turn context and applies its update to the following request", async () => {
+    const nextModel = { ...model, id: "next-model" };
+    const requests: Array<{ model: string; systemPrompt: string; tools: string[] }> = [];
+    let turn = 0;
+    const streamFn: StreamFn = (activeModel, context) => {
+      requests.push({
+        model: activeModel.id,
+        systemPrompt: context.systemPrompt ?? "",
+        tools: context.tools?.map((tool) => tool.name) ?? [],
+      });
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const content: AssistantMessage["content"] =
+          turn === 1
+            ? [{ type: "toolCall", id: "call-refresh", name: "refresh", arguments: {} }]
+            : [{ type: "text", text: "done" }];
+        stream.push({
+          type: "done",
+          reason: turn === 1 ? "toolUse" : "stop",
+          message: {
+            role: "assistant",
+            content,
+            api: activeModel.api,
+            provider: activeModel.provider,
+            model: activeModel.id,
+            usage: TEST_USAGE,
+            stopReason: turn === 1 ? "toolUse" : "stop",
+            timestamp: turn,
+          },
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const tool: AgentTool = {
+      name: "refresh",
+      label: "refresh",
+      description: "refresh turn state",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => ({ content: [{ type: "text", text: "refreshed" }], details: {} }),
+    };
+    const prepareNextTurnWithContext = vi.fn(({ context }) => ({
+      context: { ...context, systemPrompt: "refreshed prompt", tools: [] },
+      model: nextModel,
+    }));
+    const prepareNextTurn = vi.fn(() => ({
+      context: { systemPrompt: "legacy prompt", messages: [], tools: [tool] },
+    }));
+    const agent = new Agent({
+      initialState: { model, systemPrompt: "initial prompt", tools: [tool] },
+      convertToLlm: (messages) => messages as Message[],
+      streamFn,
+      prepareNextTurn,
+      prepareNextTurnWithContext,
+    });
+
+    await agent.prompt("start");
+
+    expect(prepareNextTurnWithContext).toHaveBeenCalled();
+    expect(prepareNextTurn).not.toHaveBeenCalled();
+    expect(prepareNextTurnWithContext.mock.calls[0]?.[0]).toMatchObject({
+      message: { role: "assistant", stopReason: "toolUse" },
+      toolResults: [{ role: "toolResult", toolName: "refresh" }],
+    });
+    expect(requests).toEqual([
+      { model: model.id, systemPrompt: "initial prompt", tools: ["refresh"] },
+      { model: nextModel.id, systemPrompt: "refreshed prompt", tools: [] },
+    ]);
   });
 });
 

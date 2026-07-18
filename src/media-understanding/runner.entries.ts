@@ -46,6 +46,8 @@ import {
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -792,6 +794,7 @@ export async function runProviderEntry(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
+  secretOwnerId?: string;
 }): Promise<MediaUnderstandingOutput | null> {
   const { entry, capability, cfg } = params;
   const providerIdRaw = entry.provider?.trim();
@@ -800,6 +803,10 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
+  assertRuntimeMediaRequestSecretOwnerAvailable({ capability, entry });
+  if (params.secretOwnerId) {
+    assertSecretOwnerAvailable("capability", params.secretOwnerId);
+  }
   const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
     capability,
     entry,

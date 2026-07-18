@@ -5,10 +5,11 @@ mode="${1:?mode is required}"
 sticky_root="${2:?sticky root is required}"
 workspace="${3:?workspace is required}"
 archive="$sticky_root/importer-node-modules.tar"
-marker="$sticky_root/.install-complete-v2"
+marker="$sticky_root/.openclaw-deps-fingerprint"
 
 case "$mode" in
   capture)
+    fingerprint="${4:?fingerprint is required}"
     mkdir -p "$sticky_root"
     list_file="$(mktemp)"
     temp_archive="$archive.tmp.$$"
@@ -22,7 +23,9 @@ case "$mode" in
       tar --create --file "$temp_archive" --null --files-from "$list_file"
     )
     mv "$temp_archive" "$archive"
-    touch "$marker"
+    # The marker lands last: a fingerprint is only ever visible next to the
+    # importer archive it describes, so consumers cannot restore a torn pair.
+    printf '%s\n' "$fingerprint" > "$marker"
     ;;
   restore)
     if [[ ! -f "$archive" ]]; then

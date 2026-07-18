@@ -618,6 +618,57 @@ describe("cron view editor", () => {
     expect(onceText).toContain("2026");
   });
 
+  it("offers a Seconds interval unit so sub-minute cadences stay editable", () => {
+    const container = renderView({
+      createOpen: true,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        scheduleKind: "every",
+        everyAmount: "30",
+        everyUnit: "seconds",
+      },
+    });
+    const unitSelect = getElement(container, 'select[aria-label="Unit"]', HTMLSelectElement);
+    const values = Array.from(unitSelect.querySelectorAll("option")).map((option) => option.value);
+    expect(values).toEqual(["seconds", "minutes", "hours", "days"]);
+  });
+
+  it("summarizes seconds intervals, including singular and decimal amounts", () => {
+    const singular = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount: "1", everyUnit: "seconds" },
+    });
+    expect(singular.querySelector(".cron-schedule-summary")?.textContent).toContain(
+      "Runs every second",
+    );
+
+    const plural = renderView({
+      createOpen: true,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        scheduleKind: "every",
+        everyAmount: "30",
+        everyUnit: "seconds",
+      },
+    });
+    expect(plural.querySelector(".cron-schedule-summary")?.textContent).toContain(
+      "Runs every 30 seconds",
+    );
+
+    const decimal = renderView({
+      createOpen: true,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        scheduleKind: "every",
+        everyAmount: "0.45",
+        everyUnit: "seconds",
+      },
+    });
+    expect(decimal.querySelector(".cron-schedule-summary")?.textContent).toContain(
+      "Runs every 0.45 seconds",
+    );
+  });
+
   it("hides the schedule summary for recurring amounts that cannot produce safe milliseconds", () => {
     for (const everyAmount of ["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"]) {
       const container = renderView({

@@ -7,6 +7,7 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { USAGE_PAYLOAD_TTL_MS, type UsageRefreshReason } from "../usage/refresh-policy.ts";
 import { ProfilePage } from "./profile-page.ts";
 
 const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
@@ -17,15 +18,6 @@ if (!customElements.get(PROFILE_PAGE_TEST_TAG)) {
 
 type ProfilePageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
-};
-
-type ProfilePageLifecycle = HTMLElement & {
-  context: ApplicationContext<RouteId>;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  costSummary: CostUsageSummary | null;
-  sessionsResult: SessionsUsageResult | null;
-  applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
 };
 
 function createContext(
@@ -92,6 +84,64 @@ function createSessionsResult(): SessionsUsageResult {
   };
 }
 
+function createConnectedContext(request: GatewayBrowserClient["request"]) {
+  let snapshot: ApplicationGatewaySnapshot = {
+    client: { request } as GatewayBrowserClient,
+    connected: true,
+    reconnecting: false,
+    hello: null,
+    assistantAgentId: "main",
+    sessionKey: "agent:main:main",
+    lastError: null,
+    lastErrorCode: null,
+  };
+  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const subscribe = () => () => undefined;
+  const context = {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    agents: {
+      state: { agentsList: null },
+      ensureList: async () => null,
+      subscribe,
+    },
+    agentIdentity: {
+      get: () => null,
+      ensure: async () => undefined,
+      subscribe,
+    },
+    config: {
+      current: {
+        assistantIdentity: {
+          name: "OpenClaw",
+          avatar: null,
+          avatarSource: null,
+          avatarStatus: null,
+          avatarReason: null,
+        },
+      },
+      subscribe,
+    },
+    basePath: "",
+  } as unknown as ApplicationContext<RouteId>;
+  return {
+    context,
+    emitConnected(connected: boolean) {
+      snapshot = { ...snapshot, connected };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}
+
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
@@ -119,44 +169,100 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it("keeps settled profile usage across a same-client reconnect", async () => {
-  const request = vi.fn();
-  const client = { request } as unknown as GatewayBrowserClient;
-  const context = createContext(client, true);
-  const page = new ProfilePage() as unknown as ProfilePageLifecycle;
-  page.context = context;
-  page.client = client;
-  page.connected = true;
-  page.costSummary = createCostSummary();
-  page.sessionsResult = createSessionsResult();
+it("gates profile usage refreshes by payload age and page visibility", async () => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const request = vi.fn(async (method: string) => {
+    if (method === "usage.cost") {
+      return createCostSummary();
+    }
+    return createSessionsResult();
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement & {
+    costSummary: CostUsageSummary | null;
+    lastProfileLoadedAtMs: number | null;
+    loading: boolean;
+    requestProfileRefresh: (reason: UsageRefreshReason) => void;
+    scheduleCacheSettleRefresh: () => void;
+  };
+  provider.append(page);
+  document.body.append(provider);
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(page.loading).toBe(false));
 
-  page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
-  page.applyGatewaySnapshot(context.gateway.snapshot);
-  await Promise.resolve();
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  expect(request).toHaveBeenCalledTimes(2);
 
-  expect(request).not.toHaveBeenCalled();
-});
-
-it("resumes a settling profile cache after a same-client reconnect", async () => {
-  const request = vi.fn(async (method: string) =>
-    method === "sessions.usage" ? { sessions: [] } : createCostSummary(),
-  );
-  const client = { request } as unknown as GatewayBrowserClient;
-  const context = createContext(client, true);
-  const page = new ProfilePage() as unknown as ProfilePageLifecycle;
-  page.context = context;
-  page.client = client;
-  page.connected = true;
+  let reconnectPollDelayMs: number | undefined;
+  const reconnectTimerSpy = vi.spyOn(window, "setTimeout").mockImplementation(((
+    _handler: TimerHandler,
+    timeout?: number,
+  ) => {
+    reconnectPollDelayMs = Number(timeout);
+    return 1;
+  }) as unknown as typeof window.setTimeout);
   page.costSummary = createCostSummary({
     status: "refreshing",
     cachedFiles: 0,
     pendingFiles: 1,
     staleFiles: 0,
   });
-  page.sessionsResult = createSessionsResult();
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(reconnectPollDelayMs).toBeGreaterThan(0);
+  expect(reconnectPollDelayMs).toBeLessThanOrEqual(USAGE_PAYLOAD_TTL_MS);
+  reconnectTimerSpy.mockRestore();
 
-  page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
-  page.applyGatewaySnapshot(context.gateway.snapshot);
+  page.lastProfileLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+  visibility.mockReturnValue("hidden");
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  expect(request).toHaveBeenCalledTimes(2);
 
-  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("usage.cost", expect.any(Object)));
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new Event("focus"));
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+  await vi.waitFor(() => expect(page.loading).toBe(false));
+
+  page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(6));
+  await vi.waitFor(() => expect(page.loading).toBe(false));
+
+  let settlePoll: TimerHandler | null = null;
+  let settleDelayMs: number | undefined;
+  const setTimeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation(((
+    handler: TimerHandler,
+    timeout?: number,
+  ) => {
+    settlePoll = handler;
+    settleDelayMs = Number(timeout);
+    return 1;
+  }) as unknown as typeof window.setTimeout);
+  page.costSummary = createCostSummary({
+    status: "refreshing",
+    cachedFiles: 0,
+    pendingFiles: 1,
+    staleFiles: 0,
+  });
+  const nowMs = Date.now();
+  const nowSpy = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+  page.lastProfileLoadedAtMs = nowMs;
+  page.scheduleCacheSettleRefresh();
+  expect(settleDelayMs).toBe(USAGE_PAYLOAD_TTL_MS);
+  nowSpy.mockRestore();
+
+  page.lastProfileLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+  visibility.mockReturnValue("hidden");
+  (settlePoll as (() => void) | null)?.();
+  expect(request).toHaveBeenCalledTimes(6);
+
+  setTimeoutSpy.mockRestore();
+  visibility.mockReturnValue("visible");
+  window.dispatchEvent(new Event("focus"));
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(8));
 });

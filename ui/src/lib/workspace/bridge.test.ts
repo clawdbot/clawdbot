@@ -6,6 +6,10 @@ type WidgetBridgeDeps = Parameters<typeof createWidgetBridge>[0];
 
 let testWidgetSequence = 0;
 
+function waitForWidgetBridge(assertion: () => void) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 beforeEach(() => {
   testWidgetSequence += 1;
 });
@@ -59,7 +63,7 @@ describe("getData binding gating", () => {
       resolveBinding,
     });
     bridge.handleMessage({ v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ type: "workspace:error", code: "capability_denied" });
     expect(resolveBinding).not.toHaveBeenCalled();
   });
@@ -67,7 +71,7 @@ describe("getData binding gating", () => {
   it("resolves a declared binding and posts data", async () => {
     const { bridge, posted } = makeBridge({ resolveBinding: async () => ({ revenue: 42 }) });
     bridge.handleMessage({ v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toEqual({
       v: 1,
       type: "workspace:data",
@@ -81,7 +85,7 @@ describe("getData binding gating", () => {
     const resolveBinding = vi.fn(async () => ({ ok: true }));
     const { bridge, posted } = makeBridge({ resolveBinding });
     bridge.handleMessage({ v: 1, type: "workspace:getData", requestId: "r1", bindingId: "secret" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({
       type: "workspace:error",
       code: "binding_denied",
@@ -138,7 +142,7 @@ describe("sendPrompt capability + confirm + rate limit", () => {
       sendPrompt,
     });
     bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "p1", text: "hi" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ type: "workspace:error", code: "capability_denied" });
     expect(confirmPrompt).not.toHaveBeenCalled();
     expect(sendPrompt).not.toHaveBeenCalled();
@@ -152,7 +156,7 @@ describe("sendPrompt capability + confirm + rate limit", () => {
       sendPrompt,
     });
     bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "p1", text: "hi" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ type: "workspace:error", code: "prompt_declined" });
     expect(sendPrompt).not.toHaveBeenCalled();
   });
@@ -166,7 +170,7 @@ describe("sendPrompt capability + confirm + rate limit", () => {
       sendPrompt,
     });
     bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "p1", text: "do it" });
-    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
+    await waitForWidgetBridge(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
     expect(confirmPrompt).toHaveBeenCalledWith("do it");
     expect(sendPrompt).toHaveBeenCalledWith("do it");
   });
@@ -183,7 +187,7 @@ describe("sendPrompt capability + confirm + rate limit", () => {
     bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "p1", text: "one" });
     // Second request while the first confirm is still pending → rate_limited.
     bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "p2", text: "two" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({
       type: "workspace:error",
       code: "rate_limited",
@@ -207,12 +211,12 @@ describe("sendPrompt capability + confirm + rate limit", () => {
     // next (the in-flight limit is exercised by a separate test).
     for (let i = 0; i < 10; i += 1) {
       bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: `p${i}`, text: "x" });
-      await vi.waitFor(() => expect(sent).toBe(i + 1));
+      await waitForWidgetBridge(() => expect(sent).toBe(i + 1));
     }
     expect(posted).toHaveLength(0);
     // The 11th within the same rolling minute is rejected.
     bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "p10", text: "x" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ type: "workspace:error", code: "rate_limited" });
     expect(sent).toBe(10);
   });
@@ -282,13 +286,13 @@ describe("rate-limit state persists across bridge re-instantiation (remount)", (
         requestId: `a${i}`,
         text: "x",
       });
-      await vi.waitFor(() => expect(sent).toBe(i + 1));
+      await waitForWidgetBridge(() => expect(sent).toBe(i + 1));
     }
     // Remount: dispose the exhausted bridge and build a fresh one for the same name.
     first.bridge.dispose();
     const second = makeNamed();
     second.bridge.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "b0", text: "x" });
-    await vi.waitFor(() => expect(second.posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(second.posted).toHaveLength(1));
     // Budget survived the remount → still rate_limited, no extra send.
     expect(second.posted[0]).toMatchObject({ type: "workspace:error", code: "rate_limited" });
     expect(sent).toBe(10);
@@ -324,11 +328,11 @@ describe("rate-limit state persists across bridge re-instantiation (remount)", (
     // Exhaust widget-a's budget.
     for (let i = 0; i < 10; i += 1) {
       bridgeA.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: `a${i}`, text: "x" });
-      await vi.waitFor(() => expect(sentA).toBe(i + 1));
+      await waitForWidgetBridge(() => expect(sentA).toBe(i + 1));
     }
     // widget-b is unaffected — its first send succeeds.
     bridgeB.handleMessage({ v: 1, type: "workspace:sendPrompt", requestId: "b0", text: "x" });
-    await vi.waitFor(() => expect(sentB).toBe(1));
+    await waitForWidgetBridge(() => expect(sentB).toBe(1));
     expect(postedB).toHaveLength(0);
   });
 });
@@ -352,7 +356,7 @@ describe("resolve-time binding re-check", () => {
       assertBindingAllowed: () => null,
     });
     bridge.handleMessage({ v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitForWidgetBridge(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ type: "workspace:data", data: 42 });
     expect(resolveBinding).toHaveBeenCalledOnce();
   });

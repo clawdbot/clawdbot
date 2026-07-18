@@ -1,4 +1,24 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+
+type SelectedSessionProjectionState = {
+  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
+  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
+  selectedChatSessionArchived: boolean;
+};
+
+export function applySelectedSessionProjection(
+  state: SelectedSessionProjectionState,
+  session: GatewaySessionRow | undefined,
+): session is GatewaySessionRow {
+  if (!session) {
+    return false;
+  }
+  state.selectedChatSessionArchived = session.archived === true;
+  state.chatQueueModeOverride = session.queueMode;
+  state.chatEffectiveQueueMode = session.effectiveQueueMode;
+  return true;
+}
 
 export function resolveAssistantAttachmentAuthToken(state: {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;

@@ -13,10 +13,11 @@ import {
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
+  isPreExecutionBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
   type HookContext,
@@ -27,6 +28,7 @@ import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./r
 import type { ToolDefinition } from "./sessions/index.js";
 import { appendBoundedTextTail, SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -66,6 +68,12 @@ type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
 };
+type ToolSearchCallOptions = CatalogVisibilityOptions &
+  UnknownToolErrorOptions & {
+    parentToolCallId?: string;
+    signal?: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback;
+  };
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -82,6 +90,9 @@ export type ToolSearchCatalogToolExecutor = (params: {
   input: unknown;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  acceptResultBeforeProjection: (
+    result: AgentToolResult<unknown>,
+  ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
 
 /** Transcript projection for target tool calls made through Tool Search. */
@@ -128,6 +139,7 @@ export type ToolSearchCatalogEntry = {
   label?: string;
   description: string;
   parameters?: unknown;
+  outputSchema?: TSchema;
   tool: CatalogTool;
 };
 
@@ -423,7 +435,9 @@ const sessionCatalogs =
 const reusableCatalogSnapshots = new Map<string, ReusableCatalogSnapshot>();
 const catalogFingerprints = new WeakMap<ToolSearchCatalogSession, string>();
 const catalogToolIdentities = new WeakMap<object, number>();
+const untrustedSchemaIdentities = new WeakMap<object, number>();
 let nextCatalogToolIdentity = 1;
+let nextUntrustedSchemaIdentity = 1;
 
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
@@ -559,6 +573,20 @@ function catalogToolIdentity(tool: CatalogTool): number {
   return next;
 }
 
+function untrustedSchemaFingerprint(schema: unknown): string {
+  if (schema === null || typeof schema !== "object") {
+    return stableJsonFingerprint(schema);
+  }
+  const existing = untrustedSchemaIdentities.get(schema);
+  if (existing !== undefined) {
+    return `object:${existing}`;
+  }
+  const next = nextUntrustedSchemaIdentity;
+  nextUntrustedSchemaIdentity += 1;
+  untrustedSchemaIdentities.set(schema, next);
+  return `object:${next}`;
+}
+
 function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
   // Fingerprints include object identity for executable tools because function
   // bodies are not JSON-stable but catalog reuse must not bind stale executors.
@@ -572,7 +600,14 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.name,
         entry.label ?? "",
         entry.description,
-        stableJsonFingerprint(entry.parameters),
+        // Remote/client schemas may be attacker-sized. Object identity still
+        // invalidates reuse when a schema object is replaced without walking it.
+        entry.source === "openclaw"
+          ? stableJsonFingerprint(entry.parameters)
+          : untrustedSchemaFingerprint(entry.parameters),
+        entry.source === "openclaw"
+          ? stableJsonFingerprint(entry.outputSchema)
+          : untrustedSchemaFingerprint(entry.outputSchema),
         String(catalogToolIdentity(entry.tool)),
       ]
         .map((part) => JSON.stringify(part))
@@ -703,6 +738,11 @@ function toCatalogEntry(
     label: tool.label,
     description: tool.description ?? "",
     parameters: tool.parameters,
+    // Only locally loaded OpenClaw/core tools may declare model-visible output
+    // contracts. MCP and client metadata remains untrusted and deferred.
+    ...(source === "openclaw" && (tool as AnyAgentTool).outputSchema
+      ? { outputSchema: (tool as AnyAgentTool).outputSchema }
+      : {}),
     tool: catalogTool,
   };
 }
@@ -906,6 +946,33 @@ export function projectToolSearchTargetTranscriptMessages(
     inserted.add(projection);
   }
   return projected;
+}
+
+function freezeJsonSnapshot(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  for (const nested of Object.values(value)) {
+    freezeJsonSnapshot(nested);
+  }
+  return Object.freeze(value);
+}
+
+/** Capture a stable JSON-safe result before delayed transcript settlement. */
+function snapshotToolSearchTargetTranscriptResult(
+  result: AgentToolResult<unknown>,
+): AgentToolResult<unknown> {
+  const hasDetails = "details" in result;
+  const snapshot = toJsonSafe(result);
+  if (!isRecord(snapshot)) {
+    throw new Error("Tool Search target result could not be captured for transcript projection.");
+  }
+  if (hasDetails && !("details" in snapshot)) {
+    // `details` presence selects callValue unwrapping. JSON serialization drops
+    // an explicit undefined, so restore that marker before freezing the envelope.
+    snapshot.details = result.details === undefined ? undefined : toJsonSafe(result.details);
+  }
+  return freezeJsonSnapshot(snapshot) as AgentToolResult<unknown>;
 }
 
 /** Create an explicit catalog holder for callers that cannot rely on session keys. */
@@ -1141,7 +1208,9 @@ function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
   throw new ToolInputError("Tool Search catalog is unavailable for this run.");
 }
 
-function compactEntry(entry: ToolSearchCatalogEntry) {
+export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+  const output =
+    entry.source === "openclaw" ? compactToolOutputHint(entry.outputSchema) : undefined;
   return {
     id: entry.id,
     source: entry.source,
@@ -1150,6 +1219,10 @@ function compactEntry(entry: ToolSearchCatalogEntry) {
     name: entry.name,
     label: entry.label,
     description: entry.description,
+    // Remote MCP and client schemas are untrusted metadata. Keep them deferred
+    // rather than repeatedly traversing attacker-sized property maps on search.
+    input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    ...(output ? { output } : {}),
   };
 }
 
@@ -1166,7 +1239,9 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
   return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
 }
 
-function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string | undefined {
+function formatToolDirectoryEntry(
+  entry: ReturnType<typeof compactToolSearchCatalogEntry>,
+): string | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -1189,7 +1264,9 @@ function renderToolSearchCatalogDirectory(lines: string[], total: number): strin
   return ["Available deferred-schema tools:", ...lines, "", footer].join("\n");
 }
 
-function formatToolSearchCatalogDirectory(entries: Array<ReturnType<typeof compactEntry>>): string {
+function formatToolSearchCatalogDirectory(
+  entries: Array<ReturnType<typeof compactToolSearchCatalogEntry>>,
+): string {
   if (entries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
@@ -1525,8 +1602,9 @@ export function estimateToolSchemaDirectoryToolNames(params: {
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
-    ...compactEntry(entry),
+    ...compactToolSearchCatalogEntry(entry),
     parameters: entry.parameters ?? {},
+    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
   };
 }
 
@@ -1732,6 +1810,67 @@ function getTelemetry(catalog: ToolSearchCatalogSession) {
   };
 }
 
+let schemaValidatorModulePromise:
+  | Promise<typeof import("../plugins/schema-validator.js")>
+  | undefined;
+
+async function validateCatalogOutputValue(
+  entry: ToolSearchCatalogEntry,
+  value: unknown,
+): Promise<
+  ReturnType<typeof import("../plugins/schema-validator.js").validateJsonSchemaValue> | undefined
+> {
+  if (!entry.outputSchema) {
+    return undefined;
+  }
+  try {
+    schemaValidatorModulePromise ??= import("../plugins/schema-validator.js");
+    const { validateJsonSchemaValue } = await schemaValidatorModulePromise;
+    return validateJsonSchemaValue({
+      schema: entry.outputSchema as never,
+      // The shared validator fingerprints schema changes under the caller key,
+      // so a rebuilt same-id catalog cannot retain a stale compiled contract.
+      cacheKey: `tool-output:${entry.id}`,
+      value,
+    });
+  } catch (error) {
+    throw new Error(`Tool "${entry.id}" has an invalid outputSchema.`, { cause: error });
+  }
+}
+
+async function assertCatalogOutputSchemaIsValid(entry: ToolSearchCatalogEntry): Promise<void> {
+  // Compile before execution. A bad contract must not turn a successful side
+  // effect into a retryable post-execution schema failure.
+  await validateCatalogOutputValue(entry, undefined);
+}
+
+async function assertCatalogOutputMatchesSchema(
+  entry: ToolSearchCatalogEntry,
+  result: AgentToolResult<unknown>,
+): Promise<void> {
+  if (!entry.outputSchema) {
+    return;
+  }
+  if (isPreExecutionBlockedToolResult(result)) {
+    const details = unwrapToolResultValue(result);
+    const reason =
+      isRecord(details) && typeof details.reason === "string" && details.reason.trim()
+        ? details.reason
+        : "Tool call blocked by policy";
+    throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+  }
+  const validation = await validateCatalogOutputValue(entry, unwrapToolResultValue(result));
+  if (!validation) {
+    return;
+  }
+  if (validation.ok) {
+    return;
+  }
+  throw new Error(
+    `Tool "${entry.id}" returned details that do not match its declared outputSchema.`,
+  );
+}
+
 function sanitizeToolCallIdPart(value: string): string {
   const trimmed = value.trim();
   const safe = trimmed.replace(/[^A-Za-z0-9_.:-]+/g, "_").slice(0, 120);
@@ -1756,18 +1895,20 @@ export class ToolSearchRuntime {
       .filter((hit) => hit.score > 0)
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
       .slice(0, limit)
-      .map((hit) => compactEntry(hit.entry));
+      .map((hit) => compactToolSearchCatalogEntry(hit.entry));
   };
 
   all = (options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return visibleCatalogEntries(catalog, options).map((entry) => compactEntry(entry));
+    return visibleCatalogEntries(catalog, options).map((entry) =>
+      compactToolSearchCatalogEntry(entry),
+    );
   };
 
   namespaceEntries = () => {
     const catalog = resolveCatalog(this.ctx);
     return catalog.entries.map((entry) =>
-      Object.assign(compactEntry(entry), {
+      Object.assign(compactToolSearchCatalogEntry(entry), {
         parameters: entry.parameters ?? {},
       }),
     );
@@ -1779,18 +1920,9 @@ export class ToolSearchRuntime {
     return describeEntry(findEntry(catalog, id, options, options));
   };
 
-  call = async (
-    id: string,
-    input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: AgentToolUpdateCallback;
-      recoverySurface?: UnknownToolRecoverySurface;
-    },
-  ) => {
+  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    const entry = findEntry(catalog, id, undefined, options);
+    const entry = findEntry(catalog, id, options, options);
     return await this.callEntry(catalog, entry, input, options);
   };
 
@@ -1808,6 +1940,11 @@ export class ToolSearchRuntime {
     const entry = findEntryByExactId(catalog, id, options);
     return await this.callEntry(catalog, entry, input, options);
   };
+
+  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
+    // Resolve, execute, and unwrap on the host. Code Mode otherwise builds a
+    // full description before every call and sends a larger envelope to QuickJS.
+    unwrapToolResultValue((await this.call(id, input, options)).result);
 
   isReplaySafeExactId = (id: string): boolean => {
     let entry: ToolSearchCatalogEntry;
@@ -1841,18 +1978,29 @@ export class ToolSearchRuntime {
     },
   ) => {
     catalog.callCount += 1;
+    await assertCatalogOutputSchemaIsValid(entry);
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
     const executeTool =
       this.ctx.executeTool ??
-      (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) =>
-        await params.tool.execute(
+      (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
+        const result = await params.tool.execute(
           params.toolCallId,
           params.input,
           params.signal,
           params.onUpdate,
           undefined as never,
-        ));
+        );
+        return await params.acceptResultBeforeProjection(result);
+      });
+    const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
+      if (isPreExecutionBlockedToolResult(candidate)) {
+        await assertCatalogOutputMatchesSchema(entry, candidate);
+      }
+      const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      await assertCatalogOutputMatchesSchema(entry, snapshot);
+      return snapshot;
+    };
     const result = await executeTool({
       tool: entry.tool,
       toolName: entry.name,
@@ -1863,16 +2011,24 @@ export class ToolSearchRuntime {
       input: input ?? {},
       signal: options?.signal ?? this.ctx.abortSignal,
       onUpdate: options?.onUpdate,
+      acceptResultBeforeProjection,
     });
+    // Production executors queue the accepted snapshot. Repeat acceptance here
+    // so headless/custom executors cannot return a mutable unvalidated value.
+    const acceptedResult = await acceptResultBeforeProjection(result);
     return {
-      tool: compactEntry(entry),
-      result,
+      tool: compactToolSearchCatalogEntry(entry),
+      result: acceptedResult,
     };
   };
 
   telemetry() {
     return getTelemetry(resolveCatalog(this.ctx));
   }
+}
+
+function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {
+  return isRecord(result) && "details" in result ? result.details : result;
 }
 
 /** Compact a native tool list into visible control tools plus hidden catalog entries. */
@@ -2324,7 +2480,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
       label: "Tool Search Code",
       description:
-        "Run JavaScript in an isolated Node subprocess with openclaw.tools.search, openclaw.tools.describe, and openclaw.tools.call for large tool catalogs.",
+        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
       parameters: Type.Object({
         code: Type.String({
           description:
@@ -2344,7 +2500,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
-      description: "Search the effective Tool Search catalog.",
+      description:
+        "Search the effective Tool Search catalog. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.String({ description: "Search query." }),
         limit: Type.Optional(Type.Number({ description: "Maximum number of results." })),
@@ -2357,7 +2514,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_DESCRIBE_RAW_TOOL_NAME,
       label: "Tool Describe",
-      description: "Load the full schema and metadata for one search result.",
+      description:
+        "Load the full schema and metadata for one search result when its input is not already clear.",
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
       }),
@@ -2367,7 +2525,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
-      description: "Call a selected Tool Search catalog entry through OpenClaw.",
+      description: "Call an exact Tool Search result id or name through OpenClaw.",
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
         args: Type.Optional(

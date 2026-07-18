@@ -277,6 +277,74 @@ describe("executeSendAction", () => {
     });
   });
 
+  it("reports delivery-layer effective text instead of the pre-adapter message", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockImplementationOnce(async (params: unknown) => {
+      const sendParams = requireRecord(params, "send message params");
+      const onDeliveredPayload = sendParams.onDeliveredPayload;
+      expect(onDeliveredPayload).toBeTypeOf("function");
+      (onDeliveredPayload as (payload: { text: string; mediaUrls: string[] }) => void)({
+        text: "[Peer] hello",
+        mediaUrls: [],
+      });
+      return {
+        channel: "demo-outbound",
+        to: "channel:123",
+        via: "direct" as const,
+        mediaUrl: null,
+        deliveryStatus: "sent" as const,
+      };
+    });
+
+    const result = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(result.deliveredText).toBe("[Peer] hello");
+  });
+
+  it("makes required queue persistence force core delivery and lifecycle callbacks", async () => {
+    const onDeliveryIntent = vi.fn();
+    const onDeliveryResult = vi.fn();
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+      deliveryStatus: "sent",
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+        requireQueuePersistence: true,
+        onDeliveryIntent,
+        onDeliveryResult,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expectSingleCallFields(mocks.sendMessage, {
+      queuePolicy: "required",
+      requireUnknownSendReconciliation: false,
+      onDeliveryIntent,
+      onDeliveryResult,
+    });
+  });
+
   it("forwards requesterSenderId to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendMessage.mockResolvedValue({
@@ -719,6 +787,7 @@ describe("executeSendAction", () => {
     });
 
     expect(result.handledBy).toBe("plugin");
+    expect(result.deliveredText).toBeUndefined();
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });

@@ -7,8 +7,24 @@ import {
   canonicalPathFromExistingAncestor,
   isPathInside,
 } from "openclaw/plugin-sdk/security-runtime";
-import { exists } from "./helpers.js";
 import type { CodexMemorySource } from "./source-files.js";
+
+const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
+
+async function lstatIfExists(filePath: string) {
+  try {
+    return await fs.lstat(filePath);
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 async function assertSafeMemoryDestination(params: {
   source: string;
@@ -45,12 +61,17 @@ export async function buildCodexMemoryItems(params: {
       "codex",
       path.basename(memory.path),
     );
-    await assertSafeMemoryDestination({
-      source: memory.path,
-      workspaceDir: params.workspaceDir,
-      target,
-    });
-    const targetExists = await exists(target);
+    const targetStat = await lstatIfExists(target);
+    const targetExists = targetStat !== undefined;
+    const targetNotRegular = targetExists && !targetStat.isFile();
+    if (!targetNotRegular) {
+      await assertSafeMemoryDestination({
+        source: memory.path,
+        workspaceDir: params.workspaceDir,
+        target,
+      });
+    }
+    const targetConflict = targetNotRegular || (targetExists && !params.overwrite);
     items.push(
       createMigrationItem({
         id: memory.id,
@@ -58,8 +79,12 @@ export async function buildCodexMemoryItems(params: {
         action: "copy",
         source: memory.path,
         target,
-        status: targetExists && !params.overwrite ? "conflict" : "planned",
-        reason: targetExists && !params.overwrite ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+        status: targetConflict ? "conflict" : "planned",
+        reason: targetNotRegular
+          ? MIGRATION_REASON_TARGET_NOT_REGULAR
+          : targetConflict
+            ? MIGRATION_REASON_TARGET_EXISTS
+            : undefined,
         message: "Copy consolidated Codex memory into the OpenClaw memory index.",
         details: {
           sourceType: "codex-memory",

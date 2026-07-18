@@ -125,6 +125,25 @@ describe("run-oxlint", () => {
     ).toBe(true);
   });
 
+  it("keeps oxlint shards parallel on dedicated CI runner classes", () => {
+    // Blacksmith's 16 vCPU class carries 32GB; the local-Mac 48GB threshold
+    // must not force CI serial (measured: serial shards cost 89s vs ~47s).
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 32 * 1024 ** 3, logicalCpuCount: 16 },
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 },
+      }),
+    ).toBe(true);
+  });
+
   it("keeps oxlint shards parallel for roomy CI and explicit full-speed runs", () => {
     const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
     const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };

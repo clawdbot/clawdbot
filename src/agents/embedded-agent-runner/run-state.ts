@@ -47,7 +47,7 @@ export type ActiveEmbeddedRunSnapshot = {
 
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 };
 
 export type AbandonedEmbeddedRun = {

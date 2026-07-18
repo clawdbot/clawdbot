@@ -297,6 +297,7 @@ SECRET_PLACEHOLDER_VALUES = {
     "test-token-placeholder",
     "token-oversized",
     "clawrouter-e2e-secret",
+    "config-token",
     "very-long-browser-token-0123456789",
 }
 SYNTHETIC_SECRET_PREFIXES = frozenset(

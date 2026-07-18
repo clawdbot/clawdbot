@@ -6,7 +6,6 @@ import path from "node:path";
 import readline from "node:readline";
 import chokidar, { type FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
   resolveAgentContextLimits,
@@ -43,8 +42,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   isFutureDateTimestampMs,
+  MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import {
+  PluginStateLeaseError,
+  type PluginStateLeaseContext,
+  type PluginStateLeaseRunner,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   uniqueValues,
@@ -108,14 +113,8 @@ const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
-const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
-const QMD_WRITE_LOCK_MIN_WAIT_MS = 5 * 60 * 1000;
-const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
-  factor: 1.2,
-  minTimeout: 250,
-  maxTimeout: 10_000,
-  randomize: true,
-} as const;
+const QMD_EMBED_LEASE_MIN_WAIT_MS = 15 * 60 * 1000;
+const QMD_WRITE_LEASE_MIN_WAIT_MS = 5 * 60 * 1000;
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
@@ -199,32 +198,28 @@ function resolveStableJitterMs(params: { seed: string; windowMs: number }): numb
   return bucket % (Math.floor(params.windowMs) + 1);
 }
 
-function resolveQmdWriteLockOptions(expectedMs: number, minWaitMs: number) {
+function resolveQmdWriteLeaseOptions(expectedMs: number, minWaitMs: number) {
   const expected = Math.max(1, expectedMs);
-  const waitBudgetMs = Math.max(minWaitMs, expected * 6);
   return {
-    retries: {
-      retries: Math.max(60, Math.ceil(waitBudgetMs / QMD_EMBED_LOCK_RETRY_TEMPLATE.maxTimeout)),
-      ...QMD_EMBED_LOCK_RETRY_TEMPLATE,
-    },
-    stale: Math.max(minWaitMs, expected * 2),
+    leaseMs: Math.min(MAX_TIMER_TIMEOUT_MS, Math.max(minWaitMs, expected * 2)),
+    waitMs: Math.min(MAX_TIMER_TIMEOUT_MS, Math.max(minWaitMs, expected * 6)),
   };
 }
 
 // Cross-process serialization for qmd embeds (heavy ML work, serialized globally).
-function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
-  return resolveQmdWriteLockOptions(embedTimeoutMs, QMD_EMBED_LOCK_MIN_WAIT_MS);
+function resolveQmdEmbedLeaseOptions(embedTimeoutMs: number) {
+  return resolveQmdWriteLeaseOptions(embedTimeoutMs, QMD_EMBED_LEASE_MIN_WAIT_MS);
 }
 
-// One per-store write lock shared by the update and embed phases (both write the
+// One per-agent write lease shared by the update and embed phases (both write the
 // same qmd index.sqlite), so a foreground `memory search` dirty-sync and a
 // background gateway update/embed never write the same store at once
 // (writer-vs-writer SQLITE_BUSY, #66339). Sized to the slower of the two writes
 // so a contending caller waits for the in-flight write instead of erroring.
-function resolveQmdStoreWriteLockOptions(updateTimeoutMs: number, embedTimeoutMs: number) {
-  return resolveQmdWriteLockOptions(
+function resolveQmdStoreWriteLeaseOptions(updateTimeoutMs: number, embedTimeoutMs: number) {
+  return resolveQmdWriteLeaseOptions(
     Math.max(updateTimeoutMs, embedTimeoutMs),
-    QMD_WRITE_LOCK_MIN_WAIT_MS,
+    QMD_WRITE_LEASE_MIN_WAIT_MS,
   );
 }
 
@@ -270,6 +265,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     cfg: OpenClawConfig;
     agentId: string;
     resolved: ResolvedMemoryBackendConfig;
+    withLease: PluginStateLeaseRunner;
     mode?: QmdManagerMode;
     runtimeConfig?: QmdManagerRuntimeConfig;
   }): Promise<QmdMemoryManager | null> {
@@ -283,6 +279,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       agentId: params.agentId,
       resolved,
       runtimeConfig,
+      withLease: params.withLease,
     });
     await manager.initialize(params.mode ?? "full");
     return manager;
@@ -300,6 +297,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly commands: QmdCommandClient;
+  private readonly withLease: PluginStateLeaseRunner;
   private readonly collectionController: QmdCollectionController;
   private readonly documentResolver: QmdDocumentResolver;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
@@ -322,10 +320,12 @@ export class QmdMemoryManager implements MemorySearchManager {
   private mode: QmdManagerMode = "full";
   private readonly closeSignal: Promise<void>;
   private resolveCloseSignal!: () => void;
+  private readonly closeAbortController = new AbortController();
   private qmdRuntimeIdentityPromise: Promise<string> | null = null;
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
+  private embedLeaseRetryPending = false;
   private embedBackoffUntil: number | null = null;
   private embedFailureCount = 0;
   private vectorAvailable: boolean | null = null;
@@ -337,11 +337,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     agentId: string;
     resolved: ResolvedQmdConfig;
     runtimeConfig: QmdManagerRuntimeConfig;
+    withLease: PluginStateLeaseRunner;
   }) {
     this.agentId = params.agentId;
     this.qmd = params.resolved;
     this.workspaceDir = params.runtimeConfig.workspaceDir;
     this.contextLimits = params.runtimeConfig.contextLimits;
+    this.withLease = params.withLease;
     this.stateDir = resolveStateDir(process.env, os.homedir);
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");
@@ -376,7 +378,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.workspaceDir,
       this.xdgConfigHome,
       async (args, opts) => await this.commands.run(args, opts),
-      async () => await this.buildQmdCollectionValidationCacheContext(),
+      async (signal) => await this.buildQmdCollectionValidationCacheContext(signal),
     );
     this.documentResolver = new QmdDocumentResolver(this.workspaceDir, this.collectionRoots, () =>
       this.ensureDb(),
@@ -551,12 +553,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     return crypto.createHash("sha256").update(JSON.stringify(relevantEnv)).digest("hex");
   }
 
-  private async buildQmdCollectionValidationCacheContext(): Promise<QmdRuntimeCollectionValidationCacheContext> {
+  private async buildQmdCollectionValidationCacheContext(
+    signal?: AbortSignal,
+  ): Promise<QmdRuntimeCollectionValidationCacheContext> {
     return {
       workspaceDir: this.workspaceDir,
       agentId: this.agentId,
       qmdCommand: this.qmd.command,
-      qmdVersion: await this.resolveQmdRuntimeIdentity(),
+      qmdVersion: await this.resolveQmdRuntimeIdentity(signal),
       qmdEnvironmentHash: this.buildQmdRuntimeEnvironmentHash(),
       qmdIndexPath: this.indexPath,
       searchMode: this.qmd.searchMode,
@@ -578,20 +582,27 @@ export class QmdMemoryManager implements MemorySearchManager {
     };
   }
 
-  private resolveQmdRuntimeIdentity(): Promise<string> {
+  private resolveQmdRuntimeIdentity(signal?: AbortSignal): Promise<string> {
+    if (signal) {
+      return this.readQmdRuntimeIdentity(signal);
+    }
     this.qmdRuntimeIdentityPromise ??= this.readQmdRuntimeIdentity();
     return this.qmdRuntimeIdentityPromise;
   }
 
-  private async readQmdRuntimeIdentity(): Promise<string> {
+  private async readQmdRuntimeIdentity(signal?: AbortSignal): Promise<string> {
     const commandIdentity = `command:${this.qmd.command}`;
     try {
       const result = await this.runQmd(["--version"], {
         timeoutMs: Math.min(this.qmd.limits.timeoutMs, 2_000),
+        signal,
       });
       const versionText = `${result.stdout}\n${result.stderr}`.trim();
       return versionText ? `${commandIdentity};version:${versionText}` : commandIdentity;
     } catch {
+      if (signal?.aborted) {
+        throw asQmdAbortError(signal);
+      }
       return commandIdentity;
     }
   }
@@ -643,26 +654,42 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async ensureCollections(options?: {
     force?: boolean;
     debugContext?: QmdSearchRuntimeDebugContext;
+    parentSignal?: AbortSignal;
   }): Promise<void> {
-    await this.collectionController.ensureCollections(options);
+    await this.withQmdStoreWriteLease(async (lease) => {
+      await this.collectionController.ensureCollections({ ...options, lease });
+    }, options?.parentSignal);
   }
 
   private async tryRepairMissingCollectionSearch(
     err: unknown,
     debugContext: QmdSearchRuntimeDebugContext,
+    parentSignal?: AbortSignal,
   ): Promise<boolean> {
-    return await this.collectionController.tryRepairMissingCollectionSearch(err, debugContext);
+    if (!this.isMissingCollectionSearchError(err)) {
+      return false;
+    }
+    log.warn(
+      "qmd search failed because a managed collection is missing; repairing collections and retrying once",
+    );
+    await this.ensureCollections({ force: true, debugContext, parentSignal });
+    return true;
   }
 
-  private async tryRepairNullByteCollections(err: unknown, reason: string): Promise<boolean> {
-    return await this.collectionController.tryRepairNullByteCollections(err, reason);
+  private async tryRepairNullByteCollections(
+    err: unknown,
+    reason: string,
+    lease: PluginStateLeaseContext,
+  ): Promise<boolean> {
+    return await this.collectionController.tryRepairNullByteCollections(err, reason, lease);
   }
 
   private async tryRepairDuplicateDocumentConstraint(
     err: unknown,
     reason: string,
+    lease: PluginStateLeaseContext,
   ): Promise<boolean> {
-    return await this.collectionController.tryRepairDuplicateDocumentConstraint(err, reason);
+    return await this.collectionController.tryRepairDuplicateDocumentConstraint(err, reason, lease);
   }
 
   async search(
@@ -863,7 +890,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     try {
       parsed = await runSearchAttempt(true);
     } catch (err) {
-      if (!(await this.tryRepairMissingCollectionSearch(err, debugContext))) {
+      if (!(await this.tryRepairMissingCollectionSearch(err, debugContext, searchSignal))) {
         throw err instanceof Error ? err : new Error(String(err));
       }
       parsed = await runSearchAttempt(false);
@@ -1086,6 +1113,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     this.closed = true;
     this.resolveCloseSignal();
+    this.closeAbortController.abort(new Error("qmd manager closed"));
     if (this.updateTimer) {
       clearInterval(this.updateTimer);
       this.updateTimer = null;
@@ -1136,44 +1164,75 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const run = async () => {
       const startTime = Date.now();
+      let updatePublished = false;
       log.debug(
         `qmd sync started for agent "${this.agentId}" reason=${reason} force=${force === true}`,
       );
-      await this.withQmdUpdateQueue(async () => {
-        if (this.closed) {
-          return;
+      try {
+        await this.withQmdUpdateQueue(async (lease) => {
+          const { signal } = lease;
+          if (this.closed) {
+            return;
+          }
+          if (this.sessionExporter) {
+            await this.exportSessions(lease);
+            this.throwIfAborted(signal);
+          }
+          await this.runQmdUpdateWithRetry(reason, lease);
+          updatePublished = true;
+          if (this.sessionExporter) {
+            this.throwIfAborted(signal);
+            this.refreshSessionArtifactDocIds(lease);
+          }
+        });
+      } catch (err) {
+        if (err instanceof PluginStateLeaseError && this.shouldPreserveLeaseRetry(err)) {
+          this.dirty = true;
+          if (updatePublished && qmdUsesVectors(this.qmd.searchMode)) {
+            this.embedLeaseRetryPending = true;
+          }
         }
-        if (this.sessionExporter) {
-          await this.exportSessions();
-        }
-        await this.runQmdUpdateWithRetry(reason);
-        if (this.sessionExporter) {
-          this.refreshSessionArtifactDocIds();
-        }
-        this.dirty = false;
-      });
+        throw err;
+      }
       if (this.closed) {
         return;
       }
+      this.dirty = false;
       if (this.shouldRunEmbed(force)) {
         try {
-          // Wait for embed capacity before taking the per-store write lock. The
-          // store lock should protect active qmd writes only, not time spent queued
+          // Wait for embed capacity before taking the per-agent write lease. The
+          // lease should protect active qmd writes only, not time spent queued
           // behind unrelated agents' embeds.
-          await this.withQmdEmbedQueue(() =>
-            this.withQmdGlobalEmbedLock(() =>
-              this.withQmdStoreWriteLock(async () => {
+          const embedded = await this.withQmdEmbedQueue(async () => {
+            await this.withQmdGlobalEmbedLease((globalLease) =>
+              this.withQmdStoreWriteLease(async (lease) => {
+                globalLease.assertOwned();
+                lease.assertOwned();
                 await this.runQmd(["embed"], {
                   timeoutMs: this.qmd.update.embedTimeoutMs,
                   discardOutput: true,
+                  signal: lease.signal,
                 });
-              }),
-            ),
-          );
+              }, globalLease.signal),
+            );
+          });
+          if (!embedded) {
+            return;
+          }
           this.lastEmbedAt = Date.now();
+          this.embedLeaseRetryPending = false;
           this.embedBackoffUntil = null;
           this.embedFailureCount = 0;
         } catch (err) {
+          if (err instanceof PluginStateLeaseError) {
+            if (this.shouldPreserveLeaseRetry(err)) {
+              // The update already published documents. Keep both the dirty-sync
+              // trigger and embed intent so contention cannot strand them unembedded.
+              this.dirty = true;
+              this.embedLeaseRetryPending = true;
+            }
+            throw err;
+          }
           this.noteEmbedFailure(reason, err);
         }
       }
@@ -1304,12 +1363,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.sync({ reason: "search" });
   }
 
-  private async runQmdUpdateWithRetry(reason: string): Promise<void> {
+  private async runQmdUpdateWithRetry(
+    reason: string,
+    lease: PluginStateLeaseContext,
+  ): Promise<void> {
+    const { signal } = lease;
     const isBootRun = reason === "boot" || reason.startsWith("boot:");
     const maxAttempts = isBootRun ? 3 : 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        await this.runQmdUpdateOnce(reason);
+        await this.runQmdUpdateOnce(reason, lease);
         return;
       } catch (err) {
         if (attempt >= maxAttempts || !this.isRetryableUpdateError(err)) {
@@ -1319,29 +1382,32 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(
           `qmd update retry ${attempt}/${maxAttempts - 1} after failure (${reason}): ${String(err)}`,
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
+        await this.waitForRetryDelay(delayMs, signal);
       }
     }
   }
 
-  private async runQmdUpdateOnce(reason: string): Promise<void> {
+  private async runQmdUpdateOnce(reason: string, lease: PluginStateLeaseContext): Promise<void> {
+    const { signal } = lease;
     try {
+      lease.assertOwned();
       await this.runQmd(["update"], {
         timeoutMs: this.qmd.update.updateTimeoutMs,
         discardOutput: true,
+        signal,
       });
     } catch (err) {
       if (
-        !(await this.tryRepairNullByteCollections(err, reason)) &&
-        !(await this.tryRepairDuplicateDocumentConstraint(err, reason))
+        !(await this.tryRepairNullByteCollections(err, reason, lease)) &&
+        !(await this.tryRepairDuplicateDocumentConstraint(err, reason, lease))
       ) {
         throw err;
       }
+      lease.assertOwned();
       await this.runQmd(["update"], {
         timeoutMs: this.qmd.update.updateTimeoutMs,
         discardOutput: true,
+        signal,
       });
     }
   }
@@ -1355,6 +1421,27 @@ export class QmdMemoryManager implements MemorySearchManager {
     return normalized.includes("timed out");
   }
 
+  private throwIfAborted(signal: AbortSignal): void {
+    if (signal.aborted) {
+      throw asQmdAbortError(signal);
+    }
+  }
+
+  private async waitForRetryDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+    this.throwIfAborted(signal);
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timeout);
+        reject(asQmdAbortError(signal));
+      };
+      const timeout = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
   private shouldRunEmbed(force?: boolean): boolean {
     if (!qmdUsesVectors(this.qmd.searchMode)) {
       return false;
@@ -1365,9 +1452,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const embedIntervalMs = this.qmd.update.embedIntervalMs;
     return (
+      this.embedLeaseRetryPending ||
       Boolean(force) ||
       this.lastEmbedAt === null ||
       (embedIntervalMs > 0 && now - this.lastEmbedAt > embedIntervalMs)
+    );
+  }
+
+  private shouldPreserveLeaseRetry(err: PluginStateLeaseError): boolean {
+    return (
+      !this.closed &&
+      err.code !== "PLUGIN_STATE_LEASE_ABORTED" &&
+      err.code !== "PLUGIN_STATE_LEASE_INVALID_INPUT"
     );
   }
 
@@ -1402,7 +1498,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private async withQmdEmbedQueue<T>(task: () => Promise<T>): Promise<T> {
+  private async withQmdEmbedQueue(task: () => Promise<void>): Promise<boolean> {
     const queue = getQmdEmbedQueueState();
     const previous = queue.tail;
     let releaseCurrent!: () => void;
@@ -1413,43 +1509,72 @@ export class QmdMemoryManager implements MemorySearchManager {
       () => current,
       () => current,
     );
-    await previous.catch(() => undefined);
     try {
-      return await task();
+      const waitResult = await Promise.race([
+        previous.then(
+          () => "ready" as const,
+          () => "ready" as const,
+        ),
+        this.closeSignal.then(() => "closed" as const),
+      ]);
+      if (waitResult === "closed") {
+        return false;
+      }
+      await task();
+      return true;
     } finally {
       releaseCurrent();
     }
   }
 
-  private async withQmdGlobalEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
-    return await withFileLock(
-      lockPath,
-      resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
-      task,
+  private async withQmdGlobalEmbedLease<T>(
+    task: (lease: PluginStateLeaseContext) => Promise<T>,
+  ): Promise<T> {
+    return await this.withLease(
+      {
+        namespace: "qmd",
+        key: "embed",
+        database: { scope: "shared" },
+        ...resolveQmdEmbedLeaseOptions(this.qmd.update.embedTimeoutMs),
+        signal: this.closeAbortController.signal,
+      },
+      async (lease) => await task(lease),
     );
   }
 
-  private async withQmdStoreWriteLock<T>(task: () => Promise<T>): Promise<T> {
-    // One per-store cross-process write lock guarding every qmd write (update and
+  private async withQmdStoreWriteLease<T>(
+    task: (lease: PluginStateLeaseContext) => Promise<T>,
+    parentSignal?: AbortSignal,
+  ): Promise<T> {
+    // SQLite is the sole runtime coordinator. Upgrade cutover requires every
+    // process sharing this state directory to restart; never dual-lock sidecars.
+    // One per-agent cross-process write lease guarding every qmd write (update and
     // embed) against the same index.sqlite, so a foreground `memory search`
     // dirty-sync and a background gateway update/embed never write concurrently
-    // (writer-vs-writer SQLITE_BUSY, #66339). It lives beside the agent's qmd dir,
-    // so writes for different agents still run in parallel. Update takes only this
-    // lock; embed first waits for global embed capacity, then takes this lock for
+    // (writer-vs-writer SQLITE_BUSY, #66339). Agent-scoped rows keep different
+    // agents parallel. Update takes only this lease; embed first waits for global
+    // embed capacity, then takes this lease for
     // the active qmd write.
-    const lockPath = path.join(this.agentStateDir, "qmd-write.lock");
-    return await withFileLock(
-      lockPath,
-      resolveQmdStoreWriteLockOptions(
-        this.qmd.update.updateTimeoutMs,
-        this.qmd.update.embedTimeoutMs,
-      ),
-      task,
+    return await this.withLease(
+      {
+        namespace: "qmd",
+        key: "write",
+        database: { scope: "agent", agentId: this.agentId },
+        ...resolveQmdStoreWriteLeaseOptions(
+          this.qmd.update.updateTimeoutMs,
+          this.qmd.update.embedTimeoutMs,
+        ),
+        signal: parentSignal
+          ? AbortSignal.any([this.closeAbortController.signal, parentSignal])
+          : this.closeAbortController.signal,
+      },
+      async (lease) => await task(lease),
     );
   }
 
-  private async withQmdUpdateQueue<T>(task: () => Promise<T>): Promise<T> {
+  private async withQmdUpdateQueue<T>(
+    task: (lease: PluginStateLeaseContext) => Promise<T>,
+  ): Promise<T> {
     const queue = getQmdUpdateQueueState();
     const key = this.qmdDir;
     const previous = queue.tails.get(key) ?? Promise.resolve();
@@ -1475,9 +1600,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       // Serialize the update write across processes (gateway + CLI). The in-process
       // queue above is keyed per store but a separate process cannot see it. The
-      // shared per-store write lock also serializes against the embed write below,
+      // shared per-agent write lease also serializes against the embed write below,
       // which targets the same index.sqlite.
-      return await this.withQmdStoreWriteLock(task);
+      return await this.withQmdStoreWriteLease(task);
     } finally {
       releaseCurrent();
       void next.finally(() => {
@@ -1682,12 +1807,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     return this.db;
   }
 
-  private async exportSessions(): Promise<void> {
-    await this.sessionExporter?.exportSessions();
+  private async exportSessions(lease: PluginStateLeaseContext): Promise<void> {
+    await this.sessionExporter?.exportSessions(lease);
   }
 
-  private refreshSessionArtifactDocIds(): void {
-    this.sessionExporter?.refreshArtifactDocIds();
+  private refreshSessionArtifactDocIds(lease: PluginStateLeaseContext): void {
+    this.sessionExporter?.refreshArtifactDocIds(lease);
   }
 
   private async resolveDocLocation(

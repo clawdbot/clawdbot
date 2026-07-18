@@ -306,6 +306,7 @@ describe("OpenClaw configured-model planner", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         createTempDir: async () => "/tmp/openclaw-planner",
         removeTempDir: async () => {},
+        resolveAssistantTimeoutMs: () => 120_000,
       },
     });
 
@@ -325,6 +326,8 @@ describe("OpenClaw configured-model planner", () => {
         disableTools: true,
         disableTrajectory: true,
         toolsAllow: [],
+        thinkLevel: "off",
+        timeoutMs: 120_000,
       }),
     );
     expect(runEmbeddedAgent).toHaveBeenCalledWith(

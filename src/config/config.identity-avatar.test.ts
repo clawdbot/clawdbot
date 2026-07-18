@@ -47,6 +47,7 @@ describe("identity avatar validation", () => {
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.issues[0]?.path).toBe("agents.list.0.identity.avatar");
+        expect(res.issues[0]?.pathSegments).toEqual(["agents", "list", 0, "identity", "avatar"]);
       }
     });
   });

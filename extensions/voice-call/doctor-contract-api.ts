@@ -25,6 +25,7 @@ import {
   RAW_CALL_RECORD_CHUNK_BYTES,
   resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
+import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
 import type { CallRecord } from "./src/types.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
@@ -126,7 +127,7 @@ function resolveVoiceCallStorePath(params: {
   if (configuredStore) {
     return resolveUserPath(configuredStore, params.env);
   }
-  return path.join(resolveHome(params.env), ".openclaw", "voice-calls");
+  return resolveDefaultVoiceCallStoreDir(params.env);
 }
 
 function resolveVoiceCallStateDatabaseEnv(
@@ -146,6 +147,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "audit event ledger -> versioned message lifecycle schema";
     case "operator-approvals-system-agent":
       return "operator approvals -> OpenClaw system changes";
+    case "session-watch-cursor-provenance-v4":
+      return "session watch cursors -> provenance column";
     case "strict-tables-v3":
       return "tables -> SQLite STRICT typing";
   }

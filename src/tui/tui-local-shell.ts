@@ -59,7 +59,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         ],
         2,
       );
-      selector.onSelect = (item) => {
+      selector.onSelect = (item: SelectItem) => {
         deps.closeOverlay(overlayHandle);
         if (item.value === "yes") {
           localExecAllowed = true;

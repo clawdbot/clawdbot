@@ -5,8 +5,21 @@ import {
   ReefChannelConfigSchema,
   type ReefChannelConfig,
 } from "./config-schema.js";
-import { generateAndStoreKeys, resolveStateDir } from "./state.js";
-import { ReefTransportClient } from "./transport.js";
+import { assertLegacyReefKeysMigrated } from "./legacy-key-guard.js";
+import { getReefRuntime } from "./runtime.js";
+import {
+  finalizeReefIdentityBinding,
+  generateAndStoreKeys,
+  loadKeys,
+  loadReefIdentityBinding,
+  releaseReefIdentityReservation,
+  reserveReefIdentityBinding,
+} from "./state.js";
+import {
+  isDefinitiveReefRegistrationFailure,
+  isReefOwnershipRejection,
+  ReefTransportClient,
+} from "./transport.js";
 
 type Prompt = {
   note(message: string, title?: string): Promise<void>;
@@ -104,23 +117,83 @@ export const reefSetupWizard = {
         },
       ],
     });
-    const stateDir = resolveStateDir(
-      await prompter.text({
-        message: "Local Reef state directory",
-        initialValue: resolveStateDir(),
-      }),
-    );
-    const keys = await generateAndStoreKeys(stateDir);
+    const runtime = getReefRuntime();
+    const identity = loadReefIdentityBinding(runtime);
+    if (identity && (identity.handle !== handle || identity.relayUrl !== relayUrl)) {
+      throw new Error(
+        `This OpenClaw state already holds the Reef identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay.`,
+      );
+    }
+    const configuredStateDir = (cfg.channels?.reef as { stateDir?: unknown } | undefined)?.stateDir;
+    const keys = await loadKeys(runtime).catch(async (error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      await assertLegacyReefKeysMigrated(
+        typeof configuredStateDir === "string" ? configuredStateDir : undefined,
+      );
+      return await generateAndStoreKeys(runtime);
+    });
     const client = new ReefTransportClient(relayUrl, handle, keys);
+    let token: string | undefined;
     if (!setupSession) {
       const started = await client.authStart(email);
       if (started.magicLink) {
         await prompter.note(started.magicLink, "Development magic link");
       }
-      const token = await prompter.text({ message: "Magic-link token", sensitive: true });
-      setupSession = (await client.authComplete(token)).session;
+      token = await prompter.text({ message: "Magic-link token", sensitive: true });
     }
-    await client.createHandle(setupSession, requestPolicy);
+    // Reserve the keys immediately before consuming auth or claiming a handle.
+    // Definitive relay rejection releases it; ambiguous transport failure keeps
+    // the binding because the relay may have committed the request.
+    const reservation = reserveReefIdentityBinding(runtime, { handle, relayUrl });
+    let effectiveRequestPolicy = requestPolicy;
+    try {
+      if (!setupSession) {
+        setupSession = (await client.authComplete(token ?? "")).session;
+      }
+      try {
+        await client.createHandle(setupSession, requestPolicy);
+      } catch (error) {
+        const unavailable = error instanceof Error && error.message.includes("handle_unavailable");
+        if (!unavailable) {
+          throw error;
+        }
+        try {
+          await client.listFriends();
+        } catch (verificationError) {
+          if (isReefOwnershipRejection(verificationError)) {
+            releaseReefIdentityReservation(runtime, reservation);
+            throw error;
+          }
+          finalizeReefIdentityBinding(runtime, reservation);
+          throw verificationError;
+        }
+        // Signed access proves these keys already own the handle. Finalize
+        // before checking account ownership so an account mismatch cannot
+        // redirect the same keys to a different handle.
+        finalizeReefIdentityBinding(runtime, reservation);
+        const { handles } = await client.listOwnHandles(setupSession);
+        const existing = handles.find((entry) => entry.handle === handle);
+        if (!existing) {
+          throw new Error(
+            `Handle @${handle} is owned by this claw's keys, but the setup session belongs to a different relay account`,
+            { cause: error },
+          );
+        }
+        effectiveRequestPolicy = ReefChannelConfigSchema.shape.requestPolicy.parse(
+          existing.request_policy,
+        );
+      }
+      finalizeReefIdentityBinding(runtime, reservation);
+    } catch (error) {
+      if (isDefinitiveReefRegistrationFailure(error)) {
+        releaseReefIdentityReservation(runtime, reservation);
+      } else {
+        finalizeReefIdentityBinding(runtime, reservation);
+      }
+      throw error;
+    }
     const provider = await prompter.select({
       message: "Guard provider",
       options: [
@@ -141,8 +214,7 @@ export const reefSetupWizard = {
       relayUrl,
       handle,
       email,
-      requestPolicy,
-      stateDir,
+      requestPolicy: effectiveRequestPolicy,
       guard: { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 },
     });
     await prompter.note(

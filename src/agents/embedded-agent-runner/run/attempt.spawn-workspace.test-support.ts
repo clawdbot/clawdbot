@@ -122,6 +122,7 @@ function createSubscriptionMock(): SubscriptionMock {
   // override only the lifecycle method they need.
   return {
     assistantTexts: [] as string[],
+    getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
@@ -444,7 +445,7 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
 }));
 
-vi.mock("../../../tts/tts.js", () => ({
+vi.mock("../../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: () => undefined,
 }));
 

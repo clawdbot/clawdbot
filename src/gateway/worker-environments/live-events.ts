@@ -5,12 +5,6 @@ import type {
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
-  capLiveExecResult,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "../../agents/embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "../../agents/tool-policy.js";
-import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../../config/sessions/session-accessor.js";
@@ -25,6 +19,14 @@ import {
   releaseAgentRunContext,
 } from "../../infra/agent-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import {
+  createWorkerLiveTrajectoryRecorder,
+  isDefinitiveWorkerTerminalEvent,
+  prepareWorkerLiveEventData,
+  recordWorkerLiveTrajectoryEvent,
+  type WorkerLiveTrajectoryRecorder,
+  type WorkerLiveTrajectoryTarget,
+} from "./live-event-projection.js";
 import { resolveWorkerSessionTarget } from "./session-target.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
@@ -42,13 +44,10 @@ type OwnedLiveRun = {
   claimId: string;
   controlUiVisible: boolean;
   lifecycleGeneration: string;
+  trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
 
-type LiveEventTarget = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-};
+type LiveEventTarget = WorkerLiveTrajectoryTarget;
 
 type WorkerLiveSessionBinding = Readonly<{
   environmentId: string;
@@ -115,6 +114,7 @@ function resolveLiveEventTarget(
     ...(target.agentId ? { agentId: target.agentId } : {}),
     sessionId: target.sessionId,
     sessionKey: target.sessionKey,
+    storePath: target.storePath,
   };
 }
 
@@ -160,34 +160,6 @@ function matchesSessionIdentityMutation(
     (target) =>
       target.sessionId === binding.sessionId ||
       (prepared ? target.sessionKeys.includes(prepared.target.sessionKey) : false),
-  );
-}
-
-function prepareLiveEventData(event: WorkerLiveEventParams["event"]): Record<string, unknown> {
-  const payload = structuredClone(event.payload) as Record<string, unknown>;
-  if (event.kind !== "tool") {
-    return payload;
-  }
-  const toolName = normalizeToolName(event.payload.name);
-  payload.name = toolName;
-  if (event.payload.phase === "start") {
-    payload.args = sanitizeToolArgs(event.payload.args);
-  } else if (event.payload.phase === "update") {
-    const partialResult = sanitizeToolResult(event.payload.partialResult);
-    payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;
-  } else {
-    const result = sanitizeToolResult(event.payload.result);
-    payload.result = toolName === "exec" ? capLiveExecResult(result) : result;
-  }
-  return payload;
-}
-
-function isDefinitiveTerminal(event: WorkerLiveEventParams["event"]): boolean {
-  return (
-    event.kind === "lifecycle" &&
-    (event.payload.phase === "end" ||
-      (event.payload.phase === "error" &&
-        (event.payload.aborted === true || event.payload.fallbackExhaustedFailure === true)))
   );
 }
 
@@ -503,7 +475,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       const pendingRunId = pending.request.runId;
       if (countedRunIds.has(pendingRunId)) {
-        if (isDefinitiveTerminal(pending.request.event)) {
+        if (isDefinitiveWorkerTerminalEvent(pending.request.event)) {
           return true;
         }
         continue;
@@ -614,6 +586,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       claimId,
       controlUiVisible,
       lifecycleGeneration,
+      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
@@ -628,7 +601,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in owned) {
       return owned;
     }
-    const definitiveTerminal = isDefinitiveTerminal(request.event);
+    const definitiveTerminal = isDefinitiveWorkerTerminalEvent(request.event);
     if (definitiveTerminal) {
       // Emission runs synchronous listeners that can clear this claim reentrantly.
       // Fence first so terminal delivery cannot reopen the run ID.
@@ -638,10 +611,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       {
         runId: request.runId,
         stream: request.event.kind,
-        data: prepareLiveEventData(request.event),
+        data: prepareWorkerLiveEventData(request.event),
       },
       owned.claimId,
     );
+    recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -788,4 +762,3 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
 }
 
 export type WorkerLiveEventReceiver = ReturnType<typeof createWorkerLiveEventReceiver>;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

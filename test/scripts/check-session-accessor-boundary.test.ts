@@ -111,6 +111,7 @@ describe("session accessor boundary guard", () => {
         "extensions/mattermost/src/mattermost/model-picker.ts",
         "extensions/matrix/src/matrix/monitor/handler.ts",
         "extensions/matrix/src/session-route.ts",
+        "extensions/qqbot/src/engine/group/activation.ts",
         "extensions/slack/src/monitor/slash.ts",
         "extensions/telegram/src/bot-core.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",

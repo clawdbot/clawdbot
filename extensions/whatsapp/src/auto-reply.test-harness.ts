@@ -54,12 +54,15 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 type MockSessionSocket = {
+  end: ReturnType<typeof vi.fn>;
   ev: {
     on: ReturnType<typeof vi.fn>;
     off: ReturnType<typeof vi.fn>;
   };
   ws: EventEmitter & {
     close: ReturnType<typeof vi.fn>;
+    readonly isClosed: boolean;
+    readonly isClosing: boolean;
   };
   user: { id: string };
 };
@@ -80,9 +83,21 @@ vi.mock("./session.js", async () => {
   return {
     ...actual,
     createWaSocket: vi.fn(async () => {
+      let closed = false;
       const ws = new EventEmitter() as MockSessionSocket["ws"];
-      ws.close = vi.fn();
+      Object.defineProperties(ws, {
+        isClosed: { get: () => closed },
+        isClosing: { get: () => false },
+      });
+      ws.close = vi.fn(() => {
+        closed = true;
+        ws.emit("close");
+      });
       const socket: MockSessionSocket = {
+        end: vi.fn(() => {
+          closed = true;
+          ws.emit("close");
+        }),
         ev: {
           on: vi.fn(),
           off: vi.fn(),
@@ -114,7 +129,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   appendCronStyleCurrentTimeLine: (text: string) => text,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   resolveAgentIdentity: (
     cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },

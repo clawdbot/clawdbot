@@ -1015,12 +1015,6 @@
               "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
               "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
             ]
-          },
-          {
-            "endpointClass": "qwen-portal-native",
-            "baseUrls": [
-              "https://portal.qwen.ai/v1"
-            ]
           }
         ],
         "providers": [
@@ -1122,40 +1116,6 @@
             ]
           },
           {
-            "id": "qwen-oauth",
-            "aliases": [
-              "qwen-portal",
-              "qwen-cli"
-            ],
-            "name": "Qwen Cloud qwen oauth",
-            "docs": "/providers/qwen",
-            "categories": [
-              "cloud",
-              "llm"
-            ],
-            "envVars": [
-              "QWEN_API_KEY"
-            ],
-            "authChoices": [
-              {
-                "method": "api-key",
-                "choiceId": "qwen-oauth",
-                "choiceLabel": "Qwen OAuth",
-                "choiceHint": "Portal token for portal.qwen.ai",
-                "groupId": "qwen",
-                "groupLabel": "Qwen Cloud",
-                "groupHint": "Standard / Coding Plan / OAuth",
-                "optionKey": "qwenOauthToken",
-                "cliFlag": "--qwen-oauth-token",
-                "cliOption": "--qwen-oauth-token <token>",
-                "cliDescription": "Qwen OAuth token",
-                "onboardingScopes": [
-                  "text-inference"
-                ]
-              }
-            ]
-          },
-          {
             "id": "qwen-token-plan",
             "name": "Qwen Token Plan",
             "docs": "/providers/qwen",
@@ -1174,7 +1134,7 @@
                 "choiceHint": "Endpoint: token-plan.ap-southeast-1.maas.aliyuncs.com",
                 "groupId": "qwen",
                 "groupLabel": "Qwen Cloud",
-                "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+                "groupHint": "Standard / Coding Plan / Token Plan",
                 "optionKey": "qwenTokenPlanApiKey",
                 "cliFlag": "--qwen-token-plan-api-key",
                 "cliOption": "--qwen-token-plan-api-key <key>",
@@ -1190,7 +1150,7 @@
                 "choiceHint": "Endpoint: token-plan.cn-beijing.maas.aliyuncs.com",
                 "groupId": "qwen",
                 "groupLabel": "Qwen Cloud",
-                "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+                "groupHint": "Standard / Coding Plan / Token Plan",
                 "optionKey": "qwenTokenPlanApiKeyCn",
                 "cliFlag": "--qwen-token-plan-api-key-cn",
                 "cliOption": "--qwen-token-plan-api-key-cn <key>",

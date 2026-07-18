@@ -57,6 +57,8 @@ openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the raw value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
 
+When the path is missing, `--json` writes `{ "error": "Config path not found: <path>" }` to stdout and exits with status 1. Without `--json`, the diagnostic remains on stderr.
+
 ```bash
 openclaw config get browser.executablePath
 openclaw config get agents.defaults.model --json

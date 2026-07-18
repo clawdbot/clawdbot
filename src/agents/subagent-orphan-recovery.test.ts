@@ -5,7 +5,6 @@ import * as config from "../config/config.js";
 import * as sessions from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import * as sessionUtils from "../gateway/session-transcript-readers.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -28,6 +27,7 @@ const loggerMocks = vi.hoisted(() => ({
 const dispatchAgent = vi.fn(async (_payload: Record<string, unknown>, _timeoutMs?: number) => ({
   runId: "test-run-id",
 }));
+const readSessionMessages = vi.fn(async () => [] as unknown[]);
 const gatewayRuntime: GatewayRecoveryRuntime = {
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(),
@@ -35,15 +35,29 @@ const gatewayRuntime: GatewayRecoveryRuntime = {
 };
 
 function recoverOrphanedSubagentSessions(
-  params: Omit<Parameters<typeof recoverOrphanedSubagentSessionsWithRuntime>[0], "gatewayRuntime">,
+  params: Omit<
+    Parameters<typeof recoverOrphanedSubagentSessionsWithRuntime>[0],
+    "gatewayRuntime" | "readSessionMessages"
+  >,
 ) {
-  return recoverOrphanedSubagentSessionsWithRuntime({ ...params, gatewayRuntime });
+  return recoverOrphanedSubagentSessionsWithRuntime({
+    ...params,
+    gatewayRuntime,
+    readSessionMessages,
+  });
 }
 
 function scheduleOrphanRecovery(
-  params: Omit<Parameters<typeof scheduleOrphanRecoveryWithRuntime>[0], "getGatewayRuntime">,
+  params: Omit<
+    Parameters<typeof scheduleOrphanRecoveryWithRuntime>[0],
+    "getGatewayRuntime" | "readSessionMessages"
+  >,
 ) {
-  return scheduleOrphanRecoveryWithRuntime({ ...params, getGatewayRuntime: () => gatewayRuntime });
+  return scheduleOrphanRecoveryWithRuntime({
+    ...params,
+    getGatewayRuntime: () => gatewayRuntime,
+    readSessionMessages,
+  });
 }
 
 // Mocks are installed before importing the recovery module so registry/runtime
@@ -114,10 +128,6 @@ vi.mock("../config/sessions.js", () => ({
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: sessionMocks.loadSessionEntry,
   patchSessionEntry: sessionMocks.patchSessionEntry,
-}));
-
-vi.mock("../gateway/session-transcript-readers.js", () => ({
-  readSessionMessagesAsync: vi.fn(async () => []),
 }));
 
 vi.mock("./subagent-announce-delivery.js", () => ({
@@ -210,6 +220,8 @@ describe("subagent-orphan-recovery", () => {
     resetGatewayWorkAdmission();
     dispatchAgent.mockReset();
     dispatchAgent.mockResolvedValue({ runId: "test-run-id" });
+    readSessionMessages.mockReset();
+    readSessionMessages.mockResolvedValue([]);
     vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun)
       .mockReset()
       .mockResolvedValue(1);
@@ -666,7 +678,7 @@ describe("subagent-orphan-recovery", () => {
     const store = mockSingleAbortedSession({
       subagentRecovery: {
         automaticAttempts: 2,
-        lastAttemptAt: now - 30_000,
+        lastAttemptAt: now - 2 * 60_000,
         lastRunId: "previous-run",
       },
     });
@@ -696,6 +708,31 @@ describe("subagent-orphan-recovery", () => {
     expect(recovery.lastRunId).toBe("run-1");
     expect(recovery.wedgedAt).toBeTypeOf("number");
     expect(recovery.wedgedReason).toContain("recovery blocked");
+  });
+
+  it("starts a new attempt burst after the two-minute re-wedge window", async () => {
+    const now = Date.now();
+    const expiredRecovery = {
+      automaticAttempts: 2,
+      lastAttemptAt: now - 2 * 60_000 - 1,
+      lastRunId: "previous-run",
+    };
+    const store = mockSingleAbortedSession({ subagentRecovery: expiredRecovery });
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+    });
+
+    expect(result.recovered).toBe(1);
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+    expect(sessionAccessor.patchSessionEntry).toHaveBeenCalledOnce();
+    const sessionEntry = requireRecord(
+      store["agent:main:subagent:test-session-1"],
+      "updated session entry",
+    );
+    const recovery = requireRecord(sessionEntry.subagentRecovery, "subagent recovery");
+    expect(recovery.automaticAttempts).toBe(1);
+    expect(recovery.lastRunId).toBe("run-1");
   });
 
   it("skips already tombstoned wedged sessions without rewriting them", async () => {
@@ -740,7 +777,7 @@ describe("subagent-orphan-recovery", () => {
   it("includes last human message in resume when available", async () => {
     mockSingleAbortedSession({ sessionFile: "session-abc.jsonl" });
 
-    vi.mocked(sessionUtils.readSessionMessagesAsync).mockResolvedValue([
+    readSessionMessages.mockResolvedValue([
       { role: "user", content: [{ type: "text", text: "Please build feature Y" }] },
       { role: "assistant", content: [{ type: "text", text: "Working on it..." }] },
       { role: "user", content: [{ type: "text", text: "Also add tests for it" }] },
@@ -759,7 +796,7 @@ describe("subagent-orphan-recovery", () => {
   it("adds config change hint when assistant messages reference config modifications", async () => {
     mockSingleAbortedSession();
 
-    vi.mocked(sessionUtils.readSessionMessagesAsync).mockResolvedValue([
+    readSessionMessages.mockResolvedValue([
       { role: "user", content: "Update the config" },
       { role: "assistant", content: "I've modified openclaw.json to add the new setting." },
     ]);
@@ -916,6 +953,7 @@ describe("subagent-orphan-recovery", () => {
     scheduleOrphanRecoveryWithRuntime({
       getGatewayRuntime: () => currentRuntime,
       getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+      readSessionMessages,
       delayMs: 1,
       maxRetries: 0,
     });

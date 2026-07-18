@@ -1,12 +1,61 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
   addDismissal,
   dismissalStoreKey,
   pruneDismissals,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
+import { buildSidebarAttentionItems } from "./sidebar-attention-items.ts";
+
+function approval(id: string): ExecApprovalRequest {
+  return {
+    id,
+    kind: "exec",
+    request: { command: "echo ok" },
+    createdAtMs: 1,
+    expiresAtMs: 2,
+  };
+}
+
+function approvalItems(queue: readonly ExecApprovalRequest[]) {
+  return buildSidebarAttentionItems({
+    cronJobs: [],
+    modelAuthStatus: null,
+    approvalQueue: queue,
+    now: 0,
+  }).filter((item) => item.kind === "pendingApproval");
+}
+
+describe("pending approval attention", () => {
+  it("builds a warning chip only while approvals are pending", () => {
+    expect(approvalItems([])).toEqual([]);
+
+    expect(approvalItems([approval("exec:b")])).toMatchObject([
+      {
+        kind: "pendingApproval",
+        severity: "warning",
+        icon: "shieldCheck",
+        action: { kind: "openApprovals" },
+      },
+    ]);
+  });
+
+  it("sorts queue ids into a signature that changes for a new approval", () => {
+    const first = approvalItems([approval("exec:b"), approval("exec:a")])[0];
+    const changed = approvalItems([approval("exec:b"), approval("exec:a"), approval("exec:c")])[0];
+
+    if (!first || !changed) {
+      throw new Error("expected pending approval attention items");
+    }
+
+    expect(first.signature).toBe("exec:a\nexec:b");
+    expect(changed.signature).toBe("exec:a\nexec:b\nexec:c");
+    expect(pruneDismissals({ pendingApproval: first.signature }, [changed])).toEqual({});
+  });
+});
 
 describe("pruneDismissals", () => {
   const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });

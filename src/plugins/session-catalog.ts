@@ -12,6 +12,8 @@ export type SessionCatalogListProviderParams = {
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
+  /** Publishes completed hosts without waiting for slower machines in the same list. */
+  onHost?: (host: SessionCatalogHost) => void;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId">;
 export type SessionCatalogContinueProviderParams = Omit<

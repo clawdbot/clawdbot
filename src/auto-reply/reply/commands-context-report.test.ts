@@ -1,11 +1,17 @@
-/** Tests context report command output and generated report files. */
+/** Tests context command behavior, token reporting, and generated report files. */
 import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
+import { buildCommandContext } from "./commands-context.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { stripStructuralPrefixes } from "./mentions.js";
+import { buildTestCtx } from "./test-ctx.js";
+
+/** Tests context report command output and generated report files. */
 
 function makeParams(
   commandBodyNormalized: string,
@@ -410,5 +416,108 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("No actual run context is cached for this session yet.");
     expect(result.text).not.toContain("Source: estimate");
     expect(result.mediaUrl).toBeUndefined();
+  });
+});
+
+/** Tests context command behavior and token reporting. */
+
+describe("buildCommandContext", () => {
+  it("canonicalizes registered aliases like /id to their primary command", () => {
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      From: "user",
+      To: "bot",
+      Body: "/id",
+      RawBody: "/id",
+      CommandBody: "/id",
+      BodyForCommands: "/id",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: "/id",
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/whoami");
+  });
+
+  it("preserves multiline soft reset tails after structural normalization", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "user",
+      To: "bot",
+      Body: "/reset soft\nre-read persona files",
+      RawBody: "/reset soft\nre-read persona files",
+      CommandBody: "/reset soft\nre-read persona files",
+      BodyForCommands: "/reset soft\nre-read persona files",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: stripStructuralPrefixes("/reset soft\nre-read persona files"),
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/reset soft re-read persona files");
+  });
+
+  it("preserves multiline slash skill payloads after structural normalization", () => {
+    const body = "/skill demo_skill first line\nsecond line";
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "user",
+      To: "bot",
+      Body: body,
+      RawBody: body,
+      CommandBody: body,
+      BodyForCommands: body,
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: stripStructuralPrefixes(body),
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/skill demo_skill first line\nsecond line");
+  });
+
+  it("maps explicit gateway origin into command context", () => {
+    const ctx = buildTestCtx({
+      Provider: "internal",
+      Surface: "internal",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      SenderId: "gateway-client",
+      From: undefined,
+      To: undefined,
+      Body: "/codex bind",
+      RawBody: "/codex bind",
+      CommandBody: "/codex bind",
+      BodyForCommands: "/codex bind",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: "/codex bind",
+      commandAuthorized: true,
+    });
+
+    expect(result.channel).toBe("slack");
+    expect(result.channelId).toBe("slack");
+    expect(result.from).toBe("gateway-client");
+    expect(result.to).toBe("user:U123");
   });
 });

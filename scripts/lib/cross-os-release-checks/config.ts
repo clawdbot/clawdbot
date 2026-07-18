@@ -210,6 +210,11 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
+export function managedGatewayRestartCommandTimeoutMs(platform = process.platform) {
+  // The CLI performs its own restart health loop. Keep the outer release
+  // harness alive long enough to receive that result plus service-manager overhead.
+  return gatewayReadyDeadlineMs(platform) + 60_000;
+}
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 10 * 60;
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =

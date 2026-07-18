@@ -282,15 +282,18 @@ describe("monitorSlackProvider tool results", () => {
     });
   }
 
-  async function runMentionGatedChannelMessageAndFlush() {
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        text: "<@bot-user> hello",
-        ts: "456",
-        channel_type: "channel",
-      }),
-    });
-    await flush();
+  async function runMentionGatedChannelMessage() {
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> hello",
+          ts: "456",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
   }
 
   function expectReactionFlow(expected: {
@@ -437,18 +440,13 @@ describe("monitorSlackProvider tool results", () => {
       assistant?: { threads?: { setStatus?: ReturnType<typeof vi.fn> } };
     };
     const setStatus = client.assistant?.threads?.setStatus;
-    expect(setStatus).toHaveBeenCalledTimes(2);
+    // Status updates run detached from the awaited dispatch; wait on the mock.
+    await vi.waitFor(() => expect(setStatus).toHaveBeenCalledTimes(2), { timeout: 5_000 });
     expect(setStatus).toHaveBeenNthCalledWith(1, {
       token: "bot-token",
       channel_id: "C1",
       thread_ts: "123",
       status: "is typing...",
-      loading_messages: [
-        "Reading the thread...",
-        "Checking context...",
-        "Working through the request...",
-        "Putting it all together...",
-      ],
     });
     expect(setStatus).toHaveBeenNthCalledWith(2, {
       token: "bot-token",
@@ -646,29 +644,39 @@ describe("monitorSlackProvider tool results", () => {
       channel: { name: "general", is_channel: true },
     });
 
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        text: "<@bot-user> hello",
-        ts: "456",
-        channel_type: "channel",
-      }),
-    });
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> hello",
+          ts: "456",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
 
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    // Ack reactions apply via the status-reaction debounce/queue, detached
+    // from the awaited dispatch; wait on the mock instead of asserting inline.
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
   it("keeps ack reaction when no reply is delivered and status reactions are disabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(false);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
     expect(sendMock).not.toHaveBeenCalled();
-    expect(reactMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(reactMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
     expect(reactMock).toHaveBeenCalledWith({
       channel: "C1",
       timestamp: "456",
@@ -680,10 +688,10 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
     expect(sendMock).not.toHaveBeenCalled();
-    expect(reactMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(reactMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
     expect(reactMock).toHaveBeenCalledWith({
       channel: "C1",
       timestamp: "456",
@@ -713,29 +721,37 @@ describe("monitorSlackProvider tool results", () => {
     };
     mockGeneralChannelInfo();
 
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(sendMock).not.toHaveBeenCalled();
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
   it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await expect(runMentionGatedChannelMessage()).rejects.toThrow("boom");
 
     expect(sendMock).not.toHaveBeenCalled();
-    expectReactionFlow({
-      startsWith: ["eyes", "x"],
-      includes: "x",
-      endsWith: "x",
-    });
+    await vi.waitFor(
+      () =>
+        expectReactionFlow({
+          startsWith: ["eyes", "x"],
+          includes: "x",
+          endsWith: "x",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {

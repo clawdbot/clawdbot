@@ -254,7 +254,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `blocked legacy migration cannot create or mutate current policy`() async throws {
+    func `malformed default policy does not block custom state mutations`() async throws {
         try await self.withTempHomeAndStateDir { home, _ in
             let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
             try FileManager().createDirectory(at: legacyDir, withIntermediateDirectories: true)
@@ -263,26 +263,25 @@ struct ExecApprovalsStoreRefactorTests {
             try malformed.write(to: legacyURL)
 
             let readOnly = ExecApprovalsStore.resolveReadOnly(agentId: "main")
-            #expect(readOnly.agent.security == .deny)
-            #expect(readOnly.agent.ask == .always)
+            #expect(readOnly.agent.security == .full)
+            #expect(readOnly.agent.ask == .off)
 
             let ensured = ExecApprovalsStore.ensureFile()
-            #expect(ensured.defaults?.security == .deny)
-            #expect(ensured.defaults?.ask == .off)
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
+            #expect(ensured.socket?.token?.isEmpty == false)
+            #expect(FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
 
-            let mutation = ExecApprovalsStore.updateDefaults { $0.security = .full }
-            guard case .failure(.unavailable) = mutation else {
-                Issue.record("expected blocked migration mutation failure")
+            let mutation = ExecApprovalsStore.updateDefaults { $0.security = .allowlist }
+            guard case .success = mutation else {
+                Issue.record("expected custom state mutation to succeed")
                 return
             }
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
             #expect(try Data(contentsOf: legacyURL) == malformed)
+            #expect(!FileManager().fileExists(atPath: "\(legacyURL.path).migrated"))
         }
     }
 
     @Test
-    func `symlinked legacy policy cannot seed the current store`() async throws {
+    func `symlinked default policy cannot seed the custom store`() async throws {
         try await self.withTempHomeAndStateDir { home, _ in
             let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
             try FileManager().createDirectory(at: legacyDir, withIntermediateDirectories: true)
@@ -294,10 +293,10 @@ struct ExecApprovalsStoreRefactorTests {
 
             let ensured = ExecApprovalsStore.ensureFile()
 
-            #expect(ensured.defaults?.security == .deny)
-            #expect(ensured.defaults?.ask == .off)
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
+            #expect(ensured.socket?.token?.isEmpty == false)
+            #expect(FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
             #expect(try Data(contentsOf: linkedTarget) == permissive)
+            #expect(try FileManager().destinationOfSymbolicLink(atPath: legacyURL.path) == linkedTarget.path)
         }
     }
 
@@ -1131,7 +1130,7 @@ struct ExecApprovalsStoreRefactorTests {
 }
 extension ExecApprovalsStoreRefactorTests {
     @Test
-    func `ensure file migrates default approvals into custom state dir`() async throws {
+    func `ensure file keeps custom state isolated from default approvals`() async throws {
         try await self.withTempHomeAndStateDir { home, stateDir in
             let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
             try FileManager().createDirectory(
@@ -1158,6 +1157,7 @@ extension ExecApprovalsStoreRefactorTests {
             }
             """
             try Data(legacyJson.utf8).write(to: legacyFile)
+            let legacyBefore = try Data(contentsOf: legacyFile)
 
             let file = ExecApprovalsStore.ensureFile()
             let targetURL = ExecApprovalsStore.fileURL()
@@ -1168,12 +1168,10 @@ extension ExecApprovalsStoreRefactorTests {
             #expect(targetURL.path == expectedFileURL.path)
             #expect(FileManager().fileExists(atPath: targetURL.path))
             #expect(file.socket?.path == ExecApprovalsStore.socketPath())
-            #expect(file.socket?.token == "legacy-token")
-            #expect(file.defaults?.security == .deny)
-            #expect(file.defaults?.ask == .always)
-            #expect(file.agents?["main"]?.allowlist?.map(\.pattern) == ["git status"])
-            #expect(!FileManager().fileExists(atPath: legacyFile.path))
-            #expect(FileManager().fileExists(atPath: "\(legacyFile.path).migrated"))
+            #expect(file.socket?.token != "legacy-token")
+            #expect(file.agents?["main"]?.allowlist == nil)
+            #expect(try Data(contentsOf: legacyFile) == legacyBefore)
+            #expect(!FileManager().fileExists(atPath: "\(legacyFile.path).migrated"))
         }
     }
 
@@ -1201,68 +1199,6 @@ extension ExecApprovalsStoreRefactorTests {
                 atPath: stateDir.appendingPathComponent("exec-approvals.json").path))
             #expect(try Data(contentsOf: defaultFile) == defaultBefore)
             #expect(!FileManager().fileExists(atPath: "\(defaultFile.path).migrated"))
-        }
-    }
-
-    @Test
-    func `legacy writer revocation wins before migration publishes and archives`() async throws {
-        try await self.withTempHomeAndStateDir { home, _ in
-            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
-            try FileManager().createDirectory(
-                at: legacyDir,
-                withIntermediateDirectories: true)
-            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
-            let legacyLock = legacyDir.appendingPathComponent("exec-approvals.json.lock")
-            let initial = Data(
-                #"{"version":1,"agents":{"main":{"allowlist":[{"id":"revoked-entry","pattern":"/usr/bin/echo"}]}}}"#
-                    .utf8)
-            let revoked = Data(
-                #"{"version":1,"agents":{"main":{"allowlist":[]}}}"#.utf8)
-            try initial.write(to: legacyFile)
-            try Data("legacy writer owns lock".utf8).write(to: legacyLock)
-
-            // An older writer revokes under its sidecar lock. Migration must
-            // wait, then read and archive only the post-revocation policy.
-            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) {
-                try? revoked.write(to: legacyFile, options: [.atomic])
-                try? FileManager().removeItem(at: legacyLock)
-            }
-
-            let migrated = ExecApprovalsStore.ensureFile()
-
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-            #expect(migrated.agents?["main"]?.allowlist?.isEmpty != false)
-            #expect(!FileManager().fileExists(atPath: legacyFile.path))
-            let archived = URL(fileURLWithPath: "\(legacyFile.path).migrated")
-            #expect(FileManager().fileExists(atPath: archived.path))
-            let archivedFile = try JSONDecoder().decode(
-                ExecApprovalsFile.self,
-                from: Data(contentsOf: archived))
-            #expect(archivedFile.agents?["main"]?.allowlist?.isEmpty == true)
-        }
-    }
-
-    @Test
-    func `legacy migration fails closed while legacy writer lock is held`() async throws {
-        try await self.withTempHomeAndStateDir { home, _ in
-            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
-            try FileManager().createDirectory(
-                at: legacyDir,
-                withIntermediateDirectories: true)
-            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
-            let legacyLock = legacyDir.appendingPathComponent("exec-approvals.json.lock")
-            let permissive = Data(
-                #"{"version":1,"defaults":{"security":"full","ask":"off"}}"#.utf8)
-            try permissive.write(to: legacyFile)
-            try Data("legacy writer owns lock".utf8).write(to: legacyLock)
-
-            let ensured = ExecApprovalsStore.ensureFile()
-
-            #expect(ensured.defaults?.security == .deny)
-            #expect(ensured.defaults?.ask == .off)
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
-            #expect(try Data(contentsOf: legacyFile) == permissive)
-            #expect(FileManager().fileExists(atPath: legacyLock.path))
         }
     }
 

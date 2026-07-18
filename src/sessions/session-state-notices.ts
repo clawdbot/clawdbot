@@ -36,7 +36,7 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
 // for one agent's child could be drained and acknowledged by another agent's global
 // turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
 // is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices or cursors.
+// no notices.
 export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
   return parseAgentSessionKey(watcherSessionKey) != null;
 }
@@ -45,11 +45,18 @@ export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
   targetSessionKey: string;
   lastSeenSequence: number;
+  queueOnly?: boolean;
 }): void {
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
+    ...(params.queueOnly ? { replace: true } : {}),
   });
+  // Group activity is ambient context. Coalesce it for the next main turn instead
+  // of waking the personal agent once per inbound group message.
+  if (params.queueOnly) {
+    return;
+  }
   if (!shouldWakeWatcher(params.watcherSessionKey)) {
     return;
   }

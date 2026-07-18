@@ -301,6 +301,9 @@ dependencies {
   implementation(composeBom)
   androidTestImplementation(composeBom)
 
+  implementation(project(":wear-shared"))
+  implementation(libs.play.services.wearable)
+
   implementation(libs.androidx.core.ktx)
   // AppCompat owns per-app locale persistence and Activity recreation on API 31-32.
   implementation(libs.androidx.appcompat)
@@ -364,6 +367,10 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  testLogging {
+    events("failed")
+    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+  }
 }
 
 val validateOpenClawReleaseBuildMetadata =

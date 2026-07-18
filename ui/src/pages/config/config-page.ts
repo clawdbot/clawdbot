@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing, type PropertyValues } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
@@ -14,21 +14,18 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
-  loadLocalUserIdentity,
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
-  normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   patchSettings,
-  saveLocalUserIdentity,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
-import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -38,21 +35,14 @@ import {
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
 import {
-  AI_AGENTS_SECTION_KEYS,
-  AUTOMATION_SECTION_KEYS,
-  COMMUNICATION_SECTION_KEYS,
   configSectionKeysForPage,
-  INFRASTRUCTURE_SECTION_KEYS,
   SCOPED_CONFIG_SECTION_KEYS,
   type ConfigPageId,
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
-import {
-  renderQuickSettings,
-  type QuickSettingsChannel,
-  type QuickSettingsSecurity,
-} from "./quick.ts";
+import { renderQuickSettings } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
+import { renderSecurity, type SecurityOverview } from "./security.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -70,20 +60,22 @@ const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
   communications: "communications",
   appearance: "appearance",
+  notifications: "notifications",
+  security: "security",
   automation: "automation",
   mcp: "mcp",
   infrastructure: "infrastructure",
   "ai-agents": "aiAgents",
+  advanced: "advanced",
 } as const satisfies Record<ConfigPageId, string>;
 
-const KNOWN_CHANNELS = [
-  { id: "telegram", labelKey: "configPage.channels.telegram" },
-  { id: "discord", labelKey: "configPage.channels.discord" },
-  { id: "slack", labelKey: "configPage.channels.slack" },
-  { id: "whatsapp", labelKey: "configPage.channels.whatsapp" },
-  { id: "signal", labelKey: "configPage.channels.signal" },
-  { id: "imessage", labelKey: "configPage.channels.imessage" },
-] as const;
+// Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
+// Kept so pre-restructure bookmarks and generated links still land somewhere
+// sensible instead of silently opening the old page's default section.
+const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
+  "communications:__notifications__": { routeId: "notifications", keepSection: false },
+  "automation:approvals": { routeId: "security", keepSection: true },
+};
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
 
@@ -105,6 +97,10 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
       return { activeSection: "messages", activeSubsection: null };
     case "appearance":
       return { activeSection: "__appearance__", activeSubsection: null };
+    case "notifications":
+      return { activeSection: "__notifications__", activeSubsection: null };
+    case "security":
+      return { activeSection: "security", activeSubsection: null };
     case "automation":
       return { activeSection: "commands", activeSubsection: null };
     case "mcp":
@@ -114,6 +110,7 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
     case "ai-agents":
       return { activeSection: "agents", activeSubsection: null };
     case "config":
+    case "advanced":
       return { activeSection: null, activeSubsection: null };
   }
   throw new Error("Unknown config page");
@@ -125,7 +122,13 @@ function normalizeConfigSelection(
   activeSubsection: string | null,
 ): ConfigSelection {
   const sections = configSectionKeysForPage(pageId) ?? null;
-  if (pageId === "config" && activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
+  // General/Advanced render without an include list; sections that have a
+  // curated home elsewhere must not activate here.
+  if (
+    (pageId === "config" || pageId === "advanced") &&
+    activeSection &&
+    SCOPED_CONFIG_SECTION_KEYS.has(activeSection)
+  ) {
     return { activeSection: null, activeSubsection: null };
   }
   if (sections && (!activeSection || !sections.includes(activeSection))) {
@@ -150,38 +153,7 @@ function configPageTitle(pageId: ConfigPageId): string {
     : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
-function mcpServerCount(config: unknown): number {
-  const servers = asConfigRecord(asConfigRecord(config)?.mcp)?.servers;
-  return servers && typeof servers === "object" && !Array.isArray(servers)
-    ? Object.keys(servers).length
-    : 0;
-}
-
-function quickChannels(config: unknown): QuickSettingsChannel[] {
-  const configured = asConfigRecord(asConfigRecord(config)?.channels) ?? {};
-  const configuredIds = Object.keys(configured).filter((id) => id.trim().length > 0);
-  const channelIds =
-    configuredIds.length > 0
-      ? configuredIds.toSorted((left, right) => left.localeCompare(right))
-      : KNOWN_CHANNELS.map(({ id }) => id);
-  const labels = new Map<string, string>(
-    KNOWN_CHANNELS.map(({ id, labelKey }) => [id, t(labelKey)]),
-  );
-  return channelIds.map((id) => {
-    const value = configured[id];
-    const connected = Boolean(value && typeof value === "object" && Object.keys(value).length);
-    return {
-      id,
-      label:
-        labels.get(id) ??
-        id.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase()),
-      connected,
-      detail: connected ? t("common.configured") : undefined,
-    };
-  });
-}
-
-function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
+function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
   const root =
     asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
     asConfigRecord(config);
@@ -242,8 +214,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
-  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
-  @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
@@ -254,19 +224,25 @@ export class ConfigPage extends OpenClawLightDomElement {
     config: "form",
     communications: "form",
     appearance: "form",
+    notifications: "form",
+    security: "form",
     automation: "form",
     mcp: "form",
     infrastructure: "form",
     "ai-agents": "form",
+    advanced: "form",
   };
   @state() private selections: Record<ConfigPageId, ConfigSelection> = {
     config: defaultConfigSelection("config"),
     communications: defaultConfigSelection("communications"),
     appearance: defaultConfigSelection("appearance"),
+    notifications: defaultConfigSelection("notifications"),
+    security: defaultConfigSelection("security"),
     automation: defaultConfigSelection("automation"),
     mcp: defaultConfigSelection("mcp"),
     infrastructure: defaultConfigSelection("infrastructure"),
     "ai-agents": defaultConfigSelection("ai-agents"),
+    advanced: defaultConfigSelection("advanced"),
   };
   @state() private customThemeImportUrl = "";
   @state() private customThemeImportBusy = false;
@@ -324,16 +300,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
-    this.userAvatar = loadLocalUserIdentity().avatar;
     this.syncRouteData();
-  }
-
-  private setLocalUserAvatar(avatar: string | null) {
-    const identity = saveLocalUserIdentity({
-      ...loadLocalUserIdentity(),
-      avatar,
-    });
-    this.userAvatar = identity.avatar;
   }
 
   override disconnectedCallback() {
@@ -355,8 +322,7 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   override updated(changed: PropertyValues) {
     const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
-    const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
-    if (pageChanged || modeChanged) {
+    if (pageChanged) {
       this.invalidateSystemInfoRequest();
     }
     this.syncSystemInfoPolling();
@@ -386,21 +352,37 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private syncRouteData() {
+    // Pre-restructure deep links: sections that moved to their own page must
+    // redirect before normalization discards them from the old page's list.
+    const rawSection = this.routeData
+      ? this.routeData.section
+      : new URLSearchParams(globalThis.location?.search ?? "").get("section");
+    if (rawSection) {
+      const movedRoute = MOVED_SECTION_ROUTES[`${this.pageId}:${rawSection}`];
+      if (movedRoute) {
+        this.context?.navigate(movedRoute.routeId, {
+          search: movedRoute.keepSection ? `?section=${encodeURIComponent(rawSection)}` : "",
+          hash: globalThis.location?.hash ?? "",
+        });
+        return;
+      }
+    }
     const selection = this.routeData
       ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
       : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
+    // Pre-restructure deep links like /config?section=env opened the General
+    // page's Advanced mode; those sections now live on the Advanced page.
+    if (this.pageId === "config" && selection.activeSection) {
+      this.context?.navigate("advanced", {
+        search: `?section=${encodeURIComponent(selection.activeSection)}`,
+        hash: globalThis.location?.hash ?? "",
+      });
+      return;
+    }
     this.selections = { ...this.selections, [this.pageId]: selection };
     const targetBlockId =
       this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     this.pendingRouteTargetId = targetBlockId;
-    if (this.pageId !== "config") {
-      return;
-    }
-    if (this.routeData?.section) {
-      this.settingsMode = "advanced";
-    } else if (targetBlockId?.startsWith("settings-general-")) {
-      this.settingsMode = "quick";
-    }
   }
 
   private scrollToPendingRouteTarget() {
@@ -419,7 +401,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private isSystemInfoVisible(): boolean {
-    return this.pageId === "config" && this.settingsMode === "quick";
+    return this.pageId === "config";
   }
 
   private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -716,17 +698,9 @@ export class ConfigPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     const configState = runtimeConfig.state;
     const includeSections = this.includeSections();
+    // Advanced shows everything without a curated home elsewhere.
     const excludeSections =
-      this.pageId === "config"
-        ? [
-            ...COMMUNICATION_SECTION_KEYS,
-            ...AUTOMATION_SECTION_KEYS,
-            ...INFRASTRUCTURE_SECTION_KEYS,
-            ...AI_AGENTS_SECTION_KEYS,
-            "ui",
-            "wizard",
-          ]
-        : undefined;
+      this.pageId === "advanced" ? [...SCOPED_CONFIG_SECTION_KEYS] : undefined;
     const selection = normalizeConfigSelection(
       this.pageId,
       this.selections[this.pageId].activeSection,
@@ -755,7 +729,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       rawAvailable: Boolean(
         configState.configSnapshot?.config || configState.configForm || configState.configRaw,
       ),
-      showModeToggle: this.pageId === "config",
+      showModeToggle: this.pageId === "advanced",
       formValue: configState.configForm,
       originalValue: configState.configFormOriginal,
       activeSection,
@@ -797,9 +771,20 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
+      lobsterPetVisits: this.settings.lobsterPetVisits !== false,
+      setLobsterPetVisits: (enabled) =>
+        this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
+      lobsterPetSounds: this.settings.lobsterPetSounds === true,
+      setLobsterPetSounds: (enabled) =>
+        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
-      chatFollowUpMode: normalizeChatFollowUpMode(this.settings.chatFollowUpMode),
+      chatFollowUpMode: this.settings.chatFollowUpMode,
+      serverQueueMode: configState.configSnapshot
+        ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig, {
+            configNeedsApply: configState.configNeedsApply,
+          })
+        : undefined,
       setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
@@ -814,32 +799,52 @@ export class ConfigPage extends OpenClawLightDomElement {
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
-      navRootLabel: this.pageId === "config" ? undefined : configPageTitle(this.pageId),
+      navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
       showRootTab: !includeSections?.length,
       includeSections: includeSections ? [...includeSections] : undefined,
       excludeSections,
-      includeVirtualSections: this.pageId === "communications" || this.pageId === "appearance",
-      settingsLayout: this.pageId === "config" ? "accordion" : undefined,
+      includeVirtualSections: this.pageId === "appearance" || this.pageId === "notifications",
+      settingsLayout: this.pageId === "advanced" ? "accordion" : undefined,
       webPush: this.context.webPush.snapshot,
       onWebPushSubscribe: () => void this.context.webPush.enable(),
       onWebPushUnsubscribe: () => void this.context.webPush.disable(),
       onWebPushTest: () => void this.context.webPush.sendTest(),
     };
-    if (this.pageId !== "mcp") {
-      return renderConfig(props);
+    if (this.pageId === "mcp") {
+      return renderMcp({
+        configObject,
+        pluginsHref: pathForRoute("plugins", this.context.basePath),
+        editor: renderConfig({
+          ...props,
+          activeSection: "mcp",
+          activeSubsection: null,
+          showModeToggle: false,
+          includeSections: ["mcp"],
+          navRootLabel: "MCP",
+        }),
+      });
     }
-    return renderMcp({
-      configObject,
-      pluginsHref: pathForRoute("plugins", this.context.basePath),
-      editor: renderConfig({
-        ...props,
-        activeSection: "mcp",
-        activeSubsection: null,
-        showModeToggle: false,
-        includeSections: ["mcp"],
-        navRootLabel: "MCP",
-      }),
-    });
+    if (this.pageId === "security") {
+      const runtimeState = runtimeConfig.state;
+      const configBusy =
+        runtimeState.configLoading ||
+        runtimeState.configSaving ||
+        runtimeState.configApplying ||
+        this.isUpdateBusy();
+      return renderSecurity({
+        security: extractQuickSettingsSecurity(configObject),
+        configBusy,
+        canPairDevice:
+          runtimeState.connected &&
+          hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
+        onBrowserEnabledToggle: (enabled) =>
+          runtimeConfig.patchForm(["browser", "enabled"], enabled),
+        onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
+        editor: renderConfig(props),
+      });
+    }
+    return renderConfig(props);
   }
 
   private renderQuickConfig(configObject: Record<string, unknown>) {
@@ -856,48 +861,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       currentModel: model,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
-      channels: quickChannels(configObject),
-      automation: {
-        cronJobCount: 0,
-        skillCount: 0,
-        mcpServerCount: mcpServerCount(configObject),
-      },
-      security: extractQuickSettingsSecurity(configObject),
       systemInfo: this.systemInfo,
       systemInfoUnavailable: this.systemInfoUnavailable,
-      theme: this.settings.theme,
-      themeMode: this.settings.themeMode,
-      hasCustomTheme: Boolean(this.settings.customTheme),
-      customThemeLabel: this.settings.customTheme?.label,
-      textScale: this.settings.textScale ?? 100,
-      setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
-      setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
       onModelChange: () => {
-        this.settingsMode = "advanced";
         this.selections = {
           ...this.selections,
           "ai-agents": { activeSection: "models", activeSubsection: null },
         };
         this.navigate("ai-agents");
       },
-      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
-      lobsterPetVisits: this.settings.lobsterPetVisits !== false,
-      setLobsterPetVisits: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
-      lobsterPetSounds: this.settings.lobsterPetSounds === true,
-      setLobsterPetSounds: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
-      onOpenCustomThemeImport: () => {
-        this.pageId = "appearance";
-        this.setFormMode("form");
-        this.selections = {
-          ...this.selections,
-          appearance: { activeSection: "__appearance__", activeSubsection: null },
-        };
-        this.openCustomThemeImport();
-      },
       connected: runtimeConfig.state.connected,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName: appConfig.assistantIdentity.name,
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
@@ -916,54 +889,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
-      onChannelConfigure: () => this.navigate("communications"),
-      onManageCron: () => this.navigate("cron"),
-      onBrowseSkills: () => this.navigate("skills"),
-      onConfigureMcp: () => this.navigate("mcp"),
-      onSecurityConfigure: () => {
-        this.settingsMode = "advanced";
-        this.selections = {
-          ...this.selections,
-          config: { activeSection: "auth", activeSubsection: null },
-        };
-      },
-      canPairDevice:
-        runtimeConfig.state.connected &&
-        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-      onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
-      onBrowserEnabledToggle: (enabled) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
-      onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
-      assistantAvatar: appConfig.assistantIdentity.avatar,
-      assistantAvatarUrl: appConfig.assistantIdentity.avatar,
-      assistantAvatarSource: appConfig.assistantIdentity.avatarSource,
-      assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
-      assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
-      assistantAvatarOverride: null,
-      userAvatar: this.userAvatar,
-      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
-      basePath: this.context.basePath,
     });
-  }
-
-  private renderSettingsModeToggle() {
-    if (this.pageId !== "config") {
-      return nothing;
-    }
-    return html`
-      <div class="config-view-toggle">
-        ${renderSettingsSegmented({
-          value: this.settingsMode,
-          options: [
-            { value: "quick", label: t("configPage.simple") },
-            { value: "advanced", label: t("configPage.advanced") },
-          ],
-          ariaLabel: t("configPage.settingsView"),
-          onChange: (mode) => {
-            this.settingsMode = mode;
-          },
-        })}
-      </div>
-    `;
   }
 
   override render() {
@@ -971,7 +897,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const configObject =
       asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
     const body =
-      this.pageId === "config" && this.settingsMode === "quick"
+      this.pageId === "config"
         ? this.renderQuickConfig(configObject)
         : this.renderAdvancedConfig(configObject);
     return html`
@@ -979,11 +905,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${configPageTitle(this.pageId)}</div>
         </div>
-        ${this.renderSettingsModeToggle()}
       </section>
-      ${this.pageId === "config"
-        ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
-        : nothing}
       ${renderSettingsWorkspace(
         body,
         this.pageId === "config"
@@ -997,5 +919,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-config-page", ConfigPage);
+if (!customElements.get("openclaw-config-page")) {
+  customElements.define("openclaw-config-page", ConfigPage);
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

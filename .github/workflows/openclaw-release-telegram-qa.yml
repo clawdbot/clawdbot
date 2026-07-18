@@ -47,6 +47,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.15.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
@@ -267,13 +268,59 @@ jobs:
         run: |
           set -euo pipefail
 
+          gh_with_retry() {
+            local stdout stderr_file stderr_output output status attempt
+            for attempt in 1 2 3 4 5; do
+              stderr_file="$(mktemp)"
+              set +e
+              stdout="$(gh "$@" 2>"$stderr_file")"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                if [[ -s "$stderr_file" ]]; then
+                  cat "$stderr_file" >&2
+                fi
+                rm -f "$stderr_file"
+                printf '%s\n' "$stdout"
+                return 0
+              fi
+              stderr_output="$(cat "$stderr_file")"
+              rm -f "$stderr_file"
+              output="$stdout"
+              if [[ -n "$stderr_output" ]]; then
+                output+="${output:+$'\n'}${stderr_output}"
+              fi
+              if [[ "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+                echo "::warning::Transient GitHub response from gh $* on attempt ${attempt}; retrying." >&2
+                sleep $((attempt * 3))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
           candidate_sha="$(git -C .candidate rev-parse HEAD)"
           [[ "$candidate_sha" == "$TARGET_SHA" ]]
+          repository_owner="${GITHUB_REPOSITORY%%/*}"
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          candidate_metadata_json="$(
+            gh_with_retry api graphql \
+              -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:100){nodes{state headRefOid headRepository{nameWithOwner} baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
+              -f owner="$repository_owner" \
+              -f name="$repository_name" \
+              -f oid="$candidate_sha"
+          )"
           pr_head_count="$(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls" \
-              --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${candidate_sha}"'")] | length'
+            jq -er \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg sha "$candidate_sha" \
+              '[.data.repository.object.associatedPullRequests.nodes[] |
+                select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and
+                  .headRefOid == $sha)] | length' \
+              <<<"$candidate_metadata_json"
           )"
           if [[ "$pr_head_count" != "0" ]]; then
             echo "Telegram candidate ${candidate_sha} is an open same-repository PR head." >&2
@@ -281,7 +328,7 @@ jobs:
           fi
 
           compare_status="$(
-            gh api \
+            gh_with_retry api \
               "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
               --jq '.status'
           )"
@@ -311,7 +358,7 @@ jobs:
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
               matching_release_branches="$(
-                gh api --paginate \
+                gh_with_retry api --paginate \
                   "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
                   --jq '.[].name' |
                   awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
@@ -338,15 +385,7 @@ jobs:
           fi
 
           if [[ "$trusted_reason" != "main-ancestor" ]]; then
-            repository_owner="${GITHUB_REPOSITORY%%/*}"
-            repository_name="${GITHUB_REPOSITORY#*/}"
-            signature_json="$(
-              gh api graphql \
-                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:10){nodes{state baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
-                -f owner="$repository_owner" \
-                -f name="$repository_name" \
-                -f oid="$candidate_sha"
-            )"
+            signature_json="$candidate_metadata_json"
             signature_status="$(
               jq -er \
                 --arg sha "$candidate_sha" \
@@ -383,7 +422,7 @@ jobs:
               )"
             fi
             permission_json="$(
-              gh api \
+              gh_with_retry api \
                 "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission"
             )"
             permission="$(jq -r '.permission // ""' <<<"$permission_json")"
@@ -969,17 +1008,63 @@ jobs:
         run: |
           set -euo pipefail
 
+          gh_with_retry() {
+            local stdout stderr_file stderr_output output status attempt
+            for attempt in 1 2 3 4 5; do
+              stderr_file="$(mktemp)"
+              set +e
+              stdout="$(gh "$@" 2>"$stderr_file")"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                if [[ -s "$stderr_file" ]]; then
+                  cat "$stderr_file" >&2
+                fi
+                rm -f "$stderr_file"
+                printf '%s\n' "$stdout"
+                return 0
+              fi
+              stderr_output="$(cat "$stderr_file")"
+              rm -f "$stderr_file"
+              output="$stdout"
+              if [[ -n "$stderr_output" ]]; then
+                output+="${output:+$'\n'}${stderr_output}"
+              fi
+              if [[ "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+                echo "::warning::Transient GitHub response from gh $* on attempt ${attempt}; retrying." >&2
+                sleep $((attempt * 3))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
           candidate_sha="$TARGET_SHA"
+          repository_owner="${GITHUB_REPOSITORY%%/*}"
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          candidate_metadata_json="$(
+            gh_with_retry api graphql \
+              -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:100){nodes{state headRefOid headRepository{nameWithOwner} baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
+              -f owner="$repository_owner" \
+              -f name="$repository_name" \
+              -f oid="$candidate_sha"
+          )"
           pr_head_count="$(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls" \
-              --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${candidate_sha}"'")] | length'
+            jq -er \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg sha "$candidate_sha" \
+              '[.data.repository.object.associatedPullRequests.nodes[] |
+                select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and
+                  .headRefOid == $sha)] | length' \
+              <<<"$candidate_metadata_json"
           )"
           [[ "$pr_head_count" == "0" ]]
 
           compare_status="$(
-            gh api \
+            gh_with_retry api \
               "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
               --jq '.status'
           )"
@@ -1008,7 +1093,7 @@ jobs:
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
               matching_release_branches="$(
-                gh api --paginate \
+                gh_with_retry api --paginate \
                   "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
                   --jq '.[].name' |
                   awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
@@ -1032,15 +1117,7 @@ jobs:
           [[ -n "$trusted_reason" ]]
 
           if [[ "$trusted_reason" != "main-ancestor" ]]; then
-            repository_owner="${GITHUB_REPOSITORY%%/*}"
-            repository_name="${GITHUB_REPOSITORY#*/}"
-            signature_json="$(
-              gh api graphql \
-                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:10){nodes{state baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
-                -f owner="$repository_owner" \
-                -f name="$repository_name" \
-                -f oid="$candidate_sha"
-            )"
+            signature_json="$candidate_metadata_json"
             signature_status="$(
               jq -er \
                 --arg sha "$candidate_sha" \
@@ -1077,7 +1154,7 @@ jobs:
               )"
             fi
             permission_json="$(
-              gh api \
+              gh_with_retry api \
                 "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission"
             )"
             permission="$(jq -r '.permission // ""' <<<"$permission_json")"

@@ -10,6 +10,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
+import { reefPeerIdentity } from "./friend-types.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { RelayFriend } from "./types.js";
 
@@ -65,6 +66,24 @@ describe("ReefTrustStore", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("retains delivery bindings across envelope and receipt relay windows", () => {
+    const opened: OpenKeyedStoreOptions[] = [];
+    const mockRuntime = createPluginRuntimeMock();
+    mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) => {
+      opened.push(options);
+      return createPluginStateSyncKeyedStoreForTests<T>("reef", {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+    };
+
+    openReefTrustStore(mockRuntime, config());
+
+    expect(
+      opened.find((options) => options.namespace === "outbound-deliveries")?.defaultTtlMs,
+    ).toBe(61 * 24 * 60 * 60 * 1_000);
+  });
+
   it("persists peer pins and autonomy in shared plugin-state SQLite", () => {
     const first = openReefTrustStore(runtime(), config());
     first.set("clawd", peerTrust());
@@ -105,6 +124,153 @@ describe("ReefTrustStore", () => {
     expect(store.removeOutboundRequest("clawd", second)).toBe(true);
     expect(store.hasOutboundRequest("clawd")).toBe(false);
     expect(store.outboundRequestStatus("clawd", second)).toBe("revoked");
+  });
+
+  it("persists and atomically consumes outbound delivery bindings", () => {
+    const id = "01JZ0000000000000000000120";
+    const bodyHash = "a".repeat(64);
+    const recipient = reefPeerIdentity(peerTrust());
+    const binding = { bodyHash, textHash: "b".repeat(64), recipient };
+    openReefTrustStore(runtime(), config()).recordOutboundDelivery("clawd", id, binding);
+
+    const reopened = openReefTrustStore(runtime(), config());
+    expect(reopened.outboundDelivery("clawd", id)).toEqual(binding);
+    expect(
+      reopened.consumeOutboundDelivery("clawd", id, { ...binding, bodyHash: "b".repeat(64) }),
+    ).toBe(false);
+    expect(
+      reopened.consumeOutboundDelivery("clawd", id, { ...binding, textHash: "c".repeat(64) }),
+    ).toBe(false);
+    expect(reopened.outboundDelivery("clawd", id)).toEqual(binding);
+    expect(reopened.consumeOutboundDelivery("clawd", id, binding)).toBe(true);
+    expect(reopened.outboundDelivery("clawd", id)).toBeUndefined();
+    expect(reopened.consumeOutboundDelivery("clawd", id, binding)).toBe(false);
+  });
+
+  it("keeps rejection notices durable until the sender agent consumes them", () => {
+    const id = "01JZ0000000000000000000121";
+    const bodyHash = "a".repeat(64);
+    const store = openReefTrustStore(runtime(), config());
+    const trustedPeer = peerTrust();
+    const recipient = reefPeerIdentity(trustedPeer);
+    const textHash = "c".repeat(64);
+    const binding = { bodyHash, textHash, recipient };
+    store.set("clawd", trustedPeer);
+    store.recordOutboundDelivery("clawd", id, binding);
+
+    expect(
+      store.recordOutboundRejection(
+        "clawd",
+        id,
+        { ...binding, bodyHash: "b".repeat(64) },
+        "guard_deny",
+      ),
+    ).toBe(false);
+    expect(store.recordOutboundRejection("clawd", id, binding, "guard_deny")).toBe(true);
+
+    const reopened = openReefTrustStore(runtime(), config());
+    expect(reopened.pendingOutboundRejections()).toEqual([
+      { id, peer: "clawd", recipient, textHash, category: "guard_deny" },
+    ]);
+    expect(reopened.consumeOutboundDelivery("clawd", id, binding)).toBe(false);
+    const noticeState = { lastRejectionAt: 10_000, lastResendAt: 10_100 };
+    expect(reopened.reserveOutboundRejectionNotice("clawd", id, recipient, noticeState)).toEqual({
+      kind: "reserved",
+    });
+    expect(reopened.pendingOutboundRejections()).toEqual([
+      {
+        id,
+        peer: "clawd",
+        recipient,
+        textHash,
+        category: "guard_deny",
+        reservedNotice: noticeState,
+      },
+    ]);
+    expect(reopened.completeOutboundRejection("clawd", id, noticeState)).toBe(true);
+    expect(reopened.pendingOutboundRejections()).toEqual([]);
+    expect(reopened.outboundDelivery("clawd", id)).toBeUndefined();
+    expect(reopened.rejectionNoticeState("clawd")).toEqual(noticeState);
+    expect(reopened.completeOutboundRejection("clawd", id, noticeState)).toBe(true);
+  });
+
+  it("marks imported delivery rejections stop-only in the atomic receipt update", () => {
+    const id = "01JZ0000000000000000000129";
+    const store = openReefTrustStore(runtime(), config());
+    const trustedPeer = peerTrust();
+    const recipient = reefPeerIdentity(trustedPeer);
+    const binding = { bodyHash: "a".repeat(64), recipient };
+    store.set("clawd", trustedPeer);
+    store.recordOutboundDelivery("clawd", id, binding, { resendDisabled: true });
+
+    expect(store.recordOutboundRejection("clawd", id, binding, "guard_deny")).toBe(true);
+    expect(store.pendingOutboundRejections()).toEqual([
+      {
+        id,
+        peer: "clawd",
+        recipient,
+        category: "guard_deny",
+        reservedNotice: { lastRejectionAt: expect.any(Number) },
+      },
+    ]);
+  });
+
+  it("does not recover a rejected delivery after the peer identity changes", () => {
+    const id = "01JZ0000000000000000000124";
+    const store = openReefTrustStore(runtime(), config());
+    const trustedPeer = peerTrust();
+    const recipient = reefPeerIdentity(trustedPeer);
+    const binding = { bodyHash: "a".repeat(64), recipient };
+    store.set("clawd", trustedPeer);
+    store.recordOutboundDelivery("clawd", id, binding);
+    store.recordOutboundRejection("clawd", id, binding, "guard_deny");
+
+    store.set("clawd", peerTrust());
+
+    expect(store.pendingOutboundRejections()).toEqual([]);
+    expect(() =>
+      store.reserveOutboundRejectionNotice("clawd", id, recipient, {
+        lastRejectionAt: 10_000,
+      }),
+    ).toThrow("changed keys before rejection recovery");
+  });
+
+  it("persists restart-stable rejection notice cooldowns monotonically", () => {
+    const store = openReefTrustStore(runtime(), config());
+    const trustedPeer = peerTrust();
+    const recipient = reefPeerIdentity(trustedPeer);
+    store.set("clawd", trustedPeer);
+    const latestId = "01JZ0000000000000000000122";
+    const latestBinding = { bodyHash: "a".repeat(64), recipient };
+    store.recordOutboundDelivery("clawd", latestId, latestBinding);
+    store.recordOutboundRejection("clawd", latestId, latestBinding, "guard_deny");
+    const latestState = {
+      lastRejectionAt: 10_000,
+      lastResendAt: 10_100,
+    };
+    store.reserveOutboundRejectionNotice("clawd", latestId, recipient, latestState);
+    store.completeOutboundRejection("clawd", latestId, latestState);
+
+    const reopened = openReefTrustStore(runtime(), config());
+    expect(reopened.rejectionNoticeState("clawd")).toEqual({
+      lastRejectionAt: 10_000,
+      lastResendAt: 10_100,
+    });
+
+    const olderId = "01JZ0000000000000000000123";
+    const olderBinding = { bodyHash: "b".repeat(64), recipient };
+    reopened.recordOutboundDelivery("clawd", olderId, olderBinding);
+    reopened.recordOutboundRejection("clawd", olderId, olderBinding, "guard_deny");
+    const olderState = {
+      lastRejectionAt: 9_000,
+      lastResendAt: 9_100,
+    };
+    reopened.reserveOutboundRejectionNotice("clawd", olderId, recipient, olderState);
+    reopened.completeOutboundRejection("clawd", olderId, olderState);
+    expect(reopened.rejectionNoticeState("clawd")).toEqual({
+      lastRejectionAt: 10_000,
+      lastResendAt: 10_100,
+    });
   });
 
   it("rejects autonomy updates for untrusted or invalid peers", () => {

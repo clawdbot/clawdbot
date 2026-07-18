@@ -27,6 +27,14 @@ export type McpLoopbackRequestContext = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
+  /**
+   * Per-run allowlist of gateway tool names for this grant. When set, the
+   * loopback surface lists and executes only these tools; CLI-side flags such
+   * as `--allowedTools` are advisory under bypass permission modes, so the
+   * grant is where restricted one-shot runs (e.g. active-memory recall) get
+   * hard enforcement. Unset keeps the full session-scoped surface.
+   */
+  toolsAllow?: string[];
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;

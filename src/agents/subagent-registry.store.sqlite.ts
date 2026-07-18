@@ -14,6 +14,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type {
   PendingFinalDeliveryPayload,
+  RequesterSettleWakeState,
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
   SubagentExecutionState,
@@ -89,12 +90,62 @@ function createDeliveryFromTypedColumns(
     ...(row.pending_final_delivery_last_error !== null
       ? { lastError: row.pending_final_delivery_last_error }
       : {}),
-    ...(row.completion_announced_at !== null
+    ...(row.completion_announced_at !== null && row.expects_completion_message === 1
       ? {
           status: "delivered",
           announcedAt: row.completion_announced_at,
           deliveredAt: delivery?.deliveredAt ?? row.completion_announced_at,
         }
+      : row.completion_announced_at !== null
+        ? { announcedAt: row.completion_announced_at }
+        : {}),
+    ...(row.expects_completion_message === 0 ? { status: "not_required" } : {}),
+  };
+}
+
+function createRequesterSettleWakeFromTypedColumns(
+  row: SubagentRunSqliteRow,
+  fallback: RequesterSettleWakeState | undefined,
+): RequesterSettleWakeState | undefined {
+  const fallbackStatus =
+    fallback?.status === "pending" || fallback?.status === "dispatching"
+      ? fallback.status
+      : undefined;
+  const status =
+    row.requester_settle_wake_status === "pending" ||
+    row.requester_settle_wake_status === "dispatching"
+      ? row.requester_settle_wake_status
+      : fallbackStatus;
+  if (!status) {
+    return undefined;
+  }
+  const parsedBatchRunIds = parseJson(row.requester_settle_wake_batch_run_ids_json);
+  const batchRunIds = Array.isArray(parsedBatchRunIds)
+    ? parsedBatchRunIds.filter(
+        (value): value is string => typeof value === "string" && Boolean(value),
+      )
+    : fallback?.batchRunIds;
+  return {
+    ...fallback,
+    status,
+    attemptCount:
+      normalizeFiniteNumber(row.requester_settle_wake_attempt_count) ?? fallback?.attemptCount ?? 0,
+    ...(normalizeFiniteNumber(row.requester_settle_wake_replay_count) !== undefined
+      ? { replayCount: row.requester_settle_wake_replay_count ?? undefined }
+      : fallback?.replayCount !== undefined
+        ? { replayCount: fallback.replayCount }
+        : {}),
+    ...(normalizeFiniteNumber(row.requester_settle_wake_next_attempt_at) !== undefined
+      ? { nextAttemptAt: row.requester_settle_wake_next_attempt_at ?? undefined }
+      : fallback?.nextAttemptAt !== undefined
+        ? { nextAttemptAt: fallback.nextAttemptAt }
+        : {}),
+    ...(batchRunIds && batchRunIds.length > 0 ? { batchRunIds } : {}),
+    ...(row.requester_settle_wake_last_error !== null
+      ? { lastError: row.requester_settle_wake_last_error }
+      : {}),
+    ...(sqliteBool(row.requester_settle_wake_retire_after) !== undefined
+      ? { retireAfterSettle: sqliteBool(row.requester_settle_wake_retire_after) }
       : {}),
   };
 }
@@ -129,6 +180,10 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
       }
     : undefined;
   const delivery = createDeliveryFromTypedColumns(row, payload.delivery);
+  const requesterSettleWake = createRequesterSettleWakeFromTypedColumns(
+    row,
+    payload.requesterSettleWake,
+  );
   const record = normalizeSubagentRunState({
     ...payload,
     runId: row.run_id,
@@ -181,6 +236,7 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
       ? { endedHookEmittedAt: row.ended_hook_emitted_at }
       : {}),
     ...(delivery ? { delivery } : {}),
+    ...(requesterSettleWake ? { requesterSettleWake } : {}),
   });
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
@@ -190,6 +246,7 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
   const normalized = normalizeSubagentRunState(structuredClone(entry));
   const delivery = normalized.delivery;
   const completion = normalized.completion;
+  const requesterSettleWake = normalized.requesterSettleWake;
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,
@@ -223,6 +280,13 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     ended_reason: normalized.endedReason ?? null,
     pause_reason: normalized.pauseReason ?? null,
     wake_on_descendant_settle: boolToSqlite(normalized.wakeOnDescendantSettle),
+    requester_settle_wake_status: requesterSettleWake?.status ?? null,
+    requester_settle_wake_attempt_count: requesterSettleWake?.attemptCount ?? null,
+    requester_settle_wake_replay_count: requesterSettleWake?.replayCount ?? null,
+    requester_settle_wake_next_attempt_at: requesterSettleWake?.nextAttemptAt ?? null,
+    requester_settle_wake_batch_run_ids_json: jsonStringify(requesterSettleWake?.batchRunIds),
+    requester_settle_wake_last_error: requesterSettleWake?.lastError ?? null,
+    requester_settle_wake_retire_after: boolToSqlite(requesterSettleWake?.retireAfterSettle),
     frozen_result_text: completion?.resultText ?? null,
     frozen_result_captured_at: completion?.capturedAt ?? null,
     fallback_frozen_result_text: completion?.fallbackResultText ?? null,

@@ -80,13 +80,13 @@ function buildAllowAccess(): QQBotInboundAccess {
 }
 
 function buildDeps(
-  cfg: unknown,
+  cfg: StubCfg,
   runtime: GatewayPluginRuntime,
   account: GatewayAccount,
 ): InboundPipelineDeps {
   return {
     account,
-    cfg,
+    cfg: cfg as InboundPipelineDeps["cfg"],
     runtime,
     startTyping: vi.fn(),
     adapters: {

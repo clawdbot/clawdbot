@@ -12,8 +12,10 @@ const mockState = vi.hoisted(() => ({
     onclose?: (reason: string[]) => void;
   } | null,
   subscribeMany: vi.fn(),
+  publish: vi.fn((_relays: string[], _event: unknown) => [Promise.resolve("ok")]),
   close: vi.fn(),
   subscriptionClose: vi.fn(),
+  finalizeEvent: vi.fn((event: unknown) => event),
   verifyEvent: vi.fn(() => true),
   decrypt: vi.fn(() => "plaintext"),
   publishProfile: vi.fn(async () => ({
@@ -42,7 +44,9 @@ vi.mock("nostr-tools", () => {
       };
     }
 
-    publish = vi.fn(async () => {});
+    publish(relays: string[], event: unknown) {
+      return mockState.publish(relays, event);
+    }
 
     close(relays: string[]) {
       mockState.close(relays);
@@ -51,7 +55,7 @@ vi.mock("nostr-tools", () => {
 
   return {
     SimplePool: MockSimplePool,
-    finalizeEvent: vi.fn((event: unknown) => event),
+    finalizeEvent: mockState.finalizeEvent,
     getPublicKey: vi.fn(() => BOT_PUBKEY),
     verifyEvent: mockState.verifyEvent,
     nip19: {
@@ -101,8 +105,11 @@ describe("startNostrBus inbound guards", () => {
   beforeEach(() => {
     mockState.handlers = null;
     mockState.subscribeMany.mockClear();
+    mockState.publish.mockReset();
+    mockState.publish.mockReturnValue([Promise.resolve("ok")]);
     mockState.close.mockClear();
     mockState.subscriptionClose.mockReset();
+    mockState.finalizeEvent.mockClear();
     mockState.verifyEvent.mockClear();
     mockState.verifyEvent.mockReturnValue(true);
     mockState.decrypt.mockClear();
@@ -190,6 +197,42 @@ describe("startNostrBus inbound guards", () => {
     expect(mockState.decrypt).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
     expect(bus.getMetrics().eventsReceived).toBe(1);
+
+    bus.close();
+  });
+
+  it("links authorization replies to the inbound NIP-04 event", async () => {
+    const inboundEventId = "c".repeat(64);
+    const senderPubkey = "a".repeat(64);
+    const authorizeSender = vi.fn(async ({ reply }: { reply: (text: string) => Promise<void> }) => {
+      await reply("pairing reply");
+      return "pairing" as const;
+    });
+    const key = TEST_HEX_PRIVATE_KEY;
+    const bus = await startNostrBus({
+      privateKey: key,
+      relays: ["wss://relay.example"],
+      onMessage: vi.fn(async () => {}),
+      authorizeSender,
+      onMetric: () => {},
+    });
+
+    await emitEvent(
+      createEvent({
+        id: inboundEventId,
+        pubkey: senderPubkey,
+      }),
+    );
+
+    expect(mockState.finalizeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tags: [
+          ["p", senderPubkey],
+          ["e", inboundEventId],
+        ],
+      }),
+      expect.any(Uint8Array),
+    );
 
     bus.close();
   });

@@ -2,6 +2,7 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -13,9 +14,13 @@ import { resolveClickClackAccountConfig } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "clickclack" as const;
+const SETUP_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const SETUP_CODE_LENGTH = 12;
 const REQUIRED_INPUT_ERROR =
   "ClickClack requires --token, --base-url, and --workspace (or --use-env).";
 const INVALID_BASE_URL_ERROR = "ClickClack base URL must be a valid http(s) URL.";
+const SETUP_CODE_CONFLICT_ERROR =
+  "ClickClack --code cannot be combined with --token, --token-file, or --use-env.";
 
 export function normalizeClickClackBaseUrl(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -31,6 +36,92 @@ export function normalizeClickClackBaseUrl(value: string | undefined): string | 
   } catch {
     return undefined;
   }
+}
+
+function normalizeClickClackSetupCode(value: string): string | undefined {
+  const normalized = value.trim().toUpperCase().replaceAll("-", "").replaceAll(" ", "");
+  if (
+    normalized.length !== SETUP_CODE_LENGTH ||
+    Array.from(normalized).some((character) => !SETUP_CODE_ALPHABET.includes(character))
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function requireClickClackSetupCodeBaseUrl(value: string | undefined): string {
+  const baseUrl = normalizeClickClackBaseUrl(value);
+  if (!baseUrl) {
+    throw new Error("ClickClack setup codes require a valid HTTP(S) base URL.");
+  }
+  return baseUrl;
+}
+
+function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string }): {
+  code: string;
+  baseUrl: string;
+} {
+  const rawCode = params.code.trim();
+  if (!rawCode) {
+    throw new Error("ClickClack --code must not be empty.");
+  }
+
+  let code = rawCode;
+  let baseUrl: string;
+  if (/^[a-z][a-z\d+.-]*:\/\//iu.test(rawCode)) {
+    let setupUrl: URL;
+    try {
+      setupUrl = new URL(rawCode);
+    } catch {
+      throw new Error("ClickClack --code must be a valid HTTP(S) setup URL or a bare setup code.");
+    }
+    if (setupUrl.protocol !== "http:" && setupUrl.protocol !== "https:") {
+      throw new Error("ClickClack setup codes require an HTTP(S) URL.");
+    }
+    if (setupUrl.username || setupUrl.password) {
+      throw new Error("ClickClack setup URLs must not include credentials.");
+    }
+    code = setupUrl.hash.slice(1);
+    if (!code) {
+      throw new Error("ClickClack setup URL is missing its #CODE fragment.");
+    }
+    setupUrl.hash = "";
+    setupUrl.search = "";
+    baseUrl = requireClickClackSetupCodeBaseUrl(setupUrl.toString());
+    if (params.baseUrl) {
+      const suppliedBaseUrl = requireClickClackSetupCodeBaseUrl(params.baseUrl);
+      if (suppliedBaseUrl !== baseUrl) {
+        throw new Error("ClickClack --base-url does not match the server in the setup-code URL.");
+      }
+    }
+  } else {
+    code = code.startsWith("#") ? code.slice(1) : code;
+    if (!params.baseUrl) {
+      throw new Error("A bare ClickClack setup code requires --base-url.");
+    }
+    baseUrl = requireClickClackSetupCodeBaseUrl(params.baseUrl);
+  }
+
+  const normalizedCode = normalizeClickClackSetupCode(code);
+  if (!normalizedCode) {
+    throw new Error("ClickClack setup code must contain 12 valid base32 characters.");
+  }
+  return { code: normalizedCode, baseUrl };
+}
+
+function formatClickClackSetupCodeClaimError(error: unknown): Error {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    if (status === 404) {
+      return new Error(
+        "ClickClack setup code is invalid, expired, or already used. Generate a new code and try again.",
+      );
+    }
+    if (status === 429) {
+      return new Error("Too many ClickClack setup code attempts. Wait and try again.");
+    }
+  }
+  return new Error(`Could not claim ClickClack setup code: ${formatErrorMessage(error)}`);
 }
 
 export function applyClickClackSetupConfigPatch(params: {
@@ -150,6 +241,39 @@ export function applyClickClackCredentialConfig(params: {
 
 export const clickClackSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  prepareAccountConfigInput: async ({ input }) => {
+    if (!input.code?.trim()) {
+      return input;
+    }
+    if (input.token?.trim() || input.tokenFile?.trim() || input.useEnv) {
+      throw new Error(SETUP_CODE_CONFLICT_ERROR);
+    }
+    const setup = parseClickClackSetupCodeInput({
+      code: input.code,
+      baseUrl: input.baseUrl,
+    });
+    let claim;
+    try {
+      const { claimClickClackSetupCode } = await import("./setup-claim.js");
+      claim = await claimClickClackSetupCode(setup);
+    } catch (error) {
+      throw formatClickClackSetupCodeClaimError(error);
+    }
+    const { code: _code, tokenFile: _tokenFile, useEnv: _useEnv, ...remainingInput } = input;
+    return {
+      ...remainingInput,
+      baseUrl: setup.baseUrl,
+      token: claim.token,
+      workspace: claim.workspace.id,
+      ...(claim.defaults.defaultTo !== undefined ? { defaultTo: claim.defaults.defaultTo } : {}),
+      ...(claim.defaults.allowFrom !== undefined
+        ? { allowFrom: [...claim.defaults.allowFrom] }
+        : {}),
+      ...(claim.defaults.agentActivity !== undefined
+        ? { agentActivity: claim.defaults.agentActivity }
+        : {}),
+    };
+  },
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
       cfg,
@@ -201,6 +325,9 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
       patch: {
         ...(baseUrl ? { baseUrl } : {}),
         ...(workspace ? { workspace } : {}),
+        ...(input.defaultTo?.trim() ? { defaultTo: input.defaultTo.trim() } : {}),
+        ...(input.allowFrom ? { allowFrom: [...input.allowFrom] } : {}),
+        ...(input.agentActivity !== undefined ? { agentActivity: input.agentActivity } : {}),
       },
     });
     return applyClickClackCredentialConfig({

@@ -62,7 +62,7 @@ jobs:
           fi
 
           for attempt in 1 2 3 4 5; do
-            if git fetch --no-tags origin main; then
+            if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin main; then
               break
             fi
             if [ "$attempt" = "5" ]; then
@@ -230,7 +230,7 @@ jobs:
           git commit --no-verify -m "docs: refresh documentation"
 
           for attempt in 1 2 3 4 5; do
-            if ! git fetch --no-tags origin "${TARGET_BRANCH}"; then
+            if ! timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "${TARGET_BRANCH}"; then
               echo "Fetch attempt ${attempt} failed; retrying."
               sleep $((attempt * 2))
               continue

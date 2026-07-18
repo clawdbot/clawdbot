@@ -110,9 +110,9 @@ async function waitForChildClose(
 
 describe("run-additional-boundary-checks", () => {
   it("keeps prompt snapshot drift checks in their dedicated CI lane", () => {
-    // The snapshot check regenerates prompts with real embedded-agent turns
-    // (~2min); packing it into a boundary shard makes that shard the PR wall
-    // clock, so it owns the check-prompt-snapshots lane instead.
+    // The snapshot check regenerates prompt fixtures over the full agent
+    // tool/prompt import graph; packing it into a boundary shard makes that
+    // shard the PR wall clock, so it owns the check-prompt-snapshots lane.
     expect(BOUNDARY_CHECKS.some((check) => check.label === "prompt:snapshots:check")).toBe(false);
     const workflow = fs.readFileSync(".github/workflows/ci.yml", "utf8");
     expect(workflow).toContain("check_name: check-prompt-snapshots");
@@ -153,6 +153,21 @@ describe("run-additional-boundary-checks", () => {
     output.append("second-line\n");
 
     expect(output.read()).toBe("[output truncated to last 12 bytes]\nsecond-line\n");
+  });
+
+  it("drops split UTF-8 prefixes when one chunk exceeds the output byte cap", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
+  it("drops split UTF-8 prefixes when older buffered output overflows", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀");
+    output.append("new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
   });
 
   it("parses and applies CI shard specs", () => {
@@ -278,6 +293,30 @@ describe("run-additional-boundary-checks", () => {
     expect(result.code).toBe(1);
     expect(result.timedOut).toBe(true);
     expect(result.output).toContain("timed out after 50ms");
+  });
+
+  it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {
+    const script = [
+      'const bytes = Buffer.from("old😀new");',
+      "process.stdout.write(bytes.subarray(0, 5));",
+      "setTimeout(() => process.stdout.end(bytes.subarray(5)), 20);",
+    ].join("");
+    const result = await runSingleCheck(
+      {
+        label: "split-utf8",
+        command: process.execPath,
+        args: ["-e", script],
+      },
+      {
+        checkTimeoutMs: 2_000,
+        cwd: process.cwd(),
+        env: process.env,
+        outputMaxBytes: 5,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("[output truncated to last 5 bytes]\nnew");
   });
 
   it("clamps oversized check timers before scheduling", async () => {

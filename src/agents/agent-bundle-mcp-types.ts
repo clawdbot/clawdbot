@@ -164,8 +164,9 @@ export type SessionMcpRuntimeManager = {
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
-  deferRetirement: (sessionId: string) => boolean;
-  completeDeferredRetirement: (sessionId: string, runtime: SessionMcpRuntime) => Promise<boolean>;
+  /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
+  deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;
+  completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
   disposeAll: () => Promise<void>;
   sweepIdleRuntimes: () => Promise<number>;
   listSessionIds: () => string[];

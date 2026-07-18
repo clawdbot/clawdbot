@@ -23,7 +23,11 @@ import {
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
-import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
+import {
+  resolveAnthropicVertexAdcCredentials,
+  resolveAnthropicVertexClientRegion,
+  resolveAnthropicVertexProjectId,
+} from "./region.js";
 
 const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
@@ -156,11 +160,14 @@ export function createAnthropicVertexStreamFn(
   region: string,
   baseURL?: string,
   deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
+  env: NodeJS.ProcessEnv = process.env,
 ): StreamFn {
   // GoogleAuth carries clientOptions into file-backed ADC clients. Keep the
   // proxy-aware transport provider-local; a window shim changes detection globally.
+  const adcConfig = resolveAnthropicVertexAdcCredentials(env);
   const googleAuth = new deps.GoogleAuth({
     scopes: [GOOGLE_CLOUD_PLATFORM_SCOPE],
+    ...(adcConfig ? { credentials: adcConfig } : {}),
     clientOptions: {
       transporterOptions: { fetchImplementation: googleAuthFetch },
     },
@@ -291,5 +298,6 @@ export function createAnthropicVertexStreamFnForModel(
     }),
     resolveAnthropicVertexSdkBaseUrl(model.baseUrl),
     deps,
+    env,
   );
 }

@@ -6,12 +6,15 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@noble/ed25519": "3.1.0",
     "express": "5.2.1",
+    "esbuild": "0.28.1",
     "playwright-core": "1.61.1",
     "typebox": "1.3.3",
     "ws": "8.21.0"
   },
   "devDependencies": {
+    "@openclaw/gateway-client": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "undici": "8.6.0"
   },
@@ -20,6 +23,10 @@
       "./index.ts"
     ],
     "assetScripts": {
+      "build": "node scripts/build-copilot-runtime.mjs",
+      "buildOutputs": [
+        "chrome-extension/modules/copilot-runtime.js"
+      ],
       "copy": "node scripts/copy-chrome-extension.mjs"
     }
   }

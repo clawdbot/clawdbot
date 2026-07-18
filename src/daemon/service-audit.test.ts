@@ -455,6 +455,44 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
   });
 
+  it("audits the final repeated gateway port flag", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: [
+          "/usr/bin/node",
+          "entry.js",
+          "gateway",
+          "--port",
+          "18789",
+          "--port=18888",
+        ],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+  });
+
+  it("does not reinterpret a consumed gateway port value as another flag", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port", "--port=18888"],
+        environment: {},
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue?.detail).toBe("--port=18888 -> 18888");
+  });
+
   it("flags gateway token mismatch when service token is stale", async () => {
     const audit = await createGatewayAudit({
       expectedGatewayToken: "new-token",

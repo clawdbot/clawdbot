@@ -23,6 +23,7 @@ import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
@@ -155,6 +156,15 @@ function resolveSandboxSession(params: {
   }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  if (cfg.backend === "ssh") {
+    // Never let an unresolved inline SSH credential silently fall through to
+    // ambient host SSH identities for this agent.
+    assertSshSandboxSecretOwnerAvailable({
+      config: params.config,
+      scope: cfg.scope,
+      agentId: runtime.agentId,
+    });
+  }
   return { rawSessionKey, runtime, cfg };
 }
 

@@ -34,6 +34,13 @@ export type AuthCredential = ApiKeyCredential | OAuthCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
 
+class AuthStoragePersistenceError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "AuthStoragePersistenceError";
+  }
+}
+
 export type AuthStatus = {
   configured: boolean;
   source?:
@@ -248,11 +255,20 @@ export class AuthStorage {
 
   private persistProviderChange(provider: string, credential: AuthCredential | undefined): void {
     if (this.loadError) {
-      return;
+      this.reload();
+    }
+
+    if (this.loadError) {
+      const error = new AuthStoragePersistenceError(
+        `Cannot update auth storage because it could not be loaded: ${this.loadError.message}`,
+        this.loadError,
+      );
+      this.recordError(error);
+      throw error;
     }
 
     try {
-      this.storage.withLock((current) => {
+      const persistedData = this.storage.withLock((current) => {
         const currentData = this.parseStorageData(current);
         const merged: AuthStorageData = { ...currentData };
         if (credential) {
@@ -260,10 +276,20 @@ export class AuthStorage {
         } else {
           delete merged[provider];
         }
-        return { result: undefined, next: JSON.stringify(merged, null, 2) };
+        return { result: merged, next: JSON.stringify(merged, null, 2) };
       });
+      this.loadError = null;
+      this.data = persistedData;
     } catch (error) {
-      this.recordError(error);
+      const persistenceError =
+        error instanceof AuthStoragePersistenceError
+          ? error
+          : new AuthStoragePersistenceError(
+              `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
+              error,
+            );
+      this.recordError(persistenceError);
+      throw persistenceError;
     }
   }
 
@@ -278,7 +304,6 @@ export class AuthStorage {
    * Set credential for a provider.
    */
   set(provider: string, credential: AuthCredential): void {
-    this.data[provider] = credential;
     this.persistProviderChange(provider, credential);
   }
 
@@ -286,7 +311,6 @@ export class AuthStorage {
    * Remove credential for a provider.
    */
   remove(provider: string): void {
-    delete this.data[provider];
     this.persistProviderChange(provider, undefined);
   }
 

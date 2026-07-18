@@ -11,6 +11,7 @@ import {
   candidateParallelsArgs,
   candidateParallelsShellCommand,
   githubApi,
+  isDirectReleaseCandidateExecution,
   parseArgs,
   parseRunIdFromDispatchOutput,
   reconcileReleaseCandidateState,
@@ -46,6 +47,21 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("recognizes direct execution through a symlinked temporary root", () => {
+    const realpath = vi.fn((value: string) => value.replace(/^\/tmp\//u, "/private/tmp/"));
+
+    expect(
+      isDirectReleaseCandidateExecution(
+        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
+        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
+        realpath,
+      ),
+    ).toBe(true);
+    expect(isDirectReleaseCandidateExecution(undefined, "/private/tmp/script.mjs", realpath)).toBe(
+      false,
+    );
+  });
+
   it("resumes exact workflow runs from matching release candidate state", () => {
     const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
     const expected = buildReleaseCandidateState(options, {
@@ -689,6 +705,25 @@ describe("release candidate checklist", () => {
         },
       ),
     ).toThrow("blocking product performance");
+  });
+
+  it("keeps product performance advisory for beta release candidates", () => {
+    expect(() =>
+      validateFullManifest(
+        {
+          workflowName: "Full Release Validation",
+          targetSha: "candidate-sha",
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          runReleaseSoak: "false",
+          controls: { performanceBlocking: false },
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "beta",
+        },
+      ),
+    ).not.toThrow();
   });
 
   it("binds SHA-pinned full validation evidence through its manifest", () => {

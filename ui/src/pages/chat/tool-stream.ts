@@ -65,6 +65,8 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
+  planStatus?: PlanStatus | null;
+  questionStatus?: QuestionStatus | null;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
 
@@ -328,6 +330,8 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.planStatus = null;
+  host.questionStatus = null;
 }
 
 export type CompactionStatus = {
@@ -345,6 +349,39 @@ export type FallbackStatus = {
   reason?: string;
   attempts: string[];
   occurredAt: number;
+};
+
+export type PlanStatus = {
+  /** Owning run: run-scoped terminal cleanup must not clear another run's plan. */
+  runId?: string;
+  explanation?: string;
+  steps: Array<{
+    step: string;
+    status: "pending" | "in_progress" | "completed";
+  }>;
+};
+
+export type QuestionStatus = {
+  runId?: string;
+  itemId: string;
+  actionToken: string;
+  questions: Array<{
+    id: string;
+    header: string;
+    question: string;
+    isOther: boolean;
+    options: Array<{ label: string; description?: string }>;
+  }>;
+};
+
+type PlanHost = ToolStreamHost & {
+  planStatus?: PlanStatus | null;
+  requestUpdate?: () => void;
+};
+
+type QuestionHost = ToolStreamHost & {
+  questionStatus?: QuestionStatus | null;
+  requestUpdate?: () => void;
 };
 
 type CompactionHost = ToolStreamHost & {
@@ -674,6 +711,132 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   return true;
 }
 
+function parsePlanSteps(value: unknown): PlanStatus["steps"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const steps: PlanStatus["steps"] = [];
+  // Plan contract allows at most one in_progress step; demote extras so the
+  // collapsed summary has one unambiguous current step (matches iOS/Android).
+  let hasActiveStep = false;
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const step = toTrimmedString(entry);
+      if (step) {
+        steps.push({ step, status: "pending" });
+      }
+      continue;
+    }
+    const item = readRecord(entry);
+    const step = toTrimmedString(item?.step);
+    const status = item?.status;
+    if (!step || (status !== "pending" && status !== "in_progress" && status !== "completed")) {
+      continue;
+    }
+    const normalizedStatus = status === "in_progress" && hasActiveStep ? "pending" : status;
+    hasActiveStep ||= status === "in_progress";
+    steps.push({ step, status: normalizedStatus });
+  }
+  return steps;
+}
+
+export function normalizePlanSnapshot(
+  snapshot: { steps?: unknown; explanation?: unknown },
+  runIdValue?: unknown,
+): PlanStatus | null {
+  const steps = parsePlanSteps(snapshot.steps);
+  if (steps.length === 0) {
+    return null;
+  }
+  const explanation = toTrimmedString(snapshot.explanation);
+  const runId = toTrimmedString(runIdValue);
+  return {
+    ...(runId ? { runId } : {}),
+    ...(explanation ? { explanation } : {}),
+    steps,
+  };
+}
+
+function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
+  // Plan snapshots are run-owned: a stale or spawned-run event in the same
+  // session must not overwrite (or clear) the active run's checklist. Mirrors
+  // the compaction/fallback acceptance policy (session-scoped when idle).
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return;
+  }
+  const data = payload.data ?? {};
+  if (data.phase !== "update") {
+    return;
+  }
+  host.planStatus = normalizePlanSnapshot(data, payload.runId);
+  host.requestUpdate?.();
+}
+
+function parseQuestionStatus(
+  data: Record<string, unknown>,
+  runId: string | null,
+): QuestionStatus | null {
+  const itemId = toTrimmedString(data.itemId);
+  const actionToken = toTrimmedString(data.actionToken);
+  if (!itemId || !actionToken?.match(/^[0-9a-f-]{36}$/u) || !Array.isArray(data.questions)) {
+    return null;
+  }
+  // Sensitive answers cannot use the chat-send seam without becoming transcript content.
+  // Keep the existing warned text prompt until the dedicated question RPC exists.
+  if (data.questions.some((value) => readRecord(value)?.isSecret === true)) {
+    return null;
+  }
+  const questions = data.questions.flatMap((value) => {
+    const question = readRecord(value);
+    const id = typeof question?.id === "string" ? question.id : undefined;
+    const header = toTrimmedString(question?.header);
+    const prompt = toTrimmedString(question?.question);
+    if (!id?.trim() || !header || !prompt) {
+      return [];
+    }
+    const options = Array.isArray(question?.options)
+      ? question.options.flatMap((rawOption) => {
+          const option = readRecord(rawOption);
+          const label = typeof option?.label === "string" ? option.label : undefined;
+          const description = toTrimmedString(option?.description);
+          return label?.trim() ? [{ label, ...(description ? { description } : {}) }] : [];
+        })
+      : [];
+    return [
+      {
+        id,
+        header,
+        question: prompt,
+        isOther: question?.isOther === true,
+        options,
+      },
+    ];
+  });
+  return questions.length > 0
+    ? { ...(runId ? { runId } : {}), itemId, actionToken, questions }
+    : null;
+}
+
+function handleQuestionEvent(host: QuestionHost, payload: AgentEventPayload) {
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return;
+  }
+  const data = payload.data ?? {};
+  const itemId = toTrimmedString(data.itemId);
+  if (data.phase === "resolved") {
+    if (!itemId || host.questionStatus?.itemId === itemId) {
+      host.questionStatus = null;
+      host.requestUpdate?.();
+    }
+    return;
+  }
+  if (data.phase !== "requested") {
+    return;
+  }
+  host.questionStatus = parseQuestionStatus(data, toTrimmedString(payload.runId));
+  host.requestUpdate?.();
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -705,6 +868,16 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handlePreambleProgressEvent(host, payload)) {
+    return;
+  }
+
+  if (payload.stream === "plan") {
+    handlePlanEvent(host as PlanHost, payload);
+    return;
+  }
+
+  if (payload.stream === "question") {
+    handleQuestionEvent(host as QuestionHost, payload);
     return;
   }
 

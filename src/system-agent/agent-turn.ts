@@ -29,6 +29,9 @@ import {
  * Turns share one persistent session so the conversation has genuine
  * multi-turn memory. Inference setup must succeed before this runner is entered.
  */
+// Flat budget for both route classes: agent-loop turns run multi-step tool
+// calls, so even metered external routes need the full window, and 120s
+// already covers local startup + generation (planner evidence).
 const AGENT_TURN_TIMEOUT_MS = 120_000;
 const SYSTEM_AGENT_MCP_TOOL_NAME = "mcp__openclaw__openclaw";
 
@@ -323,6 +326,7 @@ async function runSystemAgentTurnWithDeps(
     config: plan.runConfig,
     prompt: params.input,
     timeoutMs: AGENT_TURN_TIMEOUT_MS,
+    thinkLevel: "off" as const,
     runId,
     messageChannel: "openclaw",
     messageProvider: "openclaw",

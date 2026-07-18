@@ -130,6 +130,22 @@ describe("venice-models", () => {
     expect(def.maxTokens).toBe(entry.maxTokens);
   });
 
+  it("excludes retired models from the static fallback catalog", () => {
+    const catalogIds = new Set(VENICE_MODEL_CATALOG.map((model) => model.id));
+    for (const retiredId of [
+      "gemini-3-pro-preview",
+      "grok-41-fast",
+      "kimi-k2-thinking",
+      "minimax-m21",
+      "mistral-31-24b",
+      "qwen3-4b",
+      "qwen3-coder-480b-a35b-instruct",
+      "venice-uncensored",
+    ]) {
+      expect(catalogIds.has(retiredId)).toBe(false);
+    }
+  });
+
   it("retries transient fetch failures before succeeding", async () => {
     let attempts = 0;
     const fetchMock = vi.fn(async () => {

@@ -1,3 +1,4 @@
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 /**
  * Extracts visible delivery evidence from embedded-agent run results.
  */
@@ -356,10 +357,10 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
       classifiedIndexes.add(index);
     }
   }
-  const expected = new Set(expectedMediaUrls);
+  const expected = new Set(expectedMediaUrls.map(normalizeMediaReferenceForComparison));
   return payloads.every((payload, index) => {
     const containsExpectedMedia = collectDeliveredMediaUrls({ payloads: [payload] }).some((url) =>
-      expected.has(url),
+      expected.has(normalizeMediaReferenceForComparison(url)),
     );
     return !containsExpectedMedia || classifiedIndexes.has(index);
   });

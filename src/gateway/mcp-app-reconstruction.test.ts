@@ -124,6 +124,7 @@ describe("MCP App transcript reconstruction", () => {
       },
       viewId: "mcp-app-1",
       allowedAppToolNames: new Set(),
+      readOnly: true,
     });
   });
 

@@ -10,6 +10,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { formatGatewayHeapLimitReport, inspectGatewayHeapLimit } from "../daemon/gateway-heap.js";
 import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
@@ -491,6 +492,10 @@ export async function maybeRepairGatewayServiceConfig(
   if (!command) {
     return cfg;
   }
+  note(
+    formatGatewayHeapLimitReport(inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS)),
+    "Gateway heap",
+  );
   const serviceInstallEnv = buildGatewayServiceRepairEnv(command);
   const serviceWrapperPath = resolveGatewayServiceWrapperPath(command);
   if (serviceWrapperPath) {

@@ -30,9 +30,13 @@ const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]",
 // response would otherwise be buffered fully into memory just to record it.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 
-// Reads a cloned capture response body under a byte cap. Returns truncated=true
-// (and discards the partial buffer) once the cap is exceeded so oversized or
-// hostile/endless bodies are recorded as metadata-only instead of buffered.
+type CapturedResponseBodyResult =
+  | { status: "captured"; buffer: Buffer }
+  | { status: "too-large" | "unavailable" };
+
+// Reads a cloned capture response body under a byte cap. Oversized or
+// non-streaming Response-like bodies return a metadata-only status instead of
+// allocating the full body.
 //
 // Unlike media-core's readResponseWithLimit this never awaits reader.cancel():
 // the body here is one branch of a Response.clone() tee whose sibling (the
@@ -43,15 +47,15 @@ const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 async function readCapturedResponseBodyBounded(
   response: Response,
   maxBytes: number,
-): Promise<{ buffer: Buffer; truncated: boolean }> {
+): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
   const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
   if (!body || typeof body.getReader !== "function") {
-    // Non-streaming clone (e.g. test doubles): bounded arrayBuffer fallback.
-    const bytes = Buffer.from(await clone.arrayBuffer());
-    return bytes.length > maxBytes
-      ? { buffer: Buffer.alloc(0), truncated: true }
-      : { buffer: bytes, truncated: false };
+    // A real null-body Response consumes as empty. Response-like objects without
+    // a stream cannot be read under a byte cap, so never call arrayBuffer().
+    return clone instanceof Response && clone.body === null
+      ? { status: "captured", buffer: Buffer.alloc(0) }
+      : { status: "unavailable" };
   }
   const reader = body.getReader();
   const chunks: Buffer[] = [];
@@ -84,8 +88,8 @@ async function readCapturedResponseBodyBounded(
     }
   }
   return truncated
-    ? { buffer: Buffer.alloc(0), truncated: true }
-    : { buffer: Buffer.concat(chunks, total), truncated: false };
+    ? { status: "too-large" }
+    : { status: "captured", buffer: Buffer.concat(chunks, total) };
 }
 const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
   "authorization",
@@ -562,11 +566,7 @@ export function captureHttpExchange(
       metaJson: redactedCaptureJson({ ...params.meta, bodyCapture }, runtime.safeJsonString),
     });
   };
-  const cloneable =
-    params.response &&
-    typeof params.response.clone === "function" &&
-    typeof params.response.arrayBuffer === "function";
-  if (!cloneable) {
+  if (typeof params.response.clone !== "function") {
     // Some Response-like objects cannot be cloned. Still record status/headers
     // rather than forcing capture to consume or mutate the original response.
     recordResponseMetadataOnly("unavailable");
@@ -585,16 +585,15 @@ export function captureHttpExchange(
     return;
   }
   void readCapturedResponseBodyBounded(params.response, MAX_CAPTURED_RESPONSE_BODY_BYTES)
-    .then(({ buffer, truncated }) => {
-      if (truncated) {
-        // Body exceeded the cap mid-stream (chunked / understated length). The
-        // bounded reader already cancelled the clone and discarded the partial
-        // buffer; record metadata only instead of persisting an oversized blob.
-        recordResponseMetadataOnly("too-large");
+    .then((result) => {
+      if (result.status !== "captured") {
+        // The body either exceeded the cap or offered no bounded streaming path.
+        // Preserve the exchange as metadata instead of allocating the whole body.
+        recordResponseMetadataOnly(result.status);
         return;
       }
       const responsePayload = runtime.persistEventPayload(store, {
-        data: redactCapturePayload(buffer),
+        data: redactCapturePayload(result.buffer),
         contentType: responseContentType,
       });
       store.recordEvent({

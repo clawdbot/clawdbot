@@ -57,6 +57,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
   <Accordion title="Workspace files">
     - `SOUL.md` and `AGENTS.md` are copied into the OpenClaw agent workspace.
     - `memories/MEMORY.md` and `memories/USER.md` are **appended** to the matching OpenClaw memory files instead of overwriting them.
+    - Memory-only surfaces behave differently: the onboarding memory page and the Control UI Memory import page copy these two files under `memory/imports/hermes/` for indexed recall and leave existing workspace memory untouched.
 
   </Accordion>
   <Accordion title="Memory configuration">

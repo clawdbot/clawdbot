@@ -12,6 +12,7 @@ import {
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
@@ -32,11 +33,15 @@ type BundledPluginTabView = {
       embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
       allowExternalEmbedUrls: boolean;
     };
-    onRequestUpdate?: () => void;
+    onRequestUpdate: () => void;
     // L5: custom widgets need the gateway HTTP base (iframe src) and the session
     // key (prompt dispatch). Bundled views that don't use them ignore these.
     basePath?: string;
     sessionKey?: string;
+    /** Canonical sessions.list publication revision, used by session-backed widgets. */
+    sessionListRevision?: number;
+    /** Whether this connection can decide pending custom-widget code. */
+    canApproveWidgets?: boolean;
   }) => unknown;
   stop: (host: object) => void;
 };
@@ -110,11 +115,16 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private externalAuthRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthRefreshedAt = 0;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
-    (gateway) => this.updateGatewaySource(gateway),
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.updateGatewaySource(gateway),
+    )
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    );
 
   private readonly handleVisibilityChange = () => {
     if (document.visibilityState !== "visible" || !this.externalAuthTargetKey) {
@@ -558,6 +568,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         onRequestUpdate: () => this.requestUpdate(),
         basePath: context.basePath,
         sessionKey: snapshot.sessionKey,
+        sessionListRevision: context.sessions?.canonicalListRevision,
+        canApproveWidgets: hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
       });
     }
     if (info?.path) {

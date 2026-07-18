@@ -18,7 +18,7 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
-import { buildPlanUpdateStepFields } from "../../channels/streaming.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
@@ -378,7 +378,7 @@ function createPlanUpdateBridge(params: {
         phase: normalizeOptionalString(evt.data.phase),
         title: normalizeOptionalString(evt.data.title),
         explanation: normalizeOptionalString(evt.data.explanation),
-        ...buildPlanUpdateStepFields(evt.data.steps),
+        steps: normalizeAgentPlanSteps(evt.data.steps),
         source: normalizeOptionalString(evt.data.source),
       };
     },

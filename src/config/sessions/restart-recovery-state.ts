@@ -470,15 +470,17 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
   recordTerminalSource: boolean;
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
+  terminalRunId?: string;
   terminalSourceRunId?: string;
 }): Partial<SessionEntry> {
   const sourceRunId =
     normalizeRunId(params.terminalSourceRunId) ??
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
   const terminalRunIds =
-    params.recordTerminalSource && sourceRunId
+    params.recordTerminalSource && (sourceRunId || params.terminalRunId)
       ? mergeRestartRecoveryTerminalRunIds(params.entry.restartRecoveryTerminalRunIds, [
-          sourceRunId,
+          ...(sourceRunId ? [sourceRunId] : []),
+          ...(params.terminalRunId ? [params.terminalRunId] : []),
         ])
       : undefined;
   const terminalDeliveryEvidence =

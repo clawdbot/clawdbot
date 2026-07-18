@@ -83,6 +83,27 @@ describe("legacy channel pairing state migration", () => {
     );
   });
 
+  it("imports a built-in channel's explicit default account without channel config", async () => {
+    const { env, sourceDir } = await createFixture();
+    const filePath = path.join(sourceDir, "whatsapp-default-allowFrom.json");
+    writeJson(filePath, {
+      version: 1,
+      allowFrom: ["+12025550101", "+12025550102", "+12025550103"],
+    });
+
+    const detected = detectLegacyChannelPairingState({ sourceDir });
+    const result = migrateLegacyChannelPairingState({ detected, env });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated 3 whatsapp/default allowFrom entries → shared SQLite state",
+    ]);
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(readChannelPairingStateSnapshot("whatsapp", env).allowFrom).toEqual({
+      default: ["+12025550101", "+12025550102", "+12025550103"],
+    });
+  });
+
   it("merges with authoritative SQLite rows and keeps unreadable sources", async () => {
     const { env, sourceDir } = await createFixture();
     const createdAt = new Date().toISOString();
@@ -157,6 +178,27 @@ describe("legacy channel pairing state migration", () => {
     ]);
     expect(fs.existsSync(filePath)).toBe(true);
     expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({});
+  });
+
+  it("does not infer default accounts for external channels", async () => {
+    const { env, sourceDir } = await createFixture();
+    const filePath = path.join(sourceDir, "custom-channel-default-allowFrom.json");
+    writeJson(filePath, { version: 1, allowFrom: ["external-user"] });
+
+    const detected = detectLegacyChannelPairingState({
+      sourceDir,
+      configuredChannelIds: ["custom-channel"],
+    });
+    const result = migrateLegacyChannelPairingState({ detected, env });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Legacy channel allowFrom channel/account is unresolved; left in place",
+      ),
+    ]);
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(readChannelPairingStateSnapshot("custom-channel", env).allowFrom).toEqual({});
   });
 
   it("leaves overlapping channel and account filename interpretations in place", async () => {

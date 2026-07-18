@@ -25,14 +25,19 @@ export interface EditToolInput {
   edits: Edit[];
 }
 
-export interface EditToolDetails {
-  /** Display-oriented diff of the changes made */
-  diff: string;
-  /** Standard unified patch of the changes made */
-  patch: string;
-  /** Line number of the first change in the new file (for editor navigation) */
-  firstChangedLine?: number;
-}
+export type EditToolDetails =
+  | {
+      changed: false;
+    }
+  | {
+      changed: true;
+      /** Display-oriented diff of the changes made */
+      diff: string;
+      /** Standard unified patch of the changes made */
+      patch: string;
+      /** Line number of the first change in the new file (for editor navigation) */
+      firstChangedLine?: number;
+    };
 
 export interface FindToolInput {
   pattern: string;
@@ -77,9 +82,22 @@ export interface ReadToolInput {
   limit?: number;
 }
 
-export interface ReadToolDetails {
-  truncation?: TruncationResult;
-}
+export type ReadToolTruncationDetails = Omit<TruncationResult, "content">;
+
+export type ReadToolDetails =
+  | { kind: "text"; content: string }
+  | { kind: "image"; content: string; mimeType: string }
+  | {
+      kind: "truncated";
+      content: string;
+      truncation: ReadToolTruncationDetails;
+    }
+  | {
+      kind: "not_found";
+      status: "not_found";
+      path: string;
+      optional: true;
+    };
 
 export interface WriteToolInput {
   path: string;

@@ -227,10 +227,10 @@ async function runPerplexitySearchApi(params: {
     body.search_language_filter = params.searchLanguageFilter;
   }
   if (params.searchAfterDate) {
-    body.search_after_date = params.searchAfterDate;
+    body.search_after_date_filter = params.searchAfterDate;
   }
   if (params.searchBeforeDate) {
-    body.search_before_date = params.searchBeforeDate;
+    body.search_before_date_filter = params.searchBeforeDate;
   }
   if (params.maxTokens !== undefined) {
     body.max_tokens = params.maxTokens;

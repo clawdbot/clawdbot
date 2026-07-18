@@ -8,6 +8,10 @@ struct OnboardingMascotMoodTests {
         OnboardingView.mascotMood(for: snapshot)
     }
 
+    private func accessory(_ page: OnboardingView.MascotPage) -> OpenClawMascotAccessory {
+        OnboardingView.mascotAccessory(for: page)
+    }
+
     @Test func `welcome page idles`() {
         #expect(self.mood(.init(page: .welcome)) == .idle)
     }
@@ -43,6 +47,12 @@ struct OnboardingMascotMoodTests {
         #expect(self.mood(.init(page: .permissions, allPermissionsGranted: true)) == .happy)
     }
 
+    @Test func `memory import page follows import lifecycle`() {
+        #expect(self.mood(.init(page: .memory, memoryPhase: .planning)) == .thinking)
+        #expect(self.mood(.init(page: .memory, memoryPhase: .failed("offline"))) == .sad)
+        #expect(self.mood(.init(page: .memory, memoryPhase: .done([]))) == .happy)
+    }
+
     @Test func `chat and ready pages`() {
         #expect(self.mood(.init(page: .chat)) == .attentive)
         #expect(self.mood(.init(page: .ready)) == .celebrating)
@@ -50,5 +60,15 @@ struct OnboardingMascotMoodTests {
 
     @Test func `fresh AI setup model does not look failed`() {
         #expect(!OnboardingView.aiSetupLooksFailed(OnboardingAISetupModel()))
+    }
+
+    @Test func `only the ready page wears a graduation cap`() {
+        #expect(self.accessory(.ready) == .gradCap)
+        #expect(self.accessory(.welcome) == .none)
+        #expect(self.accessory(.connection) == .none)
+        #expect(self.accessory(.cli) == .none)
+        #expect(self.accessory(.ai) == .none)
+        #expect(self.accessory(.permissions) == .none)
+        #expect(self.accessory(.chat) == .none)
     }
 }

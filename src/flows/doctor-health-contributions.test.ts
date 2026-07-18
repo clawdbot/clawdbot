@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
+  noteWebFetchProxyDiagnostic: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
   callGateway: vi.fn(),
   resolveSecretInputRef: vi.fn((params: { value?: unknown }) => ({
@@ -56,8 +57,6 @@ const mocks = vi.hoisted(() => ({
   })),
   probeGatewayMemoryStatus: vi.fn(async () => ({ checked: true, ready: true, skipped: false })),
   listHealthChecks: vi.fn(),
-  getHealthCheck: vi.fn(),
-  registerHealthCheck: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
@@ -256,6 +255,10 @@ vi.mock("../commands/doctor-memory-search.js", () => ({
   noteMemorySearchHealth: mocks.noteMemorySearchHealth,
 }));
 
+vi.mock("../commands/doctor-web-fetch-proxy.js", () => ({
+  noteWebFetchProxyDiagnostic: mocks.noteWebFetchProxyDiagnostic,
+}));
+
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
   callGateway: mocks.callGateway,
@@ -313,8 +316,6 @@ vi.mock("./health-check-registry.js", async (importOriginal) => {
       }
       return registeredChecks.filter((check) => check.kind !== "core");
     },
-    getHealthCheck: mocks.getHealthCheck,
-    registerHealthCheck: mocks.registerHealthCheck,
   };
 });
 
@@ -536,6 +537,8 @@ describe("doctor health contributions", () => {
     mocks.noteLegacyCodexProviderOverride.mockClear();
     mocks.noteMemorySearchHealth.mockClear();
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
+    mocks.noteWebFetchProxyDiagnostic.mockClear();
+    mocks.noteWebFetchProxyDiagnostic.mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear();
     mocks.buildGatewayConnectionDetails.mockReturnValue({ message: "gateway details" });
     mocks.callGateway.mockReset();
@@ -590,9 +593,6 @@ describe("doctor health contributions", () => {
       { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },
     ]);
-    mocks.getHealthCheck.mockReset();
-    mocks.getHealthCheck.mockReturnValue(undefined);
-    mocks.registerHealthCheck.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
     mocks.detectLegacyStateMigrations.mockReset();
@@ -973,6 +973,19 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:command-owner")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:command-owner")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("runs the web fetch proxy diagnostic after security checks", async () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+    const contribution = requireDoctorContribution("doctor:web-fetch-proxy");
+    const cfg = { gateway: { mode: "local" as const } };
+    const env = { HTTPS_PROXY: "http://proxy.example:8080" };
+    const ctx = { cfg, env } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    expect(ids.indexOf("doctor:security")).toBeLessThan(ids.indexOf("doctor:web-fetch-proxy"));
+    await contribution.run(ctx);
+
+    expect(mocks.noteWebFetchProxyDiagnostic).toHaveBeenCalledWith({ cfg, env });
   });
 
   it("checks skill readiness before final config writes", () => {
@@ -1461,57 +1474,11 @@ describe("doctor health contributions", () => {
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
       doctorOnlyStateMigrations: true,
-      crossStateDirImports: false,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
       recoverCorruptTargetStore: false,
-    });
-  });
-
-  it("grants legacy-state cross-state imports only to capable doctor origins", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-state");
-    const detected = { preview: [], warnings: [], notices: [] };
-    mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
-
-    const directRepairContext = {
-      cfg: {},
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(true),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: { nonInteractive: true, repair: true, crossStateDirImports: true },
-    } as unknown as Parameters<(typeof contribution)["run"]>[0];
-    await contribution.run(directRepairContext);
-    expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
-      cfg: {},
-      doctorOnlyStateMigrations: true,
-      crossStateDirImports: true,
-    });
-
-    const interactivePrompter = buildDoctorPrompter(false);
-    interactivePrompter.repairMode.canPrompt = true;
-    interactivePrompter.repairMode.nonInteractive = false;
-    await contribution.run({
-      ...directRepairContext,
-      prompter: interactivePrompter,
-      options: { crossStateDirImports: true },
-    });
-    expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
-      cfg: {},
-      doctorOnlyStateMigrations: true,
-      crossStateDirImports: true,
-    });
-
-    const automatedRepairContext = {
-      ...directRepairContext,
-      options: { nonInteractive: true, repair: true, crossStateDirImports: false },
-    };
-    await contribution.run(automatedRepairContext);
-    expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
-      cfg: {},
-      doctorOnlyStateMigrations: true,
-      crossStateDirImports: false,
     });
   });
 
@@ -2784,128 +2751,6 @@ describe("doctor health contributions", () => {
       "health check already registered: core/doctor/shell-completion",
     );
     expect(mocks.runDoctorHealthRepairs).not.toHaveBeenCalled();
-  });
-
-  it("reports runtime tool schema blockers during normal doctor runs", async () => {
-    const contribution = requireDoctorContribution("doctor:runtime-tool-schemas");
-    mocks.getHealthCheck.mockReturnValue({
-      id: "core/doctor/runtime-tool-schemas",
-      detect: vi.fn(async () => [
-        {
-          checkId: "core/doctor/runtime-tool-schemas",
-          severity: "error",
-          message:
-            "Tool fuzzplugin_move_angles from plugin fuzzplugin has an unsupported input schema for runtime projection.",
-          path: "plugins.entries.fuzzplugin",
-          target: "fuzzplugin_move_angles",
-          requirement: 'fuzzplugin_move_angles.parameters.type must be "object"',
-          fixHint:
-            "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
-        },
-      ]),
-    });
-    const ctx = {
-      cfg: {},
-      configResult: { cfg: {} },
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: {},
-      cfgForPersistence: {},
-      configPath: "/tmp/fake-openclaw.json",
-      env: {},
-    } as unknown as Parameters<(typeof contribution)["run"]>[0];
-
-    await contribution.run(ctx);
-
-    expect(ctx.healthOk).toBe(false);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tool fuzzplugin_move_angles from plugin fuzzplugin"),
-      "Doctor warnings",
-    );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining('issue: fuzzplugin_move_angles.parameters.type must be "object"'),
-      "Doctor warnings",
-    );
-  });
-
-  it("reports provider catalog projection blockers during normal doctor runs", async () => {
-    const contribution = requireDoctorContribution("doctor:provider-catalog-projection");
-    mocks.getHealthCheck.mockReturnValue({
-      id: "core/doctor/provider-catalog-projection",
-      detect: vi.fn(async () => [
-        {
-          checkId: "core/doctor/provider-catalog-projection",
-          severity: "error",
-          message:
-            "Provider catalog mockplugin cannot be projected into the unified text model catalog.",
-          path: "plugins.entries.mockplugin",
-          target: "mockplugin",
-          requirement: "provider catalog entry read failed",
-          fixHint:
-            "Fix the plugin provider catalog hook or disable the plugin, then rerun doctor before relying on model discovery.",
-        },
-      ]),
-    });
-    const ctx = {
-      cfg: {},
-      configResult: { cfg: {} },
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: {},
-      cfgForPersistence: {},
-      configPath: "/tmp/fake-openclaw.json",
-      env: {},
-    } as Parameters<(typeof contribution)["run"]>[0];
-
-    await contribution.run(ctx);
-
-    expect(ctx.healthOk).toBe(false);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Provider catalog mockplugin cannot be projected"),
-      "Doctor warnings",
-    );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("issue: provider catalog entry read failed"),
-      "Doctor warnings",
-    );
-  });
-
-  it("reports local audio acceleration as information without failing doctor health", async () => {
-    const contribution = requireDoctorContribution("doctor:local-audio-acceleration");
-    mocks.getHealthCheck.mockReturnValue({
-      id: "core/doctor/local-audio-acceleration",
-      detect: vi.fn(async () => [
-        {
-          checkId: "core/doctor/local-audio-acceleration",
-          severity: "info",
-          message: "Local STT auto-selection: mlx-whisper is available.",
-          path: "tools.media.audio.models",
-        },
-      ]),
-    });
-    const ctx = {
-      cfg: {},
-      configResult: { cfg: {} },
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: {},
-      cfgForPersistence: {},
-      configPath: "/tmp/fake-openclaw.json",
-      env: {},
-      healthOk: true,
-    } as Parameters<(typeof contribution)["run"]>[0];
-
-    await contribution.run(ctx);
-
-    expect(ctx.healthOk).toBe(true);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Local STT auto-selection"),
-      "Doctor information",
-    );
-    expect(mocks.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
   });
 
   it.each([false, true])(

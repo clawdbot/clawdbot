@@ -416,16 +416,14 @@ export async function runSetupMigrationImport(params: {
       stateDir,
       workspaceDir,
     });
-    const recoveryState =
-      !setupMigrationProviderSupportsRecovery(providerId) ||
-      process.env.OPENCLAW_MIGRATION_EXISTING_IMPORT === "1"
-        ? ({ kind: "none" } as const)
-        : await resolveSetupMigrationRecovery({
-            stateDir,
-            providerId,
-            workspaceDir,
-            targetSnapshotHash: initialTargetSnapshotHash,
-          });
+    const recoveryState = !setupMigrationProviderSupportsRecovery(providerId)
+      ? ({ kind: "none" } as const)
+      : await resolveSetupMigrationRecovery({
+          stateDir,
+          providerId,
+          workspaceDir,
+          targetSnapshotHash: initialTargetSnapshotHash,
+        });
     const recoveryAttempt =
       !freshness.fresh && recoveryState.kind === "recoverable" ? recoveryState.attempt : undefined;
     if (!recoveryAttempt) {

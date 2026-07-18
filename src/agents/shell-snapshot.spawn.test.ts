@@ -62,6 +62,6 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
 
     const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
     expect(options?.stdio).toBe("ignore");
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4242, { graceMs: 0 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4242, { graceMs: 0, detached: true });
   });
 });

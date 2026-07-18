@@ -2,7 +2,7 @@
 import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
-import type { ChannelType, Client, MessageCreateListener } from "../internal/discord.js";
+import type { ChannelType, Client, DiscordMessageDispatchData } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 
 export type DiscordThreadChannel = {
@@ -62,7 +62,7 @@ export type DiscordThreadStarterRestMessage = {
   timestamp?: string | null;
 };
 
-export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+export type DiscordMessageEvent = DiscordMessageDispatchData;
 
 export type DiscordReplyDeliveryPlan = {
   deliverTarget: string;

@@ -44,8 +44,12 @@ import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.j
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
+import {
+  findPlatformMessageRejectedError,
+  isProvenDeliveryNotSentError,
+} from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -68,11 +72,18 @@ import {
   runOutboundDeliveryCommitHooks,
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
+import {
+  completeDurableDelivery,
+  rejectDurableDelivery,
+  suppressDurableDelivery,
+  type DurableDeliveryCompletion,
+} from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   enqueueDelivery,
+  enqueueDeliveryOnce,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
@@ -224,6 +235,7 @@ type ChannelHandlerParams = {
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
   deliveryQueueId?: string;
+  preparedMessageId?: string;
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
   onPlatformSendDispatch?: () => Promise<void>;
@@ -402,7 +414,9 @@ function createPluginHandler(
   const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound?.sendText;
   const sendMedia = outbound?.sendMedia;
-  const chunker = outbound?.chunker ?? null;
+  // A prepared transport id identifies one atomic platform message. Splitting it
+  // would either reuse the id or leave later chunks outside reply correlation.
+  const chunker = baseCtx.preparedMessageId ? null : (outbound?.chunker ?? null);
   const chunkerMode = outbound?.chunkerMode;
   const onMessageDeliveryResult = params.onDeliveryResult
     ? async (result: ChannelMessageSendResult): Promise<void> => {
@@ -419,6 +433,10 @@ function createPluginHandler(
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
     deliveryPartIndex: overrides?.deliveryPartIndex,
+    preparedMessageId:
+      overrides?.deliveryPartIndex === undefined || overrides.deliveryPartIndex === 0
+        ? baseCtx.preparedMessageId
+        : undefined,
     formatting:
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
@@ -656,6 +674,7 @@ const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
   gatewayClientScopes: params.gatewayClientScopes,
   conversationReadOrigin: params.conversationReadOrigin,
   deliveryQueueId: params.deliveryQueueId,
+  preparedMessageId: params.preparedMessageId,
   onPlatformSendDispatch: params.onPlatformSendDispatch,
   onDeliveryResult: params.onDeliveryResult,
 });
@@ -747,6 +766,8 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  /** @internal Reports the effective payload only after an identified platform send. */
+  onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
   /** @internal Runs after each identified platform result, before further fallible work. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
@@ -754,6 +775,12 @@ type DeliverOutboundPayloadsCoreParams = {
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;
+  /** @internal Stable producer id used to make queue creation idempotent across crashes. */
+  deliveryIntentId?: string;
+  /** @internal Serializable owner state finalized after live or recovered delivery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
   /** @internal Recheck the concrete post-hook send shape before platform I/O. */
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
@@ -1121,21 +1148,37 @@ async function renderPresentationForDelivery(
     presentation,
     capabilities: handler.presentationCapabilities,
   });
-  const adaptedPayload = { ...payload, presentation: adaptedPresentation };
+  const textIsFallback = payload.presentationTextMode === "fallback";
+  const adaptedPayload = {
+    ...payload,
+    ...(textIsFallback ? { text: undefined } : {}),
+    presentation: adaptedPresentation,
+  };
   const rendered = handler.renderPresentation
     ? await handler.renderPresentation(adaptedPayload)
     : null;
   if (rendered) {
-    const { presentation: _presentation, ...withoutPresentation } = rendered;
+    const {
+      presentation: _presentation,
+      presentationTextMode: _presentationTextMode,
+      ...withoutPresentation
+    } = rendered;
     return withoutPresentation;
   }
-  const { presentation: _presentation, ...withoutPresentation } = payload;
+  const {
+    presentation: _presentation,
+    presentationTextMode: _presentationTextMode,
+    ...withoutPresentation
+  } = payload;
   return {
     ...withoutPresentation,
-    text: renderMessagePresentationFallbackText({
-      text: payload.text,
-      presentation: adaptedPresentation,
-    }),
+    text: textIsFallback
+      ? (payload.text ??
+        renderMessagePresentationFallbackText({ presentation: adaptedPresentation }))
+      : renderMessagePresentationFallbackText({
+          text: payload.text,
+          presentation: adaptedPresentation,
+        }),
   };
 }
 
@@ -1373,6 +1416,33 @@ function suppressedPayloadOutcome(params: {
   };
 }
 
+/** Adds directive-derived media to the queue copy before spool custody. */
+function materializeQueueCustodyMedia(
+  payloads: readonly ReplyPayload[],
+  plan: readonly OutboundPayloadPlan[],
+): ReplyPayload[] {
+  const effectiveBySource = new Map(
+    plan.map((entry) => [entry.sourceIndex, entry.parts.mediaUrls] as const),
+  );
+  return payloads.map((payload, index) => {
+    const effective = effectiveBySource.get(index);
+    if (!effective?.length) {
+      return payload;
+    }
+    const structured = new Set(
+      [payload.mediaUrl, ...(payload.mediaUrls ?? [])]
+        .map((url) => url?.trim())
+        .filter((url): url is string => Boolean(url)),
+    );
+    if (effective.every((url) => structured.has(url))) {
+      return payload;
+    }
+    // Keep raw pre-hook text for deterministic replay. The singular anchor
+    // prevents recovery from re-adding its original MEDIA: path.
+    return { ...payload, mediaUrl: effective[0], mediaUrls: [...effective] };
+  });
+}
+
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate.
  * New message lifecycle code should use `sendDurableMessageBatch` from
@@ -1427,32 +1497,59 @@ export async function deliverOutboundPayloadsInternal(
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const strippedQueuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
-  const queuePayloadsChanged = strippedQueuePayloads.some(
-    (payload, index) => payload !== payloads[index],
-  );
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
-  // Media staging only rewrites source URLs one-for-one, and the plan is read for
-  // its per-payload counts (see resolveMessagePlanMediaCount), so it stays keyed
-  // to the payload shape rather than to which copy the row happens to reference.
-  const queueRenderedBatchPlan = queuePayloadsChanged
-    ? createRenderedMessageBatchPlan(strippedQueuePayloads)
-    : renderedBatchPlan;
 
-  const stageAndEnqueueDelivery = async (): Promise<string | null> => {
+  const stageAndEnqueueDelivery = async (): Promise<{ id: string; created: boolean } | null> => {
+    // Legacy `MEDIA:` text directives carry local media that only materializes
+    // into structured fields at send time, so the spool (which reads structured
+    // media) would skip it and a retry would read the vanished producer path.
+    // Project each source payload's effective media through the same canonical
+    // plan the live send uses and fold directive-derived sources into the queue
+    // copy's structured media before staging. The raw payload and its pre-hook
+    // text are untouched, so the live send below stays copy-free on the original.
+    const directiveOptions = await resolveChannelOutboundDirectiveOptions({
+      cfg: params.cfg,
+      channel,
+    });
+    const queueCustodyPayloads = materializeQueueCustodyMedia(
+      strippedQueuePayloads,
+      createOutboundPayloadPlan(strippedQueuePayloads, {
+        cfg: params.cfg,
+        sessionKey: params.session?.policyKey ?? params.session?.key,
+        surface: channel,
+        conversationType: params.session?.conversationType,
+        extractMarkdownImages: directiveOptions.extractMarkdownImages,
+      }),
+    );
+    const queuePayloadsChanged = queueCustodyPayloads.some(
+      (payload, index) => payload !== payloads[index],
+    );
+    // Media staging only rewrites source URLs one-for-one, so the plan stays keyed
+    // to the custody payload counts rather than to which copy the row references;
+    // recovery replays entry.payloads and this plan together. Materialized custody
+    // anchors mediaUrl to the effective set (to override the in-text directive on
+    // replay), so count fan-out from mediaUrls alone for payloads we rewrote to
+    // keep the plan aligned with the deduped effective media recovery re-derives.
+    const renderPlanPayloads = queueCustodyPayloads.map((payload, index) =>
+      payload === strippedQueuePayloads[index] ? payload : { ...payload, mediaUrl: undefined },
+    );
+    const queueRenderedBatchPlan = queuePayloadsChanged
+      ? createRenderedMessageBatchPlan(renderPlanPayloads)
+      : renderedBatchPlan;
     // A durable row must not outlive its media. Producer-owned local sources
     // (TTS temps above all) are deleted when this process exits, so the queue
     // takes its own copy first and the row references that; the live send below
     // keeps the original path and stays copy-free.
     const staged = await stageQueuePayloadMedia({
-      payloads: strippedQueuePayloads,
+      payloads: queueCustodyPayloads,
       // Resolved exactly as the live send resolves it: staging must neither
       // reject media the send would deliver (agent workspace sources are only
       // reachable through the agent-scoped roots) nor read more than the send may.
       mediaAccess: resolveOutboundMediaAccessForSend(
         params,
         channel,
-        collectPayloadMediaSources(strippedQueuePayloads),
+        collectPayloadMediaSources(queueCustodyPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({
         cfg: params.cfg,
@@ -1493,10 +1590,26 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
+        preparedMessageId: params.preparedMessageId,
+        deliveryCompletion: params.deliveryCompletion,
       };
-      return staged.mediaStageId
+      if (params.deliveryIntentId) {
+        const queued = await enqueueDeliveryOnce(
+          delivery,
+          params.deliveryIntentId,
+          undefined,
+          staged.mediaStageId,
+        );
+        if (!queued.created) {
+          cancelDeliveryQueueMediaStage(staged.mediaStageId);
+          await releaseSpoolArtifacts(staged.artifacts);
+        }
+        return queued;
+      }
+      const id = staged.mediaStageId
         ? await enqueueDelivery(delivery, undefined, staged.mediaStageId)
         : await enqueueDelivery(delivery);
+      return { id, created: true };
     } catch (err) {
       cancelDeliveryQueueMediaStage(staged.mediaStageId);
       await releaseSpoolArtifacts(staged.artifacts);
@@ -1506,7 +1619,7 @@ export async function deliverOutboundPayloadsInternal(
 
   // Invocation authority is not queued; recovery must re-enter delegated after restart.
   // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
+  const queued = params.skipQueue
     ? null
     : await stageAndEnqueueDelivery().catch((err: unknown) => {
         if (queuePolicy === "required") {
@@ -1516,6 +1629,7 @@ export async function deliverOutboundPayloadsInternal(
         return null;
       }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
+  const queueId = queued?.id ?? null;
   if (queueId) {
     params.onDeliveryIntent?.({
       id: queueId,
@@ -1524,6 +1638,12 @@ export async function deliverOutboundPayloadsInternal(
       ...(params.accountId ? { accountId: params.accountId } : {}),
       queuePolicy,
     });
+  }
+
+  // A prior producer already owns this stable intent. Recovery or the original
+  // live sender will finish it; a replay must not cross platform I/O again.
+  if (queued && !queued.created) {
+    throw new Error(`Stable delivery intent is already queued: ${queued.id}`);
   }
 
   if (!queueId) {
@@ -1670,6 +1790,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     deliveredResults = results;
     platformResultsReturned = true;
     if (!queueId) {
+      if (params.deliveryCompletion) {
+        if (results.length > 0) {
+          completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+        } else {
+          suppressDurableDelivery(params.deliveryCompletion);
+        }
+      }
       if (!params.deferCommitHooks) {
         await runOutboundDeliveryCommitHooks(results);
       }
@@ -1724,6 +1851,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       } else {
+        if (params.deliveryCompletion) {
+          if (results.length > 0) {
+            completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+          } else {
+            suppressDurableDelivery(params.deliveryCompletion);
+          }
+        }
         const postSendState =
           queuedPostSendState ??
           (results.length > 0 || queuedPreSendState === "marked"
@@ -1846,14 +1980,45 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             }),
           );
         } else {
-          const recordFailure = isProvenDeliveryNotSentError(err)
-            ? failDeliveryBeforePlatformSend
-            : failDelivery;
-          await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
-            log.warn(
-              `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-            );
-          });
+          const permanentRejection = findPlatformMessageRejectedError(err);
+          let terminalRejectionHandled = false;
+          if (permanentRejection) {
+            let ownerRejected = false;
+            let queueAcked = false;
+            try {
+              if (params.deliveryCompletion) {
+                rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
+                ownerRejected = true;
+              }
+              await ackDelivery(queueId);
+              queueAcked = true;
+            } catch (rejectionError) {
+              log.warn(
+                `failed to finalize permanently rejected delivery ${queueId}: ${formatErrorMessage(rejectionError)}`,
+              );
+            }
+            terminalRejectionHandled = ownerRejected || queueAcked;
+            if (queueAcked) {
+              emitTerminals(() =>
+                failedOutboundAuditTerminals({
+                  payloadCount: params.payloads.length,
+                  results: deliveredResults,
+                  payloadOutcomes: auditPayloadOutcomes ?? [],
+                  failureStage: "platform_send",
+                }),
+              );
+            }
+          }
+          if (!terminalRejectionHandled) {
+            const recordFailure = isProvenDeliveryNotSentError(err)
+              ? failDeliveryBeforePlatformSend
+              : failDelivery;
+            await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+              log.warn(
+                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+              );
+            });
+          }
         }
       }
     } else {
@@ -2070,6 +2235,7 @@ async function deliverOutboundPayloadsCore(
       gatewayClientScopes: params.gatewayClientScopes,
       conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
+      preparedMessageId: params.preparedMessageId,
       requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
       onPlatformSendStart: params.onPlatformSendStart,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
@@ -2082,13 +2248,7 @@ async function deliverOutboundPayloadsCore(
       return Promise.resolve(baseHandler);
     }
     const key = JSON.stringify(mediaSources);
-    const cached = handlerByMediaSources.get(key);
-    if (cached) {
-      return cached;
-    }
-    const created = createHandler(mediaSources);
-    handlerByMediaSources.set(key, created);
-    return created;
+    return getOrCreatePromise(handlerByMediaSources, key, () => createHandler(mediaSources));
   };
   const handler = baseHandler;
   const configuredTextLimit = handler.chunker
@@ -2159,14 +2319,27 @@ async function deliverOutboundPayloadsCore(
     }
   }
   const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
-  const recordDeliveredMirrorPayload = (
+  const recordDeliveredPayload = (
     payloadSummary: NormalizedOutboundPayload,
     deliveredResults: readonly OutboundDeliveryResult[],
   ): void => {
-    if (!params.mirror || deliveredResults.length === 0) {
+    if (deliveredResults.length === 0) {
       return;
     }
-    deliveredMirrorPayloads.push(payloadSummary);
+    // Post-send observers are bookkeeping only. Never turn an identified
+    // platform delivery into a retryable failure if an observer misbehaves.
+    try {
+      params.onDeliveredPayload?.(payloadSummary);
+    } catch (error) {
+      log.warn("Outbound delivered-payload observer failed after platform send.", {
+        channel,
+        to,
+        error: formatErrorMessage(error),
+      });
+    }
+    if (params.mirror) {
+      deliveredMirrorPayloads.push(payloadSummary);
+    }
   };
   const hookRunner = getGlobalHookRunner();
   // Canonical session key forwarded to internal lifecycle hooks
@@ -2391,7 +2564,7 @@ async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
-        recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+        recordDeliveredPayload(payloadSummary, deliveredResults);
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
           payload: effectivePayload,
@@ -2432,7 +2605,7 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
-          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+          recordDeliveredPayload(payloadSummary, deliveredResults);
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -2489,7 +2662,10 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
-          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+          recordDeliveredPayload(
+            { ...payloadSummary, text: fallbackText, mediaUrls: [] },
+            deliveredResults,
+          );
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -2555,7 +2731,7 @@ async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
-        recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+        recordDeliveredPayload(payloadSummary, deliveredResults);
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({
@@ -2634,8 +2810,10 @@ async function deliverOutboundPayloadsCore(
         const mirrorResult = await appendAssistantMessageToSessionTranscript({
           agentId: params.mirror.agentId,
           sessionKey: params.mirror.sessionKey,
+          expectedSessionId: params.mirror.expectedSessionId,
           text: mirrorText,
           idempotencyKey: params.mirror.idempotencyKey,
+          deliveryMirror: params.mirror.deliveryMirror,
           config: params.cfg,
         });
         if (!mirrorResult.ok) {

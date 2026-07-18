@@ -37,7 +37,7 @@ import {
   finalizeNodePairingCleanupClaim,
   releaseNodePairingCleanupClaim,
   requestNodePairing,
-  updatePairedNodeMetadata,
+  recordPairedNodeConnection,
   type RequestNodePairingResult,
 } from "../infra/node-pairing.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
@@ -902,9 +902,9 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             options.onError?.("watch node pending-pairing cleanup failed", error);
           }
         }
-        void updatePairedNodeMetadata(
+        void recordPairedNodeConnection(
           session.nodeId,
-          { lastConnectedAtMs: nodeSession.connectedAtMs },
+          nodeSession.connectedAtMs,
           options.pairingBaseDir,
         ).catch((error: unknown) =>
           options.onError?.("watch node last-connect metadata update failed", error),

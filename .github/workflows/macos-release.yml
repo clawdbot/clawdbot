@@ -53,6 +53,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
+          build-all-cache-scope: full
 
       - name: Build
         run: pnpm build
@@ -73,7 +74,7 @@ jobs:
           RELEASE_SHA=$(git rev-parse HEAD)
           RELEASE_MAIN_REF="refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          git fetch --no-tags origin "+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
           pnpm release:openclaw:npm:check
 
       - name: Summarize next step

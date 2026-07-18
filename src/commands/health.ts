@@ -40,10 +40,15 @@ import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import {
+  degradedPluginMatchesRoot,
+  listActiveDegradedPlugins,
+  toPublicPluginVerificationDiagnostic,
+} from "../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -70,8 +75,8 @@ export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-const debugHealth = (...args: unknown[]) => {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
+const debugHealth = (cfg: OpenClawConfig | undefined, ...args: unknown[]) => {
+  if (isDiagnosticFlagEnabled("health", cfg)) {
     console.warn("[health:debug]", ...args);
   }
 };
@@ -265,7 +270,7 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
     });
     return failed.length > 0 ? { failed } : undefined;
   } catch (error) {
-    debugHealth("delivery queue health read failed", error);
+    debugHealth(undefined, "delivery queue health read failed", error);
     return undefined;
   }
 }
@@ -354,15 +359,31 @@ const buildSessionSummary = async (storePath: string, agentId?: string) => {
 
 function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   const registry = getActivePluginRegistry();
-  if (!registry) {
-    return undefined;
-  }
-  const loaded = registry.plugins
+  const degradedPlugins = listActiveDegradedPlugins();
+  const unavailable = degradedPlugins
+    .map(({ pluginId, state, diagnostic }) => ({
+      id: pluginId,
+      state,
+      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  const loaded = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = registry.plugins
-    .filter((plugin) => plugin.status === "error")
+  const errors = (registry?.plugins ?? [])
+    .filter(
+      (plugin) =>
+        plugin.status === "error" &&
+        !degradedPlugins.some(
+          (degraded) =>
+            plugin.id === degraded.pluginId &&
+            plugin.failurePhase === "validation" &&
+            plugin.activationReason === `configured-unavailable: ${degraded.diagnostic.reason}` &&
+            Boolean(plugin.rootDir) &&
+            degradedPluginMatchesRoot(degraded, plugin.rootDir ?? ""),
+        ),
+    )
     .map((plugin) => {
       const error: PluginHealthErrorSummary = {
         id: plugin.id,
@@ -382,10 +403,10 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
       return error;
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
-  if (loaded.length === 0 && errors.length === 0) {
+  if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
     return undefined;
   }
-  return { loaded, errors };
+  return { loaded, errors, unavailable };
 }
 
 function readBooleanField(value: unknown, key: string): boolean | undefined {
@@ -585,7 +606,7 @@ export async function getHealthSnapshot(params?: {
     );
     // Probe preferred/default/bound accounts first, but include all configured
     // accounts so verbose health can explain account-specific failures.
-    debugHealth("channel", {
+    debugHealth(cfg, "channel", {
       id: plugin.id,
       accountIds,
       defaultAccountId,
@@ -603,7 +624,7 @@ export async function getHealthSnapshot(params?: {
           accountId,
         });
       if (diagnostics.length > 0) {
-        debugHealth("account.diagnostics", { channel: plugin.id, accountId, diagnostics });
+        debugHealth(cfg, "account.diagnostics", { channel: plugin.id, accountId, diagnostics });
       }
 
       let probe: unknown;
@@ -629,7 +650,7 @@ export async function getHealthSnapshot(params?: {
           ? (probeRecord.bot as { username?: string | null })
           : null;
       if (bot?.username) {
-        debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
+        debugHealth(cfg, "probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
       const runtimeSnapshot =
@@ -812,7 +833,7 @@ export async function healthCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
   } else {
-    const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
+    const debugEnabled = isDiagnosticFlagEnabled("health", cfg);
     const rich = isRich();
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({
@@ -1009,7 +1030,7 @@ export async function healthCommand(
           includeChannelPrefix: true,
         });
       } catch (error) {
-        debugHealth("logSelfId.failed", {
+        debugHealth(cfg, "logSelfId.failed", {
           channel: plugin.id,
           accountId,
           error: formatErrorMessage(error),

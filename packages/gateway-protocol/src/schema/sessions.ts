@@ -154,6 +154,19 @@ export const SessionsFilesSetResultSchema = closedObject({
   file: SessionFileEntrySchema,
 });
 
+/** Opens a session workspace on the Gateway host without accepting a client path. */
+export const SessionsFilesRevealParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+
+/** Result for revealing a session workspace on the Gateway host. */
+export const SessionsFilesRevealResultSchema = closedObject({
+  ok: Type.Boolean(),
+  path: Type.Optional(NonEmptyString),
+  error: Type.Optional(NonEmptyString),
+});
+
 /** Change status for one file in a session checkout diff. */
 export const SessionDiffFileStatusSchema = Type.Union([
   Type.Literal("added"),
@@ -645,6 +658,8 @@ export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
+export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;
+export type SessionsFilesRevealResult = Static<typeof SessionsFilesRevealResultSchema>;
 export type SessionDiffFileStatus = Static<typeof SessionDiffFileStatusSchema>;
 export type SessionDiffFile = Static<typeof SessionDiffFileSchema>;
 export type SessionsDiffParams = Static<typeof SessionsDiffParamsSchema>;

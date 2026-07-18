@@ -432,7 +432,7 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.extractor).toBe("firecrawl");
     expect(result.extractMode).toBe("markdown");
     expect(result.text).toContain("# Hello");
-    expect(result.wrappedLength).toBe((result.text as string).length);
+    expect(result.length).toBe((result.text as string).length);
     expect(result.truncated).toBe(false);
   });
 
@@ -543,7 +543,7 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.finalUrl).toBe("https://example.com/page");
   });
 
-  it("sets title to undefined when metadata title is absent", () => {
+  it("omits title when metadata title is absent", () => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
       payload: {
@@ -552,9 +552,10 @@ describe("parseFirecrawlScrapePayload", () => {
     });
 
     expect(result.title).toBeUndefined();
+    expect(Object.hasOwn(result, "title")).toBe(false);
   });
 
-  it("sets status to undefined when no statusCode is available", () => {
+  it("omits status when no statusCode is available", () => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
       payload: {
@@ -563,6 +564,7 @@ describe("parseFirecrawlScrapePayload", () => {
     });
 
     expect(result.status).toBeUndefined();
+    expect(Object.hasOwn(result, "status")).toBe(false);
   });
 
   it("truncates content when it exceeds maxChars", () => {
@@ -659,6 +661,7 @@ describe("parseFirecrawlScrapePayload", () => {
     });
 
     expect(result.warning).toBeUndefined();
+    expect(Object.hasOwn(result, "warning")).toBe(false);
   });
 
   it("handles non-string warning gracefully", () => {

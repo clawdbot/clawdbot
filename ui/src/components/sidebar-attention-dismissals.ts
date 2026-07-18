@@ -9,6 +9,7 @@ const SIDEBAR_ATTENTION_KINDS = [
   "cronOverdue",
   "modelAuthExpired",
   "modelAuthExpiring",
+  "pendingApproval",
 ] as const;
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
 

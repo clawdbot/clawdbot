@@ -9,7 +9,9 @@ read_when:
 
 `Full Release Validation` is the release product-validation umbrella. Most work
 happens in child workflows so a failed box can be rerun without restarting the
-whole release.
+whole release. Run release preparation before freezing the Code SHA; it
+refreshes Control UI locale output when the background bot has not landed it
+yet, then enforces the same strict zero-fallback check used by release CI.
 
 Freeze the product-complete pre-changelog commit as the **Code SHA**, then run:
 
@@ -56,6 +58,10 @@ SHA/artifact runs pack `extensions/codex` from the selected ref; and operators
 can set `codex_plugin_spec` directly for `npm:`, `npm-pack:`, or `git:` plugin
 sources. The lane grants the explicit Codex CLI install approval required by
 that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
+Its final zero-retry, medium-thinking turn sends visible progress with omitted
+Codex `final`, reads randomized workspace inputs, writes their exact artifact,
+and sends explicit completion. This catches the v2026.7.1 regression where an
+ordinary progress send terminated the turn.
 
 ## Top-level stages
 
@@ -71,6 +77,14 @@ run. Evidence reuse runs only from `main` or a canonical SHA-pinned
 `release-ci/*` ref whose workflow commit remains on trusted `main` lineage;
 other workflow refs run the selected lanes fresh.
 
+Fresh package-facing validation prepares one immutable tarball plus one Docker
+image artifact before dispatching Plugin Prerelease and OpenClaw Release Checks.
+Both children verify the same package SHA, artifact IDs, service digests,
+producer run attempt, and Docker archive digest before use. The package-independent
+bare Docker layer uses a content-addressed GHCR cache; candidate-specific images
+remain immutable GitHub artifacts. Focused runs with an explicit published
+package spec keep the existing package path instead.
+
 Also for `rerun_group=all`, a `Verify Docker runtime image assets` job builds
 the `runtime-assets` Docker target with
 `OPENCLAW_EXTENSIONS=diagnostics-otel,codex`. It runs in parallel with the
@@ -80,6 +94,7 @@ it before dispatching. A narrower `rerun_group` skips this preflight.
 | Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                            |
+| Shared candidate        | **Job:** `Prepare shared release candidate`<br />**Child workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and records immutable package and image artifact tuples for both package-facing child workflows.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group.                                                                                                                 |
 | Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                         |
 | Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                          |
 | Plugin prerelease       | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full plugin batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                          |
@@ -116,13 +131,14 @@ cancel each other.
 ## Release checks stages
 
 `OpenClaw Release Checks` is the largest child workflow. It resolves the target
-once and prepares a shared `release-package-under-test` artifact when package
-or Docker-facing stages need it.
+once and validates the umbrella's shared package artifact when available. A
+direct or focused dispatch prepares its own `release-package-under-test`
+artifact when package or Docker-facing stages need it.
 
 | Stage                    | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected SHA, profile, rerun group, and focused live suite filter.<br />**Rerun:** `rerun_group=release-checks`.                                                                                                                                                                                                                                                                                                                                                             |
-| Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** packs or resolves one candidate tarball and uploads `release-package-under-test` for downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                                                                             |
+| Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** validates the umbrella's immutable package tuple, or packs one candidate tarball for a direct/focused Release Checks dispatch, then exposes it to downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                |
 | Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install image-provider smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                                           |
 | Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                                                                                                                                 |
 | Repo and live E2E        | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`.                                                                                |
@@ -144,16 +160,16 @@ or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                                                                   |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                                                                      |
-| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live turns, and Chat Completions tool calls. |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                             |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                              |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                        |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                              |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                      |
-| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                    |
+| Chunk                                                           | Coverage                                                                                                                                     |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                        |
+| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live progress follow-through, and Chat Completions tool calls. |
+| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                                               |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                                |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                          |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                                |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                        |
+| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                      |
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun

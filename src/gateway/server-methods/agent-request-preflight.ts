@@ -10,6 +10,7 @@ import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exe
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
+  isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -45,6 +46,7 @@ type AgentRequestPreflight = {
   execApprovalFollowupApprovalId?: string;
   normalizedSpawned: ReturnType<typeof normalizeSpawnedRunMetadata>;
   inputProvenance: ReturnType<typeof normalizeInputProvenance>;
+  isRestartRecoveryResumeRun: boolean;
   preserveUserFacingSessionModelState: boolean;
   sessionEffects?: "visible" | "internal";
   suppressVisibleSessionEffects: boolean;
@@ -215,6 +217,8 @@ export function prepareAgentRequestPreflight(
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
+    isRestartRecoveryResumeRun:
+      canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance),
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

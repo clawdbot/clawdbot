@@ -349,7 +349,7 @@ export async function streamContainerEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: ContainerWebSocketMessage) => void;
+  onEvent: (event: ContainerWebSocketMessage) => unknown;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
   const normalized = normalizeBaseUrl(params.baseUrl);
@@ -362,18 +362,31 @@ export async function streamContainerEvents(params: {
 
   return new Promise((resolve, reject) => {
     let ws: WebSocket;
-    let resolved = false;
+    let settled = false;
+    let eventChain = Promise.resolve();
     let abortHandler: (() => void) | undefined;
 
     const cleanup = () => {
-      if (resolved) {
-        return;
-      }
-      resolved = true;
       if (abortHandler) {
         params.abortSignal?.removeEventListener("abort", abortHandler);
         abortHandler = undefined;
       }
+    };
+    const resolveOnce = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(toLintErrorObject(error, "Signal WebSocket receive handler failed"));
     };
 
     try {
@@ -391,11 +404,25 @@ export async function streamContainerEvents(params: {
     });
 
     ws.on("message", (data: Buffer) => {
+      if (settled) {
+        return;
+      }
       try {
         const text = data.toString();
         const envelope = JSON.parse(text) as ContainerWebSocketMessage;
         if (envelope) {
-          params.onEvent(envelope);
+          // WebSocket callbacks are synchronous. Chain async durable appends so
+          // transport delivery order and receive-handler failures are preserved.
+          eventChain = eventChain.then(async () => {
+            await params.onEvent(envelope);
+          });
+          void eventChain.catch((err: unknown) => {
+            logError(
+              `[signal-ws] receive handler failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            rejectOnce(err);
+            ws.close();
+          });
         }
       } catch (err) {
         logError(`[signal-ws] parse error: ${err instanceof Error ? err.message : String(err)}`);
@@ -410,8 +437,7 @@ export async function streamContainerEvents(params: {
     ws.on("close", (code, reason) => {
       const reasonStr = reason?.toString() || "no reason";
       log(`[signal-ws] closed (code=${code}, reason=${reasonStr})`);
-      cleanup();
-      resolve(); // Let the outer loop handle reconnection
+      void eventChain.then(resolveOnce, rejectOnce); // Let the outer loop handle reconnection.
     });
 
     ws.on("ping", () => {
@@ -425,9 +451,8 @@ export async function streamContainerEvents(params: {
     if (params.abortSignal) {
       abortHandler = () => {
         log("[signal-ws] aborted, closing connection");
-        cleanup();
         ws.close();
-        resolve();
+        resolveOnce();
       };
       params.abortSignal.addEventListener("abort", abortHandler, { once: true });
     }

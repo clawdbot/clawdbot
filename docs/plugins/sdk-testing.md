@@ -38,6 +38,8 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { describeOpenAIProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { withEnv, withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { createRequestCaptureJsonFetch } from "openclaw/plugin-sdk/test-media-understanding";
 import {
   bundledPluginRoot,
   createCliRuntimeCapture,
@@ -102,7 +104,10 @@ imports of that alias.
 | `createTestRegistry`                                 | Build a channel plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`               |
 | `createEmptyPluginRegistry`                          | Build an empty plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                |
 | `setActivePluginRegistry`                            | Install a registry fixture for plugin runtime tests. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`   |
-| `createRequestCaptureJsonFetch`                      | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-env`                                                     |
+| `createRequestCaptureJsonFetch`                      | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-media-understanding`                                     |
+| `isLiveTestEnabled`                                  | Gate opt-in live provider tests. Import from `plugin-sdk/test-live`                                                                      |
+| `collectProviderApiKeys`                             | Discover credentials for live provider tests. Import from `plugin-sdk/test-live-auth`                                                    |
+| `parseProviderModelMap`                              | Parse music/video live-test model overrides. Import from `plugin-sdk/test-media-generation`                                              |
 | `withServer`                                         | Run tests against a disposable local HTTP server. Import from `plugin-sdk/test-env`                                                      |
 | `createMockIncomingRequest`                          | Build a minimal incoming HTTP request object. Import from `plugin-sdk/test-env`                                                          |
 | `withFetchPreconnect`                                | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                                                       |

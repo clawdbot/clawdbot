@@ -48,7 +48,6 @@ export {
   getPresence,
   isAbortError,
   isDiscordGroupAllowedByPolicy,
-  mergeAbortSignals,
   monitorDiscordProvider,
   normalizeDiscordAllowList,
   normalizeDiscordInboundWorkerTimeoutMs,

@@ -275,6 +275,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
     authStores,
     authStoreCredentialsRevision,
     warnings: [],
+    degradedOwners: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
   };
   return {

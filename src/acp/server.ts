@@ -23,11 +23,7 @@ import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import {
-  createSqliteAcpEventLedger,
-  migrateFileAcpEventLedgerToSqlite,
-  resolveDefaultAcpEventLedgerPath,
-} from "./event-ledger.js";
+import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
@@ -54,7 +50,6 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     onClosed = resolve;
   });
   let stopped = false;
-  let startupWork: Promise<unknown> | null = null;
   let onGatewayReadyResolve!: () => void;
   let onGatewayReadyReject!: (err: Error) => void;
   let gatewayReadySettled = false;
@@ -134,13 +129,10 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     const activeAgent = agent;
     agent = null;
     activeAgent?.shutdown();
-    const startupSettlement = startupWork?.catch(() => {}) ?? Promise.resolve();
     const gatewayStop = gateway.stopAndWait().catch((err: unknown) => {
       console.warn(`acp: gateway stop failed during shutdown: ${String(err)}`);
     });
-    // Migration and transport teardown are independent. Close only after both
-    // settle so neither can touch or reopen the process-owned SQLite handle.
-    await Promise.all([startupSettlement, gatewayStop]);
+    await gatewayStop;
     closeStateDatabase();
     onClosed();
   };
@@ -177,24 +169,6 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       },
     }),
   );
-  startupWork = migrateFileAcpEventLedgerToSqlite({
-    filePath: resolveDefaultAcpEventLedgerPath(process.env),
-    archiveSource: true,
-  });
-  try {
-    await startupWork;
-  } catch (err) {
-    if (stopped) {
-      return closed;
-    }
-    await shutdown();
-    throw err;
-  } finally {
-    startupWork = null;
-  }
-  if (stopped) {
-    return closed;
-  }
   const eventLedger = createSqliteAcpEventLedger();
 
   void new AgentSideConnection(

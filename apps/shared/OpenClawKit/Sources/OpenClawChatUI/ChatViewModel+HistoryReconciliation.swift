@@ -671,3 +671,159 @@ extension OpenClawChatViewModel {
         return "\(message.role)|\(timestamp)|\(text)"
     }
 }
+
+extension OpenClawChatViewModel {
+    private func canApplyHistory(_ request: HistoryRequest) -> Bool {
+        request.id >= self.latestAppliedHistoryRequestID &&
+            self.isCurrentSession(request.session)
+    }
+
+    func advanceSessionGeneration() {
+        self.sessionGeneration &+= 1
+    }
+
+    func invalidateRunSnapshots() {
+        self.runOwnershipGeneration &+= 1
+    }
+
+    func invalidateHistorySnapshots() {
+        self.historyMutationGeneration &+= 1
+    }
+
+    func beginHistoryRequest(
+        for sessionSnapshot: SessionSnapshot? = nil,
+        captureLatestUserTurn: Bool = true) -> HistoryRequest
+    {
+        self.lastIssuedHistoryRequestID &+= 1
+        return HistoryRequest(
+            id: self.lastIssuedHistoryRequestID,
+            session: sessionSnapshot ?? self.currentSessionSnapshot(),
+            pendingRunIDs: self.pendingRuns,
+            visibleMessagesByID: Dictionary(uniqueKeysWithValues: self.messages.map { ($0.id, $0) }),
+            historyMutationGeneration: self.historyMutationGeneration,
+            runOwnershipGeneration: self.runOwnershipGeneration,
+            latestUserTurn: captureLatestUserTurn ? Self.latestUserTurn(in: self.messages) : nil)
+    }
+
+    private func markHistoryRequestApplied(_ request: HistoryRequest) {
+        self.latestAppliedHistoryRequestID = max(self.latestAppliedHistoryRequestID, request.id)
+    }
+
+    @discardableResult
+    func applyHistoryPayload(
+        _ payload: OpenClawChatHistoryPayload,
+        for request: HistoryRequest,
+        preservingOptimisticLocalMessages: Bool,
+        syncThinkingOptions: Bool = false) -> Bool
+    {
+        guard self.canApplyHistory(request) else { return false }
+        let incoming = self.adoptingProvisionalFinalMessageIDs(
+            in: Self.decodeMessages(payload.messages ?? []))
+        let unmatchedProvisionalFinalIDs = Set(provisionalFinalMessagesMissing(from: incoming).map(\.id))
+        var retainedMessageIDs = unmatchedProvisionalFinalIDs
+        if request.historyMutationGeneration != self.historyMutationGeneration {
+            for message in self.messages where request.visibleMessagesByID[message.id] != message {
+                let isMatchedProvisional = self.provisionalFinalMessagesByID[message.id] != nil &&
+                    !unmatchedProvisionalFinalIDs.contains(message.id)
+                if !isMatchedProvisional {
+                    retainedMessageIDs.insert(message.id)
+                }
+            }
+        }
+        // Durable outbox rows remain authoritative until canonical history
+        // confirms their idempotency key. Keep their bubbles through lagging
+        // snapshots, including across app relaunches and session switches.
+        retainedMessageIDs.formUnion(self.outboxCommandIDsByMessageID.keys)
+        var nextMessages = if preservingOptimisticLocalMessages {
+            Self.reconcileRunRefreshMessages(
+                previous: self.messages,
+                incoming: incoming,
+                pendingLocalUserEchoIDs: Set(self.pendingLocalUserEchoMessageIDsByRunID.values))
+        } else {
+            Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
+        }
+        let reconciledMessageIDs = Set(nextMessages.map(\.id))
+        nextMessages.append(contentsOf: self.messages.filter { message in
+            retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)
+        })
+        nextMessages = Self.dedupeMessages(nextMessages)
+        replaceMessages(nextMessages)
+        confirmOutboxCommands(in: incoming)
+        self.prunePendingLocalUserEchoMessageIDs()
+        self.clearProvisionalFinalMarkersAdoptedByHistory(incoming)
+        self.pruneProvisionalFinalMessages()
+        self.pruneRunMessageScopes()
+        self.rescopeRunsAdoptedAfterHistoryRequest(request)
+        self.sessionId = payload.sessionId
+        self.applyInFlightRunSnapshot(payload, for: request)
+        // Incomplete refreshes can arrive before durable assistant history.
+        // The latest visible user turn must survive answered before it can reject older replies.
+        let canInvalidateOlderHistory = if let latestUserTurn = request.latestUserTurn {
+            Self.hasAnsweredUser(latestUserTurn, in: self.messages)
+        } else {
+            !Self.hasUnansweredLatestUser(in: self.messages)
+        }
+        if canInvalidateOlderHistory {
+            self.markHistoryRequestApplied(request)
+        }
+        self.clearActiveSessionRunIndicatorIfLatestUserAnswered()
+        let appliedThinkingLevel = !self.prefersExplicitThinkingLevel
+            ? Self.normalizedThinkingLevel(payload.thinkingLevel)
+            : nil
+        if let level = appliedThinkingLevel {
+            self.preferredThinkingLevel = level
+            self.thinkingLevel = level
+        }
+        if syncThinkingOptions || appliedThinkingLevel != nil {
+            syncThinkingLevelOptions()
+        }
+        // Live history is the source of truth: it clears the cached marker and
+        // is written through so the next cold open pre-paints current rows.
+        self.hasAppliedLiveHistory = true
+        self.isShowingCachedTranscript = false
+        // An empty post-send refresh is incomplete by contract: reconciliation
+        // preserves the visible transcript, so preserve its last canonical cache too.
+        if !preservingOptimisticLocalMessages || !incoming.isEmpty {
+            // Persist the reconciled transcript, including durable outbox
+            // rows retained while canonical history catches up.
+            persistTranscriptToCache(
+                sessionKey: request.session.key,
+                agentID: request.session.agentID,
+                messages: nextMessages,
+                canonicalMessageIdempotencyKeys: Set(incoming.compactMap(\.idempotencyKey)))
+        }
+        // Wholesale history replacement drops local-only queued bubbles;
+        // re-adopt or re-append them from the durable outbox.
+        restoreOutboxMessages(session: request.session)
+        self.applyDeferredExternalStateIfReady()
+        return true
+    }
+
+    private func provisionalFinalMessagesMissing(
+        from incoming: [OpenClawChatMessage]) -> [OpenClawChatMessage]
+    {
+        let incomingRunIds = Set(incoming.compactMap { Self.normalizedIdempotencyKey($0.idempotencyKey) })
+        return self.messages.filter { message in
+            guard let provisional = provisionalFinalMessagesByID[message.id] else { return false }
+            if let runId = provisional.runId, incomingRunIds.contains(runId) {
+                return false
+            }
+            guard Self.containsUserTurn(provisional.scope.latestUserTurn, in: incoming) else {
+                return true
+            }
+            let searchRange = Self.messageRange(after: provisional.scope.latestUserTurn, in: incoming)
+            return !incoming[searchRange].contains { incomingMessage in
+                Self.finalMessageReconciliationKey(for: incomingMessage) == provisional.reconciliationKey
+            }
+        }
+    }
+
+    private func rescopeRunsAdoptedAfterHistoryRequest(_ request: HistoryRequest) {
+        for runId in self.pendingRuns {
+            let scope = self.runMessageScopesByRunID[runId]
+            if !request.pendingRunIDs.contains(runId) || scope?.latestUserTurn == nil {
+                self.runMessageScopesByRunID[runId] = self.currentRunMessageScope()
+            }
+        }
+    }
+}

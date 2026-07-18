@@ -12,6 +12,7 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { SessionEntryProvenance } from "./session-entry-provenance.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
@@ -535,6 +536,11 @@ export type SessionEntry = SessionRestartRecoveryState &
     pluginDebugEntries?: SessionPluginDebugEntry[];
     acp?: SessionAcpMeta;
   };
+
+/** Internal durable fields excluded from public/plugin session projections. */
+export type InternalSessionEntry = SessionEntry & {
+  mainRestartRecovery?: MainRestartRecoveryState;
+};
 
 export function isTerminalSessionStatus(
   status: unknown,

@@ -25,6 +25,7 @@ import type { SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
+  | "conversation_deliveries"
   | "conversations"
   | "session_conversations"
   | "session_entries"

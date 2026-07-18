@@ -1,7 +1,10 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
-import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
+import {
+  CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
+  CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
+} from "./app-server/protocol.js";
 import type {
   CodexSessionCatalogError,
   CodexSessionCatalogPage,
@@ -65,20 +68,40 @@ export function boundedCatalogString(
   return overflow === "truncate" ? truncateUtf16Safe(normalized, maxLength) : undefined;
 }
 
-type CodexInteractiveThreadSourceKind = (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number];
+type CodexInteractiveThreadSource =
+  | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
+  | (typeof CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES)[number];
 
-export function isInteractiveThreadSource(
+function normalizeInteractiveThreadSource(
   source: unknown,
-): source is CodexInteractiveThreadSourceKind {
-  return CODEX_INTERACTIVE_THREAD_SOURCE_KINDS.some((kind) => kind === source);
+): CodexInteractiveThreadSource | undefined {
+  if (
+    CODEX_INTERACTIVE_THREAD_SOURCE_KINDS.some((kind) => kind === source) ||
+    CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES.some((kind) => kind === source)
+  ) {
+    return source as CodexInteractiveThreadSource;
+  }
+  if (
+    isRecord(source) &&
+    CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES.some((kind) => kind === source.custom)
+  ) {
+    return source.custom as (typeof CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES)[number];
+  }
+  return undefined;
+}
+
+export function isInteractiveThreadSource(source: unknown): boolean {
+  return normalizeInteractiveThreadSource(source) !== undefined;
 }
 
 export function toCatalogSession(
   thread: CodexThread,
   archived: boolean,
 ): CodexSessionCatalogSession | undefined {
-  const source = thread.source;
-  if (!isInteractiveThreadSource(source)) {
+  // Codex models Atlas and ChatGPT as custom sources but includes both in its
+  // interactive default. Normalize those objects for the string-only catalog.
+  const source = normalizeInteractiveThreadSource(thread.source);
+  if (!source) {
     return undefined;
   }
   const record = thread as CodexThread & Record<string, unknown>;

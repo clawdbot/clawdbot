@@ -1,4 +1,5 @@
 // TTS core tests cover provider selection, synthesis, and error handling.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
@@ -33,6 +34,16 @@ const usage: Usage = {
 };
 
 describe("TTS core", () => {
+  it("keeps summarization-only LLM modules lazy", () => {
+    const source = readFileSync(new URL("./tts-core.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('import("../llm/stream.js")');
+    expect(source).toContain('import("../agents/simple-completion-runtime.js")');
+    expect(source).not.toContain('from "../llm/stream.js"');
+    expect(source).not.toContain('from "../agents/simple-completion-runtime.js"');
+    expect(source).not.toContain('from "../agents/model-auth.js"');
+  });
+
   it("resolves the first non-blank speech provider API key", () => {
     expect(resolveSpeechProviderApiKey(undefined, " \t", "  provider-key  ", "fallback")).toBe(
       "provider-key",

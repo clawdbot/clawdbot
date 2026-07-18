@@ -1,7 +1,7 @@
 // Verifies fast-mode precedence across session, agent, and model defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { formatFastModeAutoLabel, normalizeFastModeSource } from "../shared/fast-mode.js";
+import { formatFastModeAutoLabel } from "../shared/fast-mode.js";
 import {
   formatFastModeAutoProgressText,
   formatFastModeCommandOptions,
@@ -141,8 +141,6 @@ describe("resolveFastModeState", () => {
         fastAutoOnSeconds: 30,
       }),
     ).toBe("Current fast mode: auto (30 sec) (default: model).");
-    expect(normalizeFastModeSource("config")).toBe("config");
-    expect(normalizeFastModeSource("bad")).toBeUndefined();
   });
 
   it("uses model fastAutoOnSeconds for auto cutoff across session overrides", () => {

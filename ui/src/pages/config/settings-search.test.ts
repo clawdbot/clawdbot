@@ -30,7 +30,7 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("matches visible quick-setting content and schema sections", () => {
+  it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({
       query: "mcp",
       schema: {
@@ -50,15 +50,55 @@ describe("findSettingsSearchBlocks", () => {
 
     expect(matches).toEqual([
       expect.objectContaining({
-        routeId: "config",
-        label: "Automations",
-        hash: "#settings-general-automations",
-      }),
-      expect.objectContaining({
         routeId: "mcp",
         label: "MCP",
         search: "?section=mcp",
         hash: "#config-section-mcp",
+      }),
+    ]);
+  });
+
+  it("routes moved static blocks to their dedicated pages", () => {
+    const security = findSettingsSearchBlocks({
+      query: "exec policy",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+    expect(security).toEqual([expect.objectContaining({ routeId: "security", label: "Security" })]);
+
+    const notifications = findSettingsSearchBlocks({
+      query: "push notifications",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        routeId: "notifications",
+        hash: "#settings-communications-notifications",
+      }),
+    ]);
+  });
+
+  it("routes uncurated schema sections to the Advanced page", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "secrets",
+      schema: {
+        type: "object",
+        properties: {
+          secrets: { type: "object", title: "Secrets" },
+        },
+      },
+      value: {},
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "advanced",
+        search: "?section=secrets",
+        hash: "#config-section-secrets",
       }),
     ]);
   });
@@ -130,7 +170,7 @@ describe("findSettingsSearchBlocks", () => {
     await i18n.setLocale("es");
 
     const matches = findSettingsSearchBlocks({
-      query: "apariencia",
+      query: "modelo",
       schema: null,
       value: null,
       uiHints: {},
@@ -139,8 +179,7 @@ describe("findSettingsSearchBlocks", () => {
     expect(matches).toEqual([
       expect.objectContaining({
         routeId: "config",
-        label: "Apariencia",
-        hash: "#settings-general-appearance",
+        hash: "#settings-general-model",
       }),
     ]);
   });

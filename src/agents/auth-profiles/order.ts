@@ -103,16 +103,21 @@ export function isStoredCredentialCompatibleWithAuthProvider(params: {
 
 function isConfiguredProfileCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   providerAuthKey: string;
   provider: string;
   mode?: string;
   credential?: AuthProfileCredential;
 }): boolean {
-  const configProviderKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const configProviderKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
   return (
     configProviderKey === params.providerAuthKey ||
     isOpenAIApiKeyCompatibleWithCodexAuth({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       providerAuthKey: params.providerAuthKey,
       credential: params.credential,
       profileProvider: params.provider,
@@ -162,6 +167,7 @@ function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: str
 /** Returns true when config declares an aws-sdk auth profile for a provider. */
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   profileId: string;
 }): boolean {
@@ -169,9 +175,15 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   if (!profileConfig || profileConfig.mode !== "aws-sdk") {
     return false;
   }
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
   if (
-    resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+    resolveProviderIdForAuth(profileConfig.provider, {
+      config: params.cfg,
+      ...params.authAliasLookupParams,
+    }) !== providerAuthKey
   ) {
     return false;
   }
@@ -181,17 +193,22 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
 /** Resolves whether a profile can be used for a provider right now. */
 export function resolveAuthProfileEligibility(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store: AuthProfileStore;
   provider: string;
   profileId: string;
   now?: number;
 }): AuthProfileEligibility {
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
   const cred = params.store.profiles[params.profileId];
   if (!cred) {
     if (
       isConfiguredAwsSdkAuthProfileForProvider({
         cfg: params.cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
         provider: params.provider,
         profileId: params.profileId,
       })
@@ -203,6 +220,7 @@ export function resolveAuthProfileEligibility(params: {
   if (
     !isCredentialProviderCompatibleWithAuthProvider({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       providerAuthKey,
       credential: cred,
     })
@@ -214,6 +232,7 @@ export function resolveAuthProfileEligibility(params: {
     if (
       !isConfiguredProfileCompatibleWithAuthProvider({
         cfg: params.cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
         providerAuthKey,
         provider: profileConfig.provider,
         mode: profileConfig.mode,

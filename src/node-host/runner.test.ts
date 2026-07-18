@@ -244,16 +244,21 @@ describe("runNodeHost", () => {
     expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledOnce();
   });
 
-  it("passes the resolved Gateway URL to the Gateway client", async () => {
+  it.each([
+    ["127.0.0.1", "ws://127.0.0.1:18789"],
+    ["gateway.local", "ws://gateway.local:18789"],
+    ["::1", "ws://[::1]:18789"],
+    ["[::1]", "ws://[::1]:18789"],
+  ])("passes Gateway host %s as URL %s", async (gatewayHost, expectedUrl) => {
     await expect(
       runNodeHost({
-        gatewayHost: "127.0.0.1",
+        gatewayHost,
         gatewayPort: 18789,
       }),
     ).rejects.toThrow("event loop readiness timeout");
 
     expect(mocks.capturedGatewayClientOptions).toHaveLength(1);
-    expect(mocks.capturedGatewayClientOptions[0]?.url).toBe("ws://127.0.0.1:18789");
+    expect(mocks.capturedGatewayClientOptions[0]?.url).toBe(expectedUrl);
     expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
   });
 

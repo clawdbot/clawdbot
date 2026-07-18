@@ -63,7 +63,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code.",
-        planSteps: [{ step: "Patch code", status: "in_progress" }],
+        steps: [{ step: "Patch code", status: "in_progress" }],
       });
       await opts?.onApprovalEvent?.({
         phase: "requested",
@@ -367,6 +367,73 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted. Stopped 2 sub-agents.",
     });
+  });
+
+  it("seeds direct fast-abort prefixes from the session-selected model", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
+    sessionStoreMocks.currentEntry = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6-20260205",
+      thinkingLevel: "high",
+    };
+    const onModelSelected = vi.fn();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        Body: "/stop",
+        SessionKey: "agent:main:telegram:direct:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { onModelSelected },
+    });
+
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-opus-4-6-20260205",
+      thinkLevel: "high",
+    });
+  });
+
+  it("carries session prefix context through the actual routed fast-abort delivery", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
+    sessionStoreMocks.currentEntry = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6-20260205",
+      thinkingLevel: "high",
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        ExplicitDeliverRoute: true,
+        AccountId: "support",
+        Body: "/stop",
+        SessionKey: "agent:main:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "support",
+        responsePrefixContext: {
+          identityName: undefined,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          modelFull: "anthropic/claude-opus-4-6-20260205",
+          thinkingLevel: "high",
+        },
+      }),
+    );
   });
 
   it("routes ACP sessions through the runtime branch and streams block replies", async () => {

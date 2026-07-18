@@ -160,6 +160,28 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(providerToken).toBe(`Bearer ${realToken}`);
   });
 
+  it("clamps session headers to the backend limit", async () => {
+    const jwt = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } });
+    let headers: Headers | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        headers = new Headers(init?.headers);
+        return completedSseResponse();
+      }),
+    );
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      sessionId: "s".repeat(80),
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(headers?.get("session_id")).toBe("s".repeat(64));
+    expect(headers?.get("x-client-request-id")).toBe("s".repeat(64));
+  });
+
   it("builds the first Node request with an OS-specific user agent", async () => {
     vi.resetModules();
     const freshProvider = await import("./openai-chatgpt-responses.js");
@@ -820,6 +842,28 @@ describe("streamOpenAICodexResponses transport", () => {
     await stream.result();
 
     expect(payload).toMatchObject({ prompt_cache_key: "stable-cache-key" });
+  });
+
+  it("does not retry the ChatGPT transport when maxRetries is zero", async () => {
+    const jwt = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("rate limited", {
+        status: 429,
+        headers: { "retry-after": "1" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      maxRetries: 0,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
 
   it.each([

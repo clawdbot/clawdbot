@@ -1,8 +1,18 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
+import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
 
-/** Durable gateway ownership states for one session execution placement. */
+export {
+  isCloudWorkerPlacementState,
+  SESSION_PLACEMENT_STATES,
+  type SessionPlacementState,
+} from "./session-placement-state.js";
+
+/** Durable gateway ownership states for one session execution placement.
+ * The literal list stays explicit because Type.Union needs a tuple for
+ * Static inference (a mapped array collapses Static to never); the guard
+ * below keeps it in lockstep with SESSION_PLACEMENT_STATES. */
 export const SessionPlacementStateSchema = Type.Union([
   Type.Literal("local"),
   Type.Literal("requested"),
@@ -15,6 +25,13 @@ export const SessionPlacementStateSchema = Type.Union([
   Type.Literal("reclaimed"),
   Type.Literal("failed"),
 ]);
+
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const placementStateVocabularyInSync: MutuallyAssignable<
+  Static<typeof SessionPlacementStateSchema>,
+  (typeof SESSION_PLACEMENT_STATES)[number]
+> = true;
+void placementStateVocabularyInSync;
 
 const SessionPlacementTimingProperties = {
   generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -214,7 +231,6 @@ export const SessionPlacementProtocolSchemas = {
   SessionsReclaimResult: SessionsReclaimResultSchema,
 } as const;
 
-export type SessionPlacementState = Static<typeof SessionPlacementStateSchema>;
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;

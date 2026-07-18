@@ -64,6 +64,8 @@ export function makeAttemptResult(
     assistantTexts: ["Hello!"],
     acceptedSessionSpawns,
     lastAssistant: undefined,
+    currentAttemptCompletedAssistant:
+      overrides.currentAttemptCompletedAssistant ?? overrides.currentAttemptAssistant,
     messagesSnapshot: [],
     replayMetadata:
       overrides.replayMetadata ??

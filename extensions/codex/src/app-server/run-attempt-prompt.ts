@@ -65,6 +65,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     appServer,
     contextSessionKey,
     effectiveWorkspace,
+    sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
   const applyFreshThreadContinuityProjection = () => {
@@ -96,6 +97,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           .filter(isNonEmptyString),
       ),
       citationsMode: params.config?.memory?.citations,
+      sandboxed: sandbox?.enabled === true,
       modelId: effectiveRuntimeModelId,
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
       providerId: effectiveRuntimeProviderId,
@@ -176,7 +178,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: promptState.developerInstructions,
-      messages: codexModelInputHistoryMessages,
+      messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       ...("beforeAgentStartResult" in params

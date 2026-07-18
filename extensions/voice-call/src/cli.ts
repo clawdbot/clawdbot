@@ -1,6 +1,5 @@
 // Voice Call plugin module implements cli behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { format } from "node:util";
 import type { Command } from "commander";
@@ -22,6 +21,7 @@ import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import { getCallHistoryFromStore } from "./manager/store.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import { resolveUserPath } from "./utils.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
@@ -230,17 +230,9 @@ function resolveMode(input: string): "off" | "serve" | "funnel" {
 }
 
 function resolveDefaultStorePath(config: VoiceCallConfig): string {
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const resolvedPreferred = resolveUserPath(preferred);
-  const existing =
-    [resolvedPreferred].find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolvedPreferred;
-  const base = config.store?.trim() ? resolveUserPath(config.store) : existing;
+  const base = config.store?.trim()
+    ? resolveUserPath(config.store)
+    : resolveDefaultVoiceCallStoreDir();
   return path.join(base, "calls.jsonl");
 }
 

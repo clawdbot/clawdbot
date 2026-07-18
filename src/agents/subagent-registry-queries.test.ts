@@ -5,6 +5,7 @@ import {
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
+  hasDescendantRunAwaitingSettleFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   isSubagentSessionRunActiveFromRuns,
   listRunsForRequesterFromRuns,
@@ -653,5 +654,112 @@ describe("subagent registry query regressions", () => {
     ]);
 
     expect(shouldIgnorePostCompletionAnnounceForSessionFromRuns(runs, childSessionKey)).toBe(false);
+  });
+});
+
+describe("hasDescendantRunAwaitingSettleFromRuns", () => {
+  const requester = "agent:main:main";
+
+  it("reports live runs and ended runs whose cleanup has not completed, but not cleaned runs", () => {
+    const now = Date.now();
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-live",
+        childSessionKey: "agent:main:subagent:live",
+        requesterSessionKey: requester,
+        createdAt: now - 60_000,
+        startedAt: now - 60_000,
+      }),
+      makeRun({
+        runId: "run-awaiting-cleanup",
+        childSessionKey: "agent:main:subagent:awaiting",
+        requesterSessionKey: requester,
+        createdAt: now - 50_000,
+        endedAt: now - 1_000,
+      }),
+      makeRun({
+        runId: "run-cleaned",
+        childSessionKey: "agent:main:subagent:cleaned",
+        requesterSessionKey: requester,
+        createdAt: now - 40_000,
+        endedAt: now - 2_000,
+        cleanupCompletedAt: now - 1_000,
+      }),
+    ]);
+
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(true);
+    expect(
+      hasDescendantRunAwaitingSettleFromRuns(
+        toRunMap([
+          makeRun({
+            runId: "run-cleaned",
+            childSessionKey: "agent:main:subagent:cleaned",
+            requesterSessionKey: requester,
+            createdAt: now - 40_000,
+            endedAt: now - 2_000,
+            cleanupCompletedAt: now - 1_000,
+          }),
+        ]),
+        requester,
+      ),
+    ).toBe(false);
+  });
+
+  it("treats a suspended final delivery as settled, unlike the pending count", () => {
+    const now = Date.now();
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-suspended",
+        childSessionKey: "agent:main:subagent:suspended",
+        requesterSessionKey: requester,
+        createdAt: now - 50_000,
+        endedAt: now - 2_000,
+        expectsCompletionMessage: true,
+        delivery: { status: "suspended", suspendedAt: now - 1_000 },
+      }),
+    ]);
+
+    expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(1);
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
+  });
+
+  it("excludes the settling run so the finalize path can check its own drain", () => {
+    const now = Date.now();
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-settling",
+        childSessionKey: "agent:main:subagent:settling",
+        requesterSessionKey: requester,
+        createdAt: now - 50_000,
+        endedAt: now - 1_000,
+      }),
+    ]);
+
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(true);
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester, "run-settling")).toBe(false);
+  });
+
+  it("keeps waiting on nested grandchildren that have not settled", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:middle";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-middle",
+        childSessionKey,
+        requesterSessionKey: requester,
+        createdAt: now - 50_000,
+        endedAt: now - 5_000,
+        cleanupCompletedAt: now - 4_000,
+      }),
+      makeRun({
+        runId: "run-grandchild",
+        childSessionKey: `${childSessionKey}:subagent:leaf`,
+        requesterSessionKey: childSessionKey,
+        createdAt: now - 30_000,
+        startedAt: now - 30_000,
+      }),
+    ]);
+
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester, "run-middle")).toBe(true);
   });
 });

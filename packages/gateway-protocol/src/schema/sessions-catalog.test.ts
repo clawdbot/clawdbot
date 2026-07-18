@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  SessionsCatalogHostEventSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
 } from "./sessions-catalog.js";
@@ -45,6 +46,15 @@ describe("SessionsCatalogListResultSchema", () => {
 });
 
 describe("SessionsCatalogListParamsSchema", () => {
+  it("accepts an optional progressive stream id without a catalog selector", () => {
+    expect(
+      Value.Check(SessionsCatalogListParamsSchema, {
+        agentId: "main",
+        progressId: "progress-1",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts an optional agent scope", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {
@@ -64,5 +74,43 @@ describe("SessionsCatalogListParamsSchema", () => {
         cursors: { "gateway:local": "1" },
       }),
     ).toBe(true);
+  });
+});
+
+describe("SessionsCatalogHostEventSchema", () => {
+  it("accepts one completed host and rejects unknown fields", () => {
+    const event = {
+      progressId: "progress-1",
+      agentId: "main",
+      catalog: {
+        id: "codex",
+        label: "Codex",
+        capabilities: { continueSession: true, archive: true },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Codex",
+            kind: "gateway",
+            connected: true,
+            sessions: [],
+          },
+        ],
+      },
+    };
+
+    expect(Value.Check(SessionsCatalogHostEventSchema, event)).toBe(true);
+    expect(Value.Check(SessionsCatalogHostEventSchema, { ...event, unexpected: true })).toBe(false);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [] },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [event.catalog.hosts[0], event.catalog.hosts[0]] },
+      }),
+    ).toBe(false);
   });
 });

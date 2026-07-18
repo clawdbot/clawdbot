@@ -14,6 +14,7 @@ import {
   resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   requiresClaudeDefaultSampling,
+  selectPreferredLocalModelId,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -89,6 +90,59 @@ describe("modelCostsEqual", () => {
     expect(modelCostsEqual(EXPECTED_COST, EXPECTED_COST)).toBe(true);
     expect(modelCostsEqual(undefined, EXPECTED_COST)).toBe(false);
     expect(modelCostsEqual({ ...EXPECTED_COST, output: 15 }, EXPECTED_COST)).toBe(false);
+  });
+});
+
+describe("selectPreferredLocalModelId", () => {
+  const familyOrder = [
+    "google/gemma-4-27b",
+    "qwen3.5:4b",
+    "qwen3:8b",
+    "gpt-oss:20b",
+    "google/gemma-3-12b",
+    "meta-llama/Llama-4-17B",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "phi-4:14b",
+    "mistral-small:24b",
+    "deepseek-r1:14b",
+  ];
+
+  it.each(familyOrder.slice(0, -1).map((id, index) => [id, familyOrder[index + 1]!] as const))(
+    "prefers %s over %s",
+    (preferred, fallback) => {
+      expect(selectPreferredLocalModelId([fallback, preferred])).toBe(preferred);
+    },
+  );
+
+  it("sinks specialist variants below general chat models", () => {
+    expect(selectPreferredLocalModelId(["nomic-embed-text", "qwen3.5-vl:7b", "custom-chat"])).toBe(
+      "custom-chat",
+    );
+    expect(selectPreferredLocalModelId(["guard-model", "vision-model"])).toBe("guard-model");
+  });
+
+  it("ranks coder variants below general instruct families", () => {
+    expect(
+      selectPreferredLocalModelId(["qwen3-coder:30b", "meta-llama/Llama-3.3-70B-Instruct"]),
+    ).toBe("meta-llama/Llama-3.3-70B-Instruct");
+  });
+
+  it("distinguishes family versions from colon-delimited size tags", () => {
+    expect(selectPreferredLocalModelId(["qwen3:5b", "qwen3.5:4b"])).toBe("qwen3.5:4b");
+    expect(selectPreferredLocalModelId(["qwen:32b", "llama3:8b"])).toBe("llama3:8b");
+    expect(selectPreferredLocalModelId(["qwen-35b", "deepseek:8b"])).toBe("deepseek:8b");
+  });
+
+  it("matches case-insensitively and preserves caller order within a family", () => {
+    expect(selectPreferredLocalModelId(["  QWEN3:4B  ", "qwen3:8b"])).toBe("QWEN3:4B");
+  });
+
+  it("falls back to the first normalized general model", () => {
+    expect(selectPreferredLocalModelId(["  custom-chat  ", "another-chat"])).toBe("custom-chat");
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(selectPreferredLocalModelId(["", "   "])).toBeUndefined();
   });
 });
 

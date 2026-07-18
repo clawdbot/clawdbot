@@ -53,38 +53,19 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != 
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}
+  # PRs want newest-head feedback. Canonical main instead runs one complete
+  # integration cycle while GitHub's single pending slot coalesces later pushes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Keep the canonical main queue quiet long enough for a follow-up push to
-  # cancel this run before it registers the Blacksmith matrix.
-  runner-admission:
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    env:
-      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
-    steps:
-      - name: Debounce canonical main pushes
-        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          echo "Waiting ${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}s for a superseding main push before Blacksmith admission"
-          sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"
-      - name: Admit non-main CI runs immediately
-        if: github.event_name != 'push' || github.repository != 'openclaw/openclaw' || github.ref != 'refs/heads/main'
-        run: echo "No canonical main debounce required"
-
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
-    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -120,6 +101,7 @@ jobs:
       run_format_check: ${{ steps.manifest.outputs.run_format_check }}
       compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
+      strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
@@ -179,7 +161,7 @@ jobs:
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
+                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -189,6 +171,25 @@ jobs:
                 return "$fetch_status"
               fi
               echo "::warning::checkout fetch for '$ref' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+
+          # Diff-base resolution needs the head's parent commits and trees
+          # (merge-head-diff-base.mjs and the name-only diffs), but not the
+          # parents' blobs. Fetching them blob-less keeps preflight several
+          # times faster than a full --depth=2 snapshot fetch.
+          fetch_parent_metadata() {
+            local sha="$1"
+            for attempt in 1 2 3; do
+              timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
+                -c protocol.version=2 \
+                fetch --no-tags --prune --no-recurse-submodules --depth=2 \
+                --filter=blob:none origin "$sha" && return 0
+              if [ "$attempt" = "3" ]; then
+                return 1
+              fi
+              echo "::warning::parent metadata fetch for '$sha' failed on attempt $attempt; retrying"
               sleep 5
             done
           }
@@ -238,6 +239,7 @@ jobs:
               exit 1
             fi
           fi
+          fetch_parent_metadata "$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Resolve checkout SHA
@@ -248,16 +250,34 @@ jobs:
         id: diff_base
         env:
           EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          RELEASE_GATE: ${{ inputs.release_gate }}
         run: |
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
+          head_sha="$(git rev-parse HEAD)"
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # A long-lived PR event can retain an old base SHA. The tested merge
             # commit's first parent is the exact target tree for this run.
             base_sha="$(node scripts/lib/merge-head-diff-base.mjs \
               --base "$base_sha" --head HEAD --prefer-first-parent)"
           fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" = "true" ]; then
+            merge_ref="refs/remotes/origin/release-gate-merge"
+            timeout --signal=TERM --kill-after=10s 120s git fetch \
+              --no-tags --no-recurse-submodules --depth=2 origin \
+              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:${merge_ref}"
+            release_gate_head="$(git rev-parse "${merge_ref}^2")"
+            target_head="$(git rev-parse HEAD)"
+            if [ "$release_gate_head" != "$target_head" ]; then
+              echo "release_gate pull request head ${release_gate_head} does not match target ${target_head}" >&2
+              exit 1
+            fi
+            base_sha="$(git rev-parse "${merge_ref}^1")"
+            head_sha="$(git rev-parse "$merge_ref")"
+          fi
           echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
       - name: Validate historical release target
         id: historical_target
@@ -319,17 +339,23 @@ jobs:
 
       - name: Detect changed scopes
         id: changed_scope
-        if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
+        if: (github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_gate)
         shell: bash
+        env:
+          OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           set -euo pipefail
 
           if [ "${{ github.event_name }}" = "push" ]; then
             BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
-          else
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD --merge-head-first-parent
+          else
+            BASE="${{ steps.diff_base.outputs.sha }}"
+            HEAD_SHA="${{ steps.diff_base.outputs.head_sha }}"
+            node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"
           fi
 
       - name: Build CI manifest
@@ -529,6 +555,12 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          // Canonical pushes also use compact bins: 80+ single-group jobs
+          // drain the runner pool for minutes, and per-shard check names on
+          // main have no branch-protection consumers. Dispatch (release
+          // validation) keeps the full named matrix.
+          const compactPlan =
+            isCanonicalRepository && (eventName === "pull_request" || eventName === "push");
           let changedNodeTestShards = null;
           if (
             compactPullRequest &&
@@ -567,14 +599,23 @@ jobs:
             runNodeFull &&
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
-          const nodeTestShards = runNodeFull
-            ? (changedNodeTestShards
-                ? changedNodeTestShards
-                : createNodeTestPlan({
-                    includeReleaseOnlyPluginShards: false,
-                    compact: compactPullRequest,
-                  })
-              ).map((shard) => ({
+          const rawNodeTestShards = runNodeFull
+            ? changedNodeTestShards
+              ? changedNodeTestShards
+              : createNodeTestPlan({
+                  includeReleaseOnlyPluginShards: false,
+                  compact: compactPlan,
+                })
+            : [];
+          const assignVitestFsCacheWriter =
+            typeof nodeTestPlan.assignVitestFsCacheWriter === "function"
+              ? nodeTestPlan.assignVitestFsCacheWriter
+              : (shards) =>
+                  shards.map((shard, index) => ({
+                    ...shard,
+                    saveVitestFsCache: index === 0,
+                  }));
+          const nodeTestShards = assignVitestFsCacheWriter(rawNodeTestShards).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -587,12 +628,12 @@ jobs:
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
+                save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
-                  shard.shardName === "core-tooling" ||
+                  shard.shardName.startsWith("core-tooling") ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
-              }))
-            : [];
+              }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
           // Targeted jobs cannot discover repository-scanning boundary tests
@@ -667,15 +708,24 @@ jobs:
             android_matrix: createMatrix(
               runAndroid
                 ? [
-                    // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
-                    { check_name: "android-test-play", task: "test-play" },
+                    // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
+                    {
+                      check_name: "android-test-play",
+                      task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                    },
                     { check_name: "android-test-third-party", task: "test-third-party" },
+                    ...(!useCompatibleAndroidCi
+                      ? [{ check_name: "android-test-wear", task: "test-wear" }]
+                      : []),
                     {
                       check_name: "android-build-play",
                       task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
                     },
                     ...(!useCompatibleAndroidCi
-                      ? [{ check_name: "android-ktlint", task: "ktlint" }]
+                      ? [
+                          { check_name: "android-build-wear", task: "build-wear" },
+                          { check_name: "android-ktlint", task: "ktlint" },
+                        ]
                       : []),
                   ]
                 : [],
@@ -700,7 +750,6 @@ jobs:
   security-fast:
     permissions:
       contents: read
-    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -929,7 +978,10 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # 32 vCPU: the dist build sits on the light-run critical path alongside
+    # check-lint/check-dependencies; tsdown parallelizes across the extra
+    # cores for roughly the same billed core-minutes.
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
@@ -948,14 +1000,23 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          node-compile-cache: "true"
+          node-compile-cache-scope: "build"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
-            ${{ runner.os }}-build-all-v3-
+            ${{ runner.os }}-build-all-v4-
 
       - name: Restore dist build cache
         id: dist_build_cache
@@ -1157,6 +1218,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check native app i18n inventory
         run: pnpm native:i18n:check
@@ -1184,6 +1250,11 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Install Playwright Chromium
         run: |
@@ -1216,9 +1287,6 @@ jobs:
     name: control-ui-i18n
     needs: [preflight]
     if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-    # Locale refresh runs separately on main and nightly. Keep drift visible on
-    # automatic runs without blocking unrelated work; release CI stays strict.
-    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
@@ -1228,8 +1296,16 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check Control UI locale parity
+        # Source-only drift stays advisory because the post-merge bot owns
+        # repair. Generated locale changes and full release CI remain strict.
+        continue-on-error: ${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}
         run: pnpm ui:i18n:check
 
   checks-fast-core:
@@ -1256,31 +1332,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          pr_head="$(
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" |
+              jq -r --arg repo "$GITHUB_REPOSITORY" --arg target "$TARGET_SHA" '
+                select(.state == "open" and .head.sha == $target and .base.repo.full_name == $repo)
+                | .head.sha
+              '
+          )"
+          if [[ "$pr_head" != "$TARGET_SHA" ]]; then
+            echo "release-gate pull request must be open and match the target head" >&2
+            exit 1
+          fi
+          # Freeze GitHub's canonical merge snapshot once it contains the exact head.
+          # Base freshness belongs to the landing gate; chasing moving main here can never converge.
           prepared=false
           for attempt in {1..6}; do
-            pr_info="$(
-              gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" |
-                jq -r --arg repo "$GITHUB_REPOSITORY" --arg target "$TARGET_SHA" '
-                  select(.state == "open" and .head.sha == $target and .base.repo.full_name == $repo)
-                  | [.base.sha, (if .mergeable == null then "unknown" else (.mergeable | tostring) end)]
-                  | @tsv
-                '
-            )"
-            if [[ -z "$pr_info" ]]; then
-              echo "release-gate pull request must be open and match the target head" >&2
-              exit 1
-            fi
-            IFS=$'\t' read -r base_sha mergeable <<<"$pr_info"
-            if [[ "$mergeable" == "false" ]]; then
-              echo "release-gate pull request is not mergeable" >&2
-              exit 1
-            fi
-            if [[ "$mergeable" == "true" ]] &&
-              git fetch --no-tags --depth=2 origin \
-                "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
+            if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
+              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
               merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
-              read -r merge_base merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
-              if [[ "$merge_base" == "$base_sha" && "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
+              read -r frozen_base_sha merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
+              if [[ "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
                 prepared=true
                 break
               fi
@@ -1290,17 +1361,22 @@ jobs:
             fi
           done
           if [[ "$prepared" != "true" ]]; then
-            echo "release-gate merge tree did not refresh to the current pull request base and head" >&2
+            echo "release-gate merge tree did not refresh to the target head" >&2
             exit 1
           fi
           git checkout --detach "$merge_sha"
-          echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_RELEASE_BASE_SHA=${frozen_base_sha}" >> "$GITHUB_ENV"
           echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -1349,11 +1425,11 @@ jobs:
                   exit 1
                 fi
                 merge_base="${merge_parents[0]}"
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "$base_sha" ]]; then
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
@@ -1374,12 +1450,12 @@ jobs:
                   echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
                   exit 1
                 fi
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               else
                 default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               fi
@@ -1430,6 +1506,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Set up Blacksmith Docker layer cache
         if: ${{ matrix.docker_cache == true && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
@@ -1601,6 +1682,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run plugin contract shard
         env:
@@ -1639,6 +1725,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run channel contract shard
         env:
@@ -1674,6 +1765,7 @@ jobs:
         with:
           node-version: "22.22.3"
           install-bun: "false"
+          build-all-cache-scope: full
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -1698,8 +1790,8 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # The canonical main path waits for the admission debounce above, so
-      # widen this large matrix within the current runner-registration budget.
+      # Canonical main admits only one complete run at a time, so widen this
+      # matrix within the current runner-registration budget.
       max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
@@ -1712,8 +1804,17 @@ jobs:
           # Blacksmith same-repo runs clone dependencies from a sticky disk.
           # Fork PRs must keep actions/cache: sticky snapshots are writable,
           # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          sticky-disk: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          runtime-cache-sticky-disk: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          vitest-fs-cache: "true"
+          node-compile-cache: "true"
+          node-compile-cache-scope: "test"
+          # One matrix job is the designated warm-seed writer; the action only
+          # honors it outside pull_request events, so PR shards always read the
+          # protected snapshot without committing competing writes.
+          save-vitest-fs-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
+          save-node-compile-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -1729,18 +1830,28 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        # Scale the in-process Vitest worker budget with the runner class. Bins
-        # run one Vitest process at a time (planConcurrency 1), so workers are
-        # the only in-job parallelism; import-bound suites scale near-linearly.
+        # Scale the in-process Vitest worker budget with the cores the job
+        # actually received: runner labels over-promise under fleet load
+        # (observed: a 16 vCPU label delivering a 4-CPU cgroup) and dispatch
+        # runs fall back to hosted runners regardless of matrix.runner.
+        # Serial-plan bins (planConcurrency 1) get the full budget; anything
+        # that can overlap Vitest processes keeps the proven 2-worker cap.
         # Timing-sensitive groups stay pinned to 2 via plan-level env.
         env:
-          SHARD_RUNNER: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+          SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
         run: |
-          if [[ "$SHARD_RUNNER" == *"-8vcpu-"* ]]; then
-            echo "OPENCLAW_VITEST_MAX_WORKERS=6" >> "$GITHUB_ENV"
+          cores="$(nproc)"
+          if [ "$SHARD_PLAN_CONCURRENCY" != "1" ]; then
+            workers=2
+          elif [ "$cores" -ge 12 ]; then
+            workers=6
+          elif [ "$cores" -ge 6 ]; then
+            workers=4
           else
-            echo "OPENCLAW_VITEST_MAX_WORKERS=3" >> "$GITHUB_ENV"
+            workers=3
           fi
+          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
+          echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Run Node test shard
         # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
@@ -1753,6 +1864,9 @@ jobs:
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
+          # Frozen targets can carry integration hooks whose cold setup exceeds
+          # the current 120-second default on shared release runners.
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=300000"]' || '[]' }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
@@ -1777,7 +1891,7 @@ jobs:
             fi
             harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
             workflow_remote="https://github.com/${job_workflow_repository}.git"
-            git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
             for file in \
               scripts/ci-run-node-test-shard.mjs \
               scripts/lib/direct-run.mjs \
@@ -1817,10 +1931,14 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: blacksmith-16vcpu-ubuntu-2404
+            # Top light-run pole (~186s of shard work); oxlint shard
+            # concurrency scales with cores at similar billed core-minutes.
+            runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            runner: blacksmith-4vcpu-ubuntu-2404
+            # Concurrent Knip scans need cores and memory headroom; the wall
+            # clock roughly halves for similar billed core-minutes.
+            runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             # Slowest static lane (~3.5min on 4 vCPU); extra cores shorten the
@@ -1832,11 +1950,63 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      # check-lint's shard runner rebuilds the same plugin-sdk boundary
+      # artifacts the boundary lane snapshots (~72s cold); restore them from
+      # the shared sticky. Strictly read-only (commit: false): only the
+      # protected boundary lane may publish this repository-global snapshot.
+      - name: Mount extension boundary sticky disk
+        if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        with:
+          # One stable disk for the whole repository. The v1 per-PR/per-config
+          # keys minted a new backing disk for every PR and toolchain change
+          # and helped saturate Blacksmith's installation-wide sticky-disk
+          # budget, 429-failing every mount. Snapshot validity lives in the
+          # in-job marker checked below instead of the key.
+          key: ${{ github.repository }}-ext-boundary-v2
+          path: /var/tmp/openclaw-ext-boundary
+          commit: "false"
+
+      - name: Restore extension boundary artifacts from sticky disk
+        if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        env:
+          # Config/toolchain inputs the tree-OID gate below cannot see; must
+          # stay identical to the boundary lane's fingerprint composition.
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+        run: |
+          set -euo pipefail
+          sticky_root=/var/tmp/openclaw-ext-boundary
+          if [ ! -f "$sticky_root/.snapshot-ready" ]; then
+            echo "boundary artifact snapshot not seeded yet; lint prepares cold"
+            exit 0
+          fi
+          # Same tree-OID gate as the boundary lane: restore only artifacts
+          # produced from identical generative sources, so stale snapshots can
+          # neither false-skip rebuilds nor leave ghost declarations.
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
+          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+            echo "boundary source trees changed since snapshot; lint prepares cold"
+            exit 0
+          fi
+          for payload in dist packages extensions; do
+            if [ -d "$sticky_root/$payload" ]; then
+              rsync -a "$sticky_root/$payload/" "$payload/"
+            fi
+          done
 
       - name: Run check shard
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
+          RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -1852,11 +2022,19 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
+              if has_package_script "check:script-declarations"; then
+                pnpm check:script-declarations
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the check:script-declarations package script." >&2
+                exit 1
+              else
+                echo "[skip] historical target predates the script declaration contract"
+              fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
@@ -1875,7 +2053,15 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint --threads=8
+              # The i18n verify covers keys extracted from every ui/ source,
+              # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
+              # i18n-tooling diff must run it. oxlint always runs.
+              if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
+                pnpm lint --threads=8
+              else
+                echo "[skip] changed scope cannot affect control-UI i18n catalogs"
+                node scripts/run-oxlint-shards.mjs --threads=8
+              fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
               fi
@@ -1883,13 +2069,45 @@ jobs:
             dependencies)
               if has_package_script "deadcode:dependencies" &&
                 has_package_script "deadcode:unused-files"; then
-                pnpm deadcode:dependencies
-                pnpm deadcode:unused-files
+                # The three deadcode scripts spawn independent Knip scans over
+                # separate configs; run them concurrently (with buffered logs
+                # so output stays readable) instead of paying ~3 minutes of
+                # serial scanning.
+                dc_scripts=(deadcode:dependencies deadcode:unused-files)
                 if has_package_script "deadcode:exports"; then
-                  pnpm deadcode:exports
+                  dc_scripts+=(deadcode:exports)
                 elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                   echo "Current CI targets must provide the deadcode:exports package script." >&2
                   exit 1
+                fi
+                if [ "$(nproc)" -lt 8 ]; then
+                  # Hosted/dispatch runners are too small for up to seven
+                  # concurrent Knip processes; keep the serial path there.
+                  for dc in "${dc_scripts[@]}"; do
+                    pnpm "$dc"
+                  done
+                else
+                  dc_pids=()
+                  dc_logs=()
+                  for dc in "${dc_scripts[@]}"; do
+                    dc_log="$(mktemp -t deadcode-log.XXXXXX)"
+                    dc_logs+=("$dc_log")
+                    pnpm "$dc" >"$dc_log" 2>&1 &
+                    dc_pids+=($!)
+                  done
+                  dc_failures=0
+                  for i in "${!dc_scripts[@]}"; do
+                    if wait "${dc_pids[$i]}"; then
+                      echo "[ok] ${dc_scripts[$i]}"
+                    else
+                      echo "::error title=${dc_scripts[$i]} failed::${dc_scripts[$i]} failed"
+                      dc_failures=1
+                    fi
+                    cat "${dc_logs[$i]}"
+                  done
+                  if [ "$dc_failures" -ne 0 ]; then
+                    exit 1
+                  fi
                 fi
               elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
@@ -1940,8 +2158,9 @@ jobs:
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
             runner: blacksmith-8vcpu-ubuntu-2404
-          # Prompt snapshot regeneration runs real embedded-agent turns (~2min)
-          # and used to own the boundaries-a wall clock; keep it in its own lane.
+          # Prompt snapshot regeneration evaluates the full agent tool/prompt
+          # import graph and used to own the boundaries-a wall clock; keep it
+          # in its own lane.
           - check_name: check-prompt-snapshots
             group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -1959,7 +2178,11 @@ jobs:
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
-            runner: blacksmith-8vcpu-ubuntu-2404
+            # Light-run critical-path pole: cold runs spend ~100s in nine
+            # parallel plugin-sdk dts builds plus ~58s compiling 122 plugins
+            # at concurrency 6 on 8 vCPUs. Both phases scale with cores at
+            # similar billed core-minutes.
+            runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1969,6 +2192,71 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
+      # the GitHub cache below is evicted so quickly under the repo quota that
+      # its prefix restore never hits, leaving every run to rebuild ~113s of
+      # plugin-sdk declarations. Fork PRs must never produce writable
+      # repository-global snapshots, so they keep the GitHub cache path.
+      - name: Mount extension boundary sticky disk
+        if: matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        with:
+          # One stable disk for the whole repository. The v1 per-PR/per-config
+          # keys minted a new backing disk for every PR and toolchain change
+          # and helped saturate Blacksmith's installation-wide sticky-disk
+          # budget, 429-failing every mount. Snapshot validity lives in the
+          # in-job marker checked below instead of the key, so source and
+          # toolchain changes refresh this disk in place.
+          key: ${{ github.repository }}-ext-boundary-v2
+          path: /var/tmp/openclaw-ext-boundary
+          # Single semantic writer: only protected pushes commit, so
+          # pull_request clones stay read-only and the snapshot tracks main.
+          # Explicit true (not on-change/if-missing) because the allocated-byte
+          # heuristic can miss a same-size refresh, permanently stranding
+          # consumers on a stale marker. v1.4.0 skips commit after
+          # failed/cancelled steps, so a broken build cannot poison this key.
+          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
+
+      - name: Restore extension boundary artifacts from sticky disk
+        id: boundary-sticky-restore
+        if: matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        env:
+          # Config/toolchain inputs the tree-OID gate below cannot see; must
+          # stay identical to the seed step and check-lint's restore gate.
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+        run: |
+          set -euo pipefail
+          sticky_root=/var/tmp/openclaw-ext-boundary
+          if [ ! -f "$sticky_root/.snapshot-ready" ]; then
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Restore only when the generative source trees AND the runner
+          # toolchain match the snapshotting run. Tree OIDs cover source
+          # content exactly; the node/pnpm versions and the config hash cover
+          # toolchain/config/scripts/lockfile changes the OIDs cannot see.
+          # Restored artifacts are valid by construction: no clock-skew mtime
+          # race can false-skip a rebuild, and deleted/renamed sources or a
+          # toolchain bump build cold.
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
+          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+            echo "boundary source trees changed since snapshot; building cold"
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for payload in dist packages extensions; do
+            if [ -d "$sticky_root/$payload" ]; then
+              rsync -a "$sticky_root/$payload/" "$payload/"
+            fi
+          done
+          echo "restored=true" >> "$GITHUB_OUTPUT"
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
@@ -2033,7 +2321,9 @@ jobs:
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
-          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
+          # Matches the boundary lane's 32 vCPU runner (cores/2); the
+          # script's default caps at 6 to protect laptops.
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
         shell: bash
         run: |
           set -euo pipefail
@@ -2124,6 +2414,33 @@ jobs:
 
           exit "$failures"
 
+      # Only the protected writer refreshes the snapshot (pull_request mounts
+      # never commit, so seeding there would burn wall clock on a discarded
+      # clone). Seed the payload before the sticky post-action flushes.
+      # rsync -aR mirrors the repo-relative layout the restore step replays.
+      - name: Seed extension boundary sticky disk
+        if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
+        shell: bash
+        env:
+          # Must stay identical to the restore gates above.
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+        run: |
+          set -euo pipefail
+          sticky_root=/var/tmp/openclaw-ext-boundary
+          # A stale marker must not survive a mid-seed failure: drop readiness
+          # first so a partial payload can never be restored as valid.
+          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions"
+          if [ -d dist/plugin-sdk ]; then
+            rsync -aR dist/plugin-sdk "$sticky_root/"
+          fi
+          if [ -d packages/plugin-sdk/dist ]; then
+            rsync -aR packages/plugin-sdk/dist "$sticky_root/"
+          fi
+          find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
+            -exec rsync -aR {} "$sticky_root/" \;
+          { git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; } > "$sticky_root/.source-trees"
+          touch "$sticky_root/.snapshot-ready"
+
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     permissions:
@@ -2138,6 +2455,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
@@ -2396,7 +2718,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-15' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-6vcpu-macos-15' || 'macos-15') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-15' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-6vcpu-macos-15' || 'macos-15') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2435,8 +2757,10 @@ jobs:
     name: "macos-swift"
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    timeout-minutes: 20
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    # Hosted runs may still be finalizing large Swift caches after every test
+    # passes; keep that post-job work non-blocking.
+    timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -2602,6 +2926,16 @@ jobs:
           fi
           swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
 
+      - name: OpenClawKit tests
+        run: |
+          set -euo pipefail
+          openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
+          trap 'rm -rf "$openclawkit_scratch"' EXIT
+          swift test \
+            --package-path apps/shared/OpenClawKit \
+            --scratch-path "$openclawkit_scratch" \
+            --parallel
+
       - name: Swift test
         run: |
           set -euo pipefail
@@ -2620,7 +2954,7 @@ jobs:
     name: "ios-build"
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -2788,6 +3122,66 @@ jobs:
         # workflow-owned as before. Load them from the workflow revision so old targets work.
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
+      # Same-repo runs carry the Gradle user home (dependency, wrapper, and
+      # build caches) on a Blacksmith sticky disk: the setup-java gradle cache
+      # above is evicted so quickly under the repo quota that it rarely
+      # restores, leaving every run to re-resolve the full dependency graph.
+      # Fork PRs and manual dispatches must never produce writable
+      # repository-global snapshots, so they keep the GitHub cache path (their
+      # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
+      - name: Mount Gradle sticky disk
+        if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        with:
+          # One stable disk per matrix task. The v1 per-PR/per-dependency-hash
+          # keys minted a new backing disk for every PR and dependency bump
+          # and helped saturate Blacksmith's installation-wide sticky-disk
+          # budget, 429-failing every mount. Task scope stays in the key: each
+          # matrix task resolves a different dependency set, and a shared key
+          # would let a light task (ktlint) pin a thin snapshot the heavy
+          # build lanes can never repair. Dependency-file changes live in the
+          # runtime fingerprint marker below instead of the key.
+          key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
+          path: /var/tmp/openclaw-gradle
+          # Single semantic writer: only protected pushes commit, so
+          # pull_request clones stay read-only and the snapshot tracks main.
+          # Explicit true (not on-change) because the allocated-byte heuristic
+          # can miss a same-size refresh and strand the fingerprint marker;
+          # v1.4.0 still skips commit after failed/cancelled steps, so a
+          # broken build cannot poison this key.
+          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
+
+      - name: Point Gradle at the sticky disk
+        if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        env:
+          # Gradle caches are content-addressed, so a stale snapshot is safe
+          # to restore (obsolete entries are simply ignored). The fingerprint
+          # only bounds disk growth: when dependency inputs change, the writer
+          # rebuilds its snapshot from scratch so retired dependency artifacts
+          # do not accumulate on the O(1) key forever.
+          GRADLE_DEPS_FINGERPRINT: ${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
+          STICKY_WRITER: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          sticky_root=/var/tmp/openclaw-gradle
+          marker="$sticky_root/.openclaw-gradle-deps-fingerprint"
+          disk_fingerprint=""
+          if [ -f "$marker" ]; then
+            disk_fingerprint="$(<"$marker")"
+          fi
+          if [ "$disk_fingerprint" != "$GRADLE_DEPS_FINGERPRINT" ]; then
+            if [ "$STICKY_WRITER" = "true" ]; then
+              echo "Gradle dependency inputs changed; rebuilding snapshot cold to drop retired artifacts"
+              rm -rf "$sticky_root/gradle-user-home"
+              printf '%s\n' "$GRADLE_DEPS_FINGERPRINT" > "$marker"
+            else
+              echo "Gradle dependency inputs changed since snapshot; content-addressed caches stay safe to reuse"
+            fi
+          fi
+          mkdir -p "$sticky_root/gradle-user-home"
+          echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
+
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         env:
@@ -2797,10 +3191,20 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test-play)
+              ./gradlew --no-daemon --build-cache \
+                :app:testPlayDebugUnitTest \
+                :wear-shared:testDebugUnitTest
+              ;;
+            test-play-compat)
+              # Frozen targets predate the Wear shared project. Keep their app-owned
+              # Play unit tests without importing current Android modules.
               ./gradlew --no-daemon --build-cache :app:testPlayDebugUnitTest
               ;;
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
+              ;;
+            test-wear)
+              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
               ;;
             build-play)
               ./gradlew --no-daemon --build-cache \
@@ -2808,7 +3212,14 @@ jobs:
                 :app:assembleThirdPartyDebug \
                 :app:lintPlayDebug \
                 :app:lintThirdPartyDebug \
-                :benchmark:assembleDebug
+                :benchmark:assembleDebug \
+                :wear-shared:assembleDebug \
+                :wear-shared:lintDebug
+              ;;
+            build-wear)
+              ./gradlew --no-daemon --build-cache \
+                :wear:assembleDebug \
+                :wear:lintDebug
               ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
@@ -2817,7 +3228,11 @@ jobs:
               ;;
             ktlint)
               # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
-              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
+              ./gradlew --no-daemon --build-cache \
+                :app:ktlintCheck \
+                :benchmark:ktlintCheck \
+                :wear:ktlintCheck \
+                :wear-shared:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2
@@ -2830,7 +3245,6 @@ jobs:
       contents: read
     name: openclaw/ci-gate
     needs:
-      - runner-admission
       - preflight
       - security-fast
       - pnpm-store-warmup
@@ -2861,7 +3275,6 @@ jobs:
         shell: bash
         env:
           REQUIRED_RESULTS: |
-            runner-admission=${{ needs.runner-admission.result }}
             preflight=${{ needs.preflight.result }}
             security-fast=${{ needs.security-fast.result }}
           SELECTED_RESULTS: |

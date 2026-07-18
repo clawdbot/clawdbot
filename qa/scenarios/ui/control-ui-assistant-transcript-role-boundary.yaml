@@ -27,6 +27,7 @@ scenario:
     - ui/src/pages/chat/components/chat-message.ts
   execution:
     kind: flow
+    providerMode: mock-openai
     suiteIsolation: isolated
     isolationReason: The flow appends assistant fixtures to one dedicated session before opening a fresh Control UI transcript.
     summary: Drive one assistant reply through Gateway and qa-channel, append parser anti-cheat fixtures, then verify role-aware rendering in a real Control UI browser.

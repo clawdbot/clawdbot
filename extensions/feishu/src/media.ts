@@ -11,6 +11,7 @@ import {
   runFfprobe,
 } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import type { ReplyPayloadTtsSupplement } from "openclaw/plugin-sdk/reply-payload";
 import { readRegularFile, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -711,10 +712,18 @@ export function shouldSuppressFeishuTextForVoiceMedia(params: {
   fileName?: string;
   contentType?: string;
   audioAsVoice?: boolean;
+  ttsSupplement?: ReplyPayloadTtsSupplement;
 }): boolean {
+  // TTS metadata owns visibility; voice-bubble inference must not hide text
+  // that has not been delivered yet.
+  if (params.ttsSupplement) {
+    return params.ttsSupplement.visibleTextAlreadyDelivered === true;
+  }
+
   if (params.audioAsVoice === true) {
     return true;
   }
+
   if (
     params.fileName &&
     isFeishuNativeVoiceAudio({

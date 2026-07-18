@@ -120,10 +120,6 @@ export function getRecordChannelActivityMock(): AnyMockFn {
   return channelActivityMocks.recordChannelActivity;
 }
 
-export function failNextWhatsAppPluginStateRegisterIfAbsent(error: Error) {
-  pluginRuntimeMocks.failNextRegisterIfAbsent(error);
-}
-
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/channel-activity-runtime")

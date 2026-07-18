@@ -77,7 +77,29 @@ export {
   mapAllowFromEntries,
 } from "./channel-config-helpers.js";
 export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
-export * from "./channel-config-schema.js";
+// Freeze the shipped compat config-schema surface so new focused primitives do
+// not silently become deprecated root exports.
+export {
+  AllowFromListSchema,
+  BlockStreamingCoalesceSchema,
+  buildCatchallMultiAccountChannelSchema,
+  buildChannelConfigSchema,
+  buildGroupEntrySchema,
+  buildJsonChannelConfigSchema,
+  buildMultiAccountChannelSchema,
+  buildNestedDmConfigSchema,
+  ChannelGroupEntrySchema,
+  ContextVisibilityModeSchema,
+  DmConfigSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
+  MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
+  ReplyRuntimeConfigSchemaShape,
+  requireAllowlistAllowFrom,
+  requireOpenAllowFrom,
+  ToolPolicySchema,
+} from "./channel-config-schema.js";
 export * from "./channel-policy.js";
 export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.js";
 export * from "./reply-history.js";

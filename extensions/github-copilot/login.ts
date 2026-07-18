@@ -25,6 +25,8 @@ import {
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
+const GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS = 5_000;
+const GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS = 5_000;
 // Data-residency GitHub Enterprise support: the device flow, token exchange, and
 // completions endpoints all live under the tenant host (e.g. "acme.ghe.com")
 // instead of github.com. The host is threaded in from the selected auth flow so
@@ -55,6 +57,7 @@ type DeviceTokenResponse =
       error: string;
       error_description?: string;
       error_uri?: string;
+      interval?: unknown;
     };
 
 const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
@@ -100,7 +103,10 @@ function parseDeviceCodeResponse(
   issuedAt: number,
 ): DeviceCodeResponse {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
-  const intervalMs = nonNegativeSecondsToSafeMilliseconds(value.interval);
+  const intervalMs =
+    value.interval === undefined
+      ? GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS
+      : nonNegativeSecondsToSafeMilliseconds(value.interval);
   const expiresAt =
     expiresInMs === undefined
       ? undefined
@@ -199,7 +205,13 @@ async function pollForAccessToken(params: {
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
   });
 
+  let intervalMs = params.intervalMs;
   while (Date.now() < params.expiresAt) {
+    await sleepGitHubDevicePollDelay(intervalMs, params.expiresAt, params.signal);
+    if (Date.now() >= params.expiresAt) {
+      break;
+    }
+
     const json = (await postGitHubDeviceFlowForm({
       url: accessTokenUrl(params.domain),
       body: bodyBase,
@@ -207,17 +219,21 @@ async function pollForAccessToken(params: {
       domain: params.domain,
       ...(params.signal ? { signal: params.signal } : {}),
     })) as DeviceTokenResponse;
-    if ("access_token" in json && typeof json.access_token === "string") {
-      return json.access_token;
+    if ("access_token" in json) {
+      if (typeof json.access_token === "string") {
+        return json.access_token;
+      }
+      throw new Error("GitHub device flow returned an invalid access token");
     }
 
-    const err = "error" in json ? json.error : "unknown";
+    const err = json.error;
     if (err === "authorization_pending") {
-      await sleepGitHubDevicePollDelay(params.intervalMs, params.expiresAt, params.signal);
       continue;
     }
     if (err === "slow_down") {
-      await sleepGitHubDevicePollDelay(params.intervalMs + 2000, params.expiresAt, params.signal);
+      intervalMs =
+        positiveSecondsToSafeMilliseconds(json.interval) ??
+        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS);
       continue;
     }
     if (err === "expired_token") {

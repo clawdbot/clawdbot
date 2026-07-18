@@ -19,7 +19,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
 }));
 
-const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
+const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
 const MAIN_SESSION_KEY = "agent:main:main";
 const ANTHROPIC_SONNET_MODEL = "anthropic/claude-sonnet-4-6";
@@ -176,7 +176,7 @@ async function applySubagentModelPatch(cfg: OpenClawConfig) {
       },
       loadGatewayModelCatalog: async () => [
         { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
-        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.7-Code", name: "kimi" },
       ],
     }),
   );
@@ -1379,7 +1379,7 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
   });
 
   test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
@@ -1388,7 +1388,7 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
   });
 
   test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {

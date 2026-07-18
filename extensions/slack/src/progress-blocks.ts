@@ -132,9 +132,23 @@ function slugTaskIdPart(value: string | undefined): string {
   return normalized || "task";
 }
 
-function stableTaskIdPart(value: string): string {
+function stableTaskIdPart(value: string, slugValue = value): string {
   const suffix = createHash("sha256").update(value).digest("hex").slice(0, 8);
-  return `${slugTaskIdPart(value)}_${suffix}`;
+  return `${slugTaskIdPart(slugValue).slice(0, 48)}_${suffix}`;
+}
+
+function resolveLineTaskIdentity(line: ChannelProgressDraftLine): {
+  id: string;
+  contentDerived: boolean;
+} {
+  if (line.id?.trim()) {
+    return { id: stableTaskIdPart(line.id), contentDerived: false };
+  }
+  const contentKey = [line.kind, line.toolName, line.label, line.text].join("\0");
+  return {
+    id: stableTaskIdPart(contentKey, line.toolName ?? line.kind ?? line.label),
+    contentDerived: true,
+  };
 }
 
 function buildPlanTasks(params: {
@@ -157,13 +171,25 @@ function buildPlanTasks(params: {
     params.maxLineChars,
     DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS,
   );
-  return params.lines.slice(-SLACK_MAX_BLOCKS).map((line, index) => ({
-    id: line.id
-      ? stableTaskIdPart(line.id)
-      : `${slugTaskIdPart(line.toolName ?? line.kind ?? line.label)}_${index + 1}`,
-    title: lineTaskTitle(line, maxLineChars),
-    status: lineTaskStatus(line),
-  }));
+  const lines = params.lines.slice(-SLACK_MAX_BLOCKS);
+  const identities = lines.map(resolveLineTaskIdentity);
+  const contentIdOccurrences = new Map<string, number>();
+  return lines.map((line, index) => {
+    const identity = identities[index]!;
+    let id = identity.id;
+    if (identity.contentDerived) {
+      // Suffix every occurrence (singletons stay `_1`): identity must not
+      // re-key when a duplicate line enters or leaves the rolling window.
+      const occurrence = (contentIdOccurrences.get(id) ?? 0) + 1;
+      contentIdOccurrences.set(id, occurrence);
+      id = `${id}_${occurrence}`;
+    }
+    return {
+      id,
+      title: lineTaskTitle(line, maxLineChars),
+      status: lineTaskStatus(line),
+    };
+  });
 }
 
 function resolvePlanTitle(params: {
@@ -194,7 +220,8 @@ function buildSlackProgressStreamChunks(params: {
     maxLineChars: params.maxLineChars,
   });
   if (tasks.length === 0) {
-    return undefined;
+    const title = params.title?.trim() || params.label?.trim();
+    return title ? [{ type: "plan_update", title: compactChunkText(title) }] : undefined;
   }
   const title = resolvePlanTitle({ label: params.label, title: params.title, tasks });
   const chunks: AnyChunk[] = [

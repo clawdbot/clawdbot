@@ -5,7 +5,10 @@ import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { shouldIncludeUpdatePlanToolForOpenClawTools } from "./openclaw-tools.registration.js";
+import {
+  shouldIncludeAskUserToolForOpenClawTools,
+  shouldIncludeUpdatePlanToolForOpenClawTools,
+} from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
 type UpdatePlanGatingParams = Parameters<typeof shouldIncludeUpdatePlanToolForOpenClawTools>[0];
@@ -82,7 +85,45 @@ describe("openclaw-tools update_plan gating", () => {
     };
 
     expect(defaultTools).toContain("update_plan");
+    expect(defaultTools).not.toContain("ask_user");
     expect(shouldIncludeUpdatePlanToolForOpenClawTools(emptyAllowlistParams)).toBe(true);
+  });
+
+  it("keeps ask_user on primary sessions and excludes spawned worker sessions", () => {
+    expect(shouldIncludeAskUserToolForOpenClawTools({})).toBe(false);
+    expect(shouldIncludeAskUserToolForOpenClawTools({ agentSessionKey: "agent:main:main" })).toBe(
+      true,
+    );
+    expect(
+      shouldIncludeAskUserToolForOpenClawTools({
+        agentSessionKey: "agent:main:subagent:worker",
+      }),
+    ).toBe(false);
+    expect(
+      shouldIncludeAskUserToolForOpenClawTools({ agentSessionKey: "agent:main:acp:worker" }),
+    ).toBe(false);
+    // ask_user must not depend on the TUI embedded-host flag; normal gateway
+    // runs are the primary consumer.
+    expect(
+      createFastToolNames({
+        config: {} as OpenClawConfig,
+        runSessionKey: "agent:main:non-embedded",
+      }),
+    ).toContain("ask_user");
+    setEmbeddedMode(true);
+
+    expect(
+      createFastToolNames({
+        config: {} as OpenClawConfig,
+        agentSessionKey: "agent:main:subagent:worker",
+      }),
+    ).not.toContain("ask_user");
+    expect(
+      createFastToolNames({
+        config: {} as OpenClawConfig,
+        runSessionKey: "agent:main:run",
+      }),
+    ).toContain("ask_user");
   });
 
   it("wraps constructed tools with before-tool-call hooks by default", () => {

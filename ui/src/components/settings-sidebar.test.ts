@@ -18,6 +18,34 @@ afterEach(() => {
 });
 
 describe("settings sidebar search", () => {
+  it("links Ask OpenClaw to the shared custodian route", () => {
+    const onNavigate = vi.fn();
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "config",
+        connected: true,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "",
+        onExit: vi.fn(),
+        onNavigate,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+      }),
+      container,
+    );
+
+    const link = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__item[href="/custodian"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Ask OpenClaw");
+    link?.click();
+    expect(onNavigate).toHaveBeenCalledWith("custodian");
+  });
+
   it("does not match the middle of a word for a short query", () => {
     render(
       renderSettingsSidebar({
@@ -191,14 +219,17 @@ describe("settings sidebar search", () => {
     const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input");
     expect(input?.getAttribute("aria-label")).toBe("Search settings");
     expect(input?.placeholder).toBe("Search settings…");
-    expect(allLabels).toContain("Activity");
-    expect(allLabels.indexOf("Activity")).toBe(allLabels.indexOf("Logs") + 1);
+    // Management surfaces moved back to the workspace sidebar.
+    expect(allLabels).not.toContain("Activity");
+    expect(allLabels).not.toContain("Sessions");
+    expect(allLabels).toContain("Privacy & Security");
+    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Logs") + 1);
 
     enterQuery("  ThEmE  ");
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Connection", "Channels", "Communications"]);
+    expect(labels()).toEqual(["Connection", "Channels", "Communications", "Devices"]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);

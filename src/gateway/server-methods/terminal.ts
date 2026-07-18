@@ -20,7 +20,6 @@ import {
   validateTerminalTextParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { toErrorObject } from "../../infra/errors.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
@@ -28,6 +27,11 @@ import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { renderTerminalBufferText } from "../terminal/buffer-text.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
+import {
+  createTerminalOpenDeadline,
+  TerminalOpenDeadlineError,
+  waitForTerminalOpenDeadline,
+} from "../terminal/open-deadline.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
   authorizeCatalogTerminalNode,
@@ -54,86 +58,7 @@ function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): bool
   return context.isTerminalEnabled();
 }
 
-export const TERMINAL_OPEN_DEADLINE_MS = 30_000;
-
-class TerminalOpenDeadlineError extends Error {
-  constructor() {
-    super("terminal open timed out");
-    this.name = "TerminalOpenDeadlineError";
-  }
-}
-
-type TerminalOpenDeadline = {
-  expiresAtMs: number;
-  controller: AbortController;
-};
-
-function createTerminalOpenDeadline(): TerminalOpenDeadline {
-  return {
-    expiresAtMs: Date.now() + TERMINAL_OPEN_DEADLINE_MS,
-    controller: new AbortController(),
-  };
-}
-
-function expireTerminalOpenDeadline(deadline: TerminalOpenDeadline): Error {
-  if (!deadline.controller.signal.aborted) {
-    deadline.controller.abort(new TerminalOpenDeadlineError());
-  }
-  return toErrorObject(deadline.controller.signal.reason, "Terminal open timed out");
-}
-
-async function waitForTerminalOpenDeadline<T>(
-  run: () => Promise<T>,
-  deadline: TerminalOpenDeadline,
-): Promise<T> {
-  if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-    throw expireTerminalOpenDeadline(deadline);
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(expireTerminalOpenDeadline(deadline));
-    };
-    const timer = setTimeout(
-      () => expireTerminalOpenDeadline(deadline),
-      Math.max(0, deadline.expiresAtMs - Date.now()),
-    );
-    deadline.controller.signal.addEventListener("abort", onAbort, { once: true });
-    let promise: Promise<T>;
-    try {
-      promise = run();
-    } catch (error) {
-      if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-        expireTerminalOpenDeadline(deadline);
-        return;
-      }
-      clearTimeout(timer);
-      deadline.controller.signal.removeEventListener("abort", onAbort);
-      reject(toErrorObject(error, "Terminal open failed"));
-      return;
-    }
-    void promise.then(
-      (value) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(error, "Terminal open failed"));
-      },
-    );
-  });
-}
+export { TERMINAL_OPEN_DEADLINE_MS } from "../terminal/open-deadline.js";
 
 function respondTerminalOpenTimeout(respond: GatewayRequestHandlerOptions["respond"]): void {
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal open timed out"));
@@ -381,7 +306,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
     try {
       outcome = await waitForTerminalOpenDeadline(() => {
         openingTerminal = manager.open({
-          connId,
+          owner: { kind: "conn", connId },
           agentId: spawnPlan.agentId,
           cwd: spawnPlan.cwd,
           shell: spawnPlan.shell,
@@ -571,6 +496,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
             // Mirrors terminal.open: only unconfined host shells exist today.
             confined: false,
             attached: session.attached,
+            owner: session.owner,
             createdAtMs: session.createdAtMs,
           }))
         : [];

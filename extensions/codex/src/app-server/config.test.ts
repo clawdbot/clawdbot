@@ -126,6 +126,7 @@ describe("Codex app-server config", () => {
           codeModeOnly: true,
           loopDetectionPreToolUseRelay: false,
           turnCompletionIdleTimeoutMs: 120_000,
+          turnAssistantCompletionIdleTimeoutMs: 30_000,
           postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
       },
@@ -144,6 +145,7 @@ describe("Codex app-server config", () => {
       codeModeOnly: true,
       loopDetectionPreToolUseRelay: false,
       turnCompletionIdleTimeoutMs: 120_000,
+      turnAssistantCompletionIdleTimeoutMs: 30_000,
       postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
     expectFields(runtime.start, "runtime start", {
@@ -155,6 +157,10 @@ describe("Codex app-server config", () => {
 
   it("keeps the Codex loop-detection PreToolUse relay enabled by default", () => {
     expect(resolveRuntimeForTest().loopDetectionPreToolUseRelay).toBe(true);
+  });
+
+  it("keeps the existing assistant completion idle timeout by default", () => {
+    expect(resolveRuntimeForTest().turnAssistantCompletionIdleTimeoutMs).toBe(10_000);
   });
 
   it("builds Codex permissions-profile config for app-server network proxy", () => {
@@ -256,6 +262,7 @@ describe("Codex app-server config", () => {
         appServer: {
           requestTimeoutMs: Number.MAX_SAFE_INTEGER,
           turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          turnAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
           postToolRawAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
         },
       },
@@ -264,6 +271,7 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       turnCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      turnAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       postToolRawAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
   });
@@ -274,6 +282,7 @@ describe("Codex app-server config", () => {
         appServer: {
           requestTimeoutMs: 0,
           turnCompletionIdleTimeoutMs: -1,
+          turnAssistantCompletionIdleTimeoutMs: 0,
         },
       },
     });
@@ -281,6 +290,7 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
+      turnAssistantCompletionIdleTimeoutMs: 10_000,
     });
   });
 

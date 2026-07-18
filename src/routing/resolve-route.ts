@@ -31,11 +31,12 @@ export type RoutePeer = {
   id: string;
 };
 
-type ResolveAgentRouteInput = {
+export type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
@@ -622,7 +623,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
-  const dmScope = input.cfg.session?.dmScope ?? "main";
+  const dmScope = input.dmScope ?? input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer

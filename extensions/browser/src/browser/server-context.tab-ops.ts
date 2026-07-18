@@ -1,6 +1,7 @@
 /**
  * Browser tab listing, opening, labeling, and alias management for one profile.
  */
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
@@ -319,9 +320,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             { ...opts, label: normalizedLabel },
           );
         }
-        await new Promise((r) => {
-          setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS);
-        });
+        await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
       }
       opts?.signal?.throwIfAborted();
       // Preserve the explicit target-id result for callers, but do not adopt an

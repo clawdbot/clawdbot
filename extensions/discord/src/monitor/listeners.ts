@@ -7,6 +7,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
+  type DiscordMessageDispatchData,
   GuildCreateListener,
   GuildDeleteListener,
   InteractionCreateListener,
@@ -37,11 +38,12 @@ import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
-export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+type DiscordRawMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+export type DiscordMessageEvent = DiscordMessageDispatchData;
 type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
 
 export type DiscordMessageHandler = (
-  data: DiscordMessageEvent,
+  data: DiscordRawMessageEvent,
   client: Client,
   options?: { abortSignal?: AbortSignal },
 ) => Promise<void>;
@@ -63,16 +65,16 @@ export class DiscordMessageListener extends MessageCreateListener {
     super();
   }
 
-  async handle(data: DiscordMessageEvent, client: Client) {
+  async handle(data: DiscordRawMessageEvent, client: Client) {
     this.onEvent?.();
-    // Fire-and-forget: hand off to the handler without blocking gateway dispatch.
-    // Per-session ordering is owned by the message run queue.
-    void Promise.resolve()
-      .then(() => this.handler(data, client))
-      .catch((err: unknown) => {
-        const logger = this.logger ?? discordEventQueueLog;
-        logger.error(danger(`discord handler failed: ${String(err)}`));
-      });
+    // This awaits only the durable append. Agent dispatch remains detached behind
+    // the ingress drain, so later gateway events never wait for a model turn.
+    try {
+      await this.handler(data, client);
+    } catch (err) {
+      const logger = this.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord handler failed: ${String(err)}`));
+    }
   }
 }
 

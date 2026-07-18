@@ -14,31 +14,53 @@ import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
 
+type PostAgentRunAction = "continue" | "settled" | "handoff";
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
   // =========================================================================
   // Prompting
   // =========================================================================
 
   private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+    let endedForTurnHandoff = false;
     try {
       await this.agent.prompt(messages);
-      while (await this.handlePostAgentRun()) {
+      while (true) {
+        const action = await this.handlePostAgentRun();
+        if (action !== "continue") {
+          endedForTurnHandoff = action === "handoff";
+          break;
+        }
         await this.agent.continue();
       }
     } finally {
+      this.systemPromptOverride = undefined;
       this.flushPendingBashMessages();
+      // Consume handoff state before callbacks can start a nested run and set it again.
+      endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
+      this.lastRunEndedForTurnHandoff = false;
+      // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
+      if (!endedForTurnHandoff) {
+        await this.currentExtensionRunner.emit({ type: "agent_settled" });
+      }
     }
   }
 
-  private async handlePostAgentRun(): Promise<boolean> {
+  private async handlePostAgentRun(): Promise<PostAgentRunAction> {
     const msg = this.lastAssistantMessage;
     this.lastAssistantMessage = undefined;
+    const endedForTurnHandoff = this.lastRunEndedForTurnHandoff;
+    this.lastRunEndedForTurnHandoff = false;
+    if (endedForTurnHandoff) {
+      // External delivery owns the next run after a deliberate turn handoff.
+      return "handoff";
+    }
     if (!msg) {
-      return false;
+      return "settled";
     }
 
     if (this.isRetryableError(msg) && (await this.prepareRetry(msg))) {
-      return true;
+      return "continue";
     }
 
     if (msg.stopReason === "error" && this.retryCount > 0) {
@@ -51,7 +73,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       this.retryCount = 0;
     }
 
-    return await this.checkCompaction(msg);
+    if (await this.checkCompaction(msg)) {
+      return "continue";
+    }
+
+    // Messages queued by agent_end handlers arrive after the loop's final queue drain.
+    return this.agent.hasQueuedMessages() ? "continue" : "settled";
   }
 
   private createUserContent(
@@ -149,17 +176,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
       }
 
-      // Check if we need to compact before sending (catches aborted responses)
+      // Check if we need to compact before sending (catches aborted responses).
+      // The pending user prompt below starts the next run; no intermediate continuation is needed.
       const lastAssistant = this.findLastAssistantMessage();
-      if (lastAssistant && (await this.checkCompaction(lastAssistant, false))) {
-        try {
-          await this.agent.continue();
-          while (await this.handlePostAgentRun()) {
-            await this.agent.continue();
-          }
-        } finally {
-          this.flushPendingBashMessages();
-        }
+      if (lastAssistant) {
+        await this.checkCompaction(lastAssistant, false);
       }
 
       // Build messages array (custom message if any, then user message)
@@ -199,10 +220,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         }
       }
       // Apply extension-modified system prompt, or reset to base
-      if (result?.systemPrompt) {
+      if (result?.systemPrompt !== undefined) {
+        this.systemPromptOverride = result.systemPrompt;
         this.agent.state.systemPrompt = result.systemPrompt;
       } else {
         // Ensure we're using the base prompt (in case previous turn had modifications)
+        this.systemPromptOverride = undefined;
         this.agent.state.systemPrompt = this.baseSystemPrompt;
       }
     } catch (error) {

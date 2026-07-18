@@ -6,6 +6,7 @@ import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
+  chunkByParagraph,
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
@@ -228,6 +229,37 @@ describe("chunkText", () => {
   runChunkCases(chunkText, [
     expectDefined(parentheticalCases[0], "parentheticalCases[0] test invariant"),
   ]);
+});
+
+describe("chunkByParagraph Unicode line/paragraph separators", () => {
+  it.each([
+    {
+      name: "treats lone U+2029 as a standalone paragraph boundary",
+      text: "paragraph one\u2029paragraph two starts here",
+      normalized: "paragraph one\n\nparagraph two starts here",
+      limit: 39,
+      expected: ["paragraph one", "paragraph two starts here"],
+    },
+    {
+      name: "treats lone U+2028 as a line break within one paragraph",
+      text: "paragraph one line\u2028still same paragraph",
+      normalized: "paragraph one line\nstill same paragraph",
+      limit: 50,
+      expected: ["paragraph one line\nstill same paragraph"],
+    },
+    {
+      name: "treats consecutive U+2028 and U+2029 as a paragraph boundary",
+      text: "paragraph one line\u2028\u2029paragraph two starts here",
+      normalized: "paragraph one line\n\nparagraph two starts here",
+      limit: 40,
+      expected: ["paragraph one line", "paragraph two starts here"],
+    },
+  ] as const)("$name", ({ text, normalized, limit, expected }) => {
+    const chunks = chunkByParagraph(text, limit);
+
+    expect(chunks).toEqual(expected);
+    expect(chunks).toEqual(chunkByParagraph(normalized, limit));
+  });
 });
 
 describe("resolveTextChunkLimit", () => {

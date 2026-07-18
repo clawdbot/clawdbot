@@ -20,11 +20,11 @@ import {
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.js";
 import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
-  writeTelegramSpooledUpdate,
-} from "./telegram-ingress-spool.js";
+} from "./telegram-ingress-spool.test-support.js";
 
 const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 
@@ -60,6 +60,13 @@ const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
 const WEBHOOK_DRAIN_GUARD_MS = 5;
 const TELEGRAM_WEBHOOK_RATE_LIMIT_BURST = WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests + 10;
+
+async function waitForWebhookState<T>(
+  assertion: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+): Promise<T> {
+  return await vi.waitFor(assertion, { interval: 1, ...options });
+}
 
 async function yieldWebhookTask(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -238,6 +245,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   clearTelegramRuntime();
   closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
@@ -528,7 +536,7 @@ async function runNearLimitPayloadTestAndExpectUpdate(
       });
 
       expect(response.statusCode).toBe(200);
-      await vi.waitFor(() => expectSingleNearLimitUpdate({ seenUpdates, expected }));
+      await waitForWebhookState(() => expectSingleNearLimitUpdate({ seenUpdates, expected }));
     },
   );
 }
@@ -646,7 +654,7 @@ describe("startTelegramWebhook", () => {
         expect(health.status).toBe(200);
         expect(stopSpy).not.toHaveBeenCalled();
         expectMockMessageContains(runtimeError, "telegram setWebhook failed: fetch failed");
-        await vi.waitFor(() => expect(setWebhookSpy).toHaveBeenCalledTimes(2));
+        await waitForWebhookState(() => expect(setWebhookSpy).toHaveBeenCalledTimes(2));
         expect(runtimeLog).toHaveBeenCalledWith("telegram setWebhook retry 1 scheduled in 0ms");
         expectMockMessageContains(runtimeLog, "webhook advertised to telegram on http://");
         expect(setStatus).toHaveBeenCalledWith({
@@ -704,7 +712,7 @@ describe("startTelegramWebhook", () => {
     });
 
     try {
-      await vi.waitFor(() => {
+      await waitForWebhookState(() => {
         expect(started.server.listening).toBe(false);
         expect(stopSpy).toHaveBeenCalledTimes(1);
         expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
@@ -862,11 +870,11 @@ describe("startTelegramWebhook", () => {
         expect(response.status).toBe(200);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
         expect(await response.text()).toBe("");
-        await vi.waitFor(() => expect(workStarted).toBe(true));
+        await waitForWebhookState(() => expect(workStarted).toBe(true));
         expect(workFinished).toBe(false);
 
         finishWork?.();
-        await vi.waitFor(() => expect(workFinished).toBe(true));
+        await waitForWebhookState(() => expect(workFinished).toBe(true));
       },
     );
   });
@@ -960,8 +968,8 @@ describe("startTelegramWebhook", () => {
 
           expect(response.status).toBe(200);
           expect(await response.text()).toBe("");
-          await vi.waitFor(() => expect(seenUpdates).toEqual([JSON.parse(payload)]));
-          await vi.waitFor(async () =>
+          await waitForWebhookState(() => expect(seenUpdates).toEqual([JSON.parse(payload)]));
+          await waitForWebhookState(async () =>
             expect(
               (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).length,
             ).toBe(1),
@@ -972,10 +980,10 @@ describe("startTelegramWebhook", () => {
           );
           vi.setSystemTime(Date.now() + 1_100);
           await vi.advanceTimersByTimeAsync(500);
-          await vi.waitFor(() =>
+          await waitForWebhookState(() =>
             expect(seenUpdates).toEqual([JSON.parse(payload), JSON.parse(payload)]),
           );
-          await vi.waitFor(async () =>
+          await waitForWebhookState(async () =>
             expect(
               await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() }),
             ).toEqual([]),
@@ -1021,13 +1029,13 @@ describe("startTelegramWebhook", () => {
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       });
       try {
-        await vi.waitFor(() => expect(seenUpdateIds).toEqual([40]));
+        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40]));
         await vi.advanceTimersByTimeAsync(25 * 60_000 + 10_000);
         await yieldWebhookTask();
         expect(seenUpdateIds).toEqual([40]);
 
         finishFirstUpdate?.();
-        await vi.waitFor(() => expect(seenUpdateIds).toEqual([40, 41]));
+        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 41]));
       } finally {
         await started.stop();
       }
@@ -1061,7 +1069,7 @@ describe("startTelegramWebhook", () => {
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       });
       try {
-        await vi.waitFor(() => expect(participant).toBeDefined());
+        await waitForWebhookState(() => expect(participant).toBeDefined());
         await vi.advanceTimersByTimeAsync(25 * 60_000 + 10_000);
         await yieldWebhookTask();
 
@@ -1074,7 +1082,7 @@ describe("startTelegramWebhook", () => {
 
         settlementHold?.release("discard-pending");
         participant?.settle({ kind: "completed" });
-        await vi.waitFor(async () =>
+        await waitForWebhookState(async () =>
           expect(
             await listTelegramSpooledUpdateClaims({ spoolDir: requireWebhookSpoolDir() }),
           ).toEqual([]),
@@ -1102,8 +1110,8 @@ describe("startTelegramWebhook", () => {
         path: TELEGRAM_WEBHOOK_PATH,
       },
       async () => {
-        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledWith(update));
-        await vi.waitFor(async () =>
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledWith(update));
+        await waitForWebhookState(async () =>
           expect(await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).toEqual(
             [],
           ),
@@ -1177,7 +1185,7 @@ describe("startTelegramWebhook", () => {
     try {
       await completionRetryStarted;
       const claimNextCallsBeforeLaterDrain = claimNextCalls;
-      await vi.waitFor(
+      await waitForWebhookState(
         () => {
           expect(claimNextCalls).toBeGreaterThan(claimNextCallsBeforeLaterDrain);
         },
@@ -1196,8 +1204,8 @@ describe("startTelegramWebhook", () => {
       ).toEqual([51]);
 
       releaseCompletion?.();
-      await vi.waitFor(() => expect(seenUpdateIds).toEqual([50, 51]));
-      await vi.waitFor(async () =>
+      await waitForWebhookState(() => expect(seenUpdateIds).toEqual([50, 51]));
+      await waitForWebhookState(async () =>
         expect(
           await listTelegramSpooledUpdateClaims({ spoolDir: requireWebhookSpoolDir() }),
         ).toEqual([]),
@@ -1216,6 +1224,7 @@ describe("startTelegramWebhook", () => {
   });
 
   it("stops claimed completion retries when the webhook stops", async () => {
+    vi.useFakeTimers();
     let completeAttempts = 0;
     setTelegramRuntime({
       state: {
@@ -1248,13 +1257,16 @@ describe("startTelegramWebhook", () => {
       runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
     });
 
-    await vi.waitFor(() =>
-      expect(mockMessages(runtimeLog).join("\n")).toContain("completion retry 1 scheduled"),
+    await waitForWebhookState(() =>
+      expect(mockMessages(runtimeLog).join("\n")).toMatch(
+        /completion retry 1 scheduled|tombstone retry 1\//,
+      ),
     );
     await started.stop();
     const attemptsAfterStop = completeAttempts;
-    await sleep(400);
+    await vi.advanceTimersByTimeAsync(400);
 
+    // Stop must abort in-flight tombstone retries (composed webhookAbortSignal).
     expect(completeAttempts).toBe(attemptsAfterStop);
   });
 
@@ -1280,9 +1292,9 @@ describe("startTelegramWebhook", () => {
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
       });
       try {
-        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalled());
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalled());
         await vi.advanceTimersByTimeAsync(130_000);
-        await vi.waitFor(async () =>
+        await waitForWebhookState(async () =>
           expect(
             (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).map(
               (spooled) => spooled.updateId,
@@ -1320,9 +1332,9 @@ describe("startTelegramWebhook", () => {
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
       });
       try {
-        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalled());
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalled());
         await vi.advanceTimersByTimeAsync(130_000);
-        await vi.waitFor(async () =>
+        await waitForWebhookState(async () =>
           expect(await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).toEqual(
             [],
           ),
@@ -1421,7 +1433,7 @@ describe("startTelegramWebhook", () => {
         expect(validResponse.status).toBe(200);
         expect(validResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
         expect(await validResponse.text()).toBe("");
-        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
       },
     );
   });
@@ -1442,7 +1454,7 @@ describe("startTelegramWebhook", () => {
           });
           expect(response.status).toBe(200);
         }
-        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalled());
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalled());
       },
     );
   });
@@ -1495,7 +1507,7 @@ describe("startTelegramWebhook", () => {
         );
 
         expect(isolatedClient.status).toBe(200);
-        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
       },
     );
   });
@@ -1543,7 +1555,7 @@ describe("startTelegramWebhook", () => {
       });
 
       expect(secondResponse.status).toBe(200);
-      await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
+      await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
     } finally {
       await first.stop();
       await second.stop();
@@ -1605,7 +1617,7 @@ describe("startTelegramWebhook", () => {
         });
         expect(res.status).toBe(200);
         expect(await res.text()).toBe("");
-        await vi.waitFor(() => expect(seenUpdate).toEqual(JSON.parse(payload)));
+        await waitForWebhookState(() => expect(seenUpdate).toEqual(JSON.parse(payload)));
       },
     );
   });
@@ -1638,7 +1650,7 @@ describe("startTelegramWebhook", () => {
           expect(res.status).toBe(200);
         }
 
-        await vi.waitFor(() =>
+        await waitForWebhookState(() =>
           expect(seenPayloads.map((x) => JSON.parse(x))).toEqual(
             payloads.map((x) => JSON.parse(x)),
           ),
@@ -1681,7 +1693,7 @@ describe("startTelegramWebhook", () => {
 
         expect(firstResponse.statusCode).toBe(200);
         expect(secondResponse.statusCode).toBe(200);
-        await vi.waitFor(() =>
+        await waitForWebhookState(() =>
           expect(seenUpdates).toEqual([JSON.parse(firstPayload), JSON.parse(secondPayload)]),
         );
       },

@@ -51,7 +51,7 @@ export function startModelSetupFirstRunRedirect(params: {
         cacheModelSetupDetection(client, result);
         if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
           redirected = true;
-          params.context.replace("model-setup");
+          params.context.replace("model-setup", { search: "?firstRun=1" });
         }
       })
       .catch(() => {

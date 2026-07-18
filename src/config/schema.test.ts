@@ -664,6 +664,13 @@ describe("config schema", () => {
     ).toBe(true);
   });
 
+  it("accepts only the Discord subagent progress enable toggle", () => {
+    expect(DiscordConfigSchema.safeParse({ subagentProgress: true }).success).toBe(true);
+    expect(DiscordConfigSchema.safeParse({ subagentProgress: { enabled: true } }).success).toBe(
+      false,
+    );
+  });
+
   it("keeps per-agent model overrides limited to model selection", () => {
     const result = OpenClawSchema.safeParse({
       agents: {

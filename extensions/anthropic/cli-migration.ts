@@ -189,6 +189,9 @@ function buildClaudeCliAuthProfiles(
       },
     ];
   }
+  if (credential.type === "api_key_helper") {
+    return [];
+  }
   return [
     {
       profileId: CLAUDE_CLI_PROFILE_ID,

@@ -680,6 +680,98 @@ describe("channelsAddCommand", () => {
     });
   });
 
+  it("prepares setup input before validation, config writes, and post-write hooks", async () => {
+    const callOrder: string[] = [];
+    const beforePersistentEffect = vi.fn(async () => {
+      callOrder.push("authority");
+    });
+    const prepareAccountConfigInput = vi.fn(async ({ input }) => {
+      callOrder.push("prepare");
+      return {
+        ...input,
+        token: "test-token",
+        workspace: "prepared-workspace",
+      };
+    });
+    const validateInput = vi.fn(({ input }) => {
+      callOrder.push("validate");
+      return input.token === "test-token" ? null : "input was not prepared";
+    });
+    const applyAccountConfig = vi.fn(({ cfg, input }) => {
+      callOrder.push("apply");
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          "prepared-chat": {
+            enabled: true,
+            token: input.token,
+            workspace: input.workspace,
+          },
+        },
+      };
+    });
+    const afterAccountConfigWritten = vi.fn(({ input }) => {
+      callOrder.push("after");
+      expect(input).toMatchObject({
+        token: "test-token",
+        workspace: "prepared-workspace",
+      });
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "prepared-chat",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "prepared-chat",
+              label: "Prepared Chat",
+            }),
+            setup: {
+              prepareAccountConfigInput,
+              validateInput,
+              applyAccountConfig,
+              afterAccountConfigWritten,
+            },
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "prepared-chat",
+        account: "work",
+        code: "setup-code",
+      },
+      runtime,
+      { hasFlags: true, beforePersistentEffect },
+    );
+
+    expect(callOrder).toEqual([
+      "authority",
+      "prepare",
+      "validate",
+      "apply",
+      "authority",
+      "authority",
+      "after",
+    ]);
+    expect(prepareAccountConfigInput).toHaveBeenCalledWith({
+      cfg: baseConfigSnapshot.config,
+      accountId: "work",
+      input: { code: "setup-code" },
+      runtime,
+    });
+    expect(writtenChannel("prepared-chat")).toEqual({
+      enabled: true,
+      token: "test-token",
+      workspace: "prepared-workspace",
+    });
+  });
+
   it("loads external channel setup snapshots for newly installed and existing plugins", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());

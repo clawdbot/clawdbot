@@ -68,6 +68,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
@@ -290,6 +291,38 @@ export type BundledChannelConfigCollector = (params: {
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;
 }) => Record<string, PluginManifestChannelConfig> | undefined;
+
+function rejectCaseFoldedIdCollisions(
+  records: readonly PluginManifestRecord[],
+  diagnostics: PluginDiagnostic[],
+): PluginManifestRecord[] {
+  const recordsByPolicyId = new Map<string, PluginManifestRecord[]>();
+  for (const record of records) {
+    const policyId = normalizePluginPolicyId(record.id);
+    const matches = recordsByPolicyId.get(policyId) ?? [];
+    matches.push(record);
+    recordsByPolicyId.set(policyId, matches);
+  }
+
+  const rejected = new Set<PluginManifestRecord>();
+  for (const [policyId, matches] of recordsByPolicyId) {
+    const declaredIds = [...new Set(matches.map((record) => record.id))].toSorted();
+    if (declaredIds.length < 2) {
+      continue;
+    }
+    const message = `plugin ids ${declaredIds.map((id) => JSON.stringify(id)).join(", ")} collide as normalized id ${JSON.stringify(policyId)}; refusing all colliding plugins`;
+    for (const record of matches) {
+      rejected.add(record);
+      diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message,
+      });
+    }
+  }
+  return records.filter((record) => !rejected.has(record));
+}
 
 function safeStatMtimeMs(filePath: string): number | null {
   try {
@@ -859,8 +892,12 @@ function isTrustedOfficialPluginInstall(params: {
           record: installRecord,
         })
       : undefined;
+  // Local npm-pack archives also persist source="npm". Only registry installs
+  // may inherit catalog trust; local artifacts and source links stay untrusted.
   if (
     installRecord.source === "npm" &&
+    installRecord.artifactKind === undefined &&
+    installRecord.sourcePath === undefined &&
     officialInstall?.npmSpec === packageName &&
     [
       installRecord.resolvedName,
@@ -1217,7 +1254,8 @@ export function loadPluginManifestRegistry(
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
-  const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
+  const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
+  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

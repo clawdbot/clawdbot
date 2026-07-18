@@ -4,8 +4,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
+import {
+  beginConversationDeliveryOperation,
+  getConversationDeliveryOperation,
+  markConversationDeliveryRejected,
+  markConversationDeliverySuppressed,
+} from "../../config/sessions/conversation-delivery-store.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { buildConversationRef } from "../../routing/conversation-ref.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   OutboundDeliveryError,
@@ -14,10 +24,11 @@ import {
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
   enqueueDelivery,
+  enqueueDeliveryOnce,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   recoverPendingDeliveries,
@@ -34,10 +45,12 @@ import {
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const MAX_RETRIES = 5;
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
@@ -68,11 +81,18 @@ describe("delivery-queue recovery", () => {
 
   beforeEach(() => {
     resolveOutboundChannelMessageAdapterMock.mockReset();
+    sleepMock.mockReset();
+    sleepMock.mockResolvedValue(undefined);
   });
 
   const enqueueCrashRecoveryEntries = async () => {
     await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        preparedMessageId: "prepared-message-a",
+      },
       tmpDir(),
     );
     await enqueueDelivery(
@@ -120,6 +140,10 @@ describe("delivery-queue recovery", () => {
       undefined,
       true,
     ]);
+    expect(deliver.mock.calls.map(([params]) => params.preparedMessageId)).toEqual([
+      "prepared-message-a",
+      undefined,
+    ]);
     expect(result).toEqual({
       recovered: 2,
       failed: 0,
@@ -128,6 +152,200 @@ describe("delivery-queue recovery", () => {
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it("finalizes a persisted conversation operation during queue recovery", async () => {
+    const storePath = path.join(tmpDir(), "agent-sessions.json");
+    const scope = { agentId: "main", storePath };
+    const conversationRef = buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    });
+    await upsertSessionEntry(
+      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+      {
+        sessionId: "reef-session",
+        updatedAt: 100,
+        chatType: "direct",
+        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+        origin: {
+          provider: "reef",
+          accountId: "default",
+          nativeDirectUserId: "peer-agent",
+        },
+      },
+    );
+    beginConversationDeliveryOperation(scope, {
+      operationId: "operation-recovery",
+      operationKind: "send",
+      conversationRef,
+      message: "hello",
+      preparedMessageId: "reef-prepared",
+    });
+    await enqueueDeliveryOnce(
+      {
+        channel: "reef",
+        to: "reef:peer-agent",
+        queuePolicy: "required",
+        payloads: [{ text: "hello" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-recovery",
+          storePath,
+        },
+      },
+      "operation-recovery",
+      tmpDir(),
+    );
+    const deliveryResult = { channel: "reef" as const, messageId: "reef-platform" };
+    const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
+      await params.onDeliveryResult?.(deliveryResult);
+      return [deliveryResult];
+    });
+
+    try {
+      const { result } = await runRecovery({ deliver });
+
+      expect(result.recovered).toBe(1);
+      expect(getConversationDeliveryOperation(scope, "operation-recovery")).toMatchObject({
+        status: "sent",
+        queueId: "operation-recovery",
+        platformMessageId: "reef-platform",
+      });
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
+  it("acks a persisted suppressed conversation operation without replaying it", async () => {
+    const storePath = path.join(tmpDir(), "agent-sessions.json");
+    const scope = { agentId: "main", storePath };
+    const conversationRef = buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    });
+    await upsertSessionEntry(
+      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+      {
+        sessionId: "reef-session",
+        updatedAt: 100,
+        chatType: "direct",
+        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+        origin: {
+          provider: "reef",
+          accountId: "default",
+          nativeDirectUserId: "peer-agent",
+        },
+      },
+    );
+    beginConversationDeliveryOperation(scope, {
+      operationId: "operation-suppressed",
+      operationKind: "send",
+      conversationRef,
+      message: "hello",
+      preparedMessageId: "reef-prepared",
+    });
+    await enqueueDeliveryOnce(
+      {
+        channel: "reef",
+        to: "reef:peer-agent",
+        queuePolicy: "required",
+        payloads: [{ text: "hello" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-suppressed",
+          storePath,
+        },
+      },
+      "operation-suppressed",
+      tmpDir(),
+    );
+    markConversationDeliverySuppressed(scope, "operation-suppressed");
+    const deliver = vi.fn();
+
+    try {
+      const { result } = await runRecovery({ deliver });
+
+      expect(result.recovered).toBe(1);
+      expect(deliver).not.toHaveBeenCalled();
+      expect(getConversationDeliveryOperation(scope, "operation-suppressed")?.status).toBe(
+        "suppressed",
+      );
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
+  it("acks a persisted rejected conversation operation without replaying it", async () => {
+    const storePath = path.join(tmpDir(), "agent-sessions.json");
+    const scope = { agentId: "main", storePath };
+    const conversationRef = buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    });
+    await upsertSessionEntry(
+      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+      {
+        sessionId: "reef-session",
+        updatedAt: 100,
+        chatType: "direct",
+        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+        origin: {
+          provider: "reef",
+          accountId: "default",
+          nativeDirectUserId: "peer-agent",
+        },
+      },
+    );
+    beginConversationDeliveryOperation(scope, {
+      operationId: "operation-rejected",
+      operationKind: "send",
+      conversationRef,
+      message: "hello",
+      preparedMessageId: "reef-prepared",
+    });
+    await enqueueDeliveryOnce(
+      {
+        channel: "reef",
+        to: "reef:peer-agent",
+        queuePolicy: "required",
+        payloads: [{ text: "hello" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-rejected",
+          storePath,
+        },
+      },
+      "operation-rejected",
+      tmpDir(),
+    );
+    markConversationDeliveryRejected(scope, "operation-rejected", "atomic message limit");
+    const deliver = vi.fn();
+
+    try {
+      const { result } = await runRecovery({ deliver });
+
+      expect(result.failed).toBe(1);
+      expect(deliver).not.toHaveBeenCalled();
+      expect(getConversationDeliveryOperation(scope, "operation-rejected")).toMatchObject({
+        status: "rejected",
+        rejectionError: "atomic message limit",
+      });
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
   });
 
   it("permanently rejects provider-blocked rows before backoff or reconciliation", async () => {
@@ -199,28 +417,19 @@ describe("delivery-queue recovery", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       await enqueueCrashRecoveryEntries();
-      let firstDelivered!: () => void;
-      const firstDeliveredPromise = new Promise<void>((resolve) => {
-        firstDelivered = resolve;
-      });
       const deliveryTimes: number[] = [];
       const deliver = vi.fn(async () => {
         deliveryTimes.push(Date.now());
-        if (deliveryTimes.length === 1) {
-          firstDelivered();
-        }
         return [];
       });
 
       const recovery = runRecovery({ deliver, maxRecoveryMs: 60_000 });
-      await firstDeliveredPromise;
-      expect(deliver).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+      await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
       expect(deliver).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1);
+      controlledSleep.release();
       const { result } = await recovery;
 
       expect(deliver).toHaveBeenCalledTimes(2);
@@ -236,28 +445,23 @@ describe("delivery-queue recovery", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       await enqueueCrashRecoveryEntries();
       await enqueueDelivery(
         { channel: "demo-channel-c", to: "#c", payloads: [{ text: "c" }] },
         tmpDir(),
       );
-      let firstDelivered!: () => void;
-      const firstDeliveredPromise = new Promise<void>((resolve) => {
-        firstDelivered = resolve;
-      });
       const deliveryTimes: number[] = [];
       const deliver = vi.fn(async () => {
         deliveryTimes.push(Date.now());
-        if (deliveryTimes.length === 1) {
-          firstDelivered();
-        }
         return [];
       });
 
       const recovery = runRecovery({ deliver, maxRecoveryMs: 1 });
-      await firstDeliveredPromise;
 
-      await vi.advanceTimersByTimeAsync(1);
+      await expect(controlledSleep.started).resolves.toBe(1);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      controlledSleep.release();
       const { result } = await recovery;
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -294,6 +498,97 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it("honors a producer-specific retry budget", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        maxRetries: 45,
+      },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 10_000_000,
+    });
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
+  });
+
+  it("dead-letters an atomically exhausted attempt budget before replay", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        maxRetries: 1,
+      },
+      tmpDir(),
+    );
+    await reserveDeliveryAttempt(id, 1, tmpDir());
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.skippedMaxRetries).toBe(1);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+  });
+
+  it("ignores an invalid producer retry budget", async () => {
+    await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        maxRetries: 0.5,
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+  });
+
+  it("dead-letters max-retry entries even when conversation owner state is missing", async () => {
+    const storePath = path.join(tmpDir(), "missing-owner-sessions.json");
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "missing-operation",
+          storePath,
+        },
+      },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, { retryCount: MAX_RETRIES });
+    const log = createRecoveryLog();
+
+    try {
+      const { result } = await runRecovery({ deliver: vi.fn(), log });
+
+      expect(result.skippedMaxRetries).toBe(1);
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+      expectMockMessageContaining(log.warn, "owner state could not be marked unknown");
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
   it("audits max-retry deadletters as unknown when platform send may have started", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
@@ -303,6 +598,7 @@ describe("delivery-queue recovery", () => {
     );
     setQueuedEntryState(tmpDir(), id, {
       retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 10_000_000,
       platformSendStartedAt: Date.now(),
       recoveryState: "send_attempt_started",
     });
@@ -310,7 +606,7 @@ describe("delivery-queue recovery", () => {
     const { result } = await runRecovery({ deliver: vi.fn() });
     unsubscribe();
 
-    expect(result.skippedMaxRetries).toBe(1);
+    expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
     expect(auditEvents).toHaveLength(1);
     expect(auditEvents[0]).toMatchObject({
       sourceId: `message:outbound:queue:${id}:payload:0`,
@@ -337,6 +633,7 @@ describe("delivery-queue recovery", () => {
     const entries = await loadPendingDeliveries(tmpDir());
     expect(entries).toHaveLength(1);
     expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.attemptCount).toBe(1);
     expect(entries[0]?.lastError).toBe("network down");
     expect(auditEvents).toEqual([]);
   });
@@ -774,9 +1071,11 @@ describe("delivery-queue recovery", () => {
         replyToId: "root-message",
         threadId: "thread-1",
         silent: true,
+        maxRetries: 1,
       },
       tmpDir(),
     );
+    await reserveDeliveryAttempt(id, 1, tmpDir());
     await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
       replyToId: "hooked-root-message",
     });
@@ -938,6 +1237,45 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastError).toContain("provider lookup timed out");
   });
 
+  it("dead-letters an exhausted unknown send after retryable reconciliation fails", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "unknown final attempt" }],
+        maxRetries: 1,
+      },
+      tmpDir(),
+    );
+    await reserveDeliveryAttempt(id, 1, tmpDir());
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      lastAttemptAt: Date.now() - 10_000_000,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "unresolved",
+      error: "provider lookup timed out",
+      retryable: true,
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+  });
+
   it("does not reconcile unknown-after-send entries unless the adapter declares the capability", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "hidden method" }] },
@@ -983,6 +1321,25 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
     expectMockMessageContaining(log.warn, "permanent error");
+  });
+
+  it("moves typed permanent platform rejections to failed without retry backoff", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel", to: "user:abc", payloads: [{ text: "hi" }] },
+      tmpDir(),
+    );
+    const deliver = vi.fn().mockRejectedValue(
+      new PlatformMessageNotDispatchedError("atomic message limit", {
+        cause: new Error("rendered text is too large"),
+        retryable: false,
+      }),
+    );
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ failed: 1, recovered: 0 });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
   });
 
   it("treats Matrix 'User not in room' as a permanent error", async () => {
@@ -1467,8 +1824,14 @@ describe("delivery-queue recovery", () => {
         gatewayClientScopes: ["operator.write"],
         mirror: {
           sessionKey: "agent:main:main",
+          expectedSessionId: "session-main",
           text: "a",
           mediaUrls: ["https://example.com/a.png"],
+          idempotencyKey: "channel-final:message-1",
+          deliveryMirror: {
+            kind: "channel-final",
+            sourceMessageId: "message-1",
+          },
         },
         session: {
           key: "agent:main:main",
@@ -1511,8 +1874,14 @@ describe("delivery-queue recovery", () => {
     expect(deliverInput.gatewayClientScopes).toEqual(["operator.write"]);
     expect(deliverInput.mirror).toEqual({
       sessionKey: "agent:main:main",
+      expectedSessionId: "session-main",
       text: "a",
       mediaUrls: ["https://example.com/a.png"],
+      idempotencyKey: "channel-final:message-1",
+      deliveryMirror: {
+        kind: "channel-final",
+        sourceMessageId: "message-1",
+      },
     });
     expect(deliverInput.session).toEqual({
       key: "agent:main:main",

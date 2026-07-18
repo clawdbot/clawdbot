@@ -67,7 +67,12 @@ describe("OpClient", () => {
         "--cache=false",
       ],
       {
-        env: { OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth, HOME: root },
+        env: {
+          OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth,
+          HOME: root,
+          OP_LOAD_DESKTOP_APP_SETTINGS: "false",
+          OP_BIOMETRIC_UNLOCK_ENABLED: "false",
+        },
         timeoutMs: 1234,
         maxBufferBytes: 1024 * 1024,
       },

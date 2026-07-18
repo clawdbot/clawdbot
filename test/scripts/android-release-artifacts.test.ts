@@ -159,7 +159,7 @@ describe("Android release artifacts", () => {
     const result = run(["--artifact", "debug", "--dry-run"]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("--artifact must be one of: all, play, third-party");
+    expect(result.stderr).toContain("--artifact must be one of: all, play, wear, third-party");
   });
 
   it("accepts the pinned standalone APK signing certificate", () => {

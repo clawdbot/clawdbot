@@ -21,8 +21,8 @@ type CapturedDispatchParams = {
       payload: CapturedReplyPayload,
       info: { kind: "tool" | "block" | "final" },
     ) => Promise<unknown>;
-    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
-    onSettled?: () => Promise<unknown>;
+    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void> | void;
+    onSettled?: () => unknown;
   };
   replyOptions?: {
     disableBlockStreaming?: boolean;
@@ -121,7 +121,7 @@ vi.mock("./runtime-api.js", async () => {
 
 import {
   buildWhatsAppInboundContext,
-  dispatchWhatsAppBufferedReply,
+  createWhatsAppReplyPlan,
   resolveWhatsAppDmRouteTarget,
   resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
@@ -275,7 +275,7 @@ function expectRememberSentContextFields(
   expectRecordFields(requireRecord(call?.[1], "remember sent context"), fields);
 }
 
-type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
+type BufferedReplyParams = Parameters<typeof createWhatsAppReplyPlan>[0];
 type BufferedReplyOverrides = Partial<Omit<BufferedReplyParams, "context">> & {
   context?: Partial<BufferedReplyParams["context"]>;
 };
@@ -336,11 +336,27 @@ async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
     shouldClearGroupHistory: false,
   };
 
-  return dispatchWhatsAppBufferedReply({
+  return runWhatsAppReplyPlan({
     ...params,
     ...overrides,
     context: finalizedContext({ ...params.context, ...overrides.context }),
   });
+}
+
+async function runWhatsAppReplyPlan(params: BufferedReplyParams): Promise<boolean> {
+  const plan = createWhatsAppReplyPlan(params);
+  const dispatchResult = await dispatchReplyWithBufferedBlockDispatcherMock({
+    ctx: params.context,
+    dispatcherOptions: {
+      ...plan.dispatcherOptions,
+      deliver: plan.delivery.deliver as NonNullable<
+        NonNullable<CapturedDispatchParams["dispatcherOptions"]>["deliver"]
+      >,
+      onError: plan.delivery.onError,
+    },
+    replyOptions: plan.replyOptions,
+  });
+  return plan.finalize(dispatchResult);
 }
 
 describe("whatsapp inbound dispatch", () => {
@@ -1400,7 +1416,7 @@ describe("whatsapp inbound dispatch", () => {
     );
 
     await expect(
-      dispatchWhatsAppBufferedReply({
+      runWhatsAppReplyPlan({
         cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
         connectionId: "conn",
         context: finalizedContext({ Body: "hi" }),
@@ -1469,7 +1485,7 @@ describe("whatsapp inbound dispatch", () => {
       replyLogger,
     });
 
-    getCapturedOnError()?.(error, { kind: "final" });
+    await getCapturedOnError()?.(error, { kind: "final" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       {
@@ -1519,7 +1535,7 @@ describe("whatsapp inbound dispatch", () => {
       replyLogger,
     });
 
-    getCapturedOnError()?.(error, { kind: "final" });
+    await getCapturedOnError()?.(error, { kind: "final" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1558,7 +1574,7 @@ describe("whatsapp inbound dispatch", () => {
       replyLogger,
     });
 
-    getCapturedOnError()?.("plain string rejection", { kind: "block" });
+    await getCapturedOnError()?.("plain string rejection", { kind: "block" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1596,7 +1612,7 @@ describe("whatsapp inbound dispatch", () => {
       attempt: 2,
     };
 
-    getCapturedOnError()?.(objectRejection, { kind: "tool" });
+    await getCapturedOnError()?.(objectRejection, { kind: "tool" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({

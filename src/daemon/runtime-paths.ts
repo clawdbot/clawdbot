@@ -75,11 +75,13 @@ function buildSystemNodeCandidates(
 type ExecFileAsync = (
   file: string,
   args: readonly string[],
-  options: { encoding: "utf8" },
+  options: { encoding: "utf8"; timeoutMs: number },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-const execFileAsync: ExecFileAsync = async (file, args) =>
-  await runExec(file, [...args], { logOutput: false });
+const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
+
+const execFileAsync: ExecFileAsync = async (file, args, options) =>
+  await runExec(file, [...args], { logOutput: false, timeoutMs: options.timeoutMs });
 
 const NODE_RUNTIME_PROBE = String.raw`
 let sqliteVersion = null;
@@ -108,6 +110,7 @@ async function resolveNodeRuntimeInfo(
   try {
     const { stdout } = await execFileImpl(nodePath, ["-e", NODE_RUNTIME_PROBE], {
       encoding: "utf8",
+      timeoutMs: NODE_RUNTIME_PROBE_TIMEOUT_MS,
     });
     const parsed = JSON.parse(stdout) as {
       nodeVersion?: unknown;

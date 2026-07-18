@@ -2011,6 +2011,13 @@ describe("createCliJsonlStreamingParser", () => {
       cacheWrite: undefined,
       total: undefined,
     });
+    expect(output?.diagnosticUsage).toEqual({
+      input: 30,
+      output: 15,
+      cacheRead: 300,
+      cacheWrite: undefined,
+      total: undefined,
+    });
   });
 
   it("surfaces Claude tool_use start and result events", () => {

@@ -92,6 +92,7 @@ export function renderWhereSelect(params: {
   syncFolder: string;
   worktree: boolean;
   worktreeAvailable: boolean;
+  cloudDisabledReason?: string;
   customFolder: boolean;
   branches: DraftBranches | null;
   branchesLoading: boolean;
@@ -194,7 +195,8 @@ export function renderWhereSelect(params: {
               profiles: params.cloudProfiles,
               selectedId: params.cloudProfileId,
               submitting: params.submitting,
-              disabled: !params.worktreeAvailable,
+              disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
+              disabledReason: params.cloudDisabledReason,
               onSelect: params.onSelectCloudProfile,
             })}
             ${params.cloudProfileId && !activeProfile

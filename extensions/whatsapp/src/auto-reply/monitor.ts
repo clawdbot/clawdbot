@@ -28,7 +28,6 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { WHATSAPP_INBOUND_DEDUPE_TTL_MS } from "../inbound/dedupe.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
   attachWebInboxToSocket,
@@ -150,6 +149,7 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
 }
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
+const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -226,7 +226,7 @@ export async function monitorWebChannel(
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
   const reconnectCatchUpWindowMs = Math.min(
     Math.max(messageTimeoutMs, 60_000),
-    WHATSAPP_INBOUND_DEDUPE_TTL_MS,
+    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
   );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({

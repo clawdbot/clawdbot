@@ -1,3 +1,4 @@
+import { listAgentIds } from "../agents/agent-scope.js";
 import type {
   DoctorSessionSqliteIssue,
   DoctorSessionSqliteReport,
@@ -27,6 +28,7 @@ type SessionSqliteStartupFailureReportWriter = (
 ) => { jsonPath: string; markdownPath: string };
 
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
+  reconcileSessionTranscriptIndexes?: typeof import("../config/sessions/session-transcript-reconcile.js").reconcileSessionTranscriptIndexes;
   restoreSessionSqliteMigrationRun?: SessionSqliteStartupRestoreRunner;
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
   writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
@@ -54,6 +56,32 @@ export async function runStartupSessionMigration(params: {
 }): Promise<void> {
   await runSessionStartupMigration(params);
   await runStartupSessionSqliteImport(params);
+  await reconcileStartupSessionTranscriptIndexes(params);
+}
+
+async function reconcileStartupSessionTranscriptIndexes(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  log: SessionStartupMigrationLogger;
+  deps?: SessionMigrationDeps;
+}): Promise<void> {
+  const reconcile =
+    params.deps?.reconcileSessionTranscriptIndexes ??
+    (await import("../config/sessions/session-transcript-reconcile.js"))
+      .reconcileSessionTranscriptIndexes;
+  let reconciledSessions = 0;
+  for (const agentId of listAgentIds(params.cfg)) {
+    const result = await reconcile({
+      agentId,
+      ...(params.env ? { env: params.env } : {}),
+    });
+    reconciledSessions += result.reconciledSessions;
+  }
+  if (reconciledSessions > 0) {
+    params.log.info(
+      `session: rebuilt ${reconciledSessions} transcript projection(s) before serving history`,
+    );
+  }
 }
 
 async function runStartupSessionSqliteImport(params: {

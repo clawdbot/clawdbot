@@ -332,6 +332,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           model: launchOptions.model,
           sessionKey: normalizeOptionalString(params.sessionKey),
           voice: launchOptions.voice,
+          language: normalizeOptionalLowercaseString(params.language),
           forceAgentConsultOnFinalTranscript:
             realtimeConfig.consultRouting === "force-agent-consult",
         });

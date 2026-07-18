@@ -4,6 +4,7 @@ import {
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
+  resolveInboundSupplementalSenderAllowed,
   resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
@@ -22,6 +23,7 @@ export {
 export {
   createDirectDmPreCryptoGuardPolicy,
   createPreCryptoDirectDmAuthorizer,
+  dispatchInboundDirectDm,
   dispatchInboundDirectDmWithRuntime,
   resolveInboundDirectDmAccessWithRuntime,
   type AccessGroupMembershipResolver,
@@ -31,6 +33,7 @@ export {
   type ResolvedInboundDirectDmAccess,
 } from "../channels/direct-dm.js";
 export {
+  formatAgentEnvelope,
   formatInboundEnvelope,
   formatInboundFromLabel,
   resolveEnvelopeFormatOptions,
@@ -93,11 +96,23 @@ export {
 } from "../channels/inbound-event/classification.js";
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
+  createChannelInboundEnvelopeBuilder,
+  resolveChannelInboundRouteEnvelope,
+  type ChannelInboundEnvelopeInput,
+} from "../channels/inbound-event/envelope.js";
+export {
+  DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS,
+  recordChannelFeedbackEvent,
+  runChannelFeedbackReflection,
+  type ChannelFeedbackReflectionResult,
+} from "../channels/feedback-reflection.js";
+export {
   buildChannelInboundEventContext,
   // @deprecated Prefer `buildChannelInboundEventContext`.
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
+  resolveInboundSupplementalSenderAllowed,
   // @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`.
   resolveChannelInboundSupplementalContext,
 };
@@ -165,6 +180,7 @@ export const filterChannelTurnSupplementalContext = filterChannelInboundSuppleme
 export {
   runChannelInboundEvent,
   runPreparedInboundReply,
+  dispatchChannelInboundTurn,
   dispatchChannelInboundReply,
   recordDroppedChannelInboundHistory,
   dispatchReplyFromConfigWithSettledDispatcher,
@@ -177,6 +193,7 @@ export type {
   AssembledInboundReply,
   ChannelBotLoopProtectionFacts,
   ChannelInboundEventRunnerParams,
+  ChannelInboundTurnPlan,
   ChannelInboundDroppedHistoryOptions,
   PreparedInboundReply,
   InboundReplyDispatchResult,

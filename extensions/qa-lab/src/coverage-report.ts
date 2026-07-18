@@ -323,12 +323,12 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   lines.push(`- Categories: ${report.categoryCount}`);
   lines.push(`- Profiles: ${report.profileCount}`);
   lines.push(
-    `- Fulfilled taxonomy categories: ${report.fulfilledCategoryCount}/${report.requiredCategoryCount} (${report.categoryFulfillmentPercent}%)`,
+    `- Inventoried taxonomy categories: ${report.inventoriedCategoryCount}/${report.requiredCategoryCount} (${report.categoryInventoryPercent}%)`,
   );
   lines.push(
-    `- Fulfilled taxonomy coverage IDs: ${report.fulfilledCoverageIdCount}/${report.requiredCoverageIdCount} (${report.coverageIdFulfillmentPercent}%)`,
+    `- Inventoried taxonomy coverage IDs: ${report.inventoriedCoverageIdCount}/${report.requiredCoverageIdCount} (${report.coverageIdInventoryPercent}%)`,
   );
-  lines.push(`- Evidence refs: ${report.evidenceRefCount}`);
+  lines.push(`- Inventory refs: ${report.inventoryRefCount}`);
   lines.push(`- Scenario coverage IDs: ${report.scenarioCoverageIdCount}`);
   lines.push(`- Unknown scenario coverage IDs: ${report.unknownCoverageIdCount}`);
   lines.push(`- Validation warnings: ${report.validationIssueCount}`, "");
@@ -343,13 +343,13 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   }
 
   if (report.categories.length > 0) {
-    lines.push("### Category Coverage", "");
+    lines.push("### Category Inventory", "");
     for (const category of report.categories) {
       const coverageIds =
         category.coverageIds.length > 0 ? category.coverageIds.join(", ") : "none";
-      const evidence =
-        category.evidence.length > 0
-          ? category.evidence
+      const inventoryRefs =
+        category.inventoryRefs.length > 0
+          ? category.inventoryRefs
               .map((ref) => {
                 const target = ref.path ?? (ref.scenarioRefs.join("|") || "discovered");
                 return `${ref.role}:${ref.kind}:${target} (${ref.coverageId})`;
@@ -358,7 +358,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
           : "none";
       const profiles = category.profiles.length > 0 ? category.profiles.join(", ") : "none";
       lines.push(
-        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.coverageStatus}): profiles: ${profiles}; coverage IDs: ${coverageIds}; evidence: ${evidence}`,
+        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.inventoryStatus}): profiles: ${profiles}; coverage IDs: ${coverageIds}; inventory refs: ${inventoryRefs}`,
       );
     }
     lines.push("");

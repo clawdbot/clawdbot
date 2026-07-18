@@ -231,4 +231,6 @@ class DebugPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-debug-page", DebugPage);
+if (!customElements.get("openclaw-debug-page")) {
+  customElements.define("openclaw-debug-page", DebugPage);
+}

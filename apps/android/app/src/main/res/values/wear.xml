@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@array/android_wear_capabilities">
+    <string name="native_android_wear_capability" translatable="false">openclaw_phone_proxy_v1</string>
+    <string-array name="android_wear_capabilities" translatable="false">
+        <item tools:ignore="Typos">@string/native_android_wear_capability</item>
+    </string-array>
+</resources>

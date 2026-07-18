@@ -75,7 +75,10 @@ jobs:
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+        # PR builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
+        # pubkey makes the bundler hard-require it. Skip updater artifacts here;
+        # linux-app-release.yml builds the signed updater bundles.
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload bundles
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

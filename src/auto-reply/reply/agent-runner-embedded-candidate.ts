@@ -204,7 +204,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
-        trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        trigger: turn.hookTrigger ?? (turn.isHeartbeat ? "heartbeat" : "user"),
         groupId: resolveGroupSessionKey(turn.sessionCtx)?.id,
         groupChannel:
           normalizeOptionalString(turn.sessionCtx.GroupChannel) ??

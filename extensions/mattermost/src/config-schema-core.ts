@@ -1,6 +1,7 @@
 // Mattermost helper module supports config schema core behavior.
 import {
   BlockStreamingCoalesceSchema,
+  ChannelImplicitMentionsSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
@@ -138,6 +139,7 @@ const MattermostAccountSchemaBase = z
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),

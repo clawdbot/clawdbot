@@ -1668,6 +1668,29 @@ describe("sendMessageTelegram", () => {
     expect(cursor.nextPartIndex).toBe(1);
   });
 
+  it("preserves markdown link targets when Telegram rejects HTML", async () => {
+    botApi.sendMessage
+      .mockRejectedValueOnce(createHtmlParseError())
+      .mockResolvedValueOnce({ message_id: 157, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "Read [docs](https://example.com/guide)", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "123",
+      'Read <a href="https://example.com/guide">docs</a>',
+      { parse_mode: "HTML" },
+    );
+    expect(botApi.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "123",
+      "Read docs (https://example.com/guide)",
+    );
+  });
+
   it("reports the first Telegram chunk before a later chunk fails", async () => {
     const storePath = `/tmp/openclaw-telegram-projection-partial-${process.pid}-${Date.now()}.json`;
     const cursor = createTelegramPromptContextProjectionCursor({
@@ -1733,6 +1756,28 @@ describe("sendMessageTelegram", () => {
     const chunks = sendMessageTexts(botApi.sendMessage);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("preserves word boundaries when rendered markdown exceeds the text limit", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
+    const visibleText = Array.from({ length: 260 }, () => "alpha beta gamma").join(" ");
+    const markdown = `**${visibleText}**`;
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    const chunks = sendMessageTexts(botApi.sendMessage);
+    const visibleChunks = chunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk));
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(visibleChunks.join("")).toBe(visibleText);
+    for (let index = 0; index < visibleChunks.length - 1; index += 1) {
+      const left = visibleChunks[index] ?? "";
+      const right = visibleChunks[index + 1] ?? "";
+      expect(`${left.at(-1) ?? ""}${right.at(0) ?? ""}`).not.toMatch(/^[A-Za-z]{2}$/);
+    }
   });
 
   it("chunks long markdown headings on the text path", async () => {
@@ -2131,7 +2176,8 @@ describe("sendMessageTelegram", () => {
     const sendMessage = vi
       .fn()
       .mockResolvedValueOnce({ message_id: 73, chat: { id: chatId } })
-      .mockResolvedValueOnce({ message_id: 74, chat: { id: chatId } });
+      .mockResolvedValueOnce({ message_id: 74, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 75, chat: { id: chatId } });
     const api = { sendPhoto, sendMessage } as unknown as {
       sendPhoto: typeof sendPhoto;
       sendMessage: typeof sendMessage;
@@ -2154,18 +2200,18 @@ describe("sendMessageTelegram", () => {
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: undefined,
     });
-    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
     expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("A");
-    expect(res.messageId).toBe("74");
+    expect(res.messageId).toBe("75");
     expect(res.receipt?.primaryPlatformMessageId).toBe("73");
-    expect(res.receipt?.platformMessageIds).toEqual(["73", "74"]);
-    expect(res.receipt?.parts.map((part) => part.kind)).toEqual(["text", "text"]);
+    expect(res.receipt?.platformMessageIds).toEqual(["73", "74", "75"]);
+    expect(res.receipt?.parts.map((part) => part.kind)).toEqual(["text", "text", "text"]);
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     });
     const projections = await Promise.all(
-      ["72", "73", "74"].map(
+      ["72", "73", "74", "75"].map(
         async (messageId) =>
           (await cache.get({ accountId: "default", chatId, messageId }))
             ?.promptContextProjectionMarker,
@@ -2180,9 +2226,13 @@ describe("sendMessageTelegram", () => {
         kind: "valid",
         projection: { ...cursor.source, partIndex: 1, finalPart: false },
       },
-      { kind: "valid", projection: { ...cursor.source, partIndex: 2, finalPart: true } },
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 2, finalPart: false },
+      },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 3, finalPart: true } },
     ]);
-    expect(cursor.nextPartIndex).toBe(3);
+    expect(cursor.nextPartIndex).toBe(4);
   });
 
   it("uses caption when text is within 1024 char limit", async () => {
@@ -3178,7 +3228,8 @@ describe("sendMessageTelegram", () => {
     const sendMessage = vi
       .fn()
       .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
-      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } });
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 103, chat: { id: "-1001234567890" } });
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
@@ -3193,18 +3244,12 @@ describe("sendMessageTelegram", () => {
       replyToMode: "first",
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(sendMessage.mock.calls[0]?.[2]).toEqual({
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-    expect(sendMessage.mock.calls[1]?.[2]).toEqual({
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-    expect(result.messageId).toBe("102");
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
+    expect(sendMessage.mock.calls.every((call) => call[2]?.message_thread_id === 271)).toBe(true);
+    expect(result.messageId).toBe("103");
     expect(result.receipt?.primaryPlatformMessageId).toBe("101");
-    expect(result.receipt?.platformMessageIds).toEqual(["101", "102"]);
+    expect(result.receipt?.platformMessageIds).toEqual(["101", "102", "103"]);
     expect(result.receipt?.threadId).toBe("271");
     expect(result.receipt?.replyToId).toBeUndefined();
     expect(
@@ -3230,6 +3275,13 @@ describe("sendMessageTelegram", () => {
         threadId: "271",
         replyToId: undefined,
       },
+      {
+        platformMessageId: "103",
+        kind: "text",
+        index: 2,
+        threadId: "271",
+        replyToId: undefined,
+      },
     ]);
   });
 
@@ -3237,7 +3289,8 @@ describe("sendMessageTelegram", () => {
     const sendMessage = vi
       .fn()
       .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
-      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } });
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 103, chat: { id: "-1001234567890" } });
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
@@ -3251,14 +3304,13 @@ describe("sendMessageTelegram", () => {
       replyToMode: "first",
     });
 
-    expect(sendMessage.mock.calls[0]?.[2]).toMatchObject({
-      reply_to_message_id: 500,
-      allow_sending_without_reply: true,
-    });
-    expect(sendMessage.mock.calls[1]?.[2]).toMatchObject({
-      reply_to_message_id: 500,
-      allow_sending_without_reply: true,
-    });
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).toMatchObject({
+        reply_to_message_id: 500,
+        allow_sending_without_reply: true,
+      });
+    }
   });
 
   it("fails topic sends instead of retrying without message_thread_id", async () => {

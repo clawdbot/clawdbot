@@ -147,6 +147,9 @@ export const pluginSdkDocMetadata = {
   "speech-core": {
     category: "provider",
   },
+  "speech-settings": {
+    category: "provider",
+  },
   "realtime-voice": {
     category: "provider",
   },

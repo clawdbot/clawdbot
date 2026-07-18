@@ -78,6 +78,27 @@ function createChannelNativeCommandUiHints(channelLabel: string): HintMap {
   };
 }
 
+function createChannelImplicitMentionsUiHints(channelLabel: string): HintMap {
+  return {
+    implicitMentions: {
+      label: `${channelLabel} Implicit Mentions`,
+      help: `Control which ${channelLabel} reply, quote, and thread-participation signals count as mentions. Unset flags preserve the channel defaults.`,
+    },
+    "implicitMentions.replyToBot": {
+      label: `${channelLabel} Replies to Bot`,
+      help: "Treat replies to the bot's own messages as implicit mentions when the channel reports that signal.",
+    },
+    "implicitMentions.quotedBot": {
+      label: `${channelLabel} Quoted Bot Messages`,
+      help: "Treat messages quoting the bot as implicit mentions when the channel reports that signal.",
+    },
+    "implicitMentions.threadParticipation": {
+      label: `${channelLabel} Thread Participation`,
+      help: "Treat follow-ups in threads where the bot participated as implicit mentions when the channel reports that signal.",
+    },
+  };
+}
+
 function createChannelProgressUiHints(params: {
   channelLabel: string;
   includeCommentary?: boolean;
@@ -161,6 +182,7 @@ export function createChannelConfigUiHints(params: {
     denyNote?: string;
   };
   nativeCommands?: boolean;
+  implicitMentions?: boolean;
   progress?: {
     includeCommentary?: boolean;
     commentaryOrder?: "before-command" | "after-command";
@@ -179,6 +201,7 @@ export function createChannelConfigUiHints(params: {
         })
       : {}),
     ...(params.nativeCommands ? createChannelNativeCommandUiHints(params.channelLabel) : {}),
+    ...(params.implicitMentions ? createChannelImplicitMentionsUiHints(params.channelLabel) : {}),
     ...(params.progress
       ? createChannelProgressUiHints({ channelLabel: params.channelLabel, ...params.progress })
       : {}),

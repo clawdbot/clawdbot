@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -28,6 +28,13 @@ import {
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 
 describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
+  it("keeps trusted release verification independent from target app dependencies", () => {
+    const source = readFileSync("scripts/openclaw-npm-postpublish-verify.ts", "utf8");
+
+    expect(source).toContain('from "./lib/error-format.mjs"');
+    expect(source).not.toContain('from "../src/infra/errors.ts"');
+  });
+
   it("supports help and package-manager separators", () => {
     expect(parseOpenClawNpmPostpublishVerifyArgs(["--help"])).toEqual({
       help: true,

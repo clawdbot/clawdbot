@@ -207,9 +207,9 @@ describe("qa coverage report", () => {
       inventory.scorecardTaxonomy.categoryCount,
     );
     expect(inventory.scorecardTaxonomy.requiredCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.fulfilledCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.coverageIdFulfillmentPercent).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.evidenceRefCount).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.inventoriedCoverageIdCount).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.coverageIdInventoryPercent).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.inventoryRefCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.scenarioCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
     expect(
@@ -225,13 +225,13 @@ describe("qa coverage report", () => {
     ).toBe(false);
     expect(
       inventory.scorecardTaxonomy.validationIssues.some(
-        (issue) => issue.code === "coverage-id-missing-primary-evidence",
+        (issue) => issue.code === "coverage-id-missing-primary-inventory",
       ),
     ).toBe(true);
     expect(
       inventory.scorecardTaxonomy.categories.find(
         (category) => category.id === TEST_BROWSER_CATEGORY_ID,
-      )?.evidence,
+      )?.inventoryRefs,
     ).toContainEqual({
       coverageId: TEST_BROWSER_COVERAGE_ID,
       kind: "playwright",
@@ -302,9 +302,9 @@ describe("qa coverage report", () => {
     expect(report).toContain("personal-share-safe-diagnostics-artifact");
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");
-    expect(report).toContain("- Fulfilled taxonomy categories:");
-    expect(report).toContain("- Fulfilled taxonomy coverage IDs:");
-    expect(report).toContain("- Evidence refs:");
+    expect(report).toContain("- Inventoried taxonomy categories:");
+    expect(report).toContain("- Inventoried taxonomy coverage IDs:");
+    expect(report).toContain("- Inventory refs:");
     expect(report).toContain("- Scenario coverage IDs:");
     expect(report).toContain(
       "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: all, release, smoke-ci; coverage IDs:",
@@ -439,7 +439,7 @@ describe("qa coverage report", () => {
     );
   });
 
-  it("reports missing taxonomy coverage refs without treating them as fulfilled", () => {
+  it("reports missing taxonomy coverage refs without treating them as inventoried", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
       repoRoot: process.cwd(),
@@ -450,16 +450,16 @@ describe("qa coverage report", () => {
       ],
     });
 
-    expect(report.fulfilledCoverageIdCount).toBe(0);
-    expect(report.categories[0]?.coverageStatus).toBe("missing");
+    expect(report.inventoriedCoverageIdCount).toBe(0);
+    expect(report.categories[0]?.inventoryStatus).toBe("missing");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
-      "coverage-id-missing-primary-evidence",
-      "profile-category-missing-evidence",
+      "coverage-id-missing-primary-inventory",
+      "profile-category-missing-inventory",
     ]);
   });
 
-  it("uses explicit native test evidence as coverage fulfillment", () => {
+  it("inventories explicit native test declarations", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy({
         categoryId: TEST_BROWSER_CATEGORY_ID,
@@ -477,13 +477,13 @@ describe("qa coverage report", () => {
     });
 
     expect(report.validationIssues).toStrictEqual([]);
-    expect(report.fulfilledCategoryCount).toBe(1);
-    expect(report.fulfilledCoverageIdCount).toBe(1);
-    expect(report.categories[0]?.coverageStatus).toBe("covered");
+    expect(report.inventoriedCategoryCount).toBe(1);
+    expect(report.inventoriedCoverageIdCount).toBe(1);
+    expect(report.categories[0]?.inventoryStatus).toBe("complete");
     expect(report.categories[0]?.scenarioRefs).toStrictEqual([
       "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
     ]);
-    expect(report.categories[0]?.evidence).toStrictEqual([
+    expect(report.categories[0]?.inventoryRefs).toStrictEqual([
       {
         coverageId: TEST_BROWSER_COVERAGE_ID,
         kind: "playwright",
@@ -494,7 +494,7 @@ describe("qa coverage report", () => {
     ]);
   });
 
-  it("counts partial coverage IDs proportionately for taxonomy fulfillment", () => {
+  it("counts partial coverage IDs proportionately for taxonomy inventory", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy({
         featureCoverageIds: [[TEST_EXECUTABLE_COVERAGE_ID, TEST_WEBCHAT_COVERAGE_ID]],
@@ -509,15 +509,17 @@ describe("qa coverage report", () => {
       ],
     });
 
-    expect(report.fulfilledCategoryCount).toBe(0);
+    expect(report.inventoriedCategoryCount).toBe(0);
     expect(report.requiredCoverageIdCount).toBe(2);
-    expect(report.fulfilledCoverageIdCount).toBe(1);
-    expect(report.coverageIdFulfillmentPercent).toBe(50);
-    expect(report.categories[0]?.coverageStatus).toBe("partial");
-    expect(report.categories[0]?.fulfilledCoverageIds).toStrictEqual([TEST_EXECUTABLE_COVERAGE_ID]);
+    expect(report.inventoriedCoverageIdCount).toBe(1);
+    expect(report.coverageIdInventoryPercent).toBe(50);
+    expect(report.categories[0]?.inventoryStatus).toBe("partial");
+    expect(report.categories[0]?.inventoriedCoverageIds).toStrictEqual([
+      TEST_EXECUTABLE_COVERAGE_ID,
+    ]);
     expect(report.validationIssues).toContainEqual(
       expect.objectContaining({
-        code: "coverage-id-missing-primary-evidence",
+        code: "coverage-id-missing-primary-inventory",
         ref: TEST_WEBCHAT_COVERAGE_ID,
       }),
     );
@@ -588,11 +590,11 @@ describe("qa coverage report", () => {
     });
 
     expect(report.requiredCoverageIdCount).toBe(2);
-    expect(report.fulfilledCoverageIdCount).toBe(1);
-    expect(report.coverageIdFulfillmentPercent).toBe(50);
+    expect(report.inventoriedCoverageIdCount).toBe(1);
+    expect(report.coverageIdInventoryPercent).toBe(50);
   });
 
-  it("uses script producer evidence as coverage fulfillment", () => {
+  it("inventories script producer declarations", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy({
         categoryId: TEST_BROWSER_CATEGORY_ID,
@@ -610,9 +612,9 @@ describe("qa coverage report", () => {
     });
 
     expect(report.validationIssues).toStrictEqual([]);
-    expect(report.fulfilledCategoryCount).toBe(1);
-    expect(report.fulfilledCoverageIdCount).toBe(1);
-    expect(report.categories[0]?.evidence).toStrictEqual([
+    expect(report.inventoriedCategoryCount).toBe(1);
+    expect(report.inventoriedCoverageIdCount).toBe(1);
+    expect(report.categories[0]?.inventoryRefs).toStrictEqual([
       {
         coverageId: TEST_BROWSER_COVERAGE_ID,
         kind: "script",
@@ -643,7 +645,7 @@ describe("qa coverage report", () => {
     );
   });
 
-  it("reports profile categories missing primary coverage evidence", () => {
+  it("reports profile categories missing primary coverage inventory", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
       repoRoot: process.cwd(),
@@ -651,12 +653,12 @@ describe("qa coverage report", () => {
     });
 
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "coverage-id-missing-primary-evidence",
-      "profile-category-missing-evidence",
+      "coverage-id-missing-primary-inventory",
+      "profile-category-missing-inventory",
     ]);
   });
 
-  it("reports native test evidence refs outside the repository", () => {
+  it("reports native test inventory targets outside the repository", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
       repoRoot: process.cwd(),
@@ -670,13 +672,13 @@ describe("qa coverage report", () => {
     });
 
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "evidence-ref-not-found",
-      "coverage-id-missing-primary-evidence",
-      "profile-category-missing-evidence",
+      "inventory-ref-not-found",
+      "coverage-id-missing-primary-inventory",
+      "profile-category-missing-inventory",
     ]);
   });
 
-  it("uses scenario coverage metadata as runnable scenario evidence", () => {
+  it("inventories runnable scenario coverage metadata", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
       repoRoot: process.cwd(),
@@ -692,7 +694,7 @@ describe("qa coverage report", () => {
     expect(report.categories[0]?.scenarioRefs).toStrictEqual([
       "qa/scenarios/channels/dm-chat-baseline.yaml",
     ]);
-    expect(report.categories[0]?.evidence).toStrictEqual([
+    expect(report.categories[0]?.inventoryRefs).toStrictEqual([
       {
         coverageId: TEST_EXECUTABLE_COVERAGE_ID,
         kind: "qa-scenario",
@@ -703,7 +705,7 @@ describe("qa coverage report", () => {
     ]);
   });
 
-  it("counts secondary scenario metadata as evidence but not fulfillment", () => {
+  it("counts secondary scenario metadata as inventory but not primary inventory", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
       repoRoot: process.cwd(),
@@ -715,12 +717,12 @@ describe("qa coverage report", () => {
       ],
     });
 
-    expect(report.fulfilledCoverageIdCount).toBe(0);
-    expect(report.categories[0]?.coverageStatus).toBe("partial");
+    expect(report.inventoriedCoverageIdCount).toBe(0);
+    expect(report.categories[0]?.inventoryStatus).toBe("partial");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
-      "coverage-id-missing-primary-evidence",
-      "profile-category-missing-evidence",
+      "coverage-id-missing-primary-inventory",
+      "profile-category-missing-inventory",
     ]);
   });
 });

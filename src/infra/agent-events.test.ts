@@ -17,6 +17,7 @@ import {
   releaseAgentRunContext,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
+  runOncePerAgentRun,
   sweepStaleRunContexts,
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
@@ -352,6 +353,35 @@ describe("agent-events sequencing", () => {
     );
 
     expect(captured).toBe(preRestartGeneration);
+  });
+
+  test("shares one run operation across nested fallback scopes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const operation = vi.fn(async () => "claimed");
+
+    const results = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => [
+      await runOncePerAgentRun("run-1", "before_agent_reply", operation),
+      await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+        runOncePerAgentRun("run-1", "before_agent_reply", operation),
+      ),
+    ]);
+
+    expect(results).toEqual(["claimed", "claimed"]);
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not share run operations across admitted execution scopes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const operation = vi.fn(async () => "declined");
+
+    await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+      runOncePerAgentRun("run-1", "before_agent_reply", operation),
+    );
+    await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+      runOncePerAgentRun("run-1", "before_agent_reply", operation),
+    );
+
+    expect(operation).toHaveBeenCalledTimes(2);
   });
 
   test("lists only runs owned by the current lifecycle", () => {

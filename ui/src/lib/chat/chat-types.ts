@@ -55,7 +55,9 @@ export type ChatItem =
       timestamp: number;
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string; startedAt: number };
+  | { kind: "reading-indicator"; key: string; startedAt: number }
+  | { kind: "question"; key: string; questionId: string; startedAt: number; pending: boolean }
+  | { kind: "plan"; key: string };
 
 export type ChatStreamSegment = {
   text: string;

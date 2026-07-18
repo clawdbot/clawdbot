@@ -30,6 +30,7 @@ import type {
   StreamOptions,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { formatProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -469,7 +470,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+    output.errorMessage = formatProviderError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
   }

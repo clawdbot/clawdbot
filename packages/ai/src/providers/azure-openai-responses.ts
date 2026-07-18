@@ -239,6 +239,7 @@ function buildParams(
       options?.cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+    store: false,
   };
 
   applyCommonResponsesParams(params, model, context, options);

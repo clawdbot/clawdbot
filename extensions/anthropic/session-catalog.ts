@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import type {
   SessionCatalogHost,
   SessionCatalogProvider,
@@ -16,6 +17,7 @@ import {
   adoptedSourceKey,
   CLAUDE_LOCAL_SESSION_HOST_ID,
 } from "./session-catalog-adoption.js";
+import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { importClaudeHistory } from "./session-catalog-history.js";
 import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
 import {
@@ -54,9 +56,8 @@ const MAX_TRANSCRIPT_LIMIT = 50;
 const MAX_HOSTS = 100;
 const MAX_STRING_LENGTH = 4096;
 const MAX_SEARCH_LENGTH = 500;
-const MAX_CURSOR_LENGTH = 256;
-
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
+const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
@@ -65,6 +66,9 @@ const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
+// Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
+// The node invoke keeps running so cold native discovery can warm the next poll.
+const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
@@ -97,6 +101,40 @@ type DesktopSessionMetadata = {
 type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
+
+type CatalogDiscoveryCacheEntry = {
+  // The module-global cache is keyed by canonical transcript path, so an entry must also record the
+  // discovery context it was built in. `root` is the logical (unresolved) projects root: it scopes
+  // the entry to its homeDir even when the root itself is a symlink, so a different homeDir scan
+  // cannot reuse it and eviction can find it without re-resolving a now-missing root. mtime+size+ino
+  // detect any content change or atomic replacement; sessionId guards against a canonical path being
+  // reached under a different filename-derived id (e.g. an aliased/renamed symlink).
+  root: string;
+  mtimeMs: number;
+  size: number;
+  ino: number;
+  sessionId: string;
+  // Bytes this file charged against the scan budget when first scanned. Cache hits re-charge it so
+  // byte-budget-limited discovery stops at the same frontier whether or not the cache is warm,
+  // keeping pagination deterministic across repeated identical calls.
+  scannedBytes: number;
+  record: CatalogRecord | null;
+  sidechain: boolean;
+};
+
+const catalogDiscoveryCache = new Map<string, CatalogDiscoveryCacheEntry>();
+
+function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
+  catalogDiscoveryCache.delete(filePath);
+  catalogDiscoveryCache.set(filePath, entry);
+  while (catalogDiscoveryCache.size > MAX_CATALOG_DISCOVERY_CACHE_ENTRIES) {
+    const oldestPath = catalogDiscoveryCache.keys().next().value;
+    if (oldestPath === undefined) {
+      break;
+    }
+    catalogDiscoveryCache.delete(oldestPath);
+  }
+}
 
 function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
   if (typeof value !== "string") {
@@ -302,11 +340,20 @@ async function discoverCliRecords(
   const root = projectsDir(homeDir);
   const resolvedRoot = await fs.realpath(root).catch(() => undefined);
   if (!resolvedRoot) {
+    // The root (or a parent) is gone. Entries are tagged with the logical root, so evict by that
+    // rather than a lexical containment test the canonical cache keys would never satisfy.
+    for (const [cachedPath, entry] of catalogDiscoveryCache) {
+      if (entry.root === root) {
+        catalogDiscoveryCache.delete(cachedPath);
+      }
+    }
     return;
   }
   let discoveredFiles = 0;
   let scannedBytes = 0;
-  for (const projectDir of await childDirectories(root)) {
+  let truncated = false;
+  const seenFilePaths = new Set<string>();
+  scan: for (const projectDir of await childDirectories(root)) {
     let names: string[];
     try {
       names = await fs.readdir(projectDir);
@@ -314,8 +361,12 @@ async function discoverCliRecords(
       continue;
     }
     for (const name of names) {
-      if (!name.endsWith(".jsonl") || discoveredFiles >= MAX_CATALOG_DISCOVERY_FILES) {
+      if (!name.endsWith(".jsonl")) {
         continue;
+      }
+      if (discoveredFiles >= MAX_CATALOG_DISCOVERY_FILES) {
+        truncated = true;
+        break scan;
       }
       discoveredFiles += 1;
       const sessionId = name.slice(0, -".jsonl".length);
@@ -331,10 +382,52 @@ async function discoverCliRecords(
       if (!filePath) {
         continue;
       }
+      seenFilePaths.add(filePath);
+      const fileStat = await fs.stat(filePath).catch(() => undefined);
+      if (!fileStat?.isFile()) {
+        continue;
+      }
+      const cached = catalogDiscoveryCache.get(filePath);
+      // Claude transcripts only append while active, then stay static, so mtime+size+ino identify
+      // the parsed content (ino also rejects an atomic replacement that reused the same mtime/size),
+      // and sessionId ensures the record is served only under the filename-derived id it was built
+      // for. These files are owner-owned and append-only; a mid-scan read-permission revocation is
+      // not a state the Claude CLI produces, so a hit intentionally skips the open() re-check.
+      if (
+        cached &&
+        cached.root === root &&
+        cached.mtimeMs === fileStat.mtimeMs &&
+        cached.size === fileStat.size &&
+        cached.ino === fileStat.ino &&
+        cached.sessionId === sessionId &&
+        // Only replay the cached record if a cold scan would also reach its metadata under the
+        // current remaining byte budget. Once earlier files grow, replaying a record whose original
+        // scan cost now crosses the frontier would surface a record a cold scan stops before; fall
+        // through to a bounded rescan instead so warm and cold discovery (and pagination) match.
+        scannedBytes + cached.scannedBytes <= MAX_CATALOG_METADATA_SCAN_BYTES
+      ) {
+        if (cached.sidechain) {
+          sidechainIds.add(sessionId);
+        }
+        if (cached.record) {
+          records.set(sessionId, cached.record);
+        }
+        // Cache hits read no transcript bytes, but they still charge the file's original scan cost
+        // so the byte-budget cutoff matches a cold scan; otherwise repeated calls would free budget
+        // and progressively discover more files.
+        scannedBytes += cached.scannedBytes;
+        if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
+          truncated = true;
+          break scan;
+        }
+        continue;
+      }
       const handle = await fs.open(filePath, "r").catch(() => undefined);
       if (!handle) {
         continue;
       }
+      let cacheable = false;
+      let fileScannedBytes = 0;
       try {
         const stat = await handle.stat();
         let aiTitle: string | undefined;
@@ -426,15 +519,43 @@ async function discoverCliRecords(
         if (!stopFile && fileOffset >= stat.size && pending.length > 0) {
           inspectLine(pending);
         }
+        // A read whose chunk was capped by the remaining global budget stops on a smaller boundary
+        // than a cold scan would, so its fileOffset undercounts the true unconstrained scan cost.
+        // Don't cache such an entry: replaying its low cost later (with more budget free) would let
+        // the warm scan cross the frontier and surface sessions a cold scan omits.
+        const budgetConstrained = scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES;
+        cacheable =
+          !budgetConstrained &&
+          (stopFile || fileOffset >= stat.size || fileOffset >= CLAUDE_METADATA_PREFIX_BYTES);
+        fileScannedBytes = fileOffset;
       } finally {
         await handle.close();
       }
+      // Negative and sidechain-only results are cached too; unchanged files should not be reparsed.
+      if (cacheable) {
+        cacheCatalogDiscovery(filePath, {
+          root,
+          mtimeMs: fileStat.mtimeMs,
+          size: fileStat.size,
+          ino: fileStat.ino,
+          sessionId,
+          scannedBytes: fileScannedBytes,
+          record: records.get(sessionId) ?? null,
+          sidechain: sidechainIds.has(sessionId),
+        });
+      }
       if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
-        return;
+        truncated = true;
+        break scan;
       }
     }
-    if (discoveredFiles >= MAX_CATALOG_DISCOVERY_FILES) {
-      break;
+  }
+  if (!truncated) {
+    // A complete scan is authoritative for this root: drop any of its entries not seen this pass.
+    for (const [cachedPath, entry] of catalogDiscoveryCache) {
+      if (entry.root === root && !seenFilePaths.has(cachedPath)) {
+        catalogDiscoveryCache.delete(cachedPath);
+      }
     }
   }
 }
@@ -486,11 +607,11 @@ function encodeOffset(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
 }
 
-function decodeOffset(cursor: unknown, label: string): number {
+function decodeOffset(cursor: string | undefined, label: string): number {
   if (cursor === undefined) {
     return 0;
   }
-  if (typeof cursor !== "string" || !cursor || cursor.length > MAX_CURSOR_LENGTH) {
+  if (!isExactClaudeSessionCursor(cursor)) {
     throw new ClaudeCatalogParamsError(`${label} cursor is invalid`);
   }
   try {
@@ -518,6 +639,20 @@ function readLimit(value: unknown, fallback: number, max: number): number {
   return value as number;
 }
 
+function readRequiredCursor(value: unknown, message: string): string {
+  if (!isExactClaudeSessionCursor(value)) {
+    throw new ClaudeCatalogParamsError(message);
+  }
+  return value;
+}
+
+function readOptionalCursor(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readRequiredCursor(value, `${label} cursor is invalid`);
+}
+
 function readListParams(value: unknown): {
   cursor?: string;
   limit: number;
@@ -534,7 +669,7 @@ function readListParams(value: unknown): {
   if (unknown) {
     throw new ClaudeCatalogParamsError(`unknown Claude session catalog parameter: ${unknown}`);
   }
-  const cursor = optionalString(value.cursor, MAX_CURSOR_LENGTH);
+  const cursor = readOptionalCursor(value.cursor, "catalog");
   const searchTerm = optionalString(value.searchTerm, MAX_SEARCH_LENGTH);
   return {
     limit: readLimit(value.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
@@ -589,7 +724,7 @@ function readTranscriptParams(
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
     throw new ClaudeCatalogParamsError("threadId is invalid");
   }
-  const cursor = optionalString(value.cursor, MAX_CURSOR_LENGTH);
+  const cursor = readOptionalCursor(value.cursor, "transcript");
   return {
     threadId,
     limit: readLimit(value.limit, DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT),
@@ -701,6 +836,19 @@ export async function readLocalClaudeTranscriptPage(
   }
 }
 
+function readNodePageCursor(
+  value: Record<string, unknown>,
+  invalidPageMessage: string,
+): string | undefined {
+  if (!("nextCursor" in value)) {
+    return undefined;
+  }
+  if (!isExactClaudeSessionCursor(value.nextCursor)) {
+    throw new Error(invalidPageMessage);
+  }
+  return value.nextCursor;
+}
+
 function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
   if (
     !isRecord(value) ||
@@ -774,10 +922,7 @@ function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
       ...(gitBranch ? { gitBranch } : {}),
     };
   });
-  const nextCursor = optionalString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if ("nextCursor" in value && !nextCursor) {
-    throw new Error("Claude node returned an invalid session page");
-  }
+  const nextCursor = readNodePageCursor(value, "Claude node returned an invalid session page");
   return { sessions, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -833,11 +978,7 @@ function parseGatewayQuery(value: unknown): {
     }
     cursors = Object.fromEntries(
       Object.entries(value.cursors).map(([hostId, cursor]) => {
-        const normalized = optionalString(cursor, MAX_CURSOR_LENGTH);
-        if (!normalized) {
-          throw new ClaudeCatalogParamsError(`cursor for ${hostId} is invalid`);
-        }
-        return [hostId, normalized];
+        return [hostId, readRequiredCursor(cursor, `cursor for ${hostId} is invalid`)];
       }),
     );
   }
@@ -852,56 +993,68 @@ function parseGatewayQuery(value: unknown): {
 async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
+  onHost?: (host: ClaudeSessionCatalogHost) => void;
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const hosts: ClaudeSessionCatalogHost[] = [];
-  if (!requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID)) {
-    try {
-      hosts.push({
-        hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-        label: "Local Claude",
-        kind: "gateway",
-        connected: true,
-        ...(await listLocalClaudeSessionPage({
-          limit: query.limitPerHost,
-          ...(query.search ? { searchTerm: query.search } : {}),
-          ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID]
-            ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
-            : {}),
-        })),
-      });
-    } catch {
-      hosts.push({
-        hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-        label: "Local Claude",
-        kind: "gateway",
-        connected: true,
-        sessions: [],
-        error: { code: "LOCAL_READ_FAILED", message: "Local Claude sessions are unavailable" },
-      });
+  const localHosts: Promise<ClaudeSessionCatalogHost>[] =
+    !requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID)
+      ? [
+          (async () => {
+            try {
+              return {
+                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
+                label: "Local Claude",
+                kind: "gateway",
+                connected: true,
+                ...(await listLocalClaudeSessionPage({
+                  limit: query.limitPerHost,
+                  ...(query.search ? { searchTerm: query.search } : {}),
+                  ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID] !== undefined
+                    ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
+                    : {}),
+                })),
+              };
+            } catch {
+              return {
+                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
+                label: "Local Claude",
+                kind: "gateway",
+                connected: true,
+                sessions: [],
+                error: {
+                  code: "LOCAL_READ_FAILED",
+                  message: "Local Claude sessions are unavailable",
+                },
+              };
+            }
+          })(),
+        ]
+      : [];
+  for (const host of localHosts) {
+    if (params.onHost) {
+      void host.then(params.onHost).catch(() => undefined);
     }
   }
   const wantsNodes = !requested || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
   if (!wantsNodes) {
-    return { hosts };
+    return { hosts: await Promise.all(localHosts) };
   }
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
     nodes = (await params.runtime.nodes.list()).nodes;
   } catch (error) {
+    const registryHost: ClaudeSessionCatalogHost = {
+      hostId: "node:registry",
+      label: "Paired nodes",
+      kind: "node",
+      connected: false,
+      sessions: [],
+      error: createNodeListFailedError(error),
+    };
+    params.onHost?.(registryHost);
     return {
-      hosts: [
-        ...hosts,
-        {
-          hostId: "node:registry",
-          label: "Paired nodes",
-          kind: "node",
-          connected: false,
-          sessions: [],
-          error: createNodeListFailedError(error),
-        },
-      ],
+      hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
   const eligible = nodes
@@ -910,7 +1063,7 @@ async function listClaudeSessionCatalog(params: {
         node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
-    .slice(0, MAX_HOSTS - hosts.length)
+    .slice(0, MAX_HOSTS - localHosts.length)
     .toSorted((left, right) => resolveNodeLabel(left).localeCompare(resolveNodeLabel(right)));
   const nodeHosts = await Promise.all(
     eligible.map(async (node): Promise<ClaudeSessionCatalogHost> => {
@@ -930,26 +1083,49 @@ async function listClaudeSessionCatalog(params: {
         ...catalogTerminal.claudeNodeTerminalCapability(node),
       };
       if (node.connected !== true) {
-        return Object.assign(common, {
+        const host: ClaudeSessionCatalogHost = Object.assign({}, common, {
           sessions: [],
           error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
         });
+        params.onHost?.(host);
+        return host;
+      }
+      const eventualHost = Promise.resolve()
+        .then(async () => {
+          const raw = await params.runtime.nodes.invoke({
+            nodeId: node.nodeId,
+            command: CLAUDE_SESSIONS_LIST_COMMAND,
+            params: {
+              limit: query.limitPerHost,
+              ...(query.search ? { searchTerm: query.search } : {}),
+              ...(query.cursors?.[hostId] !== undefined ? { cursor: query.cursors[hostId] } : {}),
+            },
+            timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+            scopes: ["operator.write"],
+          });
+          return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
+        })
+        .catch(
+          (): ClaudeSessionCatalogHost =>
+            Object.assign({}, common, {
+              sessions: [],
+              error: {
+                code: "NODE_INVOKE_FAILED",
+                message: "Paired node Claude sessions are unavailable",
+              },
+            }),
+        );
+      if (params.onHost) {
+        // The fail-soft response can finish first; the original node invoke still
+        // publishes its authoritative host page whenever cold discovery completes.
+        void eventualHost.then(params.onHost).catch(() => undefined);
       }
       try {
-        const raw = await params.runtime.nodes.invoke({
-          nodeId: node.nodeId,
-          command: CLAUDE_SESSIONS_LIST_COMMAND,
-          params: {
-            limit: query.limitPerHost,
-            ...(query.search ? { searchTerm: query.search } : {}),
-            ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
-          },
-          timeoutMs: NODE_INVOKE_TIMEOUT_MS,
-          scopes: ["operator.write"],
+        return await withTimeout(eventualHost, NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS, {
+          message: "paired node Claude session catalog timed out",
         });
-        return Object.assign(common, parseCatalogPage(unwrapNodePayload(raw)));
       } catch {
-        return Object.assign(common, {
+        return Object.assign({}, common, {
           sessions: [],
           error: {
             code: "NODE_INVOKE_FAILED",
@@ -959,7 +1135,7 @@ async function listClaudeSessionCatalog(params: {
       }
     }),
   );
-  return { hosts: [...hosts, ...nodeHosts] };
+  return { hosts: [...(await Promise.all(localHosts)), ...nodeHosts] };
 }
 
 async function readClaudeSessionTranscript(params: {
@@ -969,6 +1145,7 @@ async function readClaudeSessionTranscript(params: {
   cursor?: string;
   limit: number;
 }): Promise<ClaudeSessionTranscriptPage> {
+  const cursor = readOptionalCursor(params.cursor, "transcript");
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
     return {
       hostId: params.hostId,
@@ -976,7 +1153,7 @@ async function readClaudeSessionTranscript(params: {
       ...(await readLocalClaudeTranscriptPage({
         threadId: params.threadId,
         limit: params.limit,
-        ...(params.cursor ? { cursor: params.cursor } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
       })),
     };
   }
@@ -999,7 +1176,7 @@ async function readClaudeSessionTranscript(params: {
     params: {
       threadId: params.threadId,
       limit: params.limit,
-      ...(params.cursor ? { cursor: params.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
     scopes: ["operator.write"],
@@ -1015,14 +1192,13 @@ async function readClaudeSessionTranscript(params: {
   ) {
     throw new Error("Claude node returned an invalid transcript page");
   }
+  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid transcript page");
   return {
     hostId: params.hostId,
     label: resolveNodeLabel(node),
     threadId: params.threadId,
     items: page.items as ClaudeTranscriptItem[],
-    ...(optionalString(page.nextCursor, MAX_CURSOR_LENGTH)
-      ? { nextCursor: optionalString(page.nextCursor, MAX_CURSOR_LENGTH) }
-      : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
 
@@ -1292,8 +1468,15 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
-      const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
-      return result.hosts.map((host) => toGenericClaudeHost(host, adopted, localCliAvailable));
+      const { onHost, ...gatewayQuery } = query;
+      const mapHost = (host: ClaudeSessionCatalogHost) =>
+        toGenericClaudeHost(host, adopted, localCliAvailable);
+      const result = await listClaudeSessionCatalog({
+        runtime: api.runtime,
+        query: gatewayQuery,
+        ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
+      });
+      return result.hosts.map(mapHost);
     },
     read: async (request) => {
       const page = await readClaudeSessionTranscript({

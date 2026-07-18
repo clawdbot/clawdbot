@@ -8,10 +8,14 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogContinueResult,
   SessionsCatalogReadResult,
+  SessionsFilesRevealResult,
+  SystemInfoResult,
   TaskSuggestion,
   TaskSuggestionEvent,
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
+  WorktreesBranchesResult,
+  WorktreesListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionBranch,
@@ -25,8 +29,17 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  createQuestionPromptState,
+  disposeQuestionPromptState,
+  handleQuestionPromptEvent,
+  listQuestionPrompts,
+  refreshPendingQuestionsWithRetry,
+  setQuestionPromptClient,
+  submitQuestionPrompt,
+  type QuestionPrompt,
+} from "../../app/question-prompt.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -35,10 +48,14 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
-import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+} from "../../lib/chat/follow-up-mode.ts";
 import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -72,7 +89,11 @@ import {
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  dismissChatError,
+  resolveAssistantAttachmentAuthToken,
+} from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
@@ -108,6 +129,12 @@ import {
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import {
+  canRevealSessionWorkspace,
+  renderChatPaneHeader,
+  resolveChatPaneWorkspace,
+  type ChatPaneHeaderAction,
+} from "./components/chat-pane-header.ts";
 import {
   chatPullRequestId,
   createPullRequestBranch,
@@ -156,6 +183,7 @@ const CHAT_HISTORY_INTENT_EDGE_PX = 300;
 const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
+const headerPlatformByClient = new WeakMap<GatewayBrowserClient, Promise<string | null>>();
 
 function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
@@ -272,11 +300,9 @@ class ChatPane extends OpenClawLightDomElement {
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => void;
-  /** Split mode renders an in-pane header row (title + workspace/split/close
-   * controls); classic single-pane mode renders none. */
-  @property({ attribute: false }) showPaneHeader = false;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) mergedChrome = false;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
@@ -284,6 +310,11 @@ class ChatPane extends OpenClawLightDomElement {
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private readonly transcript = new ChatTranscriptController(this);
+  private readonly questionPromptState = createQuestionPromptState(() => {
+    this.questionPrompts = listQuestionPrompts(this.questionPromptState);
+    this.requestUpdate();
+  });
+  private questionPrompts: QuestionPrompt[] = [];
   private state: ChatPageHost | undefined;
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
@@ -291,6 +322,23 @@ class ChatPane extends OpenClawLightDomElement {
   private paneResizeObserver: ResizeObserver | null = null;
   private connectedClient: GatewayBrowserClient | null = null;
   private connectionGeneration = 0;
+  @litState() private headerEditing = false;
+  @litState() private headerRenameValue = "";
+  @litState() private headerPlatform: string | null = null;
+  @litState() private headerCopiedAction: ChatPaneHeaderAction | null = null;
+  private headerRenameInitialLabel: string | null = null;
+  private headerRenameInitialValue = "";
+  private headerRenameSessionKey = "";
+  private headerCopiedTimer: number | null = null;
+  /** Checkout paths keyed by worktree id — stable for a worktree's lifetime,
+   * so reused session keys can never inherit another checkout's path. */
+  private readonly headerWorktreePaths = new Map<
+    string,
+    { loaded?: boolean; loading?: boolean; path?: string | null }
+  >();
+  /** HEAD keyed by the resolved root directory it was read from — a branch is
+   * a fact about a checkout, so root transitions miss instead of going stale. */
+  private readonly headerBranches = new Map<string, { loading?: boolean; value?: string | null }>();
   private nativeDraftCleanup: (() => void) | null = null;
   private readonly unreadPatchGuard = new SessionUnreadPatchGuard();
   private taskSuggestions: TaskSuggestion[] = [];
@@ -652,6 +700,9 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const previousSessionKey = state.sessionKey;
+    // An in-progress title edit belongs to the previous session; committing
+    // it against the newly routed row would rename the wrong session.
+    this.cancelHeaderRename();
     this.resetOlderMessagesViewport();
     const catalogKey = parseCatalogSessionKey(nextSessionKey);
     const previousSessionsResult = state.sessionsResult;
@@ -1574,6 +1625,9 @@ class ChatPane extends OpenClawLightDomElement {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        if (state) {
+          handleQuestionPromptEvent(this.questionPromptState, event);
+        }
         if (state && !parseCatalogSessionKey(state.sessionKey)) {
           if (event.event === "task.suggestion" && event.payload) {
             this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
@@ -1640,10 +1694,17 @@ class ChatPane extends OpenClawLightDomElement {
     this.resetOlderMessagesViewport();
     this.nativeDraftCleanup?.();
     this.nativeDraftCleanup = null;
+    if (this.headerCopiedTimer !== null) {
+      window.clearTimeout(this.headerCopiedTimer);
+      this.headerCopiedTimer = null;
+    }
+    this.headerWorktreePaths.clear();
+    this.headerBranches.clear();
     this.announceCommandPaletteTarget(null);
     resetChatViewState(this.paneId);
     this.state = undefined;
     this.connectedClient = null;
+    disposeQuestionPromptState(this.questionPromptState);
     super.disconnectedCallback();
   }
 
@@ -1673,8 +1734,7 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = stateValue.result?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
-    if (selectedSession) {
-      state.selectedChatSessionArchived = selectedSession.archived === true;
+    if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }
     if (selectedSessionDeleted) {
@@ -1795,9 +1855,11 @@ class ChatPane extends OpenClawLightDomElement {
         markQueuedChatSendsWaitingForReconnect(state);
       }
       this.connectedClient = null;
+      setQuestionPromptClient(this.questionPromptState, null);
       state.realtimeTalkSession?.stop();
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
+      state.realtimeTalkVideoStream = null;
       state.realtimeTalkStatus = "idle";
       state.realtimeTalkInputLevel.set(0);
       state.resetToolStream();
@@ -1834,6 +1896,12 @@ class ChatPane extends OpenClawLightDomElement {
         }
       };
       this.connectedClient = startupClient;
+      setQuestionPromptClient(this.questionPromptState, startupClient);
+      refreshPendingQuestionsWithRetry(this.questionPromptState, startupClient, clientIsCurrent);
+      this.headerWorktreePaths.clear();
+      this.headerBranches.clear();
+      this.headerPlatform = null;
+      void this.loadHeaderPlatform(startupClient, startupGeneration);
       if (catalogRouteKey) {
         void this.loadCatalogSession(catalogRouteKey, false);
         state.requestUpdate?.();
@@ -1852,61 +1920,292 @@ class ChatPane extends OpenClawLightDomElement {
     state.requestUpdate?.();
   }
 
+  private async loadHeaderPlatform(
+    client: GatewayBrowserClient,
+    generation: number,
+  ): Promise<void> {
+    if (!isGatewayMethodAdvertised(this.context.gateway.snapshot, "system.info")) {
+      return;
+    }
+    let platformRequest = headerPlatformByClient.get(client);
+    if (!platformRequest) {
+      platformRequest = client
+        .request<SystemInfoResult>("system.info", {})
+        .then((result) => result.platform)
+        .catch(() => null);
+      headerPlatformByClient.set(client, platformRequest);
+    }
+    try {
+      const platform = await platformRequest;
+      if (this.connectedClient === client && this.connectionGeneration === generation) {
+        this.headerPlatform = platform;
+      }
+    } catch {
+      // Optional label refinement. Generic file-manager copy remains correct.
+    }
+  }
+
+  private beginHeaderRename(row: GatewaySessionRow): void {
+    const customLabel = row.label?.trim() || null;
+    this.headerRenameSessionKey = row.key;
+    this.headerRenameInitialLabel = customLabel;
+    this.headerRenameInitialValue = customLabel ?? this.paneTitle;
+    this.headerRenameValue = this.headerRenameInitialValue;
+    this.headerEditing = true;
+    void this.updateComplete.then(() => {
+      const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
+      input?.focus();
+      input?.select();
+    });
+  }
+
+  private cancelHeaderRename(): void {
+    this.headerEditing = false;
+    this.headerRenameSessionKey = "";
+  }
+
+  private commitHeaderRename(): void {
+    if (!this.headerEditing) {
+      return;
+    }
+    const key = this.headerRenameSessionKey;
+    const trimmed = this.headerRenameValue.trim();
+    const label = trimmed || null;
+    const unchangedDerivedTitle =
+      this.headerRenameInitialLabel === null && trimmed === this.headerRenameInitialValue.trim();
+    const unchangedLabel = label === this.headerRenameInitialLabel;
+    this.headerEditing = false;
+    this.headerRenameSessionKey = "";
+    if (!key || unchangedDerivedTitle || unchangedLabel) {
+      return;
+    }
+    const agentId = parseAgentSessionKey(key)?.agentId;
+    void this.context.sessions
+      .patch(key, { label }, agentId ? { agentId } : undefined)
+      .catch((error: unknown) => this.publishHeaderError(error));
+  }
+
+  private async loadHeaderMenuData(
+    row: GatewaySessionRow,
+    agentWorkspace: string | undefined,
+    workspaceGit: boolean,
+  ): Promise<void> {
+    const client = this.connectedClient;
+    if (!client) {
+      return;
+    }
+    const loads: Promise<void>[] = [];
+    // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
+    const immediateRoot =
+      (row.execNode ? row.execCwd?.trim() : undefined) ||
+      row.spawnedWorkspaceDir?.trim() ||
+      row.spawnedCwd?.trim() ||
+      null;
+    const worktreeId = row.worktree?.id;
+    if (worktreeId && !immediateRoot) {
+      const entry = this.headerWorktreePaths.get(worktreeId) ?? {};
+      this.headerWorktreePaths.set(worktreeId, entry);
+      if (!entry.loaded && !entry.loading) {
+        entry.loading = true;
+        loads.push(
+          client
+            .request<WorktreesListResult>("worktrees.list", {})
+            .then((result) => {
+              entry.path =
+                result.worktrees.find(
+                  (candidate) => candidate.id === worktreeId && candidate.removedAt === undefined,
+                )?.path ?? null;
+              entry.loaded = true;
+            })
+            .catch(() => {
+              entry.path = null;
+              entry.loaded = false;
+            })
+            .finally(() => {
+              entry.loading = false;
+            }),
+        );
+      }
+    }
+    const agentRoot = !row.worktree ? agentWorkspace?.trim() : undefined;
+    const knownRoot =
+      immediateRoot ||
+      (worktreeId ? this.headerWorktreePaths.get(worktreeId)?.path : undefined) ||
+      agentRoot;
+    const remote = Boolean(row.execNode) || isCloudWorkerPlacementState(row.placement?.state);
+    // workspaceGit describes the agent workspace only; a session-specific
+    // root (spawned dir) may be a Git checkout regardless, so probe it and
+    // let a failed lookup hide the branch action instead.
+    const rootMayHaveBranch = knownRoot === agentRoot ? workspaceGit : Boolean(knownRoot);
+    // Unlike the worktree path, HEAD moves whenever the agent checks out a
+    // branch mid-session, so every menu open refetches. Deliberate
+    // stale-while-revalidate: the last-known branch stays actionable during
+    // the sub-second local refresh — hiding it would flicker the menu on
+    // every open to guard a race narrower than the user's click.
+    if (!row.worktree && !remote && knownRoot && rootMayHaveBranch) {
+      const entry = this.headerBranches.get(knownRoot) ?? {};
+      this.headerBranches.set(knownRoot, entry);
+      if (!entry.loading) {
+        entry.loading = true;
+        loads.push(
+          client
+            .request<WorktreesBranchesResult>("worktrees.branches", { repoRoot: knownRoot })
+            .then((result) => {
+              entry.value = result.headBranch ?? null;
+            })
+            .catch(() => {
+              entry.value = null;
+            })
+            .finally(() => {
+              entry.loading = false;
+            }),
+        );
+      }
+    }
+    await Promise.all(loads);
+    this.requestUpdate();
+  }
+
+  private showHeaderCopied(action: ChatPaneHeaderAction): void {
+    this.headerCopiedAction = action;
+    if (this.headerCopiedTimer !== null) {
+      window.clearTimeout(this.headerCopiedTimer);
+    }
+    this.headerCopiedTimer = window.setTimeout(() => {
+      this.headerCopiedAction = null;
+      this.headerCopiedTimer = null;
+    }, 1_500);
+  }
+
+  private handleHeaderMenuAction(
+    action: ChatPaneHeaderAction,
+    row: GatewaySessionRow,
+    workspaceRoot: string | null,
+    branch: string | null,
+    copy: (value: string) => Promise<boolean> = copyToClipboard,
+  ): void {
+    if (action === "copy-path" && workspaceRoot) {
+      void copy(workspaceRoot).then((copied) => {
+        if (copied) {
+          this.showHeaderCopied(action);
+        }
+      });
+      return;
+    }
+    if (action === "copy-branch" && branch) {
+      void copy(branch).then((copied) => {
+        if (copied) {
+          this.showHeaderCopied(action);
+        }
+      });
+      return;
+    }
+    if (action === "reveal" && workspaceRoot) {
+      void this.revealHeaderWorkspace(row);
+    }
+  }
+
+  private publishHeaderError(error: unknown): void {
+    if (!this.state) {
+      return;
+    }
+    this.state.chatError = error instanceof Error ? error.message : String(error);
+    this.state.requestUpdate?.();
+  }
+
+  private async revealHeaderWorkspace(row: GatewaySessionRow): Promise<void> {
+    const client = this.connectedClient;
+    if (!client) {
+      return;
+    }
+    const agentId = parseAgentSessionKey(row.key)?.agentId;
+    try {
+      const result = await client.request<SessionsFilesRevealResult>("sessions.files.reveal", {
+        key: row.key,
+        ...(agentId ? { agentId } : {}),
+      });
+      if (!result.ok) {
+        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.");
+      }
+    } catch (error) {
+      this.publishHeaderError(error);
+    }
+  }
+
   private renderPaneHeader(
     sessionWorkspace: SessionWorkspaceProps,
     backgroundTasks: BackgroundTasksProps,
+    row: GatewaySessionRow | undefined,
+    catalog: boolean,
+    agentWorkspace: string | undefined,
+    workspaceGit: boolean,
   ) {
-    return html`
-      <div
-        class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}"
-        @mousedown=${beginNativeWindowDrag}
-      >
-        <!-- Static text on purpose: an interactive session picker here would
-             fight pane focus. Panes change sessions via the sidebar or
-             drag-and-drop. -->
-        <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
-        <div class="chat-pane__actions">
-          ${renderCatalogTerminalButton(this.state, this.catalogSession)}
-          ${renderSessionDiffToggle(sessionWorkspace)}
-          ${renderBackgroundTasksToggle(backgroundTasks)}
-          ${renderSessionWorkspaceToggle(sessionWorkspace)}
-          ${!this.narrow
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                  <button
-                    class="btn btn--ghost btn--icon chat-icon-btn"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitDown")}
-                    @click=${() => this.onSplitDown?.(this.paneId)}
-                  >
-                    ${icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>
-                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                  <button
-                    class="btn btn--ghost btn--icon chat-icon-btn"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitRight")}
-                    @click=${() => this.onSplitRight?.(this.paneId)}
-                  >
-                    ${icons.panelRightOpen}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-            <button
-              class="btn btn--ghost btn--icon chat-icon-btn"
-              type="button"
-              aria-label=${t("chat.splitView.closePane")}
-              @click=${() => this.onClosePane?.(this.paneId)}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>
-        </div>
-      </div>
-    `;
+    const workspace = resolveChatPaneWorkspace({
+      session: row,
+      agentWorkspace: row?.worktree ? undefined : agentWorkspace,
+      worktreePath: row?.worktree ? this.headerWorktreePaths.get(row.worktree.id)?.path : undefined,
+    });
+    // Managed worktree sessions copy the worktree record's branch — the same
+    // source the sidebar subtitle and preserved-worktree prompts use. Live
+    // HEAD is only resolved for plain checkouts, where no record exists.
+    // Cached HEAD is keyed by the resolved root and masked while the session
+    // runs remotely, so reused keys, root transitions, open menus, and
+    // in-flight lookups racing a dispatch can never surface a wrong branch.
+    const rowRemote = Boolean(row?.execNode) || isCloudWorkerPlacementState(row?.placement?.state);
+    const branch =
+      row?.worktree?.branch ||
+      (rowRemote || !workspace.root ? null : this.headerBranches.get(workspace.root)?.value) ||
+      null;
+    const canReveal = canRevealSessionWorkspace({
+      session: row,
+      workspaceRoot: workspace.root,
+      methodAdvertised:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.files.reveal") === true,
+      hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+    });
+    return renderChatPaneHeader({
+      paneId: this.paneId,
+      narrow: this.narrow,
+      mergedChrome: this.mergedChrome,
+      title: this.paneTitle,
+      session: row,
+      catalog,
+      editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
+      renameValue: this.headerRenameValue,
+      workspaceRoot: workspace.root,
+      workspaceLabel: workspace.label,
+      branch,
+      platform: this.headerPlatform,
+      canReveal,
+      copiedAction: this.headerCopiedAction,
+      canRename:
+        this.state?.connected === true &&
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      terminalAction: renderCatalogTerminalButton(this.state, this.catalogSession),
+      diffAction: renderSessionDiffToggle(sessionWorkspace),
+      backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
+      workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
+      onBeginRename: () => row && this.beginHeaderRename(row),
+      onRenameInput: (value) => {
+        this.headerRenameValue = value;
+      },
+      onCommitRename: () => this.commitHeaderRename(),
+      onCancelRename: () => this.cancelHeaderRename(),
+      onMenuOpenChange: (open) => {
+        if (open && row) {
+          void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
+        }
+      },
+      onMenuAction: (action) => {
+        if (row) {
+          this.handleHeaderMenuAction(action, row, workspace.root, branch);
+        }
+      },
+      onOpenSplitView: this.onOpenSplitView,
+      onSplitDown: this.onSplitDown,
+      onSplitRight: this.onSplitRight,
+      onClosePane: this.onClosePane,
+    });
   }
 
   override render() {
@@ -1914,6 +2213,22 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    const selectedSession = state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
+    const runtimeConfigState = this.context.runtimeConfig.state;
+    const configSnapshot = runtimeConfigState.configSnapshot;
+    const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
+      configNeedsApply: runtimeConfigState.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded:
+        selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    });
+    state.chatFollowUpMode = resolveControlUiFollowUpMode(
+      state.settings.chatFollowUpMode,
+      serverQueueMode,
+    );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     // Tool rows consult the global title store while rendering; point its
@@ -1925,12 +2240,10 @@ class ChatPane extends OpenClawLightDomElement {
       agentId: currentAgentId || null,
       onTitlesChanged: () => state.requestUpdate?.(),
     });
-    const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
+    const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
-    )?.model?.primary;
-    const selectedSession = state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const agentDefaultModel = selectedAgent?.model?.primary;
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(
@@ -1986,6 +2299,15 @@ class ChatPane extends OpenClawLightDomElement {
       runStatus: state.chatRunStatus,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
+      planStatus: state.planStatus,
+      questionStatus: state.questionStatus,
+      gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
+      onGatewayQuestionChange: () => {
+        this.questionPrompts = [...this.questionPrompts];
+        this.requestUpdate();
+      },
+      onGatewayQuestionSubmit: (id, answers) =>
+        submitQuestionPrompt(this.questionPromptState, id, answers),
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
@@ -2002,7 +2324,7 @@ class ChatPane extends OpenClawLightDomElement {
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
-      followUpMode: state.settings.chatFollowUpMode,
+      followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
       realtimeTalkActive: state.realtimeTalkActive,
@@ -2010,6 +2332,7 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
+      realtimeTalkVideoStream: state.realtimeTalkVideoStream,
       connected: state.connected,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
@@ -2062,8 +2385,6 @@ class ChatPane extends OpenClawLightDomElement {
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
-      paneHeaderActive: this.showPaneHeader,
-      onOpenSplitView: this.onOpenSplitView,
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
@@ -2129,6 +2450,7 @@ class ChatPane extends OpenClawLightDomElement {
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+      onToggleRealtimeVideo: () => void state.toggleRealtimeTalk({ video: true }),
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();
@@ -2142,6 +2464,11 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      onQuestionSubmit: (actionToken, answers, onRejected) =>
+        void state.handleSendChat(
+          `/codex answer ${actionToken} answers:${encodeURIComponent(JSON.stringify(answers))}`,
+          { onLocalCommandSendRejected: onRejected },
+        ),
       onSideQuestion: (command, displayQuestion, onSendRejected) =>
         void state.handleSendChat(command, {
           ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),
@@ -2227,10 +2554,14 @@ class ChatPane extends OpenClawLightDomElement {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       basePath: state.basePath,
     };
-    if (!this.showPaneHeader) {
-      return renderChat(props);
-    }
-    return html`${this.renderPaneHeader(sessionWorkspace, backgroundTasks)}${renderChat(props)}`;
+    return html`${this.renderPaneHeader(
+      sessionWorkspace,
+      backgroundTasks,
+      selectedSession,
+      Boolean(catalogKey),
+      selectedAgent?.workspace,
+      selectedAgent?.workspaceGit === true,
+    )}${renderChat(props)}`;
   }
 }
 

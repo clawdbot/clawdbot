@@ -49,6 +49,9 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
     expect(request(`${buildMcpAppSandboxPath()}?csp=not-json`).res.statusCode).toBe(400);
+    const jsonButNotCsp = Buffer.from("null", "utf8").toString("base64url");
+    expect(request(`${buildMcpAppSandboxPath()}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
+    expect(request(`${buildMcpAppSandboxPath()}?csp=`).res.statusCode).toBe(400);
     expect(request("http://[", "GET").res.statusCode).toBe(400);
   });
 });

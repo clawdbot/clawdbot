@@ -27,6 +27,7 @@ import {
 import {
   getMemoryCapabilityRegistration,
   listMemoryCorpusSupplements,
+  listMemoryPromptPreparations,
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
@@ -42,6 +43,7 @@ export type PluginProcessGlobalState = {
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
+  memoryPromptPreparations: ReturnType<typeof listMemoryPromptPreparations>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
 };
 
@@ -56,6 +58,7 @@ export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
     memoryCapability: getMemoryCapabilityRegistration(),
     memoryCorpusSupplements: listMemoryCorpusSupplements(),
     memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
+    memoryPromptPreparations: listMemoryPromptPreparations(),
     memoryPromptSupplements: listMemoryPromptSupplements(),
   };
 }
@@ -71,6 +74,7 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreMemoryPluginState({
     capability: state.memoryCapability,
     corpusSupplements: state.memoryCorpusSupplements,
+    promptPreparations: state.memoryPromptPreparations,
     promptSupplements: state.memoryPromptSupplements,
   });
 }

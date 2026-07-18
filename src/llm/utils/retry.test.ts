@@ -51,6 +51,10 @@ describe("isRetryableAssistantError", () => {
     "429 temporary provider response",
     "HTTP 500 temporary provider response",
     "503: temporary provider response",
+    "524 status code (no body)",
+    "The socket connection was closed unexpectedly by fetch",
+    "ResourceExhausted: Worker local total request limit reached",
+    "resource_exhausted: transient worker capacity exhausted",
   ])("retries explicit transient HTTP statuses: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
   });

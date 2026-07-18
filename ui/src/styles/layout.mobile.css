@@ -89,6 +89,19 @@
   --shell-nav-width: 0px;
 }
 
+/* Plain-browser chat owns the only narrow chrome row in its pane header. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome {
+  --shell-topbar-height: 0px;
+  grid-template-rows: 0px minmax(0, 1fr);
+}
+
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome
+  .topbar {
+  display: none;
+}
+
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
@@ -195,24 +208,9 @@
 }
 
 .shell--mobile-nav .sidebar-shell {
-  padding: 18px 16px 14px;
+  --sidebar-pad-x: 16px;
+  padding: 18px var(--sidebar-pad-x) 14px;
   border-radius: 0;
-}
-
-.shell--mobile-nav .sidebar-nav {
-  /* Match the desktop pinned-nav layout so the session list keeps the
-     remaining drawer height. */
-  flex: 0 0 auto;
-  max-height: 60%;
-  display: block;
-  padding: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.shell--mobile-nav .sidebar-nav::-webkit-scrollbar {
-  display: none;
 }
 
 .shell--mobile-nav .nav-item {
@@ -314,7 +312,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .shell--mobile-nav .sidebar-shell {
-    padding: 16px 14px 12px;
+    --sidebar-pad-x: 14px;
+    padding: 16px var(--sidebar-pad-x) 12px;
   }
 
   .shell--mobile-nav .nav-item {

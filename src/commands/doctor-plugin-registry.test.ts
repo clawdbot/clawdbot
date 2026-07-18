@@ -922,4 +922,37 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(notes).toContain("openclaw doctor --fix");
     expect(fs.existsSync(linkPath)).toBe(false);
   });
+
+  it("reports an unreadable managed npm package without aborting doctor", async () => {
+    const stateDir = makeTempDir();
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "broken",
+      packageName: "broken-plugin",
+      version: "2026.5.3",
+    });
+    fs.writeFileSync(path.join(managed.packageDir, "package.json"), "{", "utf8");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "broken",
+        packageName: "broken-plugin",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await expect(
+      maybeRepairPluginRegistryState({
+        stateDir,
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair: false },
+      }),
+    ).resolves.toEqual({});
+
+    const notes = vi.mocked(note).mock.calls.join("\n");
+    expect(notes).toContain("Managed npm plugin packages could not be inspected");
+    expect(notes).toContain("broken-plugin");
+  });
 });

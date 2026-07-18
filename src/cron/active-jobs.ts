@@ -144,6 +144,22 @@ export function hasActiveCronJobs() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
 }
 
+/**
+ * Ignore only the caller's own marker. Unrelated runs must still block its wake,
+ * because cron jobs may execute concurrently.
+ */
+export function hasActiveCronJobsExceptMarker(markerToIgnore: CronActiveJobMarker) {
+  const state = getCronActiveJobState();
+  for (const marker of state.activeJobs.values()) {
+    const isIgnoredMarker =
+      marker.jobId === markerToIgnore.jobId && marker.token === markerToIgnore.token;
+    if (!isIgnoredMarker && isMarkerActiveInGeneration(marker, state.generation)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Returns the number of active cron runs in this process. */
 export function getActiveCronJobCount() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState());

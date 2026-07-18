@@ -13,6 +13,13 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const emptyUsageSummary = (): UsageSummary => ({ updatedAt: 0, providers: [] });
 
 const mocks = vi.hoisted(() => ({
@@ -720,7 +727,7 @@ describe("models.authStatus", () => {
     });
 
     const inFlightStatus = handler(createOptions());
-    await vi.waitFor(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
     await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
     releaseUsage?.();
     await inFlightStatus;
@@ -1263,6 +1270,7 @@ describe("models.authLogout", () => {
         state: "aborted",
         stopReason: "auth-revoked",
       }),
+      { sessionKeys: [openrouterRun.sessionKey] },
     );
     const [, payload] = firstRespondCall(opts) ?? [];
     expect((payload as ModelAuthLogoutResult).abortedRunIds).toEqual(["run-openrouter"]);

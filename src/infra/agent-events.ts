@@ -172,6 +172,7 @@ const AGENT_EVENT_EXECUTION_CONTEXT_KEY = Symbol.for("openclaw.agentEvents.execu
 
 type AgentEventExecutionContext = {
   lifecycleGeneration: string;
+  onceByRun: Map<string, Promise<unknown>>;
 };
 
 function getAgentEventState(): AgentEventState {
@@ -193,7 +194,27 @@ function getAgentEventExecutionContext() {
 
 /** Runs one execution with immutable ownership inherited by every emitted stream event. */
 export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, run: () => T): T {
-  return getAgentEventExecutionContext().run({ lifecycleGeneration }, run);
+  const storage = getAgentEventExecutionContext();
+  const parent = storage.getStore();
+  const onceByRun =
+    parent?.lifecycleGeneration === lifecycleGeneration ? parent.onceByRun : new Map();
+  return storage.run({ lifecycleGeneration, onceByRun }, run);
+}
+
+/** Shares one operation across fallback attempts that belong to the same admitted run. */
+export function runOncePerAgentRun<T>(runId: string, operation: string, run: () => Promise<T>) {
+  const context = getAgentEventExecutionContext().getStore();
+  if (!context) {
+    return run();
+  }
+  const key = `${operation}:${runId}`;
+  const existing = context.onceByRun.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const pending = Promise.resolve().then(run);
+  context.onceByRun.set(key, pending);
+  return pending;
 }
 
 export function getAgentEventLifecycleGeneration(): string {

@@ -124,6 +124,15 @@ describe("handleBashChatCommand stop", () => {
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
 
+  it("does not split boundary emoji in missing session snippets", async () => {
+    getSessionMock.mockReturnValue(undefined);
+    getFinishedSessionMock.mockReturnValue(undefined);
+
+    const result = await handleBashChatCommand(buildParams("/bash stop 1234567😀tail"));
+
+    expect(result.text).toBe("⚙️ No running bash job found for 1234567….");
+  });
+
   it("fails stop when session has no pid", async () => {
     const session = buildRunningSession({ pid: undefined, child: undefined });
     getSessionMock.mockReturnValue(session);

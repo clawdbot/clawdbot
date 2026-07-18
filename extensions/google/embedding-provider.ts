@@ -41,7 +41,6 @@ export type GeminiEmbeddingClient = {
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
-  "text-embedding-004": 2048,
   "gemini-embedding-001": 2048,
   "gemini-embedding-2-preview": 8192,
 };

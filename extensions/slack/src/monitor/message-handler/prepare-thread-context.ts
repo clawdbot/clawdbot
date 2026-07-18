@@ -1,5 +1,8 @@
 // Slack plugin module implements prepare thread context behavior.
-import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatInboundEnvelope,
+  resolveInboundSupplementalSenderAllowed,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -82,18 +85,25 @@ function isSlackThreadContextSenderAllowed(params: {
   userName?: string;
   botId?: string;
 }): boolean {
-  if (params.allowFromLower.length === 0 || params.botId) {
-    return true;
-  }
-  if (!params.userId) {
-    return false;
-  }
-  return resolveSlackAllowListMatch({
-    allowList: params.allowFromLower,
-    id: params.userId,
-    name: params.userName,
-    allowNameMatching: params.allowNameMatching,
-  }).allowed;
+  return resolveInboundSupplementalSenderAllowed({
+    isGroup: true,
+    groupPolicy: params.allowFromLower.length === 0 ? "open" : "allowlist",
+    allowFrom: params.allowFromLower,
+    isSenderAllowed: (allowFrom) => {
+      if (params.botId) {
+        return true;
+      }
+      if (!params.userId) {
+        return false;
+      }
+      return resolveSlackAllowListMatch({
+        allowList: allowFrom,
+        id: params.userId,
+        name: params.userName,
+        allowNameMatching: params.allowNameMatching,
+      }).allowed;
+    },
+  });
 }
 
 async function resolveSlackThreadUserMap(params: {

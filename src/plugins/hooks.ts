@@ -80,6 +80,7 @@ import type {
   PluginHookSubagentSpawningEvent,
   PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
+  PluginHookSubagentProgressEvent,
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
@@ -1448,6 +1449,14 @@ export function createHookRunner(
     return runVoidHook("subagent_spawned", event, ctx);
   }
 
+  /** Run portable subagent progress presentation hooks. */
+  async function runSubagentProgress(
+    event: PluginHookSubagentProgressEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    return runVoidHook("subagent_progress", event, ctx);
+  }
+
   /**
    * Run subagent_ended hook.
    * Runs in parallel (fire-and-forget).
@@ -1621,6 +1630,7 @@ export function createHookRunner(
     runSubagentSpawning,
     runSubagentDeliveryTarget,
     runSubagentSpawned,
+    runSubagentProgress,
     runSubagentEnded,
     // Gateway hooks
     runGatewayStart,
@@ -1641,6 +1651,10 @@ export type HookRunner = ReturnType<typeof createHookRunner>;
 
 export type SubagentLifecycleHookRunner = Pick<
   HookRunner,
-  "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+  | "hasHooks"
+  | "runSubagentSpawning"
+  | "runSubagentSpawned"
+  | "runSubagentProgress"
+  | "runSubagentEnded"
 >;
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

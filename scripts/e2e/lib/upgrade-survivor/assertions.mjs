@@ -691,6 +691,161 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
+function parseStableVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/u.exec(version ?? "");
+  assert(match, `invalid stable package version: ${String(version)}`);
+  return match.slice(1).map((part) => Number(part ?? 0));
+}
+
+function compareStableVersions(left, right) {
+  const leftParts = parseStableVersion(left);
+  const rightParts = parseStableVersion(right);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+function normalizeSystemctlInvocation(line) {
+  const parts = String(line ?? "")
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean);
+  const normalized = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (["--user", "--quiet", "--no-page", "--no-pager", "--now"].includes(part)) {
+      continue;
+    }
+    if (part === "--property") {
+      index += 1;
+      continue;
+    }
+    normalized.push(part);
+  }
+  return normalized.join(" ");
+}
+
+function assertUpdateRunSelfUpgrade([file]) {
+  assert(file, "assert-update-run-self-upgrade requires a summary path");
+  const summary = readJson(file);
+  const sourceVersion = summary?.source?.version;
+  const targetVersion = summary?.target?.resolvedVersion;
+  const updateRpc = summary?.updateRpcResult;
+  const sentinel = summary?.restartSentinel;
+  const qaChannelInstallRecord = summary?.qaChannelInstallRecord;
+  const targetQaChannelInstallRecord = summary?.targetPluginIndex?.installRecords?.["qa-channel"];
+  const gatewayStatus = summary?.gateway?.status;
+  const qaAccounts = summary?.qaChannel?.status?.channelAccounts?.["qa-channel"];
+  const targetServiceStarts = (summary?.supervisorHandoff?.systemctlInvocations ?? [])
+    .map(normalizeSystemctlInvocation)
+    .filter((invocation) => invocation === "start openclaw-gateway.service");
+
+  assert(summary?.status === "passed", "update.run self-upgrade summary did not pass");
+  assert(sourceVersion === "2026.4.26", `unexpected source version: ${String(sourceVersion)}`);
+  assert(summary?.source?.spec === "openclaw@2026.4.26", "source package spec was not exact");
+  assert(summary?.target?.tag === "latest", "target tag was not latest");
+  assert(
+    compareStableVersions(targetVersion, sourceVersion) > 0,
+    `target version did not advance beyond source: ${String(sourceVersion)} -> ${String(targetVersion)}`,
+  );
+  assert(
+    summary?.installedVersion === targetVersion,
+    `installed version mismatch: expected ${String(targetVersion)}, got ${String(summary?.installedVersion)}`,
+  );
+  assert(qaChannelInstallRecord?.source === "path", "QA channel was not path-installed");
+  assert(
+    typeof qaChannelInstallRecord?.sourcePath === "string" &&
+      qaChannelInstallRecord.sourcePath.includes("/extensions/qa-channel"),
+    "QA channel install record omitted its source path",
+  );
+  assert(
+    typeof qaChannelInstallRecord?.installPath === "string" &&
+      qaChannelInstallRecord.installPath.includes("/dist/extensions/qa-channel"),
+    "QA channel install record omitted its compiled local install path",
+  );
+  assert(
+    qaChannelInstallRecord?.version === "2026.4.25",
+    "QA channel install record version mismatch",
+  );
+  assert(
+    summary?.sourcePluginInspect?.plugin?.status === "loaded",
+    "source package did not load the compiled QA channel plugin",
+  );
+  assert(
+    targetQaChannelInstallRecord?.source === "path" &&
+      targetQaChannelInstallRecord?.installPath === qaChannelInstallRecord?.installPath,
+    "target SQLite index did not preserve the QA channel path install record",
+  );
+
+  assert(updateRpc?.ok === true, `update.run RPC did not report ok: ${JSON.stringify(updateRpc)}`);
+  assert(updateRpc?.result?.status === "ok", "update.run did not execute the package update");
+  assert(
+    updateRpc?.result?.before?.version === sourceVersion,
+    "update.run source version mismatch",
+  );
+  assert(updateRpc?.result?.after?.version === targetVersion, "update.run target version mismatch");
+  assert(
+    Array.isArray(updateRpc?.result?.steps) && updateRpc.result.steps.length > 0,
+    "update.run reported no executed update steps",
+  );
+  assert(updateRpc?.restart, "update.run did not schedule a Gateway restart");
+  assert(
+    updateRpc?.sentinel?.payload?.message === summary.expectedRestartNote,
+    "update.run response sentinel note mismatch",
+  );
+
+  assert(sentinel?.kind === "update", "final restart sentinel kind was not update");
+  assert(sentinel?.status === "ok", "final restart sentinel did not report ok");
+  assert(sentinel?.message === summary.expectedRestartNote, "final restart sentinel note mismatch");
+  assert(
+    sentinel?.stats?.before?.version === sourceVersion,
+    "restart sentinel source version mismatch",
+  );
+  assert(
+    sentinel?.stats?.after?.version === targetVersion,
+    "restart sentinel target version mismatch",
+  );
+  assert(
+    Number.isSafeInteger(summary?.supervisorHandoff?.servicePid) &&
+      summary.supervisorHandoff.servicePid > 1,
+    "supervisor handoff did not record the target service PID",
+  );
+  assert(targetServiceStarts.length === 1, "systemctl shim did not start the target exactly once");
+  assert(
+    summary?.supervisorHandoff?.monitorEvents?.some((line) =>
+      line.includes("source Gateway exited through supervised update handoff"),
+    ),
+    "supervisor monitor did not prove the source supervised handoff",
+  );
+
+  assert(
+    summary?.gateway?.healthz?.body?.ok === true &&
+      summary?.gateway?.healthz?.body?.status === "live",
+    "post-restart /healthz was not live",
+  );
+  assert(summary?.gateway?.readyz?.body?.ready === true, "post-restart /readyz was not ready");
+  assert(
+    gatewayStatus?.rpc?.ok === true &&
+      gatewayStatus?.rpc?.version === targetVersion &&
+      gatewayStatus?.gateway?.version === targetVersion &&
+      gatewayStatus?.cli?.version === targetVersion,
+    `post-restart Gateway did not report target version ${String(targetVersion)}`,
+  );
+  assert(Array.isArray(qaAccounts), "post-restart channels.status omitted qa-channel");
+  assert(
+    qaAccounts.some((account) => account?.running === true && account?.restartPending !== true),
+    "post-restart QA channel account was not running",
+  );
+  assert(
+    Number(summary?.qaChannel?.busPollsAfterRestart) > 0,
+    "QA channel did not poll its bus after the target Gateway restart",
+  );
+}
+
 if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
@@ -702,6 +857,8 @@ if (command === "list-scenarios") {
   assertConfiguredPluginInstalls();
 } else if (command === "assert-status-json") {
   assertStatusJson(process.argv.slice(3));
+} else if (command === "assert-update-run-self-upgrade") {
+  assertUpdateRunSelfUpgrade(process.argv.slice(3));
 } else {
   throw new Error(`unknown upgrade-survivor assertion command: ${command ?? "<missing>"}`);
 }

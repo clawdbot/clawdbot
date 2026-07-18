@@ -1,5 +1,7 @@
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob } from "../../api/types.ts";
+import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -2177,6 +2179,135 @@ describe("cron controller", () => {
       "cron.runs",
       expect.objectContaining({ id: "job-invalid" }),
     );
+  });
+});
+
+describe("cron every-interval lossless round-trip", () => {
+  function everyJob(everyMs: number): CronJob {
+    return {
+      id: "job-interval",
+      name: "Interval",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "tick" },
+      delivery: { mode: "none" },
+      state: {},
+    } as unknown as CronJob;
+  }
+
+  function captureUpdateState(job: CronJob) {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: job.id };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: job.id }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+    return { request, state };
+  }
+
+  // Each everyMs the editable form must reproduce exactly: reading a job into the
+  // form and rebuilding the schedule may never change the cadence. Legal everyMs
+  // spans 1ms..MAX_SAFE_INTEGER (gateway schema minimum 1, no sub-minute floor).
+  const cases: ReadonlyArray<{ everyMs: number; amount: string; unit: string }> = [
+    { everyMs: 1, amount: "0.001", unit: "seconds" },
+    { everyMs: 450, amount: "0.45", unit: "seconds" },
+    { everyMs: 1_000, amount: "1", unit: "seconds" },
+    { everyMs: 30_000, amount: "30", unit: "seconds" },
+    { everyMs: 90_000, amount: "90", unit: "seconds" },
+    { everyMs: 246_000, amount: "246", unit: "seconds" },
+    { everyMs: 60_000, amount: "1", unit: "minutes" },
+    { everyMs: 7_200_000, amount: "2", unit: "hours" },
+    { everyMs: 86_400_000, amount: "1", unit: "days" },
+    { everyMs: Number.MAX_SAFE_INTEGER, amount: "9007199254740.991", unit: "seconds" },
+  ];
+
+  it("reads every job back into the most natural exact unit", () => {
+    for (const { everyMs, amount, unit } of cases) {
+      const state = createState();
+      startCronEdit(state, everyJob(everyMs));
+      expect(state.cronForm.everyUnit).toBe(unit);
+      expect(state.cronForm.everyAmount).toBe(amount);
+      // The rebuilt millisecond value must equal the original, not a rounded one.
+      expect(parseCronEveryMs(state.cronForm.everyAmount, state.cronForm.everyUnit)).toBe(everyMs);
+    }
+  });
+
+  it("keeps everyMs unchanged on a metadata-only edit", async () => {
+    for (const everyMs of [30_000, 90_000, 450, Number.MAX_SAFE_INTEGER]) {
+      const { request, state } = captureUpdateState(everyJob(everyMs));
+      startCronEdit(state, state.cronJobs[0] as CronJob);
+      state.cronForm.name = "Renamed only";
+      await addCronJob(state);
+
+      const updateCall = findRequestCall(request.mock.calls, "cron.update");
+      const patch = requestPatch(updateCall);
+      expect(patch.schedule).toEqual({ kind: "every", everyMs });
+    }
+  });
+
+  it("sends the edited interval when the seconds unit is changed", async () => {
+    const wholeSeconds = captureUpdateState(everyJob(60_000));
+    startCronEdit(wholeSeconds.state, wholeSeconds.state.cronJobs[0] as CronJob);
+    wholeSeconds.state.cronForm.everyUnit = "seconds";
+    wholeSeconds.state.cronForm.everyAmount = "45";
+    await addCronJob(wholeSeconds.state);
+    expect(
+      requestPatch(findRequestCall(wholeSeconds.request.mock.calls, "cron.update")).schedule,
+    ).toEqual({ kind: "every", everyMs: 45_000 });
+
+    const subSecond = captureUpdateState(everyJob(60_000));
+    startCronEdit(subSecond.state, subSecond.state.cronJobs[0] as CronJob);
+    subSecond.state.cronForm.everyUnit = "seconds";
+    subSecond.state.cronForm.everyAmount = "0.45";
+    await addCronJob(subSecond.state);
+    expect(
+      requestPatch(findRequestCall(subSecond.request.mock.calls, "cron.update")).schedule,
+    ).toEqual({ kind: "every", everyMs: 450 });
+  });
+
+  it("clones a sub-minute job without rounding its interval", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-clone" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const sourceJob = everyJob(30_000);
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [sourceJob],
+    });
+
+    startCronClone(state, sourceJob);
+    expect(state.cronForm.everyUnit).toBe("seconds");
+    expect(state.cronForm.everyAmount).toBe("30");
+    await addCronJob(state);
+
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect((addCall[1] as { schedule?: unknown }).schedule).toEqual({
+      kind: "every",
+      everyMs: 30_000,
+    });
   });
 });
 

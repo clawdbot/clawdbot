@@ -270,7 +270,7 @@ export function createTelegramProgressController(params: {
   };
   const handlePlanUpdate = async (payload: CallbackPayload<"onPlanUpdate">) => {
     if (payload.phase === "update" && canPushToolProgress()) {
-      await compositor.pushPlanProgress(payload.planSteps, {
+      await compositor.pushPlanProgress(payload.steps, {
         explanation: payload.explanation,
       });
     }

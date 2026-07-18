@@ -86,6 +86,13 @@ extension OnboardingView {
     func handleNext() {
         // All callers (Next button, chat handoff) honor the same page gates.
         guard canAdvance else { return }
+        if self.activePageIndex == self.memoryImportPageIndex,
+           self.memoryImport.isFailed
+        {
+            self.memoryImport.dismissFailure()
+            self.updateMonitoring(for: self.activePageIndex)
+            return
+        }
         self.commitRecommendedConnectionIfNeeded(for: activePageIndex)
         if currentPage < pageCount - 1 {
             withAnimation { self.currentPage += 1 }
@@ -112,5 +119,13 @@ extension OnboardingView {
         if state.connectionMode != .unconfigured {
             AppNavigationActions.openChat()
         }
+    }
+
+    func advancePastEmptyMemoryImportIfNeeded() {
+        guard self.memoryImport.autoAdvanceRequested else { return }
+        withAnimation {
+            self.memoryImport.consumeAutoAdvanceRequest()
+        }
+        self.updateMonitoring(for: self.activePageIndex)
     }
 }

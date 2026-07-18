@@ -137,7 +137,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => settings.isVisible()).toBe(true);
       await expect.poll(() => splitView.isVisible()).toBe(true);
       await expect
-        .poll(() => splitView.evaluate((node) => node.closest(".chat-floating-toggles") != null))
+        .poll(() => splitView.evaluate((node) => node.closest(".chat-pane__header") != null))
         .toBe(true);
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
@@ -423,19 +423,15 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(activeModelBox.x).toBeGreaterThanOrEqual(
         activeSettingsBox.x + activeSettingsBox.width - 1,
       );
-      // The opener lives in the floating toggle cluster pinned to the
-      // top-right corner of the chat area. The cluster's right edge hugs the
-      // corner; the opener itself is the leftmost button in the row.
-      const toggleClusterBox = await page.locator(".chat-floating-toggles").boundingBox();
-      expect(toggleClusterBox).not.toBeNull();
-      if (!toggleClusterBox) {
-        throw new Error("expected the floating toggle cluster to have a layout box");
+      // The opener lives in the always-on pane header at the chat area's top edge.
+      const headerBox = await page.locator(".chat-pane__header").boundingBox();
+      expect(headerBox).not.toBeNull();
+      if (!headerBox) {
+        throw new Error("expected the pane header to have a layout box");
       }
       expect(
         Math.abs(
-          activeChatContentBox.x +
-            activeChatContentBox.width -
-            (toggleClusterBox.x + toggleClusterBox.width),
+          activeChatContentBox.x + activeChatContentBox.width - (headerBox.x + headerBox.width),
         ),
       ).toBeLessThanOrEqual(24);
       expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);

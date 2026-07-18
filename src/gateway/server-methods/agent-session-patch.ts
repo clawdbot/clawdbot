@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery-clear.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
@@ -201,11 +202,15 @@ export function buildAgentSessionPatch(params: {
     freshRecoverableTerminalSession &&
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
+  const automaticRecoveryClearPatch = shouldClearRotatedState
+    ? buildMainSessionRecoveryClearPatch(params.freshEntry)
+    : {};
   const patch: Partial<SessionEntry> = {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
     ...(params.touchInteraction ? { lastInteractionAt: params.now } : {}),
+    ...automaticRecoveryClearPatch,
     ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
     ...(effectiveDeliveryFields.deliveryContext
       ? { deliveryContext: effectiveDeliveryFields.deliveryContext }

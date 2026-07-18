@@ -2,7 +2,8 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { HealthSummary } from "../../../commands/health.types.js";
 import {
   onInternalDiagnosticEvent,
@@ -10,6 +11,7 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../../infra/diagnostic-events.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
@@ -82,6 +84,10 @@ const DEVICE_TOKEN_MUTATION_PARAMS = {
 const NODE_PAIR_REMOVE_PARAMS = {
   nodeId: "device-1",
 } as const satisfies Record<string, unknown>;
+
+function waitForFast(assertion: () => void | Promise<void>) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 function createLogger() {
   return {
@@ -184,6 +190,7 @@ function attachGatewayHarness(options: {
   remoteAddr?: string;
   localAddr?: string;
   resolvedAuth?: ResolvedGatewayAuth;
+  rateLimiter?: AuthRateLimiter;
   client?: unknown;
   close?: CloseGatewayConnection;
   isClosed?: () => boolean;
@@ -229,6 +236,7 @@ function attachGatewayHarness(options: {
     requestOrigin: options.requestOrigin,
     connectNonce: options.connectNonce,
     getResolvedAuth: () => resolvedAuth,
+    rateLimiter: options.rateLimiter,
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
@@ -259,6 +267,7 @@ function attachGatewayHarness(options: {
   const sendMessage = onMessage;
   return {
     advanceHandshakePhase,
+    send,
     socketSend,
     sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
       sendMessage(
@@ -343,14 +352,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseMutation).toBeTypeOf("function");
     });
 
     releaseMutation?.();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
@@ -385,14 +394,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("remove-node-1", "node.pair.remove", NODE_PAIR_REMOVE_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseMutation).toBeTypeOf("function");
     });
 
     releaseMutation?.();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-pair-removed");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
@@ -433,13 +442,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseFirstMutation).toBeTypeOf("function");
     });
 
     releaseFirstMutation?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
       expect(releaseSecondMutation).toBeTypeOf("function");
     });
@@ -449,7 +458,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
 
     releaseSecondMutation?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
@@ -487,7 +496,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         caps: [],
       });
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(harness.socketSend).toHaveBeenCalled();
       });
     } finally {
@@ -514,7 +523,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
@@ -552,7 +561,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         auth: { token: "wrong-token" },
       });
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("unauthorized"));
       });
     } finally {
@@ -585,6 +594,70 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(JSON.stringify(captured.events)).not.toContain("wrong-token");
     expect(JSON.stringify(captured.events)).not.toContain("gateway-token");
+    const response = harness.send.mock.calls.at(0)?.[0] as
+      | { error?: Record<string, unknown> }
+      | undefined;
+    expect(response?.error).not.toHaveProperty("retryable");
+    expect(response?.error).not.toHaveProperty("retryAfterMs");
+  });
+
+  it("returns retry timing when gateway auth is rate-limited", async () => {
+    const retryAfterMs = 15_000;
+    const rateLimiter: AuthRateLimiter = {
+      check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs })),
+      recordFailure: vi.fn(),
+      reset: vi.fn(),
+      size: vi.fn(() => 0),
+      prune: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-auth-rate-limited",
+      connectNonce: "nonce-auth-rate-limited",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.51",
+      resolvedAuth: {
+        mode: "token",
+        token: "test-token",
+        allowTailscale: false,
+      },
+      rateLimiter,
+      close,
+    });
+
+    harness.sendConnect("connect-auth-rate-limited", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: [],
+      caps: [],
+      auth: { token: "test-token" },
+    });
+
+    await waitForFast(() => {
+      expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("retry later"));
+    });
+
+    const response = harness.send.mock.calls.at(0)?.[0] as
+      | { error?: Record<string, unknown> }
+      | undefined;
+    expect(response?.error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      retryable: true,
+      details: {
+        code: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+        authReason: "rate_limited",
+      },
+    });
+    expect(response?.error?.retryAfterMs).toBeGreaterThan(0);
   });
 
   it("records credential and hello preparation phases during connect", async () => {
@@ -615,7 +688,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     expect(harness.advanceHandshakePhase.mock.calls.map(([phase]) => phase)).toEqual([
@@ -652,7 +725,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       caps: [],
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -690,7 +763,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -734,7 +807,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -773,7 +846,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -827,7 +900,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(
         1008,
         "agent runtime identity token is only accepted from local backend gateway clients",
@@ -865,7 +938,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(1008, "invalid agent runtime identity token");
     });
     expect(harness.client).toBeNull();

@@ -12,6 +12,7 @@ import {
 const BUILTIN_CONTEXT: BuiltinWidgetContext = {
   basePath: "",
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
+  preview: { getViewport: (_widgetId, fallback) => fallback, setViewport: vi.fn() },
 };
 
 function callbacks(): WorkspaceWidgetCellCallbacks {

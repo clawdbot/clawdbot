@@ -18,7 +18,7 @@ import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
 import type { ChannelMessageActionName } from "./runtime-api.js";
 
-type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0];
+type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -64,9 +64,9 @@ function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<st
 
 function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
+  onTurn?: (turn: QaDispatchTurn) => void;
   toolStarts?: Array<{ name?: string; phase?: string; args?: Record<string, unknown> }>;
 }): PluginRuntime {
-  const sessionUpdatedAt = new Map<string, number>();
   return createPluginRuntimeMock({
     channel: {
       mentions: {
@@ -77,104 +77,25 @@ function createMockQaRuntime(params?: {
           return patterns.some((pattern) => pattern.test(text));
         },
       },
-      routing: {
-        resolveAgentRoute({
-          accountId,
-          peer,
-        }: {
-          accountId?: string | null;
-          peer?: { kind?: string; id?: string } | null;
-        }) {
-          return {
-            agentId: "qa-agent",
-            channel: "qa-channel",
-            accountId: accountId ?? "default",
-            sessionKey: `qa-agent:${peer?.kind ?? "direct"}:${peer?.id ?? "default"}`,
-            mainSessionKey: "qa-agent:main",
-            lastRoutePolicy: "session",
-            matchedBy: "default",
-          };
-        },
-      },
-      session: {
-        resolveStorePath(_store: string | undefined, { agentId }: { agentId: string }) {
-          return agentId;
-        },
-        readSessionUpdatedAt({ sessionKey }: { sessionKey: string }) {
-          return sessionUpdatedAt.get(sessionKey);
-        },
-        recordInboundSession({ sessionKey }: { sessionKey: string }) {
-          sessionUpdatedAt.set(sessionKey, Date.now());
-        },
-      },
-      reply: {
-        resolveEnvelopeFormatOptions() {
-          return {};
-        },
-        formatAgentEnvelope({ body }: { body: string }) {
-          return body;
-        },
-        finalizeInboundContext(ctx: Record<string, unknown>) {
-          return ctx as typeof ctx & { CommandAuthorized: boolean };
-        },
-        async dispatchReplyWithBufferedBlockDispatcher({
-          ctx,
-          dispatcherOptions,
-          replyOptions,
-        }: {
-          ctx: { BodyForAgent?: string; Body?: string };
-          dispatcherOptions: {
-            deliver: (payload: { text: string }, info: { kind: string }) => Promise<void>;
-          };
-          replyOptions?: {
-            onToolStart?: (payload: {
-              name?: string;
-              phase?: string;
-              args?: Record<string, unknown>;
-            }) => Promise<void> | void;
-          };
-        }) {
+      inbound: {
+        async dispatch(turn: QaDispatchTurn) {
+          params?.onTurn?.(turn);
           for (const toolStart of params?.toolStarts ?? []) {
-            await replyOptions?.onToolStart?.(toolStart);
+            await turn.replyOptions?.onToolStart?.(toolStart);
           }
-          params?.onDispatch?.(ctx as Record<string, unknown>);
-          await dispatcherOptions.deliver(
+          params?.onDispatch?.(turn.ctxPayload as Record<string, unknown>);
+          await turn.delivery.deliver(
             {
-              text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
+              text: `qa-echo: ${turn.ctxPayload.BodyForAgent ?? turn.ctxPayload.Body ?? ""}`,
             },
             { kind: "final" },
           );
-        },
-      },
-      inbound: {
-        async dispatchReply(turn: QaDispatchTurn) {
-          await turn.recordInboundSession({
-            storePath: turn.storePath,
-            sessionKey:
-              typeof turn.ctxPayload.SessionKey === "string"
-                ? turn.ctxPayload.SessionKey
-                : turn.routeSessionKey,
-            ctx: turn.ctxPayload,
-            onRecordError: turn.record?.onRecordError ?? (() => undefined),
-          });
           return {
             admission: turn.admission ?? { kind: "dispatch" as const },
             dispatched: true,
             ctxPayload: turn.ctxPayload,
-            routeSessionKey: turn.routeSessionKey,
-            dispatchResult: await turn.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: turn.ctxPayload,
-              cfg: turn.cfg,
-              dispatcherOptions: {
-                ...turn.dispatcherOptions,
-                deliver: async (...args: Parameters<typeof turn.delivery.deliver>) => {
-                  await turn.delivery.deliver(...args);
-                },
-                onError: turn.delivery.onError,
-              },
-              replyOptions: turn.replyOptions,
-              replyResolver: turn.replyResolver,
-            }),
+            routeSessionKey: turn.route.sessionKey,
+            dispatchResult: undefined,
           };
         },
       },
@@ -472,6 +393,38 @@ describe("qa-channel plugin", () => {
     },
   );
 
+  it("captures tool starts when channel progress is hidden", { timeout: 20_000 }, async () => {
+    let allowHiddenToolLifecycle = false;
+    const harness = await startQaChannelTestHarness({
+      allowFrom: ["*"],
+      runtime: createMockQaRuntime({
+        onTurn: (turn) => {
+          allowHiddenToolLifecycle =
+            turn.replyOptions?.allowToolLifecycleWhenProgressHidden === true;
+        },
+      }),
+    });
+
+    try {
+      harness.state.addInboundMessage({
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+        text: "hello",
+      });
+      await harness.state.waitFor({
+        kind: "message-text",
+        textIncludes: "qa-echo: hello",
+        direction: "outbound",
+        timeoutMs: 15_000,
+      });
+
+      expect(allowHiddenToolLifecycle).toBe(true);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it(
     "surfaces shared group traffic with the room target as From",
     { timeout: 20_000 },
@@ -505,7 +458,7 @@ describe("qa-channel plugin", () => {
         expect(ctx.ChatType).toBe("group");
         expect(ctx.From).toBe("group:qa-room");
         expect(ctx.To).toBe("group:qa-room");
-        expect(ctx.SessionKey).toBe("qa-agent:group:group:qa-room");
+        expect(ctx.SessionKey).toBe("agent:main:qa-channel:group:group:qa-room");
         expect(ctx.SenderId).toBe("alice");
         expect(ctx.GroupSubject).toBe("QA Room");
         expect("conversation" in outbound).toBe(true);

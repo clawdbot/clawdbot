@@ -222,7 +222,7 @@ export async function streamSignalEvents(params: {
   accountId?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: SignalSseEvent) => void;
+  onEvent: (event: SignalSseEvent) => unknown;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
   apiMode?: SignalApiMode;
 }): Promise<void> {

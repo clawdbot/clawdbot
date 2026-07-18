@@ -271,9 +271,7 @@ describe("monitorSignalProvider autostart", () => {
       settled = true;
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(stop).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
     expect(settled).toBe(false);
 
     resolveStop();

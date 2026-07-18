@@ -99,13 +99,22 @@ describe("iOS Fastlane release upload gates", () => {
   it("preserves caller-pinned Swift tools in archive build PATH", () => {
     const fastfile = readFastfile();
     const pathBuilder = functionBody(fastfile, "xcodebuild_shell_join");
-    const callerPath = '*ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)';
+    const callerPath = 'ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)';
 
     expect(pathBuilder).toContain(callerPath);
     expect(pathBuilder).toContain(".reject(&:empty?).uniq.join(File::PATH_SEPARATOR)");
-    expect(pathBuilder.indexOf(callerPath)).toBeLessThan(
-      pathBuilder.indexOf('"/opt/homebrew/bin"'),
+    expect(pathBuilder).toContain(
+      "system_tools_first ? [*system_path, *caller_path] : [*caller_path, *system_path]",
     );
+  });
+
+  it("uses Apple's matched rsync pair when exporting the IPA", () => {
+    const fastfile = readFastfile();
+    const builder = functionBody(fastfile, "build_app_store_release");
+    const exportStart = builder.indexOf('"-exportArchive"');
+
+    expect(exportStart).toBeGreaterThanOrEqual(0);
+    expect(builder.slice(exportStart)).toContain("system_tools_first: true");
   });
 
   it("requires clean matching source before preparing and building release artifacts", () => {

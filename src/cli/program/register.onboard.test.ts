@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
+  acknowledgeOnboardRecommendationsCommand: vi.fn(),
+  onboardRecommendationsCommand: vi.fn(),
+  refreshOnboardRecommendationsCommand: vi.fn(),
   runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
@@ -49,6 +52,12 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
+vi.mock("../../commands/onboard-recommendations.js", () => ({
+  acknowledgeOnboardRecommendationsCommand: mocks.acknowledgeOnboardRecommendationsCommand,
+  onboardRecommendationsCommand: mocks.onboardRecommendationsCommand,
+  refreshOnboardRecommendationsCommand: mocks.refreshOnboardRecommendationsCommand,
+}));
+
 vi.mock("../../commands/system-agent-with-inference.js", () => ({
   runSystemAgentWithInference: mocks.runSystemAgentWithInference,
 }));
@@ -77,6 +86,27 @@ describe("registerOnboardCommand", () => {
     vi.clearAllMocks();
     mocks.runSystemAgentWithInference.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
+  });
+
+  it("routes the read-only recommendations subcommand", async () => {
+    await runCli(["onboard", "recommendations", "--json"]);
+
+    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations acknowledgement subcommand", async () => {
+    await runCli(["onboard", "recommendations", "acknowledge"]);
+
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations refresh subcommand", async () => {
+    await runCli(["onboard", "recommendations", "refresh"]);
+
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
@@ -120,6 +150,12 @@ describe("registerOnboardCommand", () => {
   it("forwards --skip-bootstrap to setup wizard options", async () => {
     await runCli(["onboard", "--skip-bootstrap"]);
     expect(setupWizardOptions().skipBootstrap).toBe(true);
+  });
+
+  it("forwards --tui to guided onboarding", async () => {
+    await runCli(["onboard", "--tui"]);
+
+    expect(setupWizardOptions().tui).toBe(true);
   });
 
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {

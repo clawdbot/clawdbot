@@ -64,6 +64,33 @@
             }
           },
           {
+            "id": "kimi-k3",
+            "name": "Kimi K3",
+            "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": null,
+              "xhigh": "max",
+              "max": "max"
+            },
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["max"]
+            }
+          },
+          {
             "id": "kimi-k2.7-code",
             "name": "Kimi K2.7 Code",
             "reasoning": true,
@@ -78,6 +105,20 @@
             }
           },
           {
+            "id": "kimi-k2.7-code-highspeed",
+            "name": "Kimi K2.7 Code HighSpeed",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 1.9,
+              "output": 8,
+              "cacheRead": 0.38,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "kimi-k2.5",
             "name": "Kimi K2.5",
             "input": ["text", "image"],
@@ -87,47 +128,6 @@
               "input": 0.6,
               "output": 3,
               "cacheRead": 0.1,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-thinking",
-            "name": "Kimi K2 Thinking",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-thinking-turbo",
-            "name": "Kimi K2 Thinking Turbo",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-turbo",
-            "name": "Kimi K2 Turbo",
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 16384,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
               "cacheWrite": 0
             }
           }
@@ -154,8 +154,8 @@
       "appGuidedSecret": true,
       "choiceLabel": "Moonshot API key (.ai)",
       "groupId": "moonshot",
-      "groupLabel": "Moonshot AI (Kimi K2.6)",
-      "groupHint": "Kimi K2.6",
+      "groupLabel": "Moonshot AI (Kimi)",
+      "groupHint": "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
       "optionKey": "moonshotApiKey",
       "cliFlag": "--moonshot-api-key",
       "cliOption": "--moonshot-api-key <key>",
@@ -168,8 +168,8 @@
       "appGuidedSecret": true,
       "choiceLabel": "Moonshot API key (.cn)",
       "groupId": "moonshot",
-      "groupLabel": "Moonshot AI (Kimi K2.6)",
-      "groupHint": "Kimi K2.6",
+      "groupLabel": "Moonshot AI (Kimi)",
+      "groupHint": "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
       "optionKey": "moonshotApiKey",
       "cliFlag": "--moonshot-api-key",
       "cliOption": "--moonshot-api-key <key>",

@@ -15,6 +15,10 @@ import type {
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import {
+  groupCatalogSessionsByProject,
+  type CatalogProjectGrouping,
+} from "../lib/sessions/catalog-project-grouping.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
@@ -93,9 +97,11 @@ type SessionCatalogGroupsParams = {
   newSessionAgentId: string;
   collapsedSections: ReadonlySet<string>;
   loadingMoreCatalogIds: ReadonlySet<string>;
+  projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
+  onToggleProjectGrouping: () => void;
   onLoadMore: (catalogId: string) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -194,19 +200,32 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             title=${hasError ? errorHelp : nothing}
             @click=${() => params.onToggleSection(sectionId)}
           >
+            <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
             <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
               >${collapsed ? icons.chevronRight : icons.chevronDown}</span
             >
-            <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
             ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-            <span
-              class="sidebar-session-group-count ${hasError
-                ? "sidebar-session-group-count--error"
-                : ""}"
-              data-session-catalog-error=${hasError ? catalog.id : nothing}
-              aria-hidden="true"
-              >${hasError ? icons.alertTriangle : rows.length}</span
-            >
+            ${hasError || (collapsed && rows.length > 0)
+              ? html`<span
+                  class="sidebar-session-group-count ${hasError
+                    ? "sidebar-session-group-count--error"
+                    : ""}"
+                  data-session-catalog-error=${hasError ? catalog.id : nothing}
+                  aria-hidden="true"
+                  >${hasError ? icons.alertTriangle : rows.length}</span
+                >`
+              : nothing}
+          </button>
+          <button
+            type="button"
+            class="sidebar-session-sort sidebar-session-catalog-grouping"
+            aria-pressed=${String(params.projectGrouping === "project")}
+            data-session-catalog-grouping-toggle=${catalog.id}
+            title=${t("chat.sidebar.groupCatalogSessionsByProject")}
+            aria-label=${t("chat.sidebar.groupCatalogSessionsByProject")}
+            @click=${() => params.onToggleProjectGrouping()}
+          >
+            ${icons.folder}
           </button>
           ${canCreateSession
             ? html`<button
@@ -255,6 +274,8 @@ function renderCatalogHostGroup(
   params: SessionCatalogGroupsParams,
 ) {
   const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
+  const projectGroups =
+    params.projectGrouping === "project" ? groupCatalogSessionsByProject(host.sessions) : null;
   return html`
     <section class="sidebar-session-catalog-host" data-session-catalog-host=${host.hostId}>
       <div
@@ -272,9 +293,40 @@ function renderCatalogHostGroup(
         >
       </div>
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
-        ${host.sessions.map((session) =>
-          renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
-        )}
+        ${projectGroups
+          ? html`${projectGroups.groups.map((group) => {
+              const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
+              const collapsed = params.collapsedSections.has(sectionId);
+              return html`
+                <button
+                  type="button"
+                  class="sidebar-session-catalog-project__head"
+                  data-session-catalog-project=${group.key}
+                  aria-expanded=${String(!collapsed)}
+                  title=${group.title}
+                  @click=${() => params.onToggleSection(sectionId)}
+                >
+                  <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
+                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                  >
+                  <span class="sidebar-session-catalog-project__label">${group.label}</span>
+                  <span class="sidebar-session-catalog-project__count" aria-hidden="true"
+                    >${group.sessions.length}</span
+                  >
+                </button>
+                ${collapsed
+                  ? nothing
+                  : group.sessions.map((session) =>
+                      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+                    )}
+              `;
+            })}
+            ${projectGroups.ungrouped.map((session) =>
+              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+            )}`
+          : host.sessions.map((session) =>
+              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+            )}
       </div>
     </section>
   `;

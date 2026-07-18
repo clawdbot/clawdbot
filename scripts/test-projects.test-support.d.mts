@@ -70,14 +70,6 @@ export function buildVitestRunPlans(
 
 export function buildFullSuiteVitestRunPlans(args: string[], cwd?: string): VitestRunPlan[];
 
-export function shouldUseLocalFullSuiteParallelByDefault(
-  env?: Record<string, string | undefined>,
-): boolean;
-
-export function shouldExpandLocalFullSuiteShardsByDefault(
-  env?: Record<string, string | undefined>,
-): boolean;
-
 export function resolveParallelFullSuiteConcurrency(
   specCount: number,
   env?: Record<string, string | undefined>,

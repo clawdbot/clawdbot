@@ -737,6 +737,44 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test.each(["", " ", "abc", "0", "-5", "1.5"])(
+    "rejects invalid limit %j with 400",
+    async (limit) => {
+      await seedSession({ text: "first message" });
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error?.type).toBe("invalid_request_error");
+        expect(body.error?.message).toBe("limit must be a positive integer");
+      });
+    },
+  );
+
+  test.each(["1", "+1"])(
+    "returns the requested bounded history for valid limit %s",
+    async (limit) => {
+      const { storePath } = await seedSession({ text: "first message" });
+      await appendVisibleAssistantMessage({
+        sessionKey: "agent:main:main",
+        text: "second message",
+        storePath,
+      });
+
+      await withGatewayHarness(async (harness) => {
+        const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+          "second message",
+        ]);
+        expect(body.hasMore).toBe(true);
+      });
+    },
+  );
+
   test("streams bounded history windows over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 

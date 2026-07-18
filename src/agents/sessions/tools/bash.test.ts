@@ -2,7 +2,8 @@ import path from "node:path";
 // Bash tool helper tests cover conversion from model-facing timeout seconds to
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { buildShellCommandInvocation } from "../../shell-utils.js";
 import type { BashOperations } from "./bash-operations.js";
 import { createBashTool, createLocalBashOperations } from "./bash.js";
 import { resolveBashTimeoutMs } from "./bash.test-support.js";
@@ -19,11 +20,38 @@ describe("bash tool timeout helpers", () => {
     expect(resolveBashTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("ignores absent, invalid, and non-positive timeout seconds", () => {
+  it("allows an absent timeout", () => {
     expect(resolveBashTimeoutMs(undefined)).toBeUndefined();
-    expect(resolveBashTimeoutMs(Number.NaN)).toBeUndefined();
-    expect(resolveBashTimeoutMs(0)).toBeUndefined();
-    expect(resolveBashTimeoutMs(-1)).toBeUndefined();
+  });
+
+  it.each([Number.NaN, 0, -1])("rejects invalid timeout %s", (timeout) => {
+    expect(() => resolveBashTimeoutMs(timeout)).toThrow(
+      "Invalid timeout: must be a positive finite number of seconds",
+    );
+  });
+
+  it.each([Number.NaN, 0, -1])("rejects invalid timeout %s before execution", async (timeout) => {
+    const exec = vi.fn<BashOperations["exec"]>();
+    const tool = createBashTool(process.cwd(), { operations: { exec } });
+
+    await expect(
+      tool.execute("call-invalid-timeout", { command: "echo ok", timeout }),
+    ).rejects.toThrow("Invalid timeout: must be a positive finite number of seconds");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("omits the command argv and supplies stdin for legacy WSL bash", () => {
+    expect(
+      buildShellCommandInvocation("printf ready", {
+        shell: "C:\\Windows\\System32\\bash.exe",
+        args: ["-s"],
+        commandTransport: "stdin",
+      }),
+    ).toEqual({
+      argv: ["C:\\Windows\\System32\\bash.exe", "-s"],
+      input: "printf ready",
+      stdin: "pipe",
+    });
   });
 });
 

@@ -121,6 +121,14 @@ Grok 4.3 remains the regional-safe setup default; `grok-build-0.1` and both
 dated Grok 4.20 variants remain selectable.
 </Tip>
 
+Catalog context and token-cost metadata follows xAI's live
+[model pages](https://docs.x.ai/developers/models) and
+[pricing page](https://docs.x.ai/developers/pricing). xAI applies higher rates
+when a request crosses its documented long-context threshold; OpenClaw's flat
+catalog cost fields record the short-context rates. Grok Build, xAI's separate
+coding-agent CLI, is available at [x.ai/cli](https://x.ai/cli) and currently
+uses Grok 4.5.
+
 ## Feature coverage
 
 The bundled plugin maps supported xAI APIs onto OpenClaw's shared provider and

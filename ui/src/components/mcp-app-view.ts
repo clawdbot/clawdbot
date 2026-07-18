@@ -14,6 +14,7 @@ import { I18nController, t } from "../i18n/index.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import {
   buildMcpAppHostCapabilities,
+  dispatchWidgetPrompt,
   resolveMcpAppSandboxUrl,
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
@@ -26,6 +27,7 @@ type McpAppViewPayload = {
   csp?: McpAppHostSandboxCsp;
   toolInput: unknown;
   toolResult: unknown;
+  messageSupported?: boolean;
 };
 
 type HostContext = NonNullable<
@@ -53,8 +55,14 @@ async function waitForMcpAppHandlerRegistration(
 function hostContext(element: Element | undefined, height: number): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
+  const themeMode = document.documentElement.dataset.themeMode;
   return {
-    theme: window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+    theme:
+      themeMode === "light" || themeMode === "dark"
+        ? themeMode
+        : window.matchMedia?.("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light",
     displayMode: "inline",
     availableDisplayModes: ["inline"],
     containerDimensions: {
@@ -73,6 +81,10 @@ function hostContext(element: Element | undefined, height: number): HostContext 
 }
 
 class OpenClawAppBridge extends AppBridge {
+  setMessageHandler(handler: NonNullable<AppBridge["onmessage"]>) {
+    Reflect.set(this, "onmessage", handler);
+  }
+
   setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
     this.replaceRequestHandler(ListToolsRequestSchema, (request) => handler(request.params));
   }
@@ -118,6 +130,8 @@ export class McpAppView extends LitElement {
   private bridge: AppBridge | null = null;
   private iframe: HTMLIFrameElement | null = null;
   private transport: { close(): Promise<void> } | null = null;
+  private hostContextCleanup: (() => void) | null = null;
+  private hostResizeObserver: ResizeObserver | null = null;
   private setupKey = "";
   private setupClient: object | null = null;
   private setupGeneration = 0;
@@ -157,11 +171,17 @@ export class McpAppView extends LitElement {
     const bridge = this.bridge;
     const transport = this.transport;
     const iframe = this.iframe;
+    const hostContextCleanup = this.hostContextCleanup;
+    const hostResizeObserver = this.hostResizeObserver;
     this.bridge = null;
     this.transport = null;
     this.iframe = null;
+    this.hostContextCleanup = null;
+    this.hostResizeObserver = null;
     // Clear ownership before awaiting: a stale teardown must never close a
     // replacement setup that installs its resources during the handshake.
+    hostContextCleanup?.();
+    hostResizeObserver?.disconnect();
     iframe?.remove();
     if (bridge) {
       await Promise.race([
@@ -227,12 +247,24 @@ export class McpAppView extends LitElement {
         return;
       }
 
+      let frameHeight = this.height;
       const bridge = new OpenClawAppBridge(
         null,
         { name: "OpenClaw", version: "1.0.0" },
-        buildMcpAppHostCapabilities(payload.csp),
+        buildMcpAppHostCapabilities(payload.csp, payload.messageSupported === true),
         { hostContext: hostContext(mount, this.height) },
       );
+      if (payload.messageSupported === true) {
+        const promptRateKey = `${this.sessionKey}\0${this.viewId}`;
+        bridge.setMessageHandler(async ({ content }) => {
+          const block = content.length === 1 ? content[0] : undefined;
+          const text = block?.type === "text" ? block.text : null;
+          const accepted = dispatchWidgetPrompt(iframe, text, promptRateKey, (prompt) =>
+            window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
+          );
+          return accepted ? {} : { isError: true };
+        });
+      }
       bridge.oncalltool = async (params) =>
         (await this.request("mcp.app.callTool", {
           toolName: params.name,
@@ -261,6 +293,7 @@ export class McpAppView extends LitElement {
       bridge.onsizechange = ({ height }) => {
         if (height !== undefined) {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
+          frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
           bridge.setHostContext(hostContext(mount, nextHeight));
         }
@@ -282,6 +315,15 @@ export class McpAppView extends LitElement {
           window.setTimeout(() => reject(new Error("MCP App initialization timed out")), 15_000);
         }),
       ]);
+      if (generation !== this.setupGeneration) {
+        return;
+      }
+      const updateHostContext = () => bridge.setHostContext(hostContext(mount, frameHeight));
+      this.hostContextCleanup = this.context?.theme.subscribe(updateHostContext) ?? null;
+      if (typeof ResizeObserver !== "undefined") {
+        this.hostResizeObserver = new ResizeObserver(updateHostContext);
+        this.hostResizeObserver.observe(mount);
+      }
       await waitForMcpAppHandlerRegistration();
       if (generation !== this.setupGeneration) {
         return;

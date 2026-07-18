@@ -14,7 +14,7 @@ import {
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
-type AgentEnvelopeParams = {
+export type AgentEnvelopeParams = {
   channel: string;
   from?: string;
   timestamp?: number | Date;

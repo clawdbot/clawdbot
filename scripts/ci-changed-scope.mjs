@@ -49,13 +49,18 @@ const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/config\/sessions\/(?:session-accessor\.sqlite-archive|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
-  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+  /^(src\/config\/sessions\/store\.session-lifecycle-mutation\.test\.ts$|src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:config|raw-copy)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+const CONTROL_UI_HARD_GENERATED_I18N_RE =
+  /^(?:ui\/src\/i18n\/locales\/(?!en(?:-agents)?\.ts$)[^/]+\.ts|ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl)))$/;
+const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
+
+export class ControlUiGeneratedArtifactsMixedError extends Error {}
 const CONTROL_UI_TEST_SCOPE_RE =
   /^(ui\/|test\/vitest\/vitest\.shared\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
 const NATIVE_I18N_SCOPE_RE =
@@ -179,6 +184,77 @@ export function detectChangedScope(changedPaths) {
     runControlUiI18n,
     runUiTests,
   };
+}
+
+/**
+ * Generated Control UI locale snapshots belong in their isolated automation PR.
+ * Mixing them into a source PR recreates deterministic rebase conflicts.
+ * @param {string[]} changedPaths
+ */
+export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchName = "") {
+  if (branchName === "main" || RELEASE_BRANCH_RE.test(branchName)) {
+    return;
+  }
+  const generatedPaths = changedPaths.filter((filePath) =>
+    CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath),
+  );
+  if (generatedPaths.length === 0) {
+    return;
+  }
+  const sourcePaths = changedPaths.filter(
+    (filePath) => !CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath),
+  );
+  if (sourcePaths.length === 0) {
+    return;
+  }
+  throw new ControlUiGeneratedArtifactsMixedError(
+    [
+      "Control UI generated locale artifacts must be isolated from source changes.",
+      "Commit English/source changes only; the locale refresh workflow owns generated bundles and metadata.",
+      ...generatedPaths.map((filePath) => `- generated: ${filePath}`),
+      ...sourcePaths.map((filePath) => `- source: ${filePath}`),
+    ].join("\n"),
+  );
+}
+
+export function shouldStrictControlUiI18n(changedPaths) {
+  return (
+    changedPaths === null ||
+    changedPaths.some((filePath) => CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath))
+  );
+}
+
+function resolveChangedBranchName() {
+  const githubBranch = process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME;
+  if (githubBranch) {
+    return githubBranch;
+  }
+  try {
+    return execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+export function resolveAllowedGeneratedMixBranch(
+  env = process.env,
+  branchName = resolveChangedBranchName(),
+) {
+  if (env.GITHUB_ACTIONS === "true" && env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true") {
+    return "";
+  }
+  if (RELEASE_BRANCH_RE.test(branchName)) {
+    return branchName;
+  }
+  if (
+    env.GITHUB_ACTIONS === "true" &&
+    env.GITHUB_EVENT_NAME === "push" &&
+    env.GITHUB_REF === "refs/heads/main" &&
+    branchName === "main"
+  ) {
+    return branchName;
+  }
+  return "";
 }
 
 export function shouldRunNativeI18n(changedPaths) {
@@ -352,6 +428,11 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
+  appendFileSync(
+    outputPath,
+    `strict_control_ui_i18n=${shouldStrictControlUiI18n(changedPaths)}\n`,
+    "utf8",
+  );
   appendFileSync(outputPath, `run_ui_tests=${scope.runUiTests}\n`, "utf8");
   appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
   const changedPathsJson = JSON.stringify(changedPaths);
@@ -409,6 +490,7 @@ if (isDirectRun()) {
       writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false, []);
       process.exit(0);
     }
+    assertControlUiGeneratedArtifactsIsolated(changedPaths, resolveAllowedGeneratedMixBranch());
     writeGitHubOutput(
       detectChangedScope(changedPaths),
       process.env.GITHUB_OUTPUT,
@@ -417,7 +499,12 @@ if (isDirectRun()) {
       shouldRunNativeI18n(changedPaths),
       changedPaths,
     );
-  } catch {
-    writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true, null);
+  } catch (error) {
+    if (error instanceof ControlUiGeneratedArtifactsMixedError) {
+      console.error(error.message);
+      process.exitCode = 1;
+    } else {
+      writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true, null);
+    }
   }
 }

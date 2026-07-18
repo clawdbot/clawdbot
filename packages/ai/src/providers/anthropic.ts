@@ -77,6 +77,7 @@ import {
   type AnthropicToolProjection,
 } from "./anthropic-tool-projection.js";
 import {
+  readAnthropicCacheWriteUsage,
   readAnthropicPromptUsageSnapshot,
   readAnthropicUsageTokenCount,
   readLastAnthropicIterationUsage,
@@ -85,7 +86,11 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
-import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
+import {
+  adjustMaxTokensForThinking,
+  buildBaseOptions,
+  clampMaxTokensToModel,
+} from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
@@ -240,6 +245,7 @@ function getAnthropicCompat(model: Model<"anthropic-messages">): Required<Anthro
     sendSessionAffinityHeaders:
       model.compat?.sendSessionAffinityHeaders ?? (isFireworks || isCloudflareAiGatewayAnthropic),
     supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? !isFireworks,
+    allowEmptySignature: model.compat?.allowEmptySignature ?? false,
   };
 }
 
@@ -448,9 +454,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
-        ...(requestOptions?.maxRetries !== undefined
-          ? { maxRetries: requestOptions.maxRetries }
-          : {}),
+        maxRetries: requestOptions?.maxRetries ?? 0,
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
@@ -496,6 +500,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               : readAnthropicUsageTokenCount(event.message.usage.cache_creation_input_tokens);
           if (cacheWriteTokens !== undefined) {
             output.usage.cacheWrite = cacheWriteTokens;
+          }
+          const cacheWriteUsage = readAnthropicCacheWriteUsage(event.message.usage);
+          if (cacheWriteUsage.cacheWrite1h !== undefined) {
+            output.usage.cacheWrite1h = cacheWriteUsage.cacheWrite1h;
           }
           output.usage.totalTokens =
             output.usage.input +
@@ -708,55 +716,63 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           }
           // Only update usage fields if present (not null).
           // Preserves input_tokens from message_start when proxies omit it in message_delta.
-          const inputTokens = readAnthropicUsageTokenCount(event.usage.input_tokens);
-          if (inputTokens !== undefined) {
-            output.usage.input = inputTokens;
-          }
-          const outputTokens = readAnthropicUsageTokenCount(event.usage.output_tokens);
-          if (outputTokens !== undefined) {
-            output.usage.output = outputTokens;
-          }
-          // Match the SDK stream accumulator: null means no update, not a zero counter.
-          const cacheReadTokens = readAnthropicUsageTokenCount(event.usage.cache_read_input_tokens);
-          if (cacheReadTokens !== undefined) {
-            output.usage.cacheRead = cacheReadTokens;
-          }
-          const cacheWriteTokens = readAnthropicUsageTokenCount(
-            event.usage.cache_creation_input_tokens,
-          );
-          if (cacheWriteTokens !== undefined) {
-            output.usage.cacheWrite = cacheWriteTokens;
-          }
-          output.usage.totalTokens =
-            output.usage.input +
-            output.usage.output +
-            output.usage.cacheRead +
-            output.usage.cacheWrite;
-          const iterationUsage = readLastAnthropicIterationUsage(event.usage);
-          if (iterationUsage.state === "valid") {
-            output.usage.contextUsage = {
-              state: "available",
-              promptTokens: iterationUsage.usage.contextPromptTokens,
-              totalTokens: iterationUsage.usage.totalTokens,
-            };
-          } else if (iterationUsage.state === "invalid") {
-            output.usage.contextUsage = { state: "unavailable" };
-          } else if (
-            outputTokens !== undefined &&
-            (messageStartPromptUsage !== undefined ||
-              (inputTokens !== undefined &&
-                cacheReadTokens !== undefined &&
-                cacheWriteTokens !== undefined))
-          ) {
-            const promptTokens =
-              output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
-            output.usage.contextUsage = {
-              state: "available",
-              promptTokens,
-              totalTokens: promptTokens + output.usage.output,
-            };
-          } else {
-            output.usage.contextUsage = { state: "unavailable" };
+          if (event.usage) {
+            const inputTokens = readAnthropicUsageTokenCount(event.usage.input_tokens);
+            if (inputTokens !== undefined) {
+              output.usage.input = inputTokens;
+            }
+            const outputTokens = readAnthropicUsageTokenCount(event.usage.output_tokens);
+            if (outputTokens !== undefined) {
+              output.usage.output = outputTokens;
+            }
+            // Match the SDK stream accumulator: null means no update, not a zero counter.
+            const cacheReadTokens = readAnthropicUsageTokenCount(
+              event.usage.cache_read_input_tokens,
+            );
+            if (cacheReadTokens !== undefined) {
+              output.usage.cacheRead = cacheReadTokens;
+            }
+            const cacheWriteTokens = readAnthropicUsageTokenCount(
+              event.usage.cache_creation_input_tokens,
+            );
+            if (cacheWriteTokens !== undefined) {
+              output.usage.cacheWrite = cacheWriteTokens;
+            }
+            const cacheWriteUsage = readAnthropicCacheWriteUsage(event.usage);
+            if (cacheWriteUsage.cacheWrite1h !== undefined) {
+              output.usage.cacheWrite1h = cacheWriteUsage.cacheWrite1h;
+            }
+            output.usage.totalTokens =
+              output.usage.input +
+              output.usage.output +
+              output.usage.cacheRead +
+              output.usage.cacheWrite;
+            const iterationUsage = readLastAnthropicIterationUsage(event.usage);
+            if (iterationUsage.state === "valid") {
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens: iterationUsage.usage.contextPromptTokens,
+                totalTokens: iterationUsage.usage.totalTokens,
+              };
+            } else if (iterationUsage.state === "invalid") {
+              output.usage.contextUsage = { state: "unavailable" };
+            } else if (
+              outputTokens !== undefined &&
+              (messageStartPromptUsage !== undefined ||
+                (inputTokens !== undefined &&
+                  cacheReadTokens !== undefined &&
+                  cacheWriteTokens !== undefined))
+            ) {
+              const promptTokens =
+                output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens,
+                totalTokens: promptTokens + output.usage.output,
+              };
+            } else {
+              output.usage.contextUsage = { state: "unavailable" };
+            }
           }
           calculateCost(costModel, output.usage);
         }
@@ -897,6 +913,7 @@ export const streamSimpleAnthropic: StreamFunction<
 
   const base = {
     ...buildBaseOptions(model, options, apiKey),
+    maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,
   };
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
@@ -946,13 +963,17 @@ export const streamSimpleAnthropic: StreamFunction<
     reasoning,
     options?.thinkingBudgets,
   );
-
   // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
   // consumers (payload, replay, temperature, tool-choice) see consistent state.
-  const thinkingEnabled = adjusted.thinkingBudget >= 1024;
+  const thinkingEnabled = adjusted.thinkingBudget >= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS;
+  // When thinking cannot fit, restore the visible-output cap instead of keeping
+  // the thinking-inflated request limit from adjustMaxTokensForThinking.
+  const maxTokens = thinkingEnabled
+    ? adjusted.maxTokens
+    : clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens);
   return streamAnthropic(model, context, {
     ...base,
-    maxTokens: adjusted.maxTokens,
+    maxTokens,
     thinkingEnabled,
     thinkingBudgetTokens: thinkingEnabled ? adjusted.thinkingBudget : undefined,
   } satisfies AnthropicOptions);
@@ -1153,16 +1174,15 @@ function buildParams(
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
-  const compat = context.tools ? getAnthropicCompat(model) : undefined;
-  const convertedTools =
-    context.tools && compat
-      ? convertTools(
-          context.tools,
-          isOAuthTokenResult,
-          compat.supportsEagerToolInputStreaming,
-          compat.supportsCacheControlOnTools ? cacheControl : undefined,
-        )
-      : undefined;
+  const compat = getAnthropicCompat(model);
+  const convertedTools = context.tools
+    ? convertTools(
+        context.tools,
+        isOAuthTokenResult,
+        compat.supportsEagerToolInputStreaming,
+        compat.supportsCacheControlOnTools ? cacheControl : undefined,
+      )
+    : undefined;
   const tools = convertedTools?.tools;
   const toolProjection = convertedTools?.projection;
   const systemCacheControlCount = countNativeCacheControlMarkers(system);
@@ -1180,6 +1200,7 @@ function buildParams(
       cacheControl,
       messageCacheControlLimit,
       replayThinkingEnabled,
+      compat.allowEmptySignature,
     ),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
@@ -1283,6 +1304,7 @@ function convertMessages(
   cacheControl?: CacheControlEphemeral,
   messageCacheControlLimit = 4,
   replayThinkingEnabled = true,
+  allowEmptySignature = false,
 ): MessageParam[] {
   const params: MessageParam[] = [];
   // Param indexes for transient runtime-context carriers — excluded from
@@ -1386,7 +1408,7 @@ function convertMessages(
           // If thinking signature is missing/empty (e.g., from aborted stream),
           // convert to plain text block without <thinking> tags to avoid API rejection
           // and prevent Claude from mimicking the tags in responses
-          if (!thinkingSignature) {
+          if (!thinkingSignature && !allowEmptySignature) {
             blocks.push({
               type: "text",
               text: sanitizeSurrogates(block.thinking),
@@ -1400,7 +1422,7 @@ function convertMessages(
             blocks.push({
               type: "thinking",
               thinking: block.thinking,
-              signature: thinkingSignature,
+              signature: thinkingSignature ?? "",
             });
           }
         } else if (block.type === "toolCall") {

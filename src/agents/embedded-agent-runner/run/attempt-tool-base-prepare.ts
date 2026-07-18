@@ -205,6 +205,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
+          toolBindings: attempt.toolBindings,
           chatType: attempt.chatType,
           exec: {
             ...attempt.execOverrides,
@@ -258,6 +259,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           modelCompat: extractModelCompat(attempt.model),
           modelApi: attempt.model.api,
           modelContextWindowTokens: attempt.model.contextWindow,
+          delegationCapability: attempt.delegationCapability,
           modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
             workspaceDir: params.effectiveWorkspace,
           }),

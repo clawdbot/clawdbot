@@ -264,6 +264,20 @@ describe("pickAsset", () => {
 });
 
 describe("downloadToFile", () => {
+  it("cancels non-success response bodies before rejecting", async () => {
+    const response = new Response("service unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
+
+    await withTempFile(async (filePath) => {
+      await expect(downloadToFile("https://example.com/signal-cli.tgz", filePath)).rejects.toThrow(
+        "HTTP 503",
+      );
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("downloads through the SSRF guard with an explicit timeout", async () => {
     const fetchResult = okDownloadResponse("archive");
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
@@ -344,6 +358,23 @@ describe("downloadToFile", () => {
 });
 
 describe("installSignalCliFromRelease", () => {
+  it("cancels non-success release metadata before returning the fetch error", async () => {
+    const response = new Response("service unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
+    const release = vi.fn().mockResolvedValue(undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
+
+    await expect(
+      installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Failed to fetch release info (503)",
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("returns an installer error when GitHub release metadata is malformed JSON", async () => {
     const fetchResult = okDownloadResponse("{not json", {
       headers: { "content-type": "application/json" },

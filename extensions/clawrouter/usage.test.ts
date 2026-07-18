@@ -205,14 +205,49 @@ describe("ClawRouter usage", () => {
     expect(snapshot.billing).toEqual([{ type: "spend", amount: 0, unit: "USD" }]);
   });
 
-  it("does not expose an upstream error body", async () => {
+  it("cancels non-OK usage response body before throwing", async () => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("unauthorized"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 403 },
+    );
     await expect(
       fetchClawRouterUsage({
         token: "proxy-key",
         timeoutMs: 5000,
-        fetchGuard: mockFetchGuard(new Response("secret details", { status: 403 })),
+        fetchGuard: mockFetchGuard(response),
       }),
     ).rejects.toThrow("ClawRouter usage request failed (HTTP 403)");
+    expect(cancelled).toBe(true);
+  });
+
+  it("observes peer closure when a real loopback server returns non-OK", async () => {
+    let responseClosed = false;
+    const { baseUrl, requests } = await startUsageServer((_req, res) => {
+      res.on("close", () => {
+        responseClosed = true;
+      });
+      res.writeHead(503, { "content-type": "text/plain" });
+      res.write("service unavailable");
+    });
+
+    await expect(
+      fetchClawRouterUsage({
+        token: "test-auth-token",
+        baseUrl,
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow("ClawRouter usage request failed (HTTP 503)");
+
+    expect(requests).toEqual(["GET /v1/usage"]);
+    expect(responseClosed).toBe(true);
   });
 
   it("bounds successful usage response bodies", async () => {

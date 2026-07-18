@@ -531,7 +531,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
     })) as never);
 
-    const note = vi.fn(async () => {});
+    const events: string[] = [];
+    const note = vi.fn(async () => {
+      events.push("note");
+    });
     const method: ProviderAuthMethod = {
       id: "local",
       label: "Local",
@@ -576,6 +579,9 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         note,
       } as unknown as ApplyAuthChoiceParams["prompter"],
       method,
+      beforePersistentEffect: () => {
+        events.push("lock");
+      },
     });
 
     expect(result.defaultModel).toBe(LOCAL_DEFAULT_MODEL);
@@ -592,6 +598,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
     );
+    expect(events).toEqual(["note", "lock"]);
   });
 
   it("normalizes retired Google Gemini default models returned by auth methods", async () => {

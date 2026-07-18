@@ -39,7 +39,7 @@ See [Configuration - agents](/gateway/config-agents) for:
 - `talk.*` (Talk mode)
   - `talk.consultThinkingLevel`: thinking level override for the full OpenClaw agent run behind Control UI Talk realtime consults
   - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
-  - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
+  - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on Android, iOS, and macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
   - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
@@ -512,12 +512,27 @@ See [Inferred commitments](/concepts/commitments).
       name: "OpenClaw",
       avatar: "CB", // emoji, short text, image URL, or data URI
     },
+    prefs: {
+      theme: "claw", // claw | knot | dash | custom
+      themeMode: "system", // light | dark | system
+      textScale: 100, // 90 | 100 | 110 | 125 | 140
+      locale: "en",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatSendShortcut: "enter", // enter | modifier-enter
+    },
   },
 }
 ```
 
 - `seamColor`: accent color for native app UI chrome (Talk Mode bubble tint, etc.).
 - `assistant`: Control UI identity override. Falls back to active agent identity.
+- `prefs`: operator display preferences. This is the canonical home so agents can
+  change them through the approval gate and every Control UI client stays in
+  sync; browsers mirror the values into local storage for instant boot and keep
+  a device-local copy when they cannot write config (viewer scope, offline).
+  Clients reconcile server-side changes on connect and whenever they reload the
+  config snapshot.
 
 ---
 
@@ -1441,11 +1456,13 @@ writer is best-effort, not a lossless compliance archive.
 
 ## Wizard
 
-Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
+Behavior and metadata for CLI guided setup flows (`onboard`, `configure`, `doctor`):
 
 ```json5
 {
   wizard: {
+    accessMode: "full",
+    appRecommendations: true,
     lastRunAt: "2026-01-01T00:00:00.000Z",
     lastRunVersion: "2026.1.4",
     lastRunCommit: "abc1234",
@@ -1455,6 +1472,10 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
   },
 }
 ```
+
+- `wizard.accessMode`: discovery consent chosen at the start of guided onboarding. `"full"` (recommended) lets setup look for AI apps, keys, and local runtimes automatically; `"guarded"` makes setup ask once before looking around and offers manual configuration instead.
+
+- `wizard.appRecommendations` defaults to `true`. Set it to `false` to disable installed-application recommendations during guided or classic onboarding and block Gateway `device.apps` access. Node hosts still require their separate, default-off installed-app sharing flag before they advertise the command.
 
 ---
 

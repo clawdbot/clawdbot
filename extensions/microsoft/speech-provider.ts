@@ -6,7 +6,7 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
@@ -288,7 +288,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             audioBuffer,
             outputFormat: format,
             fileExtension,
-            voiceCompatible: isVoiceCompatibleAudio({ fileName: outputPath }),
+            voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
           };
         };
 

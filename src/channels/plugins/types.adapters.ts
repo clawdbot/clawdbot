@@ -84,6 +84,12 @@ export type ChannelSetupAdapter = {
     accountId?: string;
     input?: ChannelSetupInput;
   }) => string;
+  prepareAccountConfigInput?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: ChannelSetupInput;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelSetupInput> | ChannelSetupInput;
   resolveBindingAccountId?: (params: {
     cfg: OpenClawConfig;
     agentId: string;

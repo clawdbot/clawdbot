@@ -179,6 +179,36 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("handles configured providers without explicit models", () => {
+    const msg = {
+      role: "assistant",
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+      content: [{ type: "text", text: "visible", textSignature: "response-item-1" }],
+    } as unknown as AgentMessage;
+    const inputCfg = {
+      logging: { redactSensitive: "tools" },
+      models: { providers: { openai: { apiKey: "test-key" } } },
+    } as unknown as OpenClawConfig;
+
+    const result = redactTranscriptMessage(msg, inputCfg) as unknown as {
+      api: string;
+      model: string;
+      provider: string;
+      content: Array<{ textSignature: string }>;
+    };
+
+    expect(result).toMatchObject({
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+    });
+    expect(expectDefined(result.content[0], "result.content[0] test invariant").textSignature).toBe(
+      "response-item-1",
+    );
+  });
+
   it.each([
     {
       api: "openclaw-openai-responses-transport",

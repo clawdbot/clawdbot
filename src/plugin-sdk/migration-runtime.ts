@@ -6,12 +6,7 @@ import path from "node:path";
 import { writeTextAtomic } from "@openclaw/fs-safe/atomic";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  ensureAbsoluteDirectory,
-  pathExists,
-  readRegularFile,
-  root as openFsSafeRoot,
-} from "../infra/fs-safe.js";
+import { ensureAbsoluteDirectory, pathExists, root as openFsSafeRoot } from "../infra/fs-safe.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import type {
   MigrationApplyResult,
@@ -343,9 +338,16 @@ export async function copyMemoryMigrationFileItem(
     const workspaceDir = path.resolve(opts.workspaceDir);
     relativeTarget = path.relative(workspaceDir, path.resolve(item.target));
     safeRoot = await openMemoryMigrationRoot(workspaceDir);
-    const { buffer: sourceBuffer } = await readRegularFile({
-      filePath: item.source,
+    // A hardlink inside a source tree can alias sensitive bytes outside that tree.
+    const sourceRoot = await openFsSafeRoot(path.dirname(item.source), {
+      hardlinks: "reject",
       maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+      symlinks: "reject",
+    });
+    const { buffer: sourceBuffer } = await sourceRoot.read(path.basename(item.source), {
+      hardlinks: "reject",
+      maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+      symlinks: "reject",
     });
     assertMemoryMigrationSourceRevision(item, sourceBuffer);
     const replaceExisting = opts.overwrite === true && (await safeRoot.exists(relativeTarget));

@@ -4,6 +4,7 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderHttpError,
   createProviderOperationDeadline,
   fetchWithTimeout,
   readProviderJsonResponse,
@@ -13,7 +14,10 @@ import {
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -33,6 +37,8 @@ const MAX_POLL_ATTEMPTS = 120;
 type VydraAuthStore = Parameters<typeof resolveApiKeyForProvider>[0]["store"];
 
 type VydraMediaKind = "audio" | "image" | "video";
+
+class VydraDownloadBodyTimeoutError extends Error {}
 
 type VydraJobPayload = {
   id?: string;
@@ -233,6 +239,25 @@ export function resolveVydraGeneratedMediaMaxBytes(params: {
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
+function resolveVydraDownloadBodyTimeout(params: {
+  kind: VydraMediaKind;
+  timeoutMs: number;
+  deadlineMs: number;
+}) {
+  return {
+    chunkTimeoutMs: params.timeoutMs,
+    timeoutMs: Math.max(1, params.deadlineMs - Date.now()),
+    onIdleTimeout: ({ chunkTimeoutMs }: { chunkTimeoutMs: number }) =>
+      new VydraDownloadBodyTimeoutError(
+        `Vydra ${params.kind} download stalled after ${chunkTimeoutMs}ms`,
+      ),
+    onTimeout: () =>
+      new VydraDownloadBodyTimeoutError(
+        `Vydra ${params.kind} download timed out after ${params.timeoutMs}ms`,
+      ),
+  };
+}
+
 export async function downloadVydraAsset(params: {
   url: string;
   kind: VydraMediaKind;
@@ -241,17 +266,49 @@ export async function downloadVydraAsset(params: {
   maxBytes: number;
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
   const timeoutMs = resolveVydraHttpTimeoutMs(params.timeoutMs);
+  // fetchWithTimeout clears its abort after headers land. Keep one wall-clock deadline across
+  // non-2xx error-detail and successful-body reads so a slow drip cannot reset chunk idle forever.
+  const deadlineMs = Date.now() + timeoutMs;
   const response = await fetchWithTimeout(params.url, { method: "GET" }, timeoutMs, params.fetchFn);
-  await assertOkOrThrowHttpError(response, `Vydra ${params.kind} download failed`);
+  if (!response.ok) {
+    // Shared assertOkOrThrowHttpError reads error detail without a wall-clock bound; a dripping
+    // non-2xx body would hang before the success-path reader runs.
+    let errorBody: string | null = null;
+    try {
+      errorBody =
+        (
+          await readResponseTextPrefix(
+            response,
+            16 * 1024,
+            resolveVydraDownloadBodyTimeout({ kind: params.kind, timeoutMs, deadlineMs }),
+          )
+        ).text || null;
+    } catch (error) {
+      if (error instanceof VydraDownloadBodyTimeoutError) {
+        throw error;
+      }
+      // The shared formatter historically ignored unreadable error bodies. Preserve the known
+      // HTTP status and request id even when the provider closes a failed response mid-stream.
+    }
+    // Re-run the bounded body through the shared formatter so provider error metadata and
+    // sensitive-text redaction remain identical to the previous assertOkOrThrowHttpError path.
+    throw await createProviderHttpError(
+      new Response(errorBody, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      }),
+      `Vydra ${params.kind} download failed`,
+      { statusPrefix: "HTTP " },
+    );
+  }
   const mimeType =
     response.headers.get("content-type")?.trim() ||
     (params.kind === "image" ? "image/png" : params.kind === "audio" ? "audio/mpeg" : "video/mp4");
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    chunkTimeoutMs: timeoutMs,
+    ...resolveVydraDownloadBodyTimeout({ kind: params.kind, timeoutMs, deadlineMs }),
     onOverflow: ({ maxBytes }) =>
       new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Vydra ${params.kind} download stalled after ${chunkTimeoutMs}ms`),
   });
   const extension = resolveVydraFileExtension(params.kind, mimeType);
   const fileStem = params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";

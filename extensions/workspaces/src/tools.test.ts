@@ -91,7 +91,7 @@ describe("workspace tools", () => {
     const validSamples: Record<string, unknown> = {
       workspace_get: {},
       workspace_tab_create: { title: "Finance" },
-      workspace_tab_update: { slug: "main", hidden: true },
+      workspace_tab_update: { slug: "main", hidden: true, layout: "full" },
       workspace_tab_delete: { slug: "old" },
       workspace_tabs_reorder: { order: ["main"] },
       workspace_widget_add: {

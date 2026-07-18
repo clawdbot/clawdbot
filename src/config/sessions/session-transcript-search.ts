@@ -1,22 +1,15 @@
 // Full-text search over per-agent transcript rows. Appends index themselves
 // inside the accessor's write transactions (session-transcript-index.ts);
-// this module owns the query path and the lazy reconcile that backfills
-// doctor-migrated transcripts and rebuilds branch-rewound sessions.
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+// this module owns the query path and schedules the shared reconcile owner
+// when doctor imports or out-of-band writes leave derived rows behind.
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
-  deleteOrphanedTranscriptIndexRowsInTransaction,
-  listSessionsNeedingTranscriptIndexReconcile,
-  rebuildSessionTranscriptIndexInTransaction,
-} from "./session-transcript-index.js";
+  isSessionTranscriptIndexReconcileRunning,
+  startSessionTranscriptIndexReconcile,
+} from "./session-transcript-reconcile.js";
 
-const log = createSubsystemLogger("sessions/search-index");
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
@@ -36,78 +29,6 @@ type SessionTranscriptSearchResult = {
   indexing: boolean;
   truncated: boolean;
 };
-
-const runningReconciles = new Map<string, Promise<void>>();
-
-/**
- * Rebuilds every session whose index state lags its transcript rows, then
- * sweeps orphaned index rows. One write transaction per session keeps the
- * agent DB responsive to live appends between rebuilds.
- */
-async function reconcileSessionTranscriptIndex(params: {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const database = openOpenClawAgentDatabase({
-    agentId: params.agentId,
-    ...(params.env ? { env: params.env } : {}),
-  });
-  const sessionIds = listSessionsNeedingTranscriptIndexReconcile(database.db);
-  for (const sessionId of sessionIds) {
-    runOpenClawAgentWriteTransaction(
-      (agentDatabase) => {
-        // Rows are reread inside the transaction: a live append that landed
-        // after the dirty scan is either included here or re-flagged by its
-        // own in-transaction hook, so the rebuild can never go stale.
-        const rows = executeSqliteQuerySync(
-          agentDatabase.db,
-          getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "transcript_events">>(
-            agentDatabase.db,
-          )
-            .selectFrom("transcript_events")
-            .select(["seq", "event_json"])
-            .where("session_id", "=", sessionId)
-            .orderBy("seq", "asc"),
-        ).rows;
-        if (rows.length === 0) {
-          return;
-        }
-        const events = rows.map((row) => JSON.parse(row.event_json) as unknown);
-        const maxSeq = rows[rows.length - 1]?.seq ?? -1;
-        rebuildSessionTranscriptIndexInTransaction(agentDatabase.db, sessionId, events, maxSeq);
-      },
-      { agentId: params.agentId, ...(params.env ? { env: params.env } : {}) },
-      { operationLabel: "sessions.search.reconcile" },
-    );
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-  runOpenClawAgentWriteTransaction(
-    (agentDatabase) => {
-      deleteOrphanedTranscriptIndexRowsInTransaction(agentDatabase.db);
-    },
-    { agentId: params.agentId, ...(params.env ? { env: params.env } : {}) },
-    { operationLabel: "sessions.search.orphan-sweep" },
-  );
-}
-
-function startReconcile(params: { agentId: string; env?: NodeJS.ProcessEnv }): void {
-  if (runningReconciles.has(params.agentId)) {
-    return;
-  }
-  const pending = reconcileSessionTranscriptIndex(params)
-    .catch((error: unknown) => {
-      // The next search re-detects dirty sessions and retries.
-      log.warn(
-        `session transcript reconcile failed agent=${params.agentId} error=${error instanceof Error ? error.message : String(error)}`,
-      );
-    })
-    .finally(() => {
-      runningReconciles.delete(params.agentId);
-    });
-  runningReconciles.set(params.agentId, pending);
-}
 
 function toFtsQuery(query: string): string {
   return query
@@ -132,15 +53,17 @@ export function searchSessionTranscripts(params: {
   if (query.length > SEARCH_QUERY_MAX_CHARS) {
     throw new Error(`query must not exceed ${SEARCH_QUERY_MAX_CHARS} characters`);
   }
-  const database = openOpenClawAgentDatabase({
+  const databaseOptions = {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
-  });
+  };
+  const database = openOpenClawAgentDatabase(databaseOptions);
   const dirtySessions = listSessionsNeedingTranscriptIndexReconcile(database.db);
   if (dirtySessions.length > 0) {
-    startReconcile(params);
+    startSessionTranscriptIndexReconcile(params);
   }
-  const indexing = dirtySessions.length > 0 || runningReconciles.has(params.agentId);
+  const indexing =
+    dirtySessions.length > 0 || isSessionTranscriptIndexReconcileRunning(databaseOptions);
   const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
   const sessionKeys = params.sessionKeys ?? [];
   const whereSession =

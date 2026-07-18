@@ -189,6 +189,8 @@ export type PluginRuntimeChannel = {
     run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    dispatch: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundTurn;
+    /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
     dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {

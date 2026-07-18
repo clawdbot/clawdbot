@@ -263,13 +263,22 @@ async function channelsAddCommandImpl(
     runtime.exit(1);
     return;
   }
-  const input = buildChannelSetupInput(opts);
+  let input = buildChannelSetupInput(opts);
   const accountId =
     plugin.setup.resolveAccountId?.({
       cfg: nextConfig,
       accountId: opts.account,
       input,
     }) ?? normalizeAccountId(opts.account);
+  if (plugin.setup.prepareAccountConfigInput) {
+    await params?.beforePersistentEffect?.();
+    input = await plugin.setup.prepareAccountConfigInput({
+      cfg: nextConfig,
+      accountId,
+      input,
+      runtime,
+    });
+  }
 
   const validationError = plugin.setup.validateInput?.({
     cfg: nextConfig,

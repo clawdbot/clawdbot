@@ -1053,7 +1053,7 @@ describe("describeImageWithModel", () => {
       find: vi.fn(() => ({
         api: "openai-completions",
         provider: "qwen",
-        id: "qwen-vl-max-latest",
+        id: "qwen3.6-plus",
         input: ["text", "image"],
         baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       })),
@@ -1062,7 +1062,7 @@ describe("describeImageWithModel", () => {
       role: "assistant",
       api: "openai-completions",
       provider: "qwen",
-      model: "qwen-vl-max-latest",
+      model: "qwen3.6-plus",
       stopReason: "stop",
       timestamp: Date.now(),
       content: [{ type: "text", text: "dashscope ok" }],
@@ -1072,7 +1072,7 @@ describe("describeImageWithModel", () => {
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "qwen",
-      model: "qwen-vl-max-latest",
+      model: "qwen3.6-plus",
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
       mime: "image/png",
@@ -1082,7 +1082,7 @@ describe("describeImageWithModel", () => {
 
     expect(result).toEqual({
       text: "dashscope ok",
-      model: "qwen-vl-max-latest",
+      model: "qwen3.6-plus",
     });
     const firstCall = requireFirstMockCall(completeMock, "DashScope image completion");
     const [, context] = firstCall;

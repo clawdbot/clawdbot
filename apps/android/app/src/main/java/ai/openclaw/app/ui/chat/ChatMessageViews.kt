@@ -426,6 +426,7 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
 @Composable
 fun ChatOutboxBubble(
   item: ChatOutboxItem,
+  retryEnabled: Boolean = true,
   onRetry: () -> Unit,
   onDelete: () -> Unit,
 ) {
@@ -467,7 +468,7 @@ fun ChatOutboxBubble(
         color = statusColor,
         modifier = Modifier.weight(1f),
       )
-      if (failed) {
+      if (failed && retryEnabled) {
         ChatOutboxAction(label = nativeString("Retry"), color = mobileAccent, onClick = onRetry)
       }
       // Sending rows are mid-dispatch and accepted rows may already be delivered; both stay

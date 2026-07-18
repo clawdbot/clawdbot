@@ -34,6 +34,13 @@ import {
   resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 function clearGatewayModelPricingState(): void {
   replaceGatewayModelPricingCache(new Map(), 0);
   clearGatewayModelPricingFailures();
@@ -280,7 +287,7 @@ describe("session cost usage", () => {
         agentId: "main",
         sessions: [{ sessionId, sessionFile }],
       });
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const bulk = await loadSessionCostSummariesFromCache({
             agentId: "main",
@@ -716,7 +723,7 @@ describe("session cost usage", () => {
       const session = { sessionId: "sess-batch-range", sessionFile };
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
       const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const ranged = await loadSessionCostSummariesFromCache({
             sessions: [session],
@@ -813,7 +820,7 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       const session = { sessionId: "sess-v8-upgrade", sessionFile };
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await vi.waitFor(async () => {
+      await waitForFast(async () => {
         const current = await loadSessionCostSummariesFromCache({
           sessions: [session],
           agentId: "main",
@@ -849,7 +856,7 @@ describe("session cost usage", () => {
         startMs: Date.UTC(2026, 1, 5),
         endMs: rangeEndMs,
       });
-      await vi.waitFor(async () => {
+      await waitForFast(async () => {
         const rebuilt = await loadSessionCostSummariesFromCache({
           sessions: [session],
           agentId: "main",
@@ -867,7 +874,7 @@ describe("session cost usage", () => {
         "utf-8",
       );
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await vi.waitFor(async () => {
+      await waitForFast(async () => {
         const appended = await loadSessionCostSummariesFromCache({
           sessions: [session],
           agentId: "main",
@@ -1480,7 +1487,7 @@ describe("session cost usage", () => {
       });
 
       expect(summary.totals.totalTokens).toBe(30);
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const refreshed = await loadCostUsageSummaryFromCache({
             startMs: Date.UTC(2026, 1, 5),
@@ -1532,7 +1539,7 @@ describe("session cost usage", () => {
         sessions,
         agentId: "main",
       });
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const cached = await loadSessionCostSummariesFromCache({
             sessions,

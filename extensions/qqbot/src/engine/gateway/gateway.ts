@@ -7,7 +7,6 @@ import {
 } from "../commands/command-visibility.js";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
-import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
@@ -96,16 +95,11 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     allowTextCommands: ctx.group?.allowTextCommands,
     isControlCommand: ctx.group?.isControlCommand,
     resolveIntroHint: ctx.group?.resolveIntroHint,
-    sessionStoreReader: ctx.group?.sessionStoreReader,
   };
   const groupChatEnabled = groupOpts.enabled;
   const groupHistories: Map<string, HistoryEntry[]> | undefined = groupChatEnabled
     ? new Map()
     : undefined;
-  const sessionStoreReader = groupChatEnabled
-    ? (groupOpts.sessionStoreReader ?? createNodeSessionStoreReader())
-    : undefined;
-
   // Live config provider: per-inbound lookup so binding edits applied
   // through the CLI take effect without a gateway restart (#69546).
   const activeCfgProvider = createActiveCfgProvider({ fallback: ctx.cfg });
@@ -135,7 +129,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       runtime,
       startTyping: (ev) => startTypingForEvent(ev, account, log),
       groupHistories,
-      sessionStoreReader,
       allowTextCommands: groupOpts.allowTextCommands,
       isControlCommand: groupOpts.isControlCommand,
       resolveGroupIntroHint: groupOpts.resolveIntroHint,

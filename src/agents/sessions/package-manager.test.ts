@@ -1,13 +1,30 @@
 // Package manager tests cover resource discovery boundaries for package,
 // project, and npm-declared agent resources.
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DefaultPackageManager } from "./package-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs: string[] = [];
+
+type PackageManagerInternals = {
+  parseSource(
+    source: string,
+  ):
+    | { type: "npm"; spec: string; name: string; pinned: boolean }
+    | { type: "git"; host: string; path: string }
+    | { type: "local"; path: string };
+  getNpmInstallPath(
+    source: { type: "npm"; spec: string; name: string; pinned: boolean },
+    scope: "user" | "project" | "temporary",
+  ): string;
+  getGitInstallPath(
+    source: { type: "git"; host: string; path: string },
+    scope: "user" | "project" | "temporary",
+  ): string;
+};
 
 async function makeTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -248,5 +265,31 @@ describe("DefaultPackageManager", () => {
     expect(resolved.skills).toEqual([]);
     expect(resolved.prompts).toEqual([]);
     expect(resolved.themes).toEqual([]);
+  });
+
+  it("keeps temporary package paths in a private per-agent directory", async () => {
+    const createdRoot = await makeTempDir("openclaw-package-manager-temp-");
+    const root = await realpath(createdRoot);
+    const agentDir = join(root, "agent");
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir,
+      settingsManager: SettingsManager.inMemory({}),
+    }) as unknown as PackageManagerInternals;
+    const npmSource = manager.parseSource("npm:@openclaw/example");
+    const gitSource = manager.parseSource("https://github.com/openclaw/example.git");
+    if (npmSource.type !== "npm" || gitSource.type !== "git") {
+      throw new Error("Expected package sources");
+    }
+
+    const npmPath = manager.getNpmInstallPath(npmSource, "temporary");
+    const gitPath = manager.getGitInstallPath(gitSource, "temporary");
+    const tempRoot = join(agentDir, "tmp", "resources");
+
+    expect(relative(tempRoot, npmPath).startsWith("..")).toBe(false);
+    expect(relative(tempRoot, gitPath).startsWith("..")).toBe(false);
+    if (process.platform !== "win32") {
+      expect((await stat(tempRoot)).mode & 0o777).toBe(0o700);
+    }
   });
 });

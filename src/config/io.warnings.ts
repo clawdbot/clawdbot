@@ -1,7 +1,11 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { VERSION } from "../version.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
-import { loggedConfigWarningFingerprints, warnedFutureTouchedVersions } from "./io.state.js";
+import {
+  loggedConfigWarningFingerprints,
+  setBoundedConfigIoWarningEntry,
+  warnedFutureTouchedVersions,
+} from "./io.state.js";
 import type { OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
@@ -37,9 +41,10 @@ export function logConfigWarningsOnce(params: {
     .join("\n");
   const fingerprint = hashConfigRaw(details);
   if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
+    setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
     return;
   }
-  loggedConfigWarningFingerprints.set(params.configPath, fingerprint);
+  setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
   params.logger.warn(`Config warnings:\n${details}`);
 }
 
@@ -51,10 +56,9 @@ export function warnIfConfigFromFuture(
   if (!touched || !shouldWarnOnTouchedVersion(VERSION, touched)) {
     return;
   }
-  if (warnedFutureTouchedVersions.has(touched)) {
+  if (warnedFutureTouchedVersions.check(touched)) {
     return;
   }
-  warnedFutureTouchedVersions.add(touched);
   logger.warn(
     [
       `Your OpenClaw config was written by version ${touched}, but this command is running ${VERSION}.`,

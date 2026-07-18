@@ -1,7 +1,17 @@
 // Signal plugin module implements monitor.tool result harness behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
+import { setSignalRuntime } from "./runtime.js";
+import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
 
 type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
@@ -33,6 +43,7 @@ const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalToolResultSessionStorePath = vi.hoisted(
   () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
 );
+let signalToolResultStateDir: string | undefined;
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -129,6 +140,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
     dispatchInboundMessage: async (params: {
       ctx: unknown;
       cfg: unknown;
+      replyOptions?: {
+        turnAdoptionLifecycle?: { onAdopted?: () => void | Promise<void> };
+      };
       dispatcher: {
         sendFinalReply: (payload: {
           text?: string;
@@ -177,6 +191,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
       }
       params.dispatcher.markComplete?.();
       await params.dispatcher.waitForIdle?.();
+      await params.replyOptions?.turnAdoptionLifecycle?.onAdopted?.();
       return { queuedFinal };
     },
   };
@@ -257,6 +272,36 @@ export function installSignalToolResultTestHooks() {
       import("openclaw/plugin-sdk/system-event-runtime"),
     ]);
     resetInboundDedupe();
+    const createdStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-signal-tool-result-state-"),
+    );
+    const stateDir = await fs.realpath(createdStateDir);
+    signalToolResultStateDir = stateDir;
+    setSignalRuntime({
+      logging: {
+        getChildLogger: () => ({
+          debug: vi.fn(),
+          error: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+        }),
+      },
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => {
+          throw new Error("keyed store is not configured in Signal monitor tests");
+        },
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        ) => {
+          return createChannelIngressQueueForTests({
+            ...options,
+            channelId: "signal",
+            stateDir: options?.stateDir ?? stateDir,
+          });
+        },
+      },
+    } as unknown as PluginRuntime);
     config = {
       messages: { responsePrefix: "PFX" },
       session: { store: signalToolResultSessionStorePath },
@@ -278,5 +323,14 @@ export function installSignalToolResultTestHooks() {
     enqueueSystemEventMock.mockReset();
 
     resetSystemEventsForTest();
+  });
+
+  afterEach(async () => {
+    clearSignalRuntimeForTest();
+    closeOpenClawStateDatabaseForTest();
+    if (signalToolResultStateDir) {
+      await fs.rm(signalToolResultStateDir, { recursive: true, force: true });
+      signalToolResultStateDir = undefined;
+    }
   });
 }

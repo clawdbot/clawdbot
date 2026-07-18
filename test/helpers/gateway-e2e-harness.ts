@@ -142,7 +142,7 @@ export async function connectNode(
   return { client, nodeId };
 }
 
-async function connectStatusClient(
+export async function connectGatewayStatusClient(
   inst: GatewayInstance,
   timeoutMs = GATEWAY_CONNECT_STATUS_TIMEOUT_MS,
 ): Promise<GatewayClient> {
@@ -202,7 +202,7 @@ export async function waitForNodeStatus(
     let client: GatewayClient | undefined;
     while (Date.now() < deadline) {
       try {
-        client = await connectStatusClient(
+        client = await connectGatewayStatusClient(
           inst,
           Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
         );

@@ -186,7 +186,7 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
-  it("runs runtime-specific live scenarios in dedicated workers", async () => {
+  it("runs runtime-specific channel scenarios in dedicated workers", async () => {
     const repoRoot = await makeTempRepo("qa-suite-live-runtime-");
     await runQaSuite({
       repoRoot,
@@ -211,6 +211,81 @@ describe("qa suite runtime launcher", () => {
         outputDir: path.join(outputDir, "runtime-codex-1"),
         forcedRuntime: "codex",
         scenarioIds: ["slack-codex-approval-exec-native"],
+      }),
+    );
+  });
+
+  it("partitions portable scenarios by channel for a pluggable driver", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-channels-");
+    const adapterFactories = [
+      {
+        id: "portable-driver",
+        matches: vi.fn(),
+        create: vi.fn(),
+      },
+    ];
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-channels",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories,
+      scenarioIds: ["channel-chat-baseline", "telegram-help-command", "matrix-restart-resume"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "pluggable-channels");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(3);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: undefined,
+        outputDir: path.join(outputDir, "flow"),
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "telegram",
+        outputDir: path.join(outputDir, "flow", "telegram"),
+        scenarioIds: ["telegram-help-command"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "matrix",
+        outputDir: path.join(outputDir, "flow", "matrix"),
+        scenarioIds: ["matrix-restart-resume"],
+      }),
+    );
+  });
+
+  it("binds one portable channel scenario without an explicit channel override", async () => {
+    const adapterFactories = [
+      {
+        id: "portable-driver",
+        matches: vi.fn(),
+        create: vi.fn(),
+      },
+    ];
+
+    const result = await runQaSuite({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories,
+      scenarioIds: ["telegram-help-command"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "telegram",
+        scenarioIds: ["telegram-help-command"],
       }),
     );
   });

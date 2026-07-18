@@ -95,7 +95,7 @@ describeControlUiE2e("Control UI app chrome interaction mocked Gateway E2E", () 
       await transcript.waitFor();
       const chatStyles = await page.evaluate(() => {
         const sidebar = document.querySelector<HTMLElement>(".sidebar");
-        const sessions = document.querySelector<HTMLElement>(".sidebar-recent-sessions");
+        const sessions = document.querySelector<HTMLElement>(".sidebar-shell__body");
         const thread = document.querySelector<HTMLElement>(".chat-thread");
         if (!sidebar || !sessions || !thread) {
           throw new Error("Missing chat interaction surface");

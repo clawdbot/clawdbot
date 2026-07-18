@@ -1483,6 +1483,37 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded).toHaveProperty("session-50");
   });
 
+  it("updateSessionStore honors configured maxEntries without an explicit override", async () => {
+    const now = Date.now();
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        oldest: makeEntry(now - 2),
+        recent: makeEntry(now - 1),
+      }),
+      "utf-8",
+    );
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 2,
+        },
+      },
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      store.newest = makeEntry(now);
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(loaded)).toHaveLength(2);
+    expect(loaded).toHaveProperty("newest");
+    expect(loaded).toHaveProperty("recent");
+    expect(loaded.oldest).toBeUndefined();
+  });
+
   it("loadSessionStore honors configured maxEntries without an explicit override", async () => {
     mockLoadConfig.mockReturnValue({
       session: {

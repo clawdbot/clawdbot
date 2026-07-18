@@ -536,6 +536,35 @@ describe("cron service ops regressions", () => {
     expect(options?.agentId).toBeUndefined();
   });
 
+  it("clears an orphaned queued reservation and executes the due job", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:01.000Z");
+    const job = createDueIsolatedJob({
+      id: "stale-queued",
+      nowMs: now,
+      nextRunAtMs: now - 60_000,
+    });
+    job.state.queuedAtMs = now - 2 * 60 * 60 * 1000 - 1;
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(
+      state.store?.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs,
+    ).toBeUndefined();
+  });
+
   it("queues manual cron.run requests behind the cron execution lane", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
@@ -806,6 +835,7 @@ describe("cron service ops regressions", () => {
 
     clearCommandLane(CommandLane.Cron);
   });
+
   it.each([
     {
       id: "onexit-delete-ok",

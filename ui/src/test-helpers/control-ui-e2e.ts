@@ -61,7 +61,12 @@ export type ControlUiMockGatewayScenario = {
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
+  /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
+  /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
+  inFlightRun?: { runId: string; text?: string; plan?: unknown } | null;
+  /** Session run state served alongside history (hasActiveRun/activeRunIds). */
+  sessionInfo?: Record<string, unknown> | null;
   models?: Array<{
     id: string;
     name: string;
@@ -252,7 +257,9 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
+    inFlightRun: scenario.inFlightRun ?? null,
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    sessionInfo: scenario.sessionInfo ?? null,
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -305,6 +312,9 @@ function installControlUiMockGateway(input: {
   type BrowserMethodResponseCases = {
     cases?: BrowserMethodResponseCase[];
   };
+  type BrowserMethodResponseSequence = {
+    sequence?: unknown[];
+  };
   type DeferredResponse = {
     id: string;
     method: string;
@@ -352,6 +362,7 @@ function installControlUiMockGateway(input: {
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
+  const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const sockets: Array<{ readonly url: string }> = [];
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
@@ -520,6 +531,14 @@ function installControlUiMockGateway(input: {
     return Array.isArray(maybeCases) ? maybeCases : null;
   }
 
+  function responseSequence(value: unknown): unknown[] | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+    const maybeSequence = (value as BrowserMethodResponseSequence).sequence;
+    return Array.isArray(maybeSequence) ? maybeSequence : null;
+  }
+
   function configuredResponse(
     method: string,
     params: unknown,
@@ -528,6 +547,16 @@ function installControlUiMockGateway(input: {
       return { found: false };
     }
     const configured = scenario.methodResponses[method];
+    const sequence = responseSequence(configured);
+    if (sequence) {
+      if (sequence.length === 0) {
+        return { found: false };
+      }
+      const index = methodResponseSequenceIndexes.get(method) ?? 0;
+      methodResponseSequenceIndexes.set(method, index + 1);
+      // Keep the final response stable so harmless UI retries remain deterministic.
+      return { found: true, value: sequence[Math.min(index, sequence.length - 1)] };
+    }
     const cases = responseCases(configured);
     if (!cases) {
       return { found: true, value: configured };
@@ -755,6 +784,8 @@ function installControlUiMockGateway(input: {
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
+          ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
         };
       case "chat.startup":
         return {
@@ -777,6 +808,8 @@ function installControlUiMockGateway(input: {
           },
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
+          ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
         };
       case "chat.metadata":
         return {
@@ -1072,6 +1105,7 @@ function installControlUiMockGateway(input: {
     },
     setMethodResponse(method, payload) {
       scenario.methodResponses[method] = payload;
+      methodResponseSequenceIndexes.delete(method);
       methodResponseOverrides[method] = payload;
       try {
         window.sessionStorage.setItem(

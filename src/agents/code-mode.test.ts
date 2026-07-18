@@ -1,9 +1,12 @@
 /** Tests Code Mode tool registration, namespace filtering, and run lifecycle. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+import { createOpenClawReadTool } from "./agent-tools.read.js";
 import {
   clearCodeModeNamespacesForPlugin,
   createCodeModeNamespaceTool,
@@ -21,6 +24,7 @@ import {
   resolveCodeModeConfig,
 } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
+import { createReadTool } from "./sessions/index.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -387,18 +391,143 @@ describe("Code Mode", () => {
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("`tools.search(query)`");
+    expect(execTool.description).toContain("process them in the first exec");
+    expect(execTool.description).toContain("do not spend another exec inspecting");
+    expect(execTool.description).toContain("dependent reads, checks, and follow-up calls in order");
+    expect(execTool.description).toContain("normal tool policy and approvals");
+    expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
+    expect(execTool.description).toContain("`tools.search(query: string, options?)`");
     expect(execTool.description).toContain("enabled catalog tools allowed by policy");
-    expect(execTool.description).toContain("`tools.describe(entry.id)`");
-    expect(execTool.description).toContain("`tools.call(entry.id, args)`");
+    expect(execTool.description).toContain("`tools.describe(id: string)`");
+    expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
+    expect(execTool.description).toContain("`tools.call(id: string, args?)`");
+    expect(execTool.description).toContain("Never invent or transform a tool id");
+    expect(execTool.description).toContain("Quick-index arrows show trusted declared output hints");
+    expect(execTool.description).toContain("`-> ?` means never guess result field names");
+    expect(execTool.description).toContain("never guess result field names");
+    expect(execTool.description).toContain("return the raw tool value unchanged");
+    expect(execTool.description).toContain("final dependent call after declared-output calls");
+    expect(execTool.description).toContain("do not wrap it in the requested answer shape");
+    expect(execTool.description).toContain("filter or map it only in a later exec");
+    expect(execTool.description).toContain("returns its JSON value directly");
+    expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
     expect(execTool.description).toContain('"javascript" or "typescript"');
 
-    expect(parameters.properties?.code?.description).toContain("`tools` object");
+    expect(parameters.properties?.code?.description).toContain(
+      "`tools.search` takes a query string, not an object",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "Select exact ids from `ALL_TOOLS` or `tools.search`",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "never put dependent calls in Promise.all",
+    );
     expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
     expect(parameters.properties?.code?.description).toContain("Node built-in modules are not");
+    expect(parameters.properties?.restartSafe?.description).toContain(
+      "Leave unset for ordinary calls",
+    );
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
+  });
+
+  it("primes the exec schema with exact native tool ids and compact contracts", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const alpha = pluginTool("alpha_tool", "Another deferred description.");
+    alpha.outputSchema = Type.Array(
+      Type.Object({ id: Type.String(), score: Type.Number() }, { additionalProperties: false }),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("zeta_tool", "Description stays deferred."), alpha],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("descriptions are intentionally deferred");
+    expect(description).toContain("OUTPUT DECLARED RULE");
+    expect(description).toContain(
+      '- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> Array<{ id: string; score: number }>',
+    );
+    expect(description).toContain('- "openclaw:fake-code-mode:zeta_tool" { value?: string } -> ?');
+    expect(description.indexOf("alpha_tool")).toBeLessThan(description.indexOf("zeta_tool"));
+    expect(description).not.toContain("Description stays deferred.");
+    expect(description).not.toContain("Another deferred description.");
+  });
+
+  it("keeps a typical 72-tool catalog fully indexed", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const catalogTools = Array.from({ length: 72 }, (_, index) =>
+      pluginTool(`tool_${index.toString().padStart(3, "0")}`, "Deferred", "catalog-owner"),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain('"openclaw:catalog-owner:tool_071"');
+    expect(description).not.toContain("additional OpenClaw/plugin tools omitted");
+  });
+
+  it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const pluginId = `fake-${"x".repeat(120)}`;
+    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    );
+    // Alphabetically last, but carries a declared output contract.
+    const contracted = pluginTool("zzz_contracted_tool", "Deferred", pluginId);
+    (contracted as { outputSchema?: unknown }).outputSchema = Type.Object(
+      { ok: Type.Boolean() },
+      { additionalProperties: false },
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools, contracted],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).toContain("zzz_contracted_tool");
+    expect(index).toContain("-> { ok: boolean }");
+  });
+
+  it("bounds the model-visible native tool index", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const pluginId = `fake-${"x".repeat(120)}`;
+    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).not.toContain("fake_099");
   });
 
   it("adds registered namespace docs to the model-visible exec schema", () => {
@@ -427,6 +556,58 @@ describe("Code Mode", () => {
     expect(compacted.tools[0]?.description).toContain("Registered namespace globals");
     expect(compacted.tools[0]?.description).toContain("Tickets: Ticket lookup helpers.");
     expect(compacted.tools[0]?.description).toContain("Tickets.currentAgent() returns undefined.");
+  });
+
+  it("omits MCP and namespace guidance from the exec schema when the run catalog has neither", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    // Base tool guidance always stays; MCP/API and namespace guidance drop out so
+    // the model never probes an empty virtual API surface.
+    expect(description).toContain("`tools.search(query: string, options?)`");
+    expect(description).not.toContain("API.list");
+    expect(description).not.toContain("MCP tools are available only through");
+    expect(description).not.toContain("Registered plugin namespaces are available");
+    expect(description).not.toContain("Registered namespace globals");
+  });
+
+  it("keeps MCP guidance in the exec schema when the run catalog has MCP tools", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        pluginTool("fake_noop", "Noop"),
+        mcpTool({
+          name: "github__create_issue",
+          serverName: "github",
+          toolName: "create_issue",
+          parameters: {
+            type: "object",
+            properties: { malicious_prompt: { type: "string" } },
+          },
+        }),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("API.list(prefix?)");
+    expect(description).toContain("MCP tools are available only through");
+    expect(description).toContain('"openclaw:fake-code-mode:fake_noop"');
+    expect(description).not.toContain("github__create_issue");
+    expect(description).not.toContain("malicious_prompt");
   });
 
   it("validates namespace registrations before exposing globals", () => {
@@ -809,10 +990,9 @@ describe("Code Mode", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const hits = await tools.search("ticket", { limit: 1 });
-        const described = await tools.describe(hits[0].id);
-        const called = await tools.call(described.id, { value: "ship" });
+        const called = await tools.callValue(hits[0].id, { value: "ship" });
         text("created");
-        return called.result.details;
+        return called;
       `,
     });
 
@@ -822,7 +1002,184 @@ describe("Code Mode", () => {
       input: { value: "ship" },
     });
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
+    expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns ordinary read content through tools.callValue", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const read = createOpenClawReadTool(
+      createReadTool("/workspace", {
+        operations: {
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => Buffer.from("ordinary file content"),
+        },
+      }) as unknown as Parameters<typeof createOpenClawReadTool>[0],
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `return await tools.callValue("openclaw:core:read", { path: "notes.txt" });`,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({ kind: "text", content: "ordinary file content" });
+  });
+
+  it("resolves sequential bridge tool calls inline within one exec instead of a wait per call", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    // maxPendingToolCalls stays a per-batch concurrency cap; five sequential
+    // awaits must drain inline even with a cap of 2.
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    // Five separate awaits would each suspend to the model under a wait-per-call
+    // design; inline resumption collapses them into a single completed exec so
+    // the model spends one turn instead of six.
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-inline",
+        {
+          code: `
+            const ids = [];
+            for (let index = 0; index < 5; index += 1) {
+              const called = await tools.callValue("fake_create_ticket", { value: index });
+              ids.push(called.input.value);
+            }
+            return ids;
+          `,
+        },
+      ),
+    );
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual([0, 1, 2, 3, 4]);
+    expect(ticket.execute).toHaveBeenCalledTimes(5);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("fails fast without parking a suspended run when the exec call is aborted", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    // Long timeout so a missing abort short-circuit would block the whole test.
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 30_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    applyCodeModeCatalog({
+      tools: [
+        ...codeModeTools,
+        // A tool that never settles and ignores its abort signal; only the
+        // host-level abort race can free the cancelled exec.
+        pluginToolWithExecute("fake_stuck", "Stuck helper", async () => {
+          await new Promise<never>(() => {});
+          return null as never;
+        }),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-abort",
+        { code: "await tools.fake_stuck({}); return 'done';" },
+        controller.signal,
+      ),
+    );
+
+    // Abort drops the run instead of parking it; a cancelled call must not pin
+    // one of the process-global suspended-run slots until TTL expiry.
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("code mode execution aborted");
+    expect(details.code).toBe("aborted");
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("terminates a running guest promptly when the exec call is aborted", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    // Long timeout so only the abort race can end the hostile loop quickly.
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 30_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 200);
+    const startedAt = Date.now();
+    try {
+      const details = resultDetails(
+        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+          "code-call-abort-live",
+          { code: "while (true) {}" },
+          controller.signal,
+        ),
+      );
+      expect(details.status).toBe("failed");
+      expect(details.error).toBe("code mode execution aborted");
+      expect(details.code).toBe("aborted");
+    } finally {
+      clearTimeout(abortTimer);
+    }
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(testing.activeRuns.size).toBe(0);
   });
 
   it("uses tools recovery guidance for guessed tool ids", async () => {
@@ -890,6 +1247,41 @@ describe("Code Mode", () => {
     );
   });
 
+  it("surfaces policy blocks as guest call errors for declared outputs", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const target = pluginTool("fake_policy_block", "Return policy-controlled rows");
+    target.outputSchema = Type.Array(
+      Type.Object({ id: Type.String() }, { additionalProperties: false }),
+    );
+    target.execute = vi.fn(async () =>
+      buildBlockedToolResult({ reason: "blocked by orchard policy" }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        try {
+          const rows = await tools.callValue("fake_policy_block", {});
+          return rows.map((row) => row.id);
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toContain("was blocked before execution: blocked by orchard policy");
+  });
+
   it("exposes MCP tools only through the MCP namespace", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = mcpTool({
@@ -926,6 +1318,7 @@ describe("Code Mode", () => {
         const rootApi = await MCP.$api();
         const api = await MCP.github.$api("createIssue", { schema: true });
         const apiFiles = await API.list("mcp");
+        const apiFilesTrailingSlash = await API.list("mcp/");
         const rootFile = await API.read("mcp/index.d.ts");
         const serverFile = await API.read("mcp/github.d.ts");
         const created = await MCP.github.createIssue({
@@ -953,6 +1346,7 @@ describe("Code Mode", () => {
         return {
           apiHeader: api.header,
           apiFilePaths: apiFiles.files.map((file) => file.path),
+          apiFilePathsTrailingSlash: apiFilesTrailingSlash.files.map((file) => file.path),
           listedServerFileBytes: apiFiles.files.find((file) => file.path === "mcp/github.d.ts").bytes,
           serverFileBytes: serverFile.bytes,
           serverFileContent: serverFile.content,
@@ -1004,6 +1398,7 @@ describe("Code Mode", () => {
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
       apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      apiFilePathsTrailingSlash: ["mcp/index.d.ts", "mcp/github.d.ts"],
       listedServerFileBytes: expect.any(Number),
       serverFileBytes: expect.any(Number),
       serverFileContent: expect.stringContaining("Repository 名称"),

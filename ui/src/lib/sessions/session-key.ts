@@ -185,17 +185,23 @@ export function isUiGlobalScopeConfigured(
   return isUiGlobalSessionKey(resolveUiCanonicalMainSessionKey(host));
 }
 
-function resolveUiCanonicalMainSessionKey(
+export function resolveUiCanonicalMainSessionKey(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
 ): string {
   const defaults = readSessionDefaults(host);
-  return (
-    normalizeOptionalString(defaults?.mainSessionKey) ??
-    buildAgentMainSessionKey({
-      agentId: resolveUiDefaultAgentId(host),
-      mainKey: resolveUiConfiguredMainKey(host),
-    })
-  );
+  const advertised = normalizeOptionalString(defaults?.mainSessionKey);
+  if (advertised) {
+    return advertised;
+  }
+  // Global scope routes main to the "global" sentinel even when the gateway
+  // has not advertised a main session key yet (e.g. pre-hello snapshots).
+  if (normalizeOptionalLowercaseString(host.agentsList?.scope) === "global") {
+    return "global";
+  }
+  return buildAgentMainSessionKey({
+    agentId: resolveUiDefaultAgentId(host),
+    mainKey: resolveUiConfiguredMainKey(host),
+  });
 }
 
 function normalizeUiSessionEventKey(
@@ -375,4 +381,17 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   }
   const parsed = parseAgentSessionKey(raw);
   return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("subagent:");
+}
+
+/** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
+export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = normalizeOptionalString(sessionKey) ?? "";
+  if (!raw) {
+    return false;
+  }
+  if (normalizeLowercaseStringOrEmpty(raw).startsWith("acp:")) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("acp:");
 }

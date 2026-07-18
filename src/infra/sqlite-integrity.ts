@@ -2,10 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
-  quickCheck: "ok";
 };
 
-type SqliteCheckPragma = "integrity_check" | "quick_check";
+type SqliteCheckPragma = "integrity_check";
 type SqliteForeignKeyViolation = {
   fkid: bigint;
   parent: string;
@@ -15,15 +14,35 @@ type SqliteForeignKeyViolation = {
 
 const MAX_REPORTED_FOREIGN_KEY_VIOLATIONS = 5;
 
+const SQLITE_CORRUPT_ERRCODE = 11;
+const SQLITE_NOTADB_ERRCODE = 26;
+
+/** Return whether a named integrity failure proves persistent database damage. */
+export function isTerminalSqliteIntegrityError(error: Error): boolean {
+  if (error.name !== "SqliteIntegrityError") {
+    return false;
+  }
+  const cause = error.cause as { errcode?: unknown } | undefined;
+  if (!cause) {
+    // No cause means the check pragma itself reported corruption rows: persistent.
+    return true;
+  }
+  if (typeof cause.errcode !== "number") {
+    return false;
+  }
+  // Mask extended codes to the primary; transient lock/busy failures must not latch.
+  const primaryCode = cause.errcode & 0xff;
+  return primaryCode === SQLITE_CORRUPT_ERRCODE || primaryCode === SQLITE_NOTADB_ERRCODE;
+}
+
 /** Require structural, table/index, and referential consistency before trusting a database. */
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
 ): SqliteIntegrityChecks {
-  const quickCheck = runSqliteCheck(database, databaseLabel, "quick_check");
   const integrityCheck = runSqliteCheck(database, databaseLabel, "integrity_check");
   runSqliteForeignKeyCheck(database, databaseLabel);
-  return { integrityCheck, quickCheck };
+  return { integrityCheck };
 }
 
 /** Require table and associated index consistency before trusting indexed reads. */
@@ -42,15 +61,22 @@ function runSqliteCheck(
   tableName?: string,
 ): "ok" {
   const argument = tableName ? `('${tableName.replaceAll("'", "''")}')` : "";
-  const rows = database.prepare(`PRAGMA ${pragma}${argument};`).all() as Array<
-    Record<string, unknown>
-  >;
+  let rows: Array<Record<string, unknown>>;
+  try {
+    rows = database.prepare(`PRAGMA ${pragma}${argument};`).all() as Array<Record<string, unknown>>;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw createSqliteIntegrityError(
+      `SQLite ${pragma} failed for ${databaseLabel}: ${message}`,
+      error,
+    );
+  }
   const results = rows.map((row) => row[pragma] ?? Object.values(row)[0]);
   if (results.length === 1 && results[0] === "ok") {
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw new Error(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
+  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
@@ -68,9 +94,10 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`SQLite foreign_key_check failed for ${databaseLabel}: ${message}`, {
-      cause: error,
-    });
+    throw createSqliteIntegrityError(
+      `SQLite foreign_key_check failed for ${databaseLabel}: ${message}`,
+      error,
+    );
   }
   if (violations.length === 0) {
     return;
@@ -80,7 +107,15 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
     details.push("additional violations omitted");
   }
-  throw new Error(`SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`);
+  throw createSqliteIntegrityError(
+    `SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`,
+  );
+}
+
+function createSqliteIntegrityError(message: string, cause?: unknown): Error {
+  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
+  error.name = "SqliteIntegrityError";
+  return error;
 }
 
 function retainSortedForeignKeyViolation(

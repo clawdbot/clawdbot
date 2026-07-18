@@ -244,7 +244,8 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
   it("falls back to in-paren word boundaries when the parenthesis is unbalanced", () => {
     const input = "**foo (bar baz qux quux**";
     const chunks = markdownToTelegramChunks(input, 20);
-    expect(chunks.map((chunk) => chunk.text)).toEqual(["foo", "(bar baz qux ", "quux"]);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["foo ", "(bar baz qux ", "quux"]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("foo (bar baz qux quux");
     expectHtmlChunkLengthsAtMost(chunks, 20);
   });
 

@@ -1,6 +1,7 @@
 // Mention gating tests cover channel mention requirements before inbound messages trigger agents.
 import { describe, expect, it } from "vitest";
 import {
+  allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
   resolveMentionGating,
@@ -126,6 +127,49 @@ describe("resolveInboundMentionDecision", () => {
     expect(res.matchedImplicitMentionKinds).toStrictEqual([]);
     expect(res.effectiveWasMentioned).toBe(false);
     expect(res.shouldSkip).toBe(true);
+  });
+
+  it("translates positive implicit mention config inside the evaluator", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        implicitMentionKinds: ["reply_to_bot", "bot_thread_participant", "native"],
+      },
+      policy: {
+        isGroup: true,
+        requireMention: true,
+        implicitMentions: {
+          replyToBot: false,
+          quotedBot: true,
+          threadParticipation: false,
+        },
+        allowTextCommands: true,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
+    expect(res.matchedImplicitMentionKinds).toEqual(["native"]);
+  });
+
+  it("keeps an explicit plugin allowlist ahead of implicit mention config", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        implicitMentionKinds: ["reply_to_bot", "bot_thread_participant"],
+      },
+      policy: {
+        isGroup: true,
+        requireMention: true,
+        implicitMentions: { replyToBot: false, threadParticipation: true },
+        allowedImplicitMentionKinds: ["reply_to_bot"],
+        allowTextCommands: true,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
+    expect(res.matchedImplicitMentionKinds).toEqual(["reply_to_bot"]);
   });
 
   it("dedupes repeated implicit mention kinds", () => {
@@ -265,5 +309,26 @@ describe("implicitMentionKindWhen", () => {
 
   it("returns an empty list when disabled", () => {
     expect(implicitMentionKindWhen("reply_to_bot", false)).toStrictEqual([]);
+  });
+});
+
+describe("allowedImplicitMentionKindsFromConfig", () => {
+  it("maps positive config flags to evaluator kinds while preserving native mentions", () => {
+    expect(
+      allowedImplicitMentionKindsFromConfig({
+        replyToBot: true,
+        quotedBot: false,
+        threadParticipation: false,
+      }),
+    ).toEqual(["reply_to_bot", "native"]);
+  });
+
+  it("keeps unset kinds allowed for shipped-behavior compatibility", () => {
+    expect(allowedImplicitMentionKindsFromConfig({})).toEqual([
+      "reply_to_bot",
+      "quoted_bot",
+      "bot_thread_participant",
+      "native",
+    ]);
   });
 });

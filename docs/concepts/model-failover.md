@@ -28,18 +28,18 @@ OpenClaw handles failures in two stages:
   <Step title="Advance on failover-worthy errors">
     If that provider is exhausted with a failover-worthy error, move to the next model candidate.
   </Step>
-  <Step title="Persist fallback override">
-    Persist the selected fallback override before the retry starts so other session readers see the same provider/model the runner is about to use. The persisted model override is marked `modelOverrideSource: "auto"`.
+  <Step title="Use fallback for the current turn">
+    Run the winning fallback candidate without changing the session's selected provider/model.
   </Step>
-  <Step title="Roll back narrowly on failure">
-    If the fallback candidate fails, roll back only the fallback-owned session override fields when they still match that failed candidate.
+  <Step title="Retry safe pure overload exhaustion">
+    If every candidate fails only because providers are overloaded, retry the full turn-local chain up to 10 times with exponential backoff while no tool execution or assistant output has started. After 30 seconds, send one status notice so the user is not left waiting silently.
   </Step>
   <Step title="Throw FallbackSummaryError if exhausted">
     If every candidate fails, throw a `FallbackSummaryError` with per-attempt detail and the soonest cooldown expiry when one is known.
   </Step>
 </Steps>
 
-This is intentionally narrower than "save and restore the whole session." The reply runner only persists the model-selection fields it owns for fallback: `providerOverride`, `modelOverride`, `modelOverrideSource`, `authProfileOverride`, `authProfileOverrideSource`, `authProfileOverrideCompactionCount`. That prevents a failed fallback retry from overwriting newer unrelated session mutations, such as a manual `/model` change or a session rotation update that happened while the attempt was running.
+Fallback execution is turn-local. The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered; it does not persist the fallback as the next turn's model selection.
 
 ## Selection source policy
 
@@ -47,12 +47,12 @@ The selection source controls whether the fallback chain is allowed:
 
 - **Configured default**: `agents.defaults.model.primary` uses `agents.defaults.model.fallbacks`.
 - **Agent primary**: `agents.list[].model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
-- **Auto fallback override**: a runtime fallback writes `providerOverride`, `modelOverride`, `modelOverrideSource: "auto"`, and the selected origin model before retrying. This override keeps walking the configured fallback chain without probing the primary on every message, but OpenClaw probes the configured origin every 5 minutes (not configurable) and clears the override once it recovers. `/new`, `/reset`, and `sessions.reset` also clear auto-sourced overrides. Heartbeat runs without an explicit `heartbeat.model` clear direct auto overrides when their origin no longer matches the current configured default.
+- **Runtime fallback**: the fallback candidate applies only to the current turn. The next turn starts from the selected primary again. OpenClaw still recognizes previously stored `modelOverrideSource: "auto"` entries, probes their configured origin every 5 minutes, and clears them once the origin recovers. `/new`, `/reset`, and `sessions.reset` also clear those entries.
 - **User session override**: `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` write `modelOverrideSource: "user"`. This is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
 - **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
 - **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`; `payload.fallbacks: []` makes the cron run strict.
 
-OpenClaw remembers recent primary probes per session and primary model so a failing primary is not retried on every turn. It sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
+OpenClaw sends a visible notice when a turn moves onto fallback and another notice when a later turn succeeds on the selected primary. Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
 
 ## Auth failure skip cache
 
@@ -82,7 +82,7 @@ When a later probe succeeds and the session returns to the selected primary, Ope
 ↪️ Model Fallback cleared: <primary> (was <fallback>)
 ```
 
-These notices are operational messages, not assistant content. They deliver once per state change, including side-effect-only turns when feasible, but sticky fallback turns do not repeat them. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech and commitment extraction.
+These notices are operational messages, not assistant content. They deliver once per state change, including side-effect-only turns when feasible, but repeated turn-local fallback transitions do not repeat them. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech and commitment extraction.
 
 ## Auth storage (keys + OAuth)
 
@@ -262,6 +262,8 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits (see the defaults table above).
 
+If the entire candidate chain is exhausted only by overload failures, the reply runner retries the chain up to 10 times in the same turn. Full-turn retry is allowed only before tool execution or assistant output starts, avoiding duplicate mutations or messages if an overload arrives after observable work. Backoff starts at 2.5 seconds and doubles to a 30-second cap. Once the turn has been waiting for 30 seconds, OpenClaw sends one transient status notice: `The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.` The retry and any fallback winner remain turn-local; ordinary transient server errors retain their separate one-retry policy.
+
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
 ### Candidate chain rules
@@ -319,42 +321,21 @@ When every auth profile for a provider is already in cooldown, OpenClaw does not
 
 ## Session overrides and live model switching
 
-Session model changes are shared state. The active runner, `/model` command, compaction/session updates, and live-session reconciliation all read or write parts of the same session entry.
+Session model changes are shared state. The active runner, `/model` command, compaction/session updates, and live-session reconciliation all read or write parts of the same session entry. Fallback execution does not write model-selection fields, so it cannot replace a newer manual selection while retrying.
 
-That means fallback retries have to coordinate with live model switching:
+Live model switching follows these rules:
 
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
 - User-driven model overrides are treated as exact selections for fallback policy, so an unreachable selected provider surfaces as a failure instead of being masked by `agents.defaults.model.fallbacks`.
-- Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
-- Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. OpenClaw periodically probes the configured origin again and clears the auto override when it recovers; `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.
-- User replies announce fallback transitions and fallback-cleared recovery once per state change. Sticky fallback turns do not repeat the notice.
+- Runtime fallback candidates remain turn-local. The next turn starts from the current selected model, including a manual selection that arrived during the previous run.
+- Previously stored auto fallback overrides remain supported: OpenClaw periodically probes their configured origin and clears the override when it recovers; `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.
+- User replies announce fallback transitions and fallback-cleared recovery once per state change. Repeated turns with the same selected/active pair do not repeat the notice.
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
-- If the fallback attempt fails, the runner rolls back only the override fields it wrote, and only if they still match that failed candidate.
 
-This prevents the classic race:
-
-<Steps>
-  <Step title="Primary fails">
-    The selected primary model fails.
-  </Step>
-  <Step title="Fallback chosen in memory">
-    Fallback candidate is chosen in memory.
-  </Step>
-  <Step title="Session store still says old primary">
-    Session store still reflects the old primary.
-  </Step>
-  <Step title="Live reconciliation reads stale state">
-    Live-session reconciliation reads the stale session state.
-  </Step>
-  <Step title="Retry snapped back">
-    The retry gets snapped back to the old model before the fallback attempt starts.
-  </Step>
-</Steps>
-
-The persisted fallback override closes that window, and the narrow rollback keeps newer manual or runtime session changes intact.
+The active run carries its chosen candidate directly. Live reconciliation changes that candidate only for an explicit pending user switch, so no temporary fallback override or rollback is needed.
 
 ## Observability and failure summaries
 

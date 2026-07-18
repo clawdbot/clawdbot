@@ -21,6 +21,15 @@ const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
 }));
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
+const appendGatewayLifecycleAudit = vi.fn();
+const createGatewayLifecycleMutationAudit = vi.fn(
+  (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
+    appendGatewayLifecycleAudit({
+      action: params.action,
+      source: params.source ?? "cli",
+      ...mutation,
+    }),
+);
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfig(),
@@ -35,6 +44,28 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../../infra/restart-intent.js", () => ({
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
   writeGatewayRestartIntentSync: (opts: unknown) => writeGatewayRestartIntentSync(opts),
+}));
+
+vi.mock("./lifecycle-audit.js", () => ({
+  appendGatewayLifecycleAudit: (params: unknown) => appendGatewayLifecycleAudit(params),
+  createGatewayLifecycleMutationAudit: (params: { action: string; source?: string }) =>
+    createGatewayLifecycleMutationAudit(params),
+  createServiceLifecycleMutationAudit: (params: { serviceNoun: string; action: string }) =>
+    params.serviceNoun === "Gateway" ? createGatewayLifecycleMutationAudit(params) : undefined,
+  appendServiceLifecycleRepairAudit: (params: {
+    serviceNoun: string;
+    action: string;
+    pid?: number;
+  }) => {
+    if (params.serviceNoun === "Gateway") {
+      appendGatewayLifecycleAudit({
+        action: params.action,
+        source: "cli",
+        mode: "service-repair",
+        ...(params.pid === undefined ? {} : { pid: params.pid }),
+      });
+    }
+  },
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
@@ -113,6 +144,8 @@ describe("runServiceRestart token drift", () => {
   });
 
   beforeEach(() => {
+    appendGatewayLifecycleAudit.mockClear();
+    createGatewayLifecycleMutationAudit.mockClear();
     resetLifecycleRuntimeLogs();
     loadConfig.mockReset();
     loadConfig.mockReturnValue({
@@ -561,6 +594,76 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("reports an already-running gateway without restarting it", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    const payload = readJsonLog<{ ok?: boolean; result?: string; message?: string }>();
+    expect(payload).toMatchObject({
+      ok: true,
+      result: "already-running",
+      message: "Gateway service already running (pid 4242).",
+    });
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
+  });
+
+  it("audits a service start that actually mutates the gateway", async () => {
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.onMutation?.({ mode: "kickstart" });
+      return { outcome: "completed" };
+    });
+
+    await runServiceStart(createServiceRunArgs());
+
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "start",
+      source: "cli",
+      mode: "kickstart",
+    });
+  });
+
+  it("audits direct managed restart mutations", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.onMutation?.({ mode: "kickstart", pid: 4242 });
+      return { outcome: "completed" };
+    });
+
+    await runServiceRestart(createServiceRunArgs());
+
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "restart",
+      source: "cli",
+      mode: "kickstart",
+      pid: 4242,
+    });
+  });
+
+  it("audits direct managed stop mutations", async () => {
+    service.stop.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.onMutation?.({ mode: "bootout" });
+    });
+
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true },
+    });
+
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "stop",
+      source: "cli",
+      mode: "bootout",
+    });
   });
 
   it("captures service start warnings in json start output", async () => {

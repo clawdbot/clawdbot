@@ -52,7 +52,11 @@ function isGoogleChatAccountConfigured(params: {
   accountId?: string | null;
 }): boolean {
   const account = resolveGoogleChatAccount(params);
-  return account.enabled && account.credentialSource !== "none";
+  return (
+    account.enabled &&
+    account.credentialSource !== "none" &&
+    account.tokenStatus !== "configured_unavailable"
+  );
 }
 
 function hasGoogleChatWebhookApprovalAuthConfig(params: {

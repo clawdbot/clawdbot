@@ -803,6 +803,32 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "live-only"]);
   });
 
+  it("filters scenario-selected providers from implicit suite selections", () => {
+    const scenarios = [
+      makeMatrixFlowQaSuiteTestScenario("mock-selected", "mock-openai"),
+      makeMatrixFlowQaSuiteTestScenario("live-selected", "live-frontier"),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["mock-selected"]);
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["live-selected"]);
+  });
+
   it("keeps implicit scenario membership identical across channel drivers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),

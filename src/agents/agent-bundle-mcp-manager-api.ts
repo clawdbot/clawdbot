@@ -79,6 +79,7 @@ export async function retireSessionMcpRuntime(params: {
   sessionId?: string | null;
   reason: string;
   preserveActiveLeases?: boolean;
+  retainAcrossReuse?: boolean;
   onError?: (error: unknown, sessionId: string, reason: string) => void;
 }): Promise<boolean> {
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -86,13 +87,23 @@ export async function retireSessionMcpRuntime(params: {
     return false;
   }
   const manager = getSessionMcpRuntimeManager();
+  const retainAcrossReuse =
+    params.preserveActiveLeases === true && params.retainAcrossReuse === true;
   // Aggregate leases across static + all requester-scoped parts so preserveActiveLeases
   // does not miss a leased scoped runtime while peeking only the bare session key.
-  if (params.preserveActiveLeases === true && manager.totalActiveLeasesForSession(sessionId) > 0) {
-    manager.deferRetirement(sessionId);
-    return true;
+  if (params.preserveActiveLeases === true) {
+    manager.deferRetirement(sessionId, {
+      retainAcrossReuse,
+    });
+    if (manager.totalActiveLeasesForSession(sessionId) > 0) {
+      return true;
+    }
   }
   try {
+    if (retainAcrossReuse) {
+      await manager.completeDeferredRetirement(sessionId);
+      return true;
+    }
     await disposeSessionMcpRuntime(sessionId);
     return true;
   } catch (error) {

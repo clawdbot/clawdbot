@@ -1,4 +1,6 @@
 // Agents command tests cover agent config mutation, binding updates, and summary generation.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -59,6 +61,29 @@ describe("agents helpers", () => {
     expect(work.agentDir).toBe(path.resolve("/state/agents/work/agent"));
     expect(work.bindings).toBe(1);
     expect(work.isDefault).toBe(true);
+  });
+
+  it("buildAgentSummaries renders local avatars and omits absent avatars", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-avatar-"));
+    try {
+      fs.writeFileSync(path.join(workspace, "avatar.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace },
+            { id: "work", workspace, identity: { avatar: "avatar.png" } },
+          ],
+        },
+      };
+
+      const summaries = buildAgentSummaries(cfg);
+      const work = requireAgentSummary(summaries, "work");
+      expect(work.identityAvatarUrl).toBe("data:image/png;base64,iVBORw==");
+      expect(work.identitySource).toBe("config");
+      expect(requireAgentSummary(summaries, "main")).not.toHaveProperty("identityAvatarUrl");
+    } finally {
+      fs.rmSync(workspace, { force: true, recursive: true });
+    }
   });
 
   it("applyAgentConfig merges updates", () => {

@@ -133,6 +133,7 @@ export async function runEmbeddedAttemptSettledPhase(
   let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
   let lastAssistant: AssistantMessage | undefined;
   let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
+  let currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   let attemptUsage: NormalizedUsage | undefined;
   let cacheBreak: PromptCacheBreak | null = null;
   let contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
@@ -290,6 +291,7 @@ export async function runEmbeddedAttemptSettledPhase(
         sessionIdUsed = settledStream.sessionIdUsed;
         lastAssistant = settledStream.lastAssistant;
         currentAttemptAssistant = settledStream.currentAttemptAssistant;
+        currentAttemptCompletedAssistant = settledStream.currentAttemptCompletedAssistant;
         attemptUsage = settledStream.attemptUsage;
         cacheBreak = settledStream.cacheBreak;
         sessionRuntimeState.promptCache = settledStream.promptCache;
@@ -387,6 +389,7 @@ export async function runEmbeddedAttemptSettledPhase(
       ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
       lastAssistant,
       currentAttemptAssistant,
+      currentAttemptCompletedAssistant,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,
       contextBudgetStatus,

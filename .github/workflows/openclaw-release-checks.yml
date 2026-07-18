@@ -52,7 +52,7 @@ on:
         default: false
         type: boolean
       allow_unreleased_changelog:
-        description: Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict
+        description: Allow explicitly opted-in current-tree packaging to use Unreleased notes
         required: false
         default: false
         type: boolean
@@ -102,6 +102,11 @@ on:
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_json:
+        description: Immutable package and Docker image artifact tuple from Full Release Validation
         required: false
         default: ""
         type: string
@@ -203,6 +208,9 @@ jobs:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
 
       - name: Resolve checked-out fallback SHA
         if: steps.fast_ref.outputs.fallback == 'true'
@@ -220,13 +228,13 @@ jobs:
           set -euo pipefail
           SELECTED_SHA="$(git rev-parse HEAD)"
           git_fetch_with_checkout_auth() {
-            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
-              git fetch "$@"
-              return
+            local -a git_args=(git)
+            if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              local auth_header
+              auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+              git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")
             fi
-            local auth_header
-            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+            timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"
           }
           git_fetch_with_checkout_auth --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git_fetch_with_checkout_auth --tags origin '+refs/tags/*:refs/tags/*'
@@ -281,13 +289,13 @@ jobs:
           fi
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
           git_fetch_with_checkout_auth() {
-            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
-              git fetch "$@"
-              return
+            local -a git_args=(git)
+            if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              local auth_header
+              auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+              git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")
             fi
-            local auth_header
-            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+            timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"
           }
           git_fetch_with_checkout_auth --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
           if ! git merge-base --is-ancestor "${SELECTED_SHA}" "refs/remotes/origin/${alpha_branch}"; then
@@ -368,12 +376,12 @@ jobs:
           allow_unreleased_changelog="$(printf '%s' "$RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT" | tr '[:upper:]' '[:lower:]')"
           if [[ "$RELEASE_REF_INPUT" == "main" || "$RELEASE_REF_INPUT" == "refs/heads/main" ]]; then
             allow_unreleased_changelog=true
+          elif [[ "$allow_unreleased_changelog" == "true" || "$allow_unreleased_changelog" == "1" || "$allow_unreleased_changelog" == "yes" ]]; then
+            allow_unreleased_changelog=true
           elif [[ "$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33|tideclaw/alpha/) ]] || [[ "$RELEASE_REF_INPUT" =~ ^(refs/tags/)?v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
             allow_unreleased_changelog=false
-          elif [[ "$allow_unreleased_changelog" != "true" && "$allow_unreleased_changelog" != "1" && "$allow_unreleased_changelog" != "yes" ]]; then
-            allow_unreleased_changelog=false
           else
-            allow_unreleased_changelog=true
+            allow_unreleased_changelog=false
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
@@ -549,15 +557,15 @@ jobs:
       contents: read
       packages: read
     outputs:
-      artifact_digest: ${{ steps.release_package_upload.outputs.artifact-digest }}
-      artifact_id: ${{ steps.release_package_upload.outputs.artifact-id }}
-      artifact_name: ${{ steps.artifact.outputs.name }}
-      artifact_run_attempt: ${{ steps.artifact.outputs.run_attempt }}
-      artifact_run_id: ${{ steps.artifact.outputs.run_id }}
-      package_file_name: ${{ steps.artifact.outputs.file_name }}
-      package_sha256: ${{ steps.package.outputs.sha256 }}
-      package_version: ${{ steps.package.outputs.package_version }}
-      source_sha: ${{ steps.package.outputs.source_sha }}
+      artifact_digest: ${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest }}
+      artifact_id: ${{ steps.release_package_upload.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId }}
+      artifact_name: ${{ steps.artifact.outputs.name || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName }}
+      artifact_run_attempt: ${{ steps.artifact.outputs.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}
+      artifact_run_id: ${{ steps.artifact.outputs.run_id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId }}
+      package_file_name: ${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}
+      package_sha256: ${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}
+      package_version: ${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}
+      source_sha: ${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}
     steps:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -565,9 +573,11 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
+          filter: blob:none
 
       - name: Set artifact metadata
         id: artifact
+        if: inputs.candidate_artifact_json == ''
         run: |
           {
             echo "file_name=openclaw-current.tgz"
@@ -577,6 +587,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
+        if: inputs.candidate_artifact_json == ''
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -585,6 +596,7 @@ jobs:
 
       - name: Resolve release package artifact
         id: package
+        if: inputs.candidate_artifact_json == ''
         shell: bash
         env:
           PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
@@ -623,6 +635,7 @@ jobs:
 
       - name: Upload release package artifact
         id: release_package_upload
+        if: inputs.candidate_artifact_json == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.artifact.outputs.name }}
@@ -633,6 +646,7 @@ jobs:
           if-no-files-found: error
 
       - name: Validate release package artifact binding
+        if: inputs.candidate_artifact_json == ''
         env:
           ARTIFACT_DIGEST: ${{ steps.release_package_upload.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.release_package_upload.outputs.artifact-id }}
@@ -669,6 +683,36 @@ jobs:
             echo "Release package identity is incomplete." >&2
             exit 1
           }
+
+      - name: Validate shared release candidate identity
+        if: inputs.candidate_artifact_json != ''
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          SELECTED_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          jq -e \
+            --arg sha "$SELECTED_SHA" \
+            'def digits: test("^[1-9][0-9]*$");
+             def hex40: test("^[a-f0-9]{40}$");
+             def hex64: test("^[a-f0-9]{64}$");
+             (.packageArtifactName | type == "string" and length > 0) and
+             (.packageArtifactId | tostring | digits) and
+             (.packageArtifactDigest | hex64) and
+             (.packageArtifactRunId | tostring | digits) and
+             (.packageArtifactRunAttempt | tostring | digits) and
+             (.packageFileName | test("^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$")) and
+             (.packageSourceSha | hex40) and
+             .packageSourceSha == $sha and
+             (.packageSha256 | hex64) and
+             (.packageVersion | type == "string" and length > 0) and
+             (.imageArtifactName | type == "string" and length > 0) and
+             (.imageArtifactId | tostring | digits) and
+             (.imageArtifactDigest | hex64) and
+             (.imageArtifactRunId | tostring | digits) and
+             (.imageArtifactRunAttempt | tostring | digits) and
+             (.imageArchiveSha256 | hex64)' \
+            <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null
 
   install_smoke_release_checks:
     needs: [resolve_target]
@@ -821,6 +865,12 @@ jobs:
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
       shared_image_artifact_namespace: release-docker
+      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
       shared_image_policy: no-push-artifact
     secrets: *live_e2e_release_secrets
 
@@ -854,7 +904,9 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
+      telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       shared_image_artifact_namespace: release-package
+      candidate_artifact_json: ${{ inputs.candidate_artifact_json }}
       shared_image_policy: no-push-artifact
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

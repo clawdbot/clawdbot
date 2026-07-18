@@ -6,6 +6,7 @@ import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_DEVICE_APPS_COMMAND,
   NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
@@ -232,6 +233,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableAgentRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
+  installedAppsSharingEnabled?: boolean;
+  platform?: NodeJS.Platform;
 }): Promise<PreparedNodeHostRuntime> {
   void ensureTerminalUploadCleanup();
   const config = params?.config ?? getRuntimeConfig();
@@ -241,6 +244,9 @@ export async function prepareNodeHostRuntime(params?: {
   env.PATH = pathEnv;
   const duplexEnabled =
     params?.enableAgentRuns === true || params?.enableDuplexPluginCommands === true;
+  const platform = params?.platform ?? process.platform;
+  const installedAppsSharingEnabled =
+    platform === "darwin" && params?.installedAppsSharingEnabled === true;
   const availabilityContext = { config, env };
   const resolvePluginNodeHost = () =>
     listRegisteredNodeHostCapsAndCommands(availabilityContext, {
@@ -255,7 +261,14 @@ export async function prepareNodeHostRuntime(params?: {
       : null;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
-    caps: [...new Set(["system", "mcp", ...pluginManifest.caps])].toSorted(),
+    caps: [
+      ...new Set([
+        "system",
+        "mcp",
+        ...(installedAppsSharingEnabled ? ["device"] : []),
+        ...pluginManifest.caps,
+      ]),
+    ].toSorted(),
     commands: [
       ...new Set([
         ...NODE_SYSTEM_RUN_COMMANDS,
@@ -263,6 +276,7 @@ export async function prepareNodeHostRuntime(params?: {
         NODE_FS_LIST_DIR_COMMAND,
         NODE_TERMINAL_UPLOAD_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
+        ...(installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []),
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
         ...pluginManifest.commands,
       ]),
@@ -384,6 +398,8 @@ export async function prepareNodeHostRuntime(params?: {
               ...(claudePath ? { claudePath } : {}),
               ...(controller ? { signal: controller.signal } : {}),
               ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              installedAppsSharingEnabled,
+              installedAppsPlatform: platform,
               pluginCommandContext,
             });
           } finally {

@@ -1,23 +1,25 @@
 // Voice Call plugin module implements telephony tts behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  parseTtsDirectives,
-  type SpeechModelOverridePolicy,
-  type SpeechProviderConfig,
-  type TtsDirectiveOverrides,
-} from "openclaw/plugin-sdk/speech";
+import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "openclaw/plugin-sdk/speech";
 import type { VoiceCallTtsConfig } from "./config.js";
-import type { CoreConfig } from "./core-bridge.js";
 import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 // Telephony TTS adapter that applies voice-call overrides and emits 8kHz mulaw audio.
 
 /** Core runtime TTS API used by the telephony adapter. */
 export type TelephonyTtsRuntime = {
+  prepareTtsRequest: (params: {
+    cfg: OpenClawConfig;
+    override?: VoiceCallTtsConfig;
+    text: string;
+  }) => Promise<{
+    cfg: OpenClawConfig;
+    directives: TtsDirectiveParseResult;
+  }>;
   textToSpeechTelephony: (params: {
     text: string;
-    cfg: CoreConfig;
+    cfg: OpenClawConfig;
     prefsPath?: string;
     overrides?: TtsDirectiveOverrides;
   }) => Promise<{
@@ -40,48 +42,34 @@ export type TelephonyTtsProvider = {
 /** Default timeout for one telephony synthesis request. */
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
 
-/** Voice-call override policy for inline TTS model directives. */
-type TelephonyModelOverrideConfig = {
-  enabled?: boolean;
-  allowText?: boolean;
-  allowProvider?: boolean;
-  allowVoice?: boolean;
-  allowModelId?: boolean;
-  allowVoiceSettings?: boolean;
-  allowNormalization?: boolean;
-  allowSeed?: boolean;
-};
-
 /** Create a TTS provider that honors voice-call overrides and converts PCM to mulaw. */
-export function createTelephonyTtsProvider(params: {
-  coreConfig: CoreConfig;
+export async function createTelephonyTtsProvider(params: {
+  coreConfig: OpenClawConfig;
   ttsOverride?: VoiceCallTtsConfig;
   runtime: TelephonyTtsRuntime;
   logger?: {
     warn?: (message: string) => void;
   };
-}): TelephonyTtsProvider {
+}): Promise<TelephonyTtsProvider> {
   const { coreConfig, ttsOverride, runtime, logger } = params;
-  const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
-  const ttsConfig = mergedConfig.messages?.tts;
-  const modelOverrides = resolveTelephonyModelOverridePolicy(
-    readTelephonyModelOverrides(ttsConfig),
-  );
-  const providerConfigs = collectTelephonyProviderConfigs(ttsConfig);
-  const activeProvider = normalizeProviderId(ttsConfig?.provider);
+  const preparedConfig = await runtime.prepareTtsRequest({
+    cfg: coreConfig,
+    override: ttsOverride,
+    text: "",
+  });
   const synthesisTimeoutMs = resolveTimerTimeoutMs(
-    mergedConfig.messages?.tts?.timeoutMs,
+    preparedConfig.cfg.messages?.tts?.timeoutMs,
     TELEPHONY_DEFAULT_TTS_TIMEOUT_MS,
   );
 
   return {
     synthesisTimeoutMs,
     synthesizeForTelephony: async (text: string) => {
-      const directives = parseTtsDirectives(text, modelOverrides, {
-        cfg: mergedConfig,
-        providerConfigs,
-        preferredProviderId: activeProvider,
+      const prepared = await runtime.prepareTtsRequest({
+        cfg: preparedConfig.cfg,
+        text,
       });
+      const directives = prepared.directives;
       if (directives.warnings.length > 0) {
         logger?.warn?.(
           `[voice-call] Ignored telephony TTS directive overrides (${directives.warnings.join("; ")})`,
@@ -92,7 +80,7 @@ export function createTelephonyTtsProvider(params: {
         : text;
       const result = await runtime.textToSpeechTelephony({
         text: cleanText,
-        cfg: mergedConfig,
+        cfg: prepared.cfg,
         overrides: directives.overrides,
       });
 
@@ -113,141 +101,4 @@ export function createTelephonyTtsProvider(params: {
       return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
     },
   };
-}
-
-/** Apply voice-call TTS overrides to core config without mutating the original object. */
-function applyTtsOverride(coreConfig: CoreConfig, override?: VoiceCallTtsConfig): CoreConfig {
-  if (!override) {
-    return coreConfig;
-  }
-
-  const base = coreConfig.messages?.tts;
-  const merged = mergeTtsConfig(base, override);
-  if (!merged) {
-    return coreConfig;
-  }
-
-  return {
-    ...coreConfig,
-    messages: {
-      ...coreConfig.messages,
-      tts: merged,
-    },
-  };
-}
-
-/** Merge core and voice-call TTS config, keeping undefined override fields out. */
-function mergeTtsConfig(
-  base?: VoiceCallTtsConfig,
-  override?: VoiceCallTtsConfig,
-): VoiceCallTtsConfig | undefined {
-  if (!base && !override) {
-    return undefined;
-  }
-  if (!override) {
-    return base;
-  }
-  if (!base) {
-    return override;
-  }
-  return mergeDeep(base, override) as VoiceCallTtsConfig;
-}
-
-/** Resolve directive override policy for telephony synthesis. */
-function resolveTelephonyModelOverridePolicy(
-  overrides: TelephonyModelOverrideConfig | undefined,
-): SpeechModelOverridePolicy {
-  const enabled = overrides?.enabled ?? true;
-  if (!enabled) {
-    return {
-      enabled: false,
-      allowText: false,
-      allowProvider: false,
-      allowVoice: false,
-      allowModelId: false,
-      allowVoiceSettings: false,
-      allowNormalization: false,
-      allowSeed: false,
-    };
-  }
-  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
-  return {
-    enabled: true,
-    allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider, false),
-    allowVoice: allow(overrides?.allowVoice),
-    allowModelId: allow(overrides?.allowModelId),
-    allowVoiceSettings: allow(overrides?.allowVoiceSettings),
-    allowNormalization: allow(overrides?.allowNormalization),
-    allowSeed: allow(overrides?.allowSeed),
-  };
-}
-
-/** Read model override policy from TTS config when present. */
-function readTelephonyModelOverrides(
-  ttsConfig: VoiceCallTtsConfig | undefined,
-): TelephonyModelOverrideConfig | undefined {
-  const value = (ttsConfig as Record<string, unknown> | undefined)?.modelOverrides;
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as TelephonyModelOverrideConfig)
-    : undefined;
-}
-
-/** Normalize provider ids for config lookup. */
-function normalizeProviderId(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined;
-}
-
-/** Coerce provider config objects while rejecting arrays and primitives. */
-function asProviderConfig(value: unknown): SpeechProviderConfig {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as SpeechProviderConfig)
-    : {};
-}
-
-/** Collect named provider configs from canonical and legacy TTS config shapes. */
-function collectTelephonyProviderConfigs(
-  ttsConfig: VoiceCallTtsConfig | undefined,
-): Record<string, SpeechProviderConfig> {
-  if (!ttsConfig) {
-    return {};
-  }
-  const entries: Record<string, SpeechProviderConfig> = {};
-  const rawProviders =
-    ttsConfig.providers &&
-    typeof ttsConfig.providers === "object" &&
-    !Array.isArray(ttsConfig.providers)
-      ? (ttsConfig.providers as Record<string, unknown>)
-      : {};
-  for (const [providerId, value] of Object.entries(rawProviders)) {
-    const normalized = normalizeProviderId(providerId) ?? providerId;
-    entries[normalized] = asProviderConfig(value);
-  }
-  const reservedKeys = new Set([
-    "auto",
-    "enabled",
-    "maxTextLength",
-    "mode",
-    "modelOverrides",
-    "persona",
-    "personas",
-    "prefsPath",
-    "provider",
-    "providers",
-    "summaryModel",
-    "timeoutMs",
-  ]);
-  for (const [key, value] of Object.entries(ttsConfig as Record<string, unknown>)) {
-    if (
-      reservedKeys.has(key) ||
-      typeof value !== "object" ||
-      value === null ||
-      Array.isArray(value)
-    ) {
-      continue;
-    }
-    const normalized = normalizeProviderId(key) ?? key;
-    entries[normalized] ??= asProviderConfig(value);
-  }
-  return entries;
 }

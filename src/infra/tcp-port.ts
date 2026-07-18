@@ -21,20 +21,23 @@ export function parseTcpPortFromArgs(programArguments: string[] | undefined): nu
   if (!programArguments?.length) {
     return null;
   }
+  let latestPort: number | null = null;
   for (let index = 0; index < programArguments.length; index += 1) {
     const argument = programArguments[index];
     if (argument === "--port") {
       const parsed = parseTcpPort(programArguments[index + 1]);
       if (parsed !== null) {
-        return parsed;
+        latestPort = parsed;
       }
+      index += 1;
+      continue;
     }
     if (argument?.startsWith("--port=")) {
       const parsed = parseTcpPort(argument.slice("--port=".length));
       if (parsed !== null) {
-        return parsed;
+        latestPort = parsed;
       }
     }
   }
-  return null;
+  return latestPort;
 }

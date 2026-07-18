@@ -16,7 +16,12 @@ import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import {
+  listActiveDegradedPlugins,
+  toPublicPluginVerificationDiagnostic,
+} from "../plugins/runtime-degraded-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { listActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
@@ -564,6 +569,20 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    degradedSecretOwners: listActiveDegradedSecretOwners().map(
+      ({ ownerKind, ownerId, state, paths: ownerPaths, reason }) => ({
+        ownerKind,
+        ownerId,
+        state,
+        paths: ownerPaths,
+        reason,
+      }),
+    ),
+    degradedPlugins: listActiveDegradedPlugins().map(({ pluginId, state, diagnostic }) => ({
+      pluginId,
+      state,
+      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
+    })),
     tasks,
     taskAudit,
     ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),

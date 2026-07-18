@@ -203,6 +203,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     const cron = new CronService({
       storePath: store.storePath,
       cronEnabled: true,
+      cronConfig: { maxConcurrentRuns: 2 },
       log: logger,
       enqueueSystemEvent: () => {},
       requestHeartbeat: () => {},

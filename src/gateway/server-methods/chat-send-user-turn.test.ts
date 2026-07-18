@@ -69,6 +69,7 @@ describe("prepareChatSendUserTurn", () => {
         suppressCommandInterpretation: false,
         systemInputProvenance: { kind: "internal_system", sourceTool: "test" },
         systemProvenanceReceipt: "[System receipt]",
+        toolBindings: { browser: { kind: "tab", targetId: "target-1" } },
       },
       session: {
         agentId: "main",
@@ -104,6 +105,7 @@ describe("prepareChatSendUserTurn", () => {
         body: "/status",
       },
       InputProvenance: { kind: "internal_system", sourceTool: "test" },
+      GatewayRunToolBindings: { browser: { kind: "tab", targetId: "target-1" } },
       OriginatingChannel: "discord",
       OriginatingTo: "channel:1",
       AccountId: "account-1",

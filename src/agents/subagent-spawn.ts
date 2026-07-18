@@ -221,6 +221,9 @@ export type SpawnSubagentContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentMessageId?: string | number;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -1778,6 +1781,14 @@ export async function spawnSubagentDirect(
     };
   }
 
+  const progressOrigin = {
+    channel: requesterOrigin?.channel,
+    accountId: requesterOrigin?.accountId,
+    to: ctx.currentMessagingTarget ?? requesterOrigin?.to,
+    threadId: requesterOrigin?.threadId,
+    channelId: ctx.currentChannelId,
+    messageId: ctx.currentMessageId,
+  };
   try {
     registerSubagentRun({
       runId: childRunId,
@@ -1785,6 +1796,7 @@ export async function spawnSubagentDirect(
       controllerSessionKey: ownership.controllerSessionKey,
       requesterSessionKey: ownership.completionRequesterSessionKey,
       requesterOrigin,
+      progressOrigin,
       requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
@@ -1843,6 +1855,26 @@ export async function spawnSubagentDirect(
       childSessionKey,
       runId: childRunId,
     };
+  }
+
+  if (hookRunner?.hasHooks("subagent_progress")) {
+    try {
+      await hookRunner.runSubagentProgress(
+        {
+          phase: "started",
+          runId: childRunId,
+          childSessionKey,
+          requester: progressOrigin,
+        },
+        {
+          runId: childRunId,
+          childSessionKey,
+          requesterSessionKey: requesterInternalKey,
+        },
+      );
+    } catch {
+      // Progress presentation is best-effort and must not reject an accepted spawn.
+    }
   }
 
   if (hookRunner?.hasHooks("subagent_spawned")) {

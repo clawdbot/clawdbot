@@ -2509,6 +2509,7 @@ describe("createOllamaStreamFn", () => {
               streaming: false,
             },
             contextWindow: 131072,
+            contextTokens: 16384,
           },
           options: { temperature: 0.7, maxTokens: 55 },
         });
@@ -2536,6 +2537,32 @@ describe("createOllamaStreamFn", () => {
         expect(requestBody.options.top_p).toBe(0.9);
         expect(requestBody.options.streaming).toBeUndefined();
         expect(requestBody.think).toBe(false);
+      },
+    );
+  });
+
+  it("uses effective contextTokens for native Ollama chat options", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { contextWindow: 262_144, contextTokens: 32_768 },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: { num_ctx?: number };
+        };
+        expect(requestBody.options.num_ctx).toBe(32_768);
       },
     );
   });

@@ -13,6 +13,9 @@ import java.util.UUID
 /** Upper bound of durable outbox rows per gateway; enqueue is refused beyond this. */
 internal const val OUTBOX_MAX_QUEUED = 50
 
+/** Crash-left UI receipts retained per Gateway/agent owner after outbox retirement. */
+internal const val OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER = 16
+
 /** Queued commands older than this are expired instead of sending stale instructions. */
 internal const val OUTBOX_EXPIRY_MS = 48L * 60L * 60L * 1000L
 
@@ -24,6 +27,9 @@ internal const val OUTBOX_DELIVERY_UNCONFIRMED_ERROR = "delivery unconfirmed; re
 
 /** Connection-gated command rows never auto-replay across a reconnect; retry needs explicit intent. */
 internal const val OUTBOX_CONNECTION_CHANGED_ERROR = "connection changed before this command was sent; retry manually"
+
+/** Owner-less migrated rows stay parked because their original default agent cannot be proven. */
+internal const val OUTBOX_OWNER_CHANGED_ERROR = "chat owner changed before this message was sent; retry from the original chat"
 
 /**
  * gatedEpoch sentinel for rows migrated from schemas without epochs: it matches no live
@@ -87,6 +93,9 @@ data class ChatOutboxItem(
   // Non-null marks a connection-gated row (slash command): it may only auto-send while this
   // connection epoch is still active, so reconnects never silently replay a command.
   val gatedEpoch: Long? = null,
+  // Captured at admission and sent explicitly on every replay. Unscoped session keys otherwise
+  // follow the gateway's mutable default agent and can cross owners after process restart.
+  val ownerAgentId: String?,
   val attachments: List<ChatOutboxAttachment> = emptyList(),
 )
 
@@ -136,6 +145,9 @@ interface ChatCommandOutbox {
   /** All rows for [gatewayId] with attachment metadata, strictly createdAt-ordered. */
   suspend fun load(gatewayId: String): List<ChatOutboxItem>
 
+  /** True when the exact UI idempotency key committed, even if history retired its command row. */
+  suspend fun wasAdmitted(id: String): Boolean
+
   suspend fun enqueue(
     gatewayId: String,
     sessionKey: String,
@@ -144,6 +156,8 @@ interface ChatCommandOutbox {
     nowMs: Long,
     attachments: List<OutboxAttachmentPayload> = emptyList(),
     gatedEpoch: Long? = null,
+    ownerAgentId: String,
+    idempotencyKey: String? = null,
   ): ChatOutboxEnqueueResult
 
   /** Re-assembles the attachment bytes for one command, in stable position order. */
@@ -191,9 +205,13 @@ interface ChatCommandOutbox {
     id: String,
     nowMs: Long,
     gatedEpoch: Long?,
+    ownerAgentId: String? = null,
   ): Int
 
   suspend fun delete(id: String)
+
+  /** Deletes only an undispatched row; false means another lane already claimed or retired it. */
+  suspend fun deleteIfQueued(id: String): Boolean
 
   /** Retires rows proven delivered by canonical history; returns how many rows were removed. */
   suspend fun confirmDelivered(ids: Set<String>): Int
@@ -202,6 +220,7 @@ interface ChatCommandOutbox {
   suspend fun deleteForSession(
     gatewayId: String,
     sessionKey: String,
+    ownerAgentId: String,
   )
 
   /** Drops every queued command owned by one gateway identity. */
@@ -233,6 +252,15 @@ internal data class OutboxCommandEntity(
   val retryCount: Int,
   val lastError: String?,
   val gatedEpoch: Long?,
+  val ownerAgentId: String?,
+)
+
+@Entity(tableName = "composer_send_admissions")
+internal data class ComposerSendAdmissionEntity(
+  @PrimaryKey val id: String,
+  val gatewayId: String,
+  val ownerAgentId: String,
+  val sessionKey: String,
 )
 
 @Entity(
@@ -266,10 +294,14 @@ internal interface ChatOutboxDao {
   @Query("SELECT * FROM outbox_commands WHERE gatewayId = :gatewayId ORDER BY createdAtMs ASC, id ASC")
   suspend fun commands(gatewayId: String): List<OutboxCommandEntity>
 
-  @Query("SELECT id FROM outbox_commands WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey")
+  @Query(
+    "SELECT id FROM outbox_commands WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey " +
+      "AND ownerAgentId = :ownerAgentId",
+  )
   suspend fun commandIdsForSession(
     gatewayId: String,
     sessionKey: String,
+    ownerAgentId: String,
   ): List<String>
 
   @Query("SELECT id FROM outbox_commands WHERE gatewayId = :gatewayId")
@@ -325,7 +357,8 @@ internal interface ChatOutboxDao {
 
   @Query(
     "UPDATE outbox_commands SET status = :queuedStatus, retryCount = 0, lastError = NULL, createdAtMs = :createdAtMs, " +
-      "gatedEpoch = :gatedEpoch WHERE id = :id AND gatewayId = :gatewayId AND status = :failedStatus",
+      "gatedEpoch = :gatedEpoch, ownerAgentId = COALESCE(ownerAgentId, :ownerAgentId) " +
+      "WHERE id = :id AND gatewayId = :gatewayId AND status = :failedStatus",
   )
   suspend fun requeueForRetry(
     id: String,
@@ -334,6 +367,7 @@ internal interface ChatOutboxDao {
     queuedStatus: String,
     failedStatus: String,
     gatedEpoch: Long?,
+    ownerAgentId: String?,
   ): Int
 
   @Query(
@@ -350,6 +384,47 @@ internal interface ChatOutboxDao {
 
   @Query("DELETE FROM outbox_commands WHERE id = :id")
   suspend fun delete(id: String): Int
+
+  @Query("SELECT status FROM outbox_commands WHERE id = :id")
+  suspend fun status(id: String): String?
+
+  @Query("SELECT EXISTS(SELECT 1 FROM composer_send_admissions WHERE id = :id)")
+  suspend fun hasAdmissionReceipt(id: String): Boolean
+
+  @Insert
+  suspend fun insertAdmissionReceipt(row: ComposerSendAdmissionEntity)
+
+  @Query("DELETE FROM composer_send_admissions WHERE id = :id")
+  suspend fun deleteAdmissionReceipt(id: String): Int
+
+  // Live command rows remain recovery proof even during a send burst. The agent-wide window
+  // bounds retired receipts across sessions while a lifecycle save catches up with SavedState.
+  @Query(
+    "DELETE FROM composer_send_admissions WHERE gatewayId = :gatewayId AND ownerAgentId = :ownerAgentId " +
+      "AND id NOT IN (SELECT id FROM outbox_commands) " +
+      "AND rowid NOT IN " +
+      "(SELECT rowid FROM composer_send_admissions WHERE gatewayId = :gatewayId AND ownerAgentId = :ownerAgentId " +
+      "AND id NOT IN (SELECT id FROM outbox_commands) " +
+      "ORDER BY rowid DESC LIMIT :keep)",
+  )
+  suspend fun pruneAdmissionReceipts(
+    gatewayId: String,
+    ownerAgentId: String,
+    keep: Int,
+  )
+
+  @Query("DELETE FROM composer_send_admissions WHERE gatewayId = :gatewayId")
+  suspend fun deleteAdmissionReceiptsForGateway(gatewayId: String)
+
+  @Query(
+    "DELETE FROM composer_send_admissions WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey " +
+      "AND ownerAgentId = :ownerAgentId",
+  )
+  suspend fun deleteAdmissionReceiptsForSession(
+    gatewayId: String,
+    sessionKey: String,
+    ownerAgentId: String,
+  )
 
   @Query("SELECT * FROM outbox_attachments WHERE commandId IN (:commandIds) ORDER BY position ASC")
   suspend fun attachmentsForCommands(commandIds: List<String>): List<OutboxAttachmentEntity>
@@ -400,6 +475,11 @@ class RoomChatCommandOutbox internal constructor(
     return rows.map { row -> row.toItem(attachmentsByCommand[row.id].orEmpty()) }
   }
 
+  override suspend fun wasAdmitted(id: String): Boolean {
+    val dao = database.outboxDao()
+    return dao.status(id) != null || dao.hasAdmissionReceipt(id)
+  }
+
   override suspend fun enqueue(
     gatewayId: String,
     sessionKey: String,
@@ -408,9 +488,12 @@ class RoomChatCommandOutbox internal constructor(
     nowMs: Long,
     attachments: List<OutboxAttachmentPayload>,
     gatedEpoch: Long?,
+    ownerAgentId: String,
+    idempotencyKey: String?,
   ): ChatOutboxEnqueueResult {
     val gateway = scopedGatewayId(gatewayId) ?: return ChatOutboxEnqueueResult.Unavailable
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return ChatOutboxEnqueueResult.Unavailable
+    val owner = ownerAgentId.trim().takeIf { it.isNotEmpty() } ?: return ChatOutboxEnqueueResult.Unavailable
     val attachmentBytes = attachments.sumOf { it.bytes.size.toLong() }
     if (attachmentBytes > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) {
       return ChatOutboxEnqueueResult.AttachmentsTooLarge
@@ -432,9 +515,10 @@ class RoomChatCommandOutbox internal constructor(
       // Monotonic per-gateway createdAt keeps flush strictly FIFO even when two sends land
       // in the same wall-clock millisecond (the id tiebreak is a random UUID otherwise).
       val createdAt = maxOf(nowMs, (dao.maxCreatedAt(gateway) ?: Long.MIN_VALUE) + 1)
+      val requestedId = idempotencyKey?.trim()?.takeIf { it.isNotEmpty() }
       val entity =
         OutboxCommandEntity(
-          id = UUID.randomUUID().toString(),
+          id = requestedId ?: UUID.randomUUID().toString(),
           gatewayId = gateway,
           sessionKey = key,
           text = text,
@@ -444,7 +528,25 @@ class RoomChatCommandOutbox internal constructor(
           retryCount = 0,
           lastError = null,
           gatedEpoch = gatedEpoch,
+          ownerAgentId = owner,
         )
+      if (requestedId != null) {
+        // The receipt commits with the row and outlives history retirement. SavedState can then
+        // prove this draft was admitted even if reconnect reconciliation already deleted the row.
+        dao.insertAdmissionReceipt(
+          ComposerSendAdmissionEntity(
+            id = requestedId,
+            gatewayId = gateway,
+            ownerAgentId = owner,
+            sessionKey = key,
+          ),
+        )
+        dao.pruneAdmissionReceipts(
+          gatewayId = gateway,
+          ownerAgentId = owner,
+          keep = OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER,
+        )
+      }
       dao.insert(entity)
       val storedAttachments =
         attachments.mapIndexed { position, payload ->
@@ -527,6 +629,7 @@ class RoomChatCommandOutbox internal constructor(
     id: String,
     nowMs: Long,
     gatedEpoch: Long?,
+    ownerAgentId: String?,
   ): Int {
     val gateway = scopedGatewayId(gatewayId) ?: return 0
     val dao = database.outboxDao()
@@ -544,6 +647,7 @@ class RoomChatCommandOutbox internal constructor(
           queuedStatus = ChatOutboxStatus.Queued.dbValue,
           failedStatus = ChatOutboxStatus.Failed.dbValue,
           gatedEpoch = gatedEpoch,
+          ownerAgentId = ownerAgentId?.trim()?.takeIf { it.isNotEmpty() },
         )
       if (transitioned > 0) {
         // Queued same-session successors follow the retried row in their original order, so
@@ -570,6 +674,15 @@ class RoomChatCommandOutbox internal constructor(
     }
   }
 
+  override suspend fun deleteIfQueued(id: String): Boolean =
+    database.withTransaction {
+      val dao = database.outboxDao()
+      if (dao.status(id) != ChatOutboxStatus.Queued.dbValue) return@withTransaction false
+      val deleted = deleteCommandRowLocked(id) > 0
+      if (deleted) dao.deleteAdmissionReceipt(id)
+      deleted
+    }
+
   override suspend fun confirmDelivered(ids: Set<String>): Int {
     if (ids.isEmpty()) return 0
     return database.withTransaction {
@@ -584,14 +697,17 @@ class RoomChatCommandOutbox internal constructor(
   override suspend fun deleteForSession(
     gatewayId: String,
     sessionKey: String,
+    ownerAgentId: String,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
+    val owner = ownerAgentId.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.outboxDao()
     database.withTransaction {
-      for (id in dao.commandIdsForSession(gateway, key)) {
+      for (id in dao.commandIdsForSession(gateway, key, owner)) {
         deleteCommandRowLocked(id)
       }
+      dao.deleteAdmissionReceiptsForSession(gateway, key, owner)
     }
   }
 
@@ -602,6 +718,7 @@ class RoomChatCommandOutbox internal constructor(
       for (id in dao.commandIdsForGateway(gateway)) {
         deleteCommandRowLocked(id)
       }
+      dao.deleteAdmissionReceiptsForGateway(gateway)
     }
   }
 
@@ -665,6 +782,7 @@ private fun OutboxCommandEntity.toItem(attachments: List<OutboxAttachmentEntity>
     retryCount = retryCount,
     lastError = lastError,
     gatedEpoch = gatedEpoch,
+    ownerAgentId = ownerAgentId,
     attachments = attachments.map { it.toAttachment() },
   )
 

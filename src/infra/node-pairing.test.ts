@@ -7,11 +7,12 @@ import {
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
   listNodePairing,
+  recordPairedNodeConnection,
   releaseNodePairingCleanupClaim,
   renamePairedNode,
   requestNodePairing,
   reusePendingNodePairingForReconnect,
-  updatePairedNodeMetadata,
+  updatePairedNodeBins,
 } from "./node-pairing.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
@@ -568,20 +569,48 @@ describe("node surface approvals", () => {
     });
   });
 
-  test("updates node runtime metadata and reports missing nodes", async () => {
+  test("updates remote skill bins and reports missing nodes", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
 
-      await expect(
-        updatePairedNodeMetadata("node-1", { lastConnectedAtMs: 1234, bins: ["ffmpeg"] }, baseDir),
-      ).resolves.toBe(true);
-      await expect(
-        updatePairedNodeMetadata("missing", { lastConnectedAtMs: 1 }, baseDir),
-      ).resolves.toBe(false);
+      await expect(recordPairedNodeConnection("node-1", 1_234, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: true,
+      });
+      await expect(updatePairedNodeBins("node-1", ["ffmpeg"], baseDir)).resolves.toBe(true);
+      await expect(updatePairedNodeBins("missing", ["ffmpeg"], baseDir)).resolves.toBe(false);
 
       const pairedNode = await findPairedNode("node-1", baseDir);
-      expect(pairedNode?.lastConnectedAtMs).toBe(1234);
+      expect(pairedNode?.lastConnectedAtMs).toBe(1_234);
       expect(pairedNode?.bins).toEqual(["ffmpeg"]);
+    });
+  });
+
+  test("atomically grants one first-connection claim across concurrent handshakes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+
+      const claims = await Promise.all([
+        recordPairedNodeConnection("node-1", 1_000, baseDir),
+        recordPairedNodeConnection("node-1", 2_000, baseDir),
+      ]);
+
+      expect(claims.filter((claim) => claim.recorded && claim.firstConnection)).toHaveLength(1);
+      expect(claims.every((claim) => claim.recorded)).toBe(true);
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(2_000);
+      await expect(recordPairedNodeConnection("node-1", 1_500, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: false,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(2_000);
+      await expect(recordPairedNodeConnection("node-1", 3_000, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: false,
+      });
+      await expect(recordPairedNodeConnection("missing", 4_000, baseDir)).resolves.toEqual({
+        recorded: false,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(3_000);
     });
   });
 

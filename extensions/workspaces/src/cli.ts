@@ -287,6 +287,21 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
     });
   }
 
+  for (const [verb, tabLayout] of [
+    ["grid", "grid"],
+    ["full", "full"],
+  ] as const) {
+    addGatewayOptions(
+      tabs.command(verb).argument("<slug>", "Tab slug").description(`Use ${tabLayout} layout`),
+    ).action(async (slug: string, commandOptions: GatewayOptions) => {
+      const result = await callWorkspaceGateway("workspaces.tab.update", commandOptions, {
+        slug,
+        patch: { layout: tabLayout },
+      });
+      writeTabs(readWorkspaceResult(result).doc, commandOptions);
+    });
+  }
+
   addGatewayOptions(
     widgets
       .command("list")

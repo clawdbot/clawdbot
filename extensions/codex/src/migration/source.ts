@@ -74,7 +74,11 @@ type PluginReadResult =
     };
 
 function defaultCodexHome(): string {
-  return resolveHomePath(process.env.CODEX_HOME?.trim() || "~/.codex");
+  const configuredHome = process.env.CODEX_HOME;
+  // Codex preserves nonempty CODEX_HOME verbatim; --from remains trimmed below as CLI convenience.
+  return resolveHomePath(
+    configuredHome !== undefined && configuredHome.length > 0 ? configuredHome : "~/.codex",
+  );
 }
 
 function personalAgentsSkillsDir(): string {

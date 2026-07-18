@@ -156,6 +156,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryPeersFromConfig(params),
         listGroups: async (params) =>
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsFromConfig(params),
+        listGroupsLive: async (params) =>
+          (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsLive(params),
       },
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>

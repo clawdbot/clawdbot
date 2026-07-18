@@ -490,8 +490,13 @@ export function acquireMaintenanceLock(checkout, requestedPath) {
       let owner;
       try {
         owner = JSON.parse(readFileSync(path.join(lockPath, "owner.json"), "utf8"));
-      } catch (ownerError) {
-        if (ownerError?.code === "ENOENT" && incompleteLockRetries < 20) {
+      } catch {
+        // The mkdir winner publishes owner.json right after creating the lock
+        // dir, so readers can see ENOENT before the write and an empty/partial
+        // file during writeFileSync's open-truncate window. Both are
+        // creation-in-progress, not corruption; re-read within the bounded
+        // budget and only then declare the lock invalid.
+        if (incompleteLockRetries < 20) {
           incompleteLockRetries += 1;
           spawnSync("sleep", ["0.01"]);
           continue;

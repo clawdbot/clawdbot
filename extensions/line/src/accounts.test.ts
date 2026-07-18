@@ -172,30 +172,67 @@ describe("LINE accounts", () => {
       expect(account.tokenSource).toBe("file");
     });
 
-    it.runIf(process.platform !== "win32")("rejects symlinked token and secret files", () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-account-"));
-      tempDirs.push(dir);
-      const tokenFile = path.join(dir, "token.txt");
-      const tokenLink = path.join(dir, "token-link.txt");
-      const secretFile = path.join(dir, "secret.txt");
-      const secretLink = path.join(dir, "secret-link.txt");
-      fs.writeFileSync(tokenFile, "file-token\n", "utf8");
-      fs.writeFileSync(secretFile, "file-secret\n", "utf8");
-      fs.symlinkSync(tokenFile, tokenLink);
-      fs.symlinkSync(secretFile, secretLink);
+    it.runIf(process.platform !== "win32")(
+      "marks symlinked token and secret files configured-unavailable",
+      () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-account-"));
+        tempDirs.push(dir);
+        const tokenFile = path.join(dir, "token.txt");
+        const tokenLink = path.join(dir, "token-link.txt");
+        const secretFile = path.join(dir, "secret.txt");
+        const secretLink = path.join(dir, "secret-link.txt");
+        fs.writeFileSync(tokenFile, "file-token\n", "utf8");
+        fs.writeFileSync(secretFile, "file-secret\n", "utf8");
+        fs.symlinkSync(tokenFile, tokenLink);
+        fs.symlinkSync(secretFile, secretLink);
 
+        const cfg: OpenClawConfig = {
+          channels: {
+            line: {
+              tokenFile: tokenLink,
+              secretFile: secretLink,
+            },
+          },
+        };
+
+        const account = resolveLineAccount({ cfg });
+        expect(account.tokenStatus).toBe("configured_unavailable");
+        expect(account.signingSecretStatus).toBe("configured_unavailable");
+        expect(account.credentialDiagnostics).toEqual([
+          {
+            code: "CREDENTIAL_FILE_UNAVAILABLE",
+            path: "channels.line.tokenFile",
+            reason: "symlink",
+          },
+          {
+            code: "CREDENTIAL_FILE_UNAVAILABLE",
+            path: "channels.line.secretFile",
+            reason: "symlink",
+          },
+        ]);
+        expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(dir);
+      },
+    );
+
+    it("does not fall through when an explicit credential file is missing", () => {
+      vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
+      vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
+      const tokenFile = createSecretFile("missing-token.txt", "unused");
+      fs.rmSync(tokenFile);
       const cfg: OpenClawConfig = {
         channels: {
           line: {
-            tokenFile: tokenLink,
-            secretFile: secretLink,
+            tokenFile,
+            channelSecret: "test-channel-secret",
           },
         },
       };
 
-      expect(() => resolveLineAccount({ cfg })).toThrow(
-        /LINE credential file.*must not be a symlink/,
-      );
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.channelAccessToken).toBe("");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.tokenSource).toBe("file");
     });
 
     it("resolves default account credentials from accounts.default", () => {

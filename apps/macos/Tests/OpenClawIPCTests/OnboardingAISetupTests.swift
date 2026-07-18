@@ -627,6 +627,8 @@ struct OnboardingAISetupTests {
             label: "OpenAI",
             hint: nil,
             groupLabel: "OpenAI",
+            icon: nil,
+            website: nil,
             kind: "oauth",
             featured: true
         )
@@ -709,17 +711,17 @@ struct OnboardingAISetupTests {
         #expect(local["modelRef"]?.value as? String == "lmstudio/qwen-local")
     }
 
-    @Test func `unavailable detected integration decodes for informational display`() throws {
-        let candidate = try JSONDecoder().decode(
-            OnboardingAISetupModel.UnavailableCandidate.self,
+    @Test func `unavailable detected integrations decode for informational display`() throws {
+        let candidates = try JSONDecoder().decode(
+            [OnboardingAISetupModel.UnavailableCandidate].self,
             from: Data(
-                #"{"id":"antigravity-cli","label":"Antigravity CLI","detail":"installed","reason":"Automatic setup cannot enforce a tool-free probe."}"#.utf8
+                #"[{"id":"pi-cli","label":"Pi CLI","detail":"installed","reason":"Not a setup route."},{"id":"opencode-cli","label":"OpenCode CLI","detail":"installed","reason":"Not a setup route."}]"#.utf8
             )
         )
 
-        #expect(candidate.id == "antigravity-cli")
-        #expect(candidate.label == "Antigravity CLI")
-        #expect(candidate.detail == "installed")
+        #expect(candidates.map(\.id) == ["pi-cli", "opencode-cli"])
+        #expect(candidates.map(\.label) == ["Pi CLI", "OpenCode CLI"])
+        #expect(candidates.allSatisfy { $0.detail == "installed" })
     }
 
     @Test func `activation decodes and retains copyable setup lines`() throws {

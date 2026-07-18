@@ -34,7 +34,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { getSlashCommands } from "./commands.js";
+import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
@@ -805,19 +805,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const applyAutocompleteProvider = () => {
     const dynamicKey = resolveDynamicSlashCommandsKey();
+    const slashCommands = getSlashCommands({
+      cfg: config,
+      local: isLocalMode,
+      provider: sessionInfo.modelProvider,
+      model: sessionInfo.model,
+      agentRuntime: sessionInfo.agentRuntime?.id,
+      thinkingLevels: sessionInfo.thinkingLevels,
+      dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
+    });
+    editor.shouldSubmitAutocomplete = (text) =>
+      shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(
-        getSlashCommands({
-          cfg: config,
-          local: isLocalMode,
-          provider: sessionInfo.modelProvider,
-          model: sessionInfo.model,
-          agentRuntime: sessionInfo.agentRuntime?.id,
-          thinkingLevels: sessionInfo.thinkingLevels,
-          dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
-        }),
-        resolveUsableCwd(),
-      ),
+      new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
     );
   };
 

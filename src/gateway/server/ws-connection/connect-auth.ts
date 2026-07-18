@@ -195,6 +195,14 @@ export async function authenticateGatewayConnect(
       client: connectParams.client,
     });
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage, {
+      ...(failedAuth.rateLimited === true
+        ? {
+            retryable: true,
+            ...(failedAuth.retryAfterMs !== undefined
+              ? { retryAfterMs: failedAuth.retryAfterMs }
+              : {}),
+          }
+        : {}),
       details: {
         code: resolveAuthConnectErrorDetailCode(failedAuth.reason),
         authReason: failedAuth.reason,

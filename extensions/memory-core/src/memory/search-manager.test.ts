@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type {
+  PluginStateLeaseContext,
+  PluginStateLeaseOptions,
+  PluginStateLeaseRunner,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
@@ -151,8 +156,25 @@ import {
 import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
-  getMemorySearchManager,
+  getMemorySearchManager as getMemorySearchManagerWithoutLease,
 } from "./search-manager.js";
+const withLease: PluginStateLeaseRunner = async <T>(
+  options: PluginStateLeaseOptions,
+  run: (lease: PluginStateLeaseContext) => Promise<T>,
+) =>
+  await run({
+    signal: options.signal ?? new AbortController().signal,
+    assertOwned: vi.fn(),
+  });
+const createLeaseHost = (): PluginStateLeaseRunner =>
+  async function leaseHost<T>(
+    options: PluginStateLeaseOptions,
+    run: (lease: PluginStateLeaseContext) => Promise<T>,
+  ): Promise<T> {
+    return await withLease(options, run);
+  };
+const getMemorySearchManager = (params: Parameters<typeof getMemorySearchManagerWithoutLease>[0]) =>
+  getMemorySearchManagerWithoutLease({ ...params, withLease: params.withLease ?? withLease });
 const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
 
 type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
@@ -321,6 +343,7 @@ describe("getMemorySearchManager caching", () => {
       const result = await freshModule.getMemorySearchManager({
         cfg: createQmdCfg("corrupt-cache-agent"),
         agentId: "corrupt-cache-agent",
+        withLease,
       });
       const managerStatus = requireManager(result).status();
       expect(managerStatus.backend).toBe("qmd");
@@ -375,6 +398,43 @@ describe("getMemorySearchManager caching", () => {
     expect(mockMemoryIndexGet).toHaveBeenCalledWith(
       expect.objectContaining({ acquireLocalService: secondAcquire }),
     );
+  });
+
+  it("does not reuse QMD managers across SQLite lease hosts", async () => {
+    const agentId = "lease-hosts";
+    const cfg = createQmdCfg(agentId);
+    const firstLease = createLeaseHost();
+    const secondLease = createLeaseHost();
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
+
+    const first = await getMemorySearchManager({ cfg, agentId, withLease: firstLease });
+    const second = await getMemorySearchManager({ cfg, agentId, withLease: secondLease });
+
+    expect(first.manager).not.toBe(second.manager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    expect(qmdCreateParams(1).withLease).toBe(secondLease);
+  });
+
+  it("fails QMD closed when the host omits SQLite lease coordination", async () => {
+    const cfg = createQmdCfg("missing-lease-host");
+
+    const result = await getMemorySearchManagerWithoutLease({
+      cfg,
+      agentId: "missing-lease-host",
+    });
+
+    expect(result.manager).toBe(fallbackManager);
+    expect(result.debug).toMatchObject({
+      backend: "qmd",
+      managerCacheState: "fallback-builtin",
+      failureCode: "qmd-unavailable",
+    });
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
   });
 
   it("keeps the cached QMD manager active when the caller cancels a search", async () => {

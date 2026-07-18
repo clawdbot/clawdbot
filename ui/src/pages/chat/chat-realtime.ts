@@ -21,11 +21,12 @@ export type ChatRealtimeState = {
   realtimeTalkDetail: string | null;
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
+  realtimeTalkVideoStream: MediaStream | null;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
   requestUpdate: () => void;
   resetRealtimeTalkConversation: () => void;
-  toggleRealtimeTalk: () => Promise<void>;
+  toggleRealtimeTalk: (options?: { video?: boolean }) => Promise<void>;
 };
 
 export function createInitialChatRealtimeState() {
@@ -35,6 +36,7 @@ export function createInitialChatRealtimeState() {
     realtimeTalkDetail: null,
     realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
     realtimeTalkConversation: [],
+    realtimeTalkVideoStream: null,
     realtimeTalkSession: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
@@ -55,6 +57,7 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   state.realtimeTalkStatus = "idle";
   state.realtimeTalkDetail = null;
   state.realtimeTalkInputLevel.set(0);
+  state.realtimeTalkVideoStream = null;
   state.resetRealtimeTalkConversation();
 }
 
@@ -62,7 +65,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
   state.resetRealtimeTalkConversation = () => {
     resetChatRealtimeConversation(state);
   };
-  state.toggleRealtimeTalk = async () => {
+  state.toggleRealtimeTalk = async (options = {}) => {
     if (state.realtimeTalkSession) {
       state.realtimeTalkSession.stop();
       state.realtimeTalkSession = null;
@@ -70,6 +73,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkStatus = "idle";
       state.realtimeTalkDetail = null;
       state.realtimeTalkInputLevel.set(0);
+      state.realtimeTalkVideoStream = null;
       state.resetRealtimeTalkConversation();
       state.requestUpdate();
       return;
@@ -121,9 +125,16 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
           state.requestUpdate();
         },
+        onVideoStream: (stream) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
+          state.realtimeTalkVideoStream = stream;
+          state.requestUpdate();
+        },
       },
-      {},
-      { inputDeviceId },
+      options.video ? { capabilities: ["camera-frame"] } : {},
+      { inputDeviceId, videoEnabled: options.video },
     );
     state.realtimeTalkSession = session;
     try {
@@ -138,6 +149,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkStatus = "error";
       state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       state.realtimeTalkInputLevel.set(0);
+      state.realtimeTalkVideoStream = null;
       state.requestUpdate();
     }
   };

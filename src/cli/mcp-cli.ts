@@ -35,6 +35,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -182,6 +183,8 @@ type McpDoctorServerResult = {
   ok: boolean;
   issues: McpDoctorIssue[];
 };
+
+const MCP_DOCTOR_CONCURRENCY = 4;
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "authorization",
@@ -334,7 +337,14 @@ async function collectMcpDoctorIssues(params: {
           serverName: name,
           serverUrl: resolved.url,
         });
-        if (!authStatus.hasTokens) {
+        if (authStatus.requiresAuthorization) {
+          issues.push(
+            issue(
+              "warning",
+              `OAuth credentials require additional authorization; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
+            ),
+          );
+        } else if (!authStatus.hasTokens) {
           issues.push(
             issue(
               "warning",
@@ -695,7 +705,11 @@ export function registerMcpCli(program: Command) {
       for (const entry of status) {
         const transport = entry.enabled ? (entry.transport ?? "invalid") : "disabled";
         const auth = entry.auth === "oauth" ? " oauth" : "";
-        const oauth = entry.authStatus?.hasTokens ? " authorized" : "";
+        const oauth = entry.authStatus?.requiresAuthorization
+          ? " authorization-required"
+          : entry.authStatus?.hasTokens
+            ? " authorized"
+            : "";
         const filters = entry.toolFilter ? " tool-filtered" : "";
         const parallel = entry.supportsParallelToolCalls ? " parallel" : "";
         defaultRuntime.log(`- ${entry.name}: ${transport}${auth}${oauth}${filters}${parallel}`);
@@ -706,7 +720,7 @@ export function registerMcpCli(program: Command) {
           );
           if (entry.auth === "oauth") {
             defaultRuntime.log(
-              `  oauth: tokens=${entry.authStatus?.hasTokens ? "yes" : "no"} client=${entry.authStatus?.hasClientInformation ? "yes" : "no"}`,
+              `  oauth: tokens=${entry.authStatus?.hasTokens ? "yes" : "no"} authorization=${entry.authStatus?.requiresAuthorization ? "required" : entry.authStatus?.hasTokens ? "ready" : "missing"} client=${entry.authStatus?.hasClientInformation ? "yes" : "no"}`,
             );
           }
           if (entry.toolFilter) {
@@ -788,24 +802,35 @@ export function registerMcpCli(program: Command) {
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
         );
       }
-      const servers = await Promise.all(
-        Object.entries(selected)
-          .toSorted(([a], [b]) => a.localeCompare(b))
-          .map(async ([serverName, server]): Promise<McpDoctorServerResult> => {
-            const issues = await collectMcpDoctorIssues({
-              name: serverName,
-              server,
-              config: loaded.config,
-              path: loaded.path,
-              probe: Boolean(opts.probe),
-            });
-            return {
-              name: serverName,
-              ok: !issues.some((entry) => entry.level === "error"),
-              issues,
-            };
-          }),
-      );
+      const tasks = Object.entries(selected)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([serverName, server]) => async (): Promise<McpDoctorServerResult> => {
+          const issues = await collectMcpDoctorIssues({
+            name: serverName,
+            server,
+            config: loaded.config,
+            path: loaded.path,
+            probe: Boolean(opts.probe),
+          });
+          return {
+            name: serverName,
+            ok: !issues.some((entry) => entry.level === "error"),
+            issues,
+          };
+        });
+      // A probe can start one process or connection per server. Keep large
+      // registries from fanning out every transport at once.
+      const {
+        results: servers,
+        firstError,
+        hasError,
+      } = await runTasksWithConcurrency({
+        tasks,
+        limit: MCP_DOCTOR_CONCURRENCY,
+      });
+      if (hasError) {
+        throw firstError;
+      }
       const ok = servers.every((server) => server.ok);
       if (opts.json) {
         printJson({ path: loaded.path, ok, servers });

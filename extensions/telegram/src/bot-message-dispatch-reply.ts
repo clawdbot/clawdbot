@@ -13,7 +13,6 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
 import type { TelegramDraftController } from "./bot-message-dispatch-draft.js";
-import type { TelegramReplyFenceController } from "./bot-message-dispatch-fence.js";
 import type { TelegramProgressController } from "./bot-message-dispatch-progress.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import type { TelegramDispatchTurnState } from "./bot-message-dispatch.types.js";
@@ -59,7 +58,7 @@ export function createTelegramReplyDelivery(params: {
   context: TelegramMessageContext;
   delivery: TelegramDeliveryController;
   draft: TelegramDraftController;
-  fence: Pick<TelegramReplyFenceController, "generation" | "isSuperseded">;
+  fence: { generation: () => number; isSuperseded: () => boolean };
   progress: TelegramProgressController;
   runtime: RuntimeEnv;
   state: TelegramDispatchTurnState;

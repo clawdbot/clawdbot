@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type {
   RealtimeVoiceAgentControlResult,
-  RealtimeVoiceForcedConsultCoordinator,
+  RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
@@ -22,6 +22,7 @@ const {
   agentCommandMock,
   resolveRealtimeBootstrapContextInstructionsMock,
   transcribeAudioFileMock,
+  prepareTtsRequestMock,
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
@@ -149,6 +150,15 @@ const {
       (...args: unknown[]) => Promise<string | undefined>
     >(async () => undefined),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    prepareTtsRequestMock: vi.fn(async ({ cfg, text }: { cfg: unknown; text: string }) => ({
+      cfg,
+      directives: {
+        cleanedText: text,
+        hasDirective: false,
+        overrides: {},
+        warnings: [],
+      },
+    })),
     textToSpeechStreamMock: vi.fn(
       async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
     ),
@@ -219,13 +229,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
-    getTtsProvider: vi.fn(() => "openai"),
     resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
-    resolveTtsConfig: vi.fn(() => ({
-      modelOverrides: {},
-      providerConfigs: {},
-    })),
-    resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-tts.json"),
   };
 });
 
@@ -260,6 +264,26 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   return {
     ...actual,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
+    createRealtimeVoiceSessionHarness: (
+      params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
+    ) => {
+      const harness = actual.createRealtimeVoiceSessionHarness(params);
+      return {
+        ...harness,
+        createBridge: (bridgeParams: Parameters<typeof harness.createBridge>[0]) =>
+          createRealtimeVoiceBridgeSessionMock(bridgeParams),
+        flushOutput: (flush: () => void) => flush(),
+        handleBargeIn: (
+          options: Parameters<typeof harness.handleBargeIn>[0],
+          fallbackFlush: () => void,
+        ) => {
+          realtimeSessionMock.handleBargeIn(options);
+          // The mock provider never clears audio, so exercise the harness fallback directly.
+          // Discord passes a no-op for normal truncation and a real clear for forced paths.
+          fallbackFlush();
+        },
+      };
+    },
     controlRealtimeVoiceAgentRun: controlRealtimeVoiceAgentRunMock,
     resolveConfiguredRealtimeVoiceProvider: resolveConfiguredRealtimeVoiceProviderMock,
   };
@@ -286,6 +310,7 @@ vi.mock("../runtime.js", () => ({
       transcribeAudioFile: transcribeAudioFileMock,
     },
     tts: {
+      prepareTtsRequest: prepareTtsRequestMock,
       textToSpeechStream: textToSpeechStreamMock,
       textToSpeech: textToSpeechMock,
     },
@@ -371,6 +396,18 @@ describe("DiscordVoiceManager", () => {
     resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(undefined);
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    prepareTtsRequestMock.mockReset();
+    prepareTtsRequestMock.mockImplementation(
+      async ({ cfg, text }: { cfg: unknown; text: string }) => ({
+        cfg,
+        directives: {
+          cleanedText: text,
+          hasDirective: false,
+          overrides: {},
+          warnings: [],
+        },
+      }),
+    );
     textToSpeechStreamMock.mockReset();
     textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
     textToSpeechMock.mockReset();
@@ -5067,14 +5104,14 @@ describe("DiscordVoiceManager", () => {
       realtime?: unknown;
     };
     const realtime = entry.realtime as {
-      forcedConsults: RealtimeVoiceForcedConsultCoordinator;
+      harness: RealtimeVoiceSessionHarness;
     };
-    const cancelled = realtime.forcedConsults.prepare("cancelled question");
+    const cancelled = realtime.harness.forcedConsults.prepare("cancelled question");
     if (!cancelled) {
       throw new Error("expected forced consult handle");
     }
-    realtime.forcedConsults.markStarted(cancelled);
-    realtime.forcedConsults.markCancelled(cancelled);
+    realtime.harness.forcedConsults.markStarted(cancelled);
+    realtime.harness.forcedConsults.markCancelled(cancelled);
     const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
@@ -6612,6 +6649,9 @@ describe("DiscordVoiceManager", () => {
     expect(commandArgs?.messageProvider).toBe("discord-voice");
     expect(commandArgs?.message).toContain("Do not call the tts tool");
     expect(commandArgs?.message).toContain("repair obvious transcription artifacts");
+    expect(prepareTtsRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello back" }),
+    );
     expect(lastTtsArgs().channel).toBe("discord");
     expect(lastTtsArgs().text).toBe("hello back");
   });

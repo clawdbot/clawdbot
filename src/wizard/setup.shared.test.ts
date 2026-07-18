@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 
 const mocks = vi.hoisted(() => ({
@@ -95,6 +95,33 @@ describe("writeWizardConfigFile pending install ownership", () => {
         baseHash: "verified-hash",
         afterWrite: { mode: "auto" },
       }),
+    );
+  });
+
+  it("preserves an absent config snapshot through the final write", async () => {
+    const config: OpenClawConfig = { gateway: { port: 18789 } };
+    const baseSnapshot: ConfigFileSnapshot = {
+      path: "/tmp/openclaw.json",
+      exists: false,
+      raw: null,
+      parsed: undefined,
+      sourceConfig: {},
+      resolved: {},
+      valid: true,
+      runtimeConfig: {},
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+
+    await writeWizardConfigFile(config, { baseSnapshot });
+
+    const commit = mocks.commitConfigWriteWithPendingPluginInstalls.mock.calls[0]?.[0]?.commit;
+    expect(commit).toBeTypeOf("function");
+    await commit(config);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: config, snapshot: baseSnapshot }),
     );
   });
 });

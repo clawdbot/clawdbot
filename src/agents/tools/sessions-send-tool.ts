@@ -70,6 +70,61 @@ const SessionsSendToolSchema = Type.Object({
   watch: Type.Optional(Type.Boolean()),
 });
 
+const SessionsSendDeliverySchema = Type.Object(
+  {
+    status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
+    mode: Type.Literal("announce"),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsSendOutputSchema = Type.Union([
+  Type.Object(
+    {
+      runId: Type.String(),
+      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
+      error: Type.String(),
+      sessionKey: Type.Optional(Type.String()),
+      sentBeforeError: Type.Optional(Type.Literal(true)),
+      watched: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      runId: Type.String(),
+      status: Type.Literal("accepted"),
+      sessionKey: Type.String(),
+      delivery: SessionsSendDeliverySchema,
+      watched: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      runId: Type.String(),
+      status: Type.Literal("timeout"),
+      error: Type.String(),
+      sentBeforeError: Type.Literal(true),
+      sessionKey: Type.String(),
+      delivery: Type.Optional(SessionsSendDeliverySchema),
+      watched: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      runId: Type.String(),
+      status: Type.Literal("ok"),
+      sessionKey: Type.String(),
+      delivery: SessionsSendDeliverySchema,
+      reply: Type.Optional(Type.String()),
+      watched: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
@@ -358,6 +413,7 @@ export function createSessionsSendTool(opts?: {
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSendTool(),
     parameters: SessionsSendToolSchema,
+    outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
       const params = normalizeSessionsSendArguments(args);
@@ -813,9 +869,9 @@ export function createSessionsSendTool(opts?: {
       return jsonResult({
         runId,
         status: "ok",
-        reply,
         sessionKey: displayKey,
         delivery,
+        ...(typeof reply === "string" ? { reply } : {}),
         ...watchField,
       });
     },

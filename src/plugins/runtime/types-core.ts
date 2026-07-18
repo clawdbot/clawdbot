@@ -1,4 +1,5 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
+import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
@@ -7,6 +8,7 @@ import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type {
   ListSpeechVoices,
+  PrepareTtsRequest,
   TextToSpeech,
   TextToSpeechStream,
   TextToSpeechTelephony,
@@ -304,6 +306,12 @@ export type PluginRuntimeCore = {
     /** @deprecated Use runEmbeddedAgent. */
     runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    /**
+     * Shares the embedded runner's CLI-backend dispatch eligibility (route,
+     * registered backend, stored credential mode) so opted-in callers can
+     * budget timeouts for the run that will actually execute.
+     */
+    resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
@@ -354,6 +362,7 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
+    prepareTtsRequest: PrepareTtsRequest;
     textToSpeech: TextToSpeech;
     textToSpeechStream: TextToSpeechStream;
     textToSpeechTelephony: TextToSpeechTelephony;
@@ -415,12 +424,16 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openBlobStore: <TMetadata>(
+      options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
+    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
     openKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
+    withLease: import("../../plugin-state/plugin-state-lease.types.js").PluginStateLeaseRunner;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
@@ -428,6 +441,20 @@ export type PluginRuntimeCore = {
       TMetadata,
       TCompletedMetadata
     >;
+    openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options: Omit<
+        CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
+        "queue"
+      > & {
+        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+          TPayload,
+          TMetadata,
+          TCompletedMetadata
+        >;
+        accountId?: string;
+        stateDir?: string;
+      },
+    ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;

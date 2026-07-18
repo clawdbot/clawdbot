@@ -11,6 +11,9 @@ type ResolveStoreTargets = NonNullable<
 >;
 type SweepStoreTemps = NonNullable<StartupMigrationDeps["sweepOrphanSessionStoreTemps"]>;
 type RunDoctorSessionSqlite = NonNullable<StartupMigrationDeps["runDoctorSessionSqlite"]>;
+type ReconcileSessionTranscriptIndexes = NonNullable<
+  StartupMigrationDeps["reconcileSessionTranscriptIndexes"]
+>;
 
 function makeLog() {
   return {
@@ -31,6 +34,9 @@ function makeDeps(
   migrate: MigrateSessionKeys,
   removedFiles = 0,
   runDoctorSessionSqlite: RunDoctorSessionSqlite = makeSessionSqliteImport(),
+  reconcileSessionTranscriptIndexes: ReconcileSessionTranscriptIndexes = vi
+    .fn<ReconcileSessionTranscriptIndexes>()
+    .mockResolvedValue({ reconciledSessions: 0 }),
 ) {
   return {
     migrateOrphanedSessionKeys: migrate,
@@ -43,6 +49,7 @@ function makeDeps(
       .mockResolvedValueOnce(removedFiles)
       .mockResolvedValue(0),
     runDoctorSessionSqlite,
+    reconcileSessionTranscriptIndexes,
   };
 }
 
@@ -197,6 +204,31 @@ describe("runStartupSessionMigration", () => {
       "session: imported legacy session metadata/transcripts into SQLite",
     );
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("reconciles configured agent transcript projections before startup completes", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const reconcile = vi
+      .fn<ReconcileSessionTranscriptIndexes>()
+      .mockResolvedValueOnce({ reconciledSessions: 2 })
+      .mockResolvedValueOnce({ reconciledSessions: 1 });
+    const cfg = {
+      agents: { defaults: {}, list: [{ id: "main" }, { id: "ops" }] },
+      session: {},
+    } as Parameters<typeof runStartupSessionMigration>[0]["cfg"];
+
+    await runStartupSessionMigration({
+      cfg,
+      log,
+      deps: makeDeps(migrate, 0, makeSessionSqliteImport(), reconcile),
+    });
+
+    expect(reconcile).toHaveBeenNthCalledWith(1, { agentId: "main" });
+    expect(reconcile).toHaveBeenNthCalledWith(2, { agentId: "ops" });
+    expect(log.info).toHaveBeenCalledWith(
+      "session: rebuilt 3 transcript projection(s) before serving history",
+    );
   });
 
   it("warns without blocking when hot legacy session SQLite import reports legacy file issues", async () => {

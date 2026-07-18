@@ -199,6 +199,15 @@ vi.mock("./command/session.js", () => ({
 
 vi.mock("./command/types.js", () => ({}));
 
+// Recovery ownership has dedicated store-backed coverage. This command suite
+// uses an intentionally synthetic session resolver with no durable store path.
+vi.mock("./main-session-recovery-store.js", () => ({
+  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
+  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
+  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
+  validateMainSessionRecoveryOwner: vi.fn(async () => true),
+}));
+
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
@@ -2980,7 +2989,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run", "recovery-run"]);
   });
 
   it("refreshes delivery session entries through the session accessor", async () => {

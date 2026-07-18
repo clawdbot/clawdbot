@@ -73,6 +73,7 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 		out.WriteString(translated)
 	}
 	translatedBody := out.String()
+	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
 	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
 	}

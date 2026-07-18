@@ -22,6 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -211,6 +212,7 @@ async function postCronWebhook(params: {
   }, CRON_WEBHOOK_TIMEOUT_MS);
 
   try {
+    assertSecretOwnerAvailable("capability", "cron-webhook");
     const result = await fetchWithSsrFGuard({
       url: params.webhookUrl,
       init: {

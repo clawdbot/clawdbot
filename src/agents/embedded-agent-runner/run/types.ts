@@ -15,6 +15,7 @@ import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -113,6 +114,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   fallbackActive?: boolean;
   /** Concrete fallback reason that selected this attempt, when known. */
   fallbackReason?: string | null;
+  /** Whether this attempt may start or redirect work to another agent/task. */
+  delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
@@ -269,6 +272,8 @@ export type EmbeddedRunAttemptResult = {
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
+  /** Completed message_end snapshot owned by this model attempt. */
+  currentAttemptCompletedAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;

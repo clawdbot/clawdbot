@@ -19,6 +19,7 @@ import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-ma
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { loadSqliteMarkedSessionFile } from "./session-manager-file.js";
 import {
+  buildSessionContext,
   CURRENT_SESSION_VERSION,
   findMostRecentSession,
   loadEntriesFromFile,
@@ -26,6 +27,7 @@ import {
   SessionManager,
   type FileEntry,
   type SessionEntry,
+  type SessionMessageEntry,
 } from "./session-manager.js";
 
 const tempPaths: string[] = [];
@@ -147,6 +149,66 @@ describe("SessionManager.open", () => {
         expect.objectContaining({ id: compactionId, type: "compaction" }),
       ]),
     );
+  });
+
+  it("preserves root-to-leaf ordering across session branches", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: "2026-07-16T00:00:00.000Z",
+        message: { role: "user", content: "root", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "main-leaf",
+        parentId: "root",
+        timestamp: "2026-07-16T00:00:01.000Z",
+        message: { role: "user", content: "main", timestamp: 2 },
+      },
+      {
+        type: "message",
+        id: "side-middle",
+        parentId: "root",
+        timestamp: "2026-07-16T00:00:02.000Z",
+        message: { role: "user", content: "side middle", timestamp: 3 },
+      },
+      {
+        type: "message",
+        id: "side-leaf",
+        parentId: "side-middle",
+        timestamp: "2026-07-16T00:00:03.000Z",
+        message: { role: "user", content: "side leaf", timestamp: 4 },
+      },
+    ] satisfies SessionMessageEntry[];
+    const manager = SessionManager.inMemory();
+    for (const entry of entries) {
+      manager.appendMessage(entry.message);
+      if (entry.id === "main-leaf") {
+        manager.branch(manager.getBranch().at(0)!.id);
+      }
+    }
+
+    expect(buildSessionContext(entries, "side-leaf").messages).toMatchObject([
+      { content: "root" },
+      { content: "side middle" },
+      { content: "side leaf" },
+    ]);
+    expect(
+      manager
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message),
+    ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
+  });
+
+  it("normalizes session names to one line", () => {
+    const manager = SessionManager.inMemory();
+
+    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
+
+    expect(manager.getSessionName()).toBe("first second third");
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {

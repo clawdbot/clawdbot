@@ -14,6 +14,7 @@ import {
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
+  isMissingSecretRefResolutionError,
   resolveSecretRefString,
   resolveSecretRefValue,
   resolveSecretRefValues,
@@ -215,6 +216,65 @@ describe("secret ref resolver", () => {
     expect(value).toBe("sk-env-value");
   });
 
+  it("classifies only matching absent env refs as missing", async () => {
+    const ref = { source: "env", provider: "default", id: "MISSING_API_KEY" } as const;
+    const missingError = await resolveSecretRefValue(ref, { config: {}, env: {} }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(isMissingSecretRefResolutionError({ ref, error: missingError })).toBe(true);
+    expect(
+      isMissingSecretRefResolutionError({
+        ref: { ...ref, id: "OTHER_API_KEY" },
+        error: missingError,
+      }),
+    ).toBe(false);
+
+    const policyError = await resolveSecretRefValue(ref, {
+      config: {
+        secrets: {
+          providers: {
+            default: { source: "env", allowlist: ["OTHER_API_KEY"] },
+          },
+        },
+      },
+      env: { MISSING_API_KEY: "test-missing-api-key" },
+    }).catch((error: unknown) => error);
+    expect(isMissingSecretRefResolutionError({ ref, error: policyError })).toBe(false);
+  });
+
+  it("classifies missing refs under a configured default provider alias", async () => {
+    const ref = { source: "env", provider: "primary", id: "MISSING_API_KEY" } as const;
+    const error = await resolveSecretRefValue(ref, {
+      config: {
+        secrets: {
+          defaults: { env: "primary" },
+          providers: { primary: { source: "env" } },
+        },
+      },
+      env: {},
+    }).catch((caught: unknown) => caught);
+
+    expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
+  });
+
+  it("does not rewrite an explicit default provider to a configured alias", async () => {
+    const ref = { source: "env", provider: "default", id: "MISSING_API_KEY" } as const;
+    const error = await resolveSecretRefValue(ref, {
+      config: {
+        secrets: {
+          defaults: { env: "primary" },
+          providers: { primary: { source: "env" } },
+        },
+      },
+      env: {},
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('Secret provider "default" is not configured');
+    expect(isMissingSecretRefResolutionError({ ref, error })).toBe(false);
+  });
+
   itPosix("resolves file refs in json mode", async () => {
     const root = await createCaseDir("file");
     const filePath = path.join(root, "secrets.json");
@@ -244,6 +304,24 @@ describe("secret ref resolver", () => {
     expect(value).toBe("sk-file-value");
   });
 
+  itPosix("classifies an out-of-bounds file pointer as a missing ref", async () => {
+    const root = await createCaseDir("file-missing-index");
+    const filePath = path.join(root, "secrets.json");
+    await writeSecureFile(filePath, JSON.stringify({ providers: [] }));
+    const ref = { source: "file", provider: "filemain", id: "/providers/0" } as const;
+    const error = await resolveSecretRefValue(ref, {
+      config: {
+        secrets: {
+          providers: {
+            filemain: createFileProviderConfig(filePath),
+          },
+        },
+      },
+    }).catch((caught: unknown) => caught);
+
+    expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
+  });
+
   itPosix("resolves exec refs with protocolVersion 1 response", async () => {
     const value = await resolveExecSecret(execProtocolV1ScriptPath);
     expect(value).toBe("value:openai/api-key");
@@ -260,6 +338,33 @@ describe("secret ref resolver", () => {
     );
     expect((error as Error).message).not.toContain("provider-private-detail-7f3c");
   });
+
+  itPosix(
+    "classifies omitted and NOT_FOUND exec ids as missing but keeps other errors fail-closed",
+    async () => {
+      const ref = { source: "exec", provider: "execmain", id: "openai/api-key" } as const;
+      const configFor = (command: string): OpenClawConfig => ({
+        secrets: {
+          providers: {
+            execmain: createExecProviderConfig(command),
+          },
+        },
+      });
+      const omittedError = await resolveSecretRefValue(ref, {
+        config: configFor(execMissingIdScriptPath),
+      }).catch((error: unknown) => error);
+      const missingError = await resolveSecretRefValue(ref, {
+        config: configFor(execProviderErrorScriptPath),
+      }).catch((error: unknown) => error);
+      const providerError = await resolveSecretRefValue(ref, {
+        config: configFor(execUnsafeProviderErrorScriptPath),
+      }).catch((error: unknown) => error);
+
+      expect(isMissingSecretRefResolutionError({ ref, error: omittedError })).toBe(true);
+      expect(isMissingSecretRefResolutionError({ ref, error: missingError })).toBe(true);
+      expect(isMissingSecretRefResolutionError({ ref, error: providerError })).toBe(false);
+    },
+  );
 
   itPosix("suppresses exec error codes outside the bounded format", async () => {
     const error = await resolveExecSecret(execUnsafeProviderErrorScriptPath).catch(

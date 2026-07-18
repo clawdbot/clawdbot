@@ -20,6 +20,7 @@ import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
   detectBrowserOpenSupport,
+  buildOnboardingControlUiUrl,
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
@@ -580,10 +581,12 @@ export async function finalizeSetupWizard(
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const authedUrl =
-      settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? `${displayLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-        : displayLinks.httpUrl;
+    const authedUrl = buildOnboardingControlUiUrl({
+      httpUrl: displayLinks.httpUrl,
+      authMode: settings.authMode,
+      token: settings.gatewayToken,
+      suppressTokenOutput: suppressGatewayTokenOutput,
+    });
     if (opts.skipHealth || !gatewayProbe.ok) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,

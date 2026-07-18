@@ -120,11 +120,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           }}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
-          <span class="sidebar-update-card__copy">
-            <span class="sidebar-update-card__title">${title}</span>
-            <span class="sidebar-update-card__subtitle">v${update.latestVersion}</span>
-          </span>
-          <span class="sidebar-update-card__arrow" aria-hidden="true">${icons.chevronRight}</span>
+          <span class="sidebar-update-card__text">${title} · v${update.latestVersion}</span>
         </button>
         <button
           class="sidebar-update-card__dismiss"

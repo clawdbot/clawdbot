@@ -40,7 +40,7 @@ describe("memory-core engine runtime SDK facade", () => {
     expect(issue.code).toBe("recall-store-over-limit");
   });
 
-  it("injects local-service acquisition into manager facade calls", async () => {
+  it("injects local-service acquisition and SQLite leases into manager facade calls", async () => {
     const runtime = await import("./memory-core-engine-runtime.js");
     const params = { cfg: {}, agentId: "main" } as never;
 
@@ -51,11 +51,13 @@ describe("memory-core engine runtime SDK facade", () => {
       cfg: {},
       agentId: "main",
       acquireLocalService: expect.any(Function),
+      withLease: expect.any(Function),
     });
     expect(getMemoryIndexManagerImpl).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
       acquireLocalService: expect.any(Function),
+      withLease: expect.any(Function),
     });
   });
 });

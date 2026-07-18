@@ -17,17 +17,35 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
+const DEFAULT_MOCK_CATALOG_ENTRIES = vi.hoisted(() => [
+  { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
+  { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
+  { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
+  { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
+  { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+  { provider: "xai", id: "grok-4", name: "Grok 4" },
+  { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
+]);
+
+const catalogRuntimeMocks = vi.hoisted(() => {
+  const loadModelCatalog = vi.fn(
+    async (_params?: unknown): Promise<unknown[]> => DEFAULT_MOCK_CATALOG_ENTRIES,
+  );
+  return {
+    loadModelCatalog,
+    // Delegate to the entries mock so per-test `loadModelCatalog.mockResolvedValueOnce`
+    // still drives selection; tests that need a degraded snapshot override this directly.
+    loadModelCatalogSnapshot: vi.fn(async (params?: unknown) => {
+      const entries = await loadModelCatalog(params as never);
+      return { entries, routeVariants: entries, authoritative: true };
+    }),
+  };
+});
+
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
-  loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
-    { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
-    { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
-    { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
-    { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
-    { provider: "xai", id: "grok-4", name: "Grok 4" },
-    { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
-  ]),
+  loadModelCatalog: catalogRuntimeMocks.loadModelCatalog,
+  loadModelCatalogSnapshot: catalogRuntimeMocks.loadModelCatalogSnapshot,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -2063,4 +2081,106 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
   });
 });
+
+describe("createModelSelectionState degraded-catalog override preservation", () => {
+  const sessionKey = "agent:main:discord:channel:g1";
+  // The `anthropic/*` wildcard (a non-default provider) forces the live catalog
+  // load path (`needsModelCatalog`), which is the only path where a degraded
+  // catalog can transiently drop a pin. Every test must load the snapshot so its
+  // one-time mock is consumed and cannot leak into a sibling test.
+  //
+  // Allow-list without gpt-4o, so the pinned override reads as "not allowed"
+  // whenever the catalog cannot vouch for it. The authoritative flag then
+  // decides whether that reads as a genuine disallow or a transient outage.
+  const restrictiveCfg = {
+    agents: { defaults: { models: { "openai/gpt-4o-mini": {}, "anthropic/*": {} } } },
+  } as unknown as OpenClawConfig;
+  // Permissive allow-list that keeps gpt-4o allowed regardless of the catalog.
+  const permissiveCfg = {
+    agents: {
+      defaults: { models: { "openai/gpt-4o": {}, "openai/gpt-4o-mini": {}, "anthropic/*": {} } },
+    },
+  } as unknown as OpenClawConfig;
+
+  const makeOverrideEntry = (): SessionEntry => ({
+    sessionId: "session-id",
+    updatedAt: Date.now(),
+    providerOverride: "openai",
+    modelOverride: "gpt-4o",
+    modelOverrideSource: "user",
+  });
+
+  async function run(params: {
+    cfg: OpenClawConfig;
+    snapshotEntries: unknown[];
+    authoritative: boolean;
+  }): Promise<{
+    state: Awaited<ReturnType<typeof createModelSelectionState>>;
+    sessionEntry: SessionEntry;
+  }> {
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockResolvedValueOnce({
+      entries: params.snapshotEntries,
+      routeVariants: params.snapshotEntries,
+      authoritative: params.authoritative,
+    });
+    const sessionEntry = makeOverrideEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const state = await createModelSelectionState({
+      cfg: params.cfg,
+      agentCfg: params.cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      primaryProvider: "openai",
+      primaryModel: "gpt-4o-mini",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasModelDirective: false,
+    });
+    return { state, sessionEntry };
+  }
+
+  it("preserves a pin the degraded catalog cannot vouch for", async () => {
+    // Degraded snapshot: we cannot prove the pin is really disallowed, so keep it.
+    const { state, sessionEntry } = await run({
+      cfg: restrictiveCfg,
+      snapshotEntries: [],
+      authoritative: false,
+    });
+    expect(state.resetModelOverride).toBe(false);
+    expect(state.resetModelOverrideReason).toBe("temporarily-unavailable");
+    expect(state.resetModelOverrideRef).toBe("openai/gpt-4o");
+    // The pin is untouched and the turn falls back to primary.
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(state.model).toBe("gpt-4o-mini");
+  });
+
+  it("destroys a genuinely-disallowed pin on an authoritative catalog", async () => {
+    // Same disallowed pin, but an authoritative catalog proves it is gone.
+    const { state } = await run({
+      cfg: restrictiveCfg,
+      snapshotEntries: [{ provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" }],
+      authoritative: true,
+    });
+    expect(state.resetModelOverrideReason).toBe("disallowed");
+    expect(state.resetModelOverride).toBe(true);
+  });
+
+  it("keeps a configured pin that is present on an authoritative catalog", async () => {
+    const { state } = await run({
+      cfg: permissiveCfg,
+      snapshotEntries: [
+        { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+        { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
+      ],
+      authoritative: true,
+    });
+    expect(state.resetModelOverride).toBe(false);
+    expect(state.resetModelOverrideReason).toBeUndefined();
+    expect(state.model).toBe("gpt-4o");
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -64,13 +64,25 @@ export function isEphemeralGatewayClient(client?: GatewayClientInfoLike | null):
 /** Return whether a client is one of the operator UI clients. */
 export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
-  return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI || clientId === GATEWAY_CLIENT_NAMES.TUI;
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT ||
+    clientId === GATEWAY_CLIENT_NAMES.TUI
+  );
 }
 
 /** Return whether a client is the browser Control UI. */
 export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
-  return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI;
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT
+  );
+}
+
+/** Return whether a client is the first-party browser side-panel copilot. */
+export function isBrowserCopilotClient(client?: GatewayClientInfoLike | null): boolean {
+  return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT;
 }
 
 /** Return whether a raw channel id resolves to OpenClaw's internal channel. */

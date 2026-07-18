@@ -4,7 +4,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
-import { detectRespawnSupervisor } from "./supervisor-markers.js";
+import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 
@@ -73,7 +73,7 @@ export function restartGatewayProcessWithFreshPid(
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
   }
-  const supervisor = detectRespawnSupervisor(process.env);
+  const supervisor = detectGatewayRespawnSupervisor(process.env);
   if (supervisor) {
     // On macOS launchd, exit cleanly and let KeepAlive relaunch the service.
     // Avoid detached kickstart/start handoffs here so restart timing stays tied
@@ -121,7 +121,7 @@ export function restartGatewayProcessWithFreshPid(
 export function respawnGatewayProcessForUpdate(
   opts: GatewayRespawnOptions = {},
 ): GatewayUpdateRespawnResult {
-  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+  const supervisor = detectGatewayRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
   if (supervisor) {

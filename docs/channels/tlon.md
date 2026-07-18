@@ -145,6 +145,10 @@ baseline, and override per channel nest:
 Once the bot has replied inside a thread, it keeps responding to later messages in that thread
 without requiring another mention.
 
+Set `channels.tlon.implicitMentions.threadParticipation: false` to require a new explicit mention
+for those follow-ups. Account overrides use `channels.tlon.accounts.<id>.implicitMentions`. Tlon
+does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
+
 ## Owner and approval system
 
 ```json5
@@ -293,6 +297,7 @@ Full configuration: [Configuration](/gateway/configuration)
 | `channels.tlon.autoAcceptGroupInvites`                 | Auto-accept group invites from `groupInviteAllowlist`.         |
 | `channels.tlon.groupInviteAllowlist`                   | Ships whose group invites are auto-accepted.                   |
 | `channels.tlon.autoDiscoverChannels`                   | Auto-discover joined group channels (default: `false`).        |
+| `channels.tlon.implicitMentions.threadParticipation`   | Let participated-thread follow-ups bypass mention gating.      |
 | `channels.tlon.groupChannels`                          | Manually pinned channel nests.                                 |
 | `channels.tlon.defaultAuthorizedShips`                 | Ships authorized for all channels (used when no rule matches). |
 | `channels.tlon.authorization.channelRules`             | Per-channel-nest auth mode + allowlist.                        |

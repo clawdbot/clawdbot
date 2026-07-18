@@ -150,8 +150,6 @@ export function createGatewayClient({
   request: (method: unknown, params: unknown, timeoutMs?: number) => Promise<unknown>;
   waitOpen: () => Promise<unknown>;
 };
-/** Maximum time to wait for a spawned gateway to become reachable. */
-export const READY_TIMEOUT_MS: 120000;
 declare function defaultKillProcess(pid: unknown, signal: unknown): boolean;
 declare function defaultRunTaskkill(
   command: string,

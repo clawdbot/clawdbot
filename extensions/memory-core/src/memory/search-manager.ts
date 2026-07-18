@@ -24,11 +24,13 @@ import {
   type MemorySyncParams,
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   resolveMemoryCoreLocalServiceHostIdentity,
   type MemoryCoreAcquireLocalService,
 } from "./embedding-local-service.js";
+import { resolveMemoryCoreLeaseHostIdentity } from "./runtime-host.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   MEMORY_SEARCH_DEADLINE_CONTROL,
@@ -140,6 +142,7 @@ type MemorySearchManagerParams = {
   agentId: string;
   purpose?: MemorySearchManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
 };
 
 function getActiveQmdManagerOpenFailure(
@@ -225,12 +228,18 @@ export async function getMemorySearchManager(
       qmdResolved,
       runtimeConfig,
       params.acquireLocalService,
+      params.withLease,
     );
     const debugIdentityHash = hashQmdManagerIdentity(identityKey);
 
     const createPrimaryQmdManager = async (
       mode: "full" | "status" | "cli",
     ): Promise<{ manager: Maybe<MemorySearchManager>; failureReason?: string }> => {
+      if (!params.withLease) {
+        const message = "memory-core host does not provide SQLite lease coordination";
+        log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+        return { manager: null, failureReason: `qmd memory unavailable: ${message}` };
+      }
       try {
         await fs.mkdir(workspaceDir, { recursive: true });
       } catch (err) {
@@ -269,6 +278,7 @@ export async function getMemorySearchManager(
           resolved: { ...resolved, qmd: qmdResolved },
           mode,
           runtimeConfig,
+          withLease: params.withLease,
         });
         if (primary) {
           clearQmdManagerOpenFailure(scopeKey, identityKey);
@@ -792,11 +802,13 @@ function buildQmdManagerIdentityKey(
   config: ResolvedQmdConfig,
   runtimeConfig: QmdManagerRuntimeConfig,
   acquireLocalService: MemoryCoreAcquireLocalService | undefined,
+  withLease: PluginStateLeaseRunner | undefined,
 ): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
   const localServiceHostId = resolveMemoryCoreLocalServiceHostIdentity(acquireLocalService);
-  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}:${localServiceHostId}`;
+  const leaseHostId = resolveMemoryCoreLeaseHostIdentity(withLease);
+  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}:${localServiceHostId}:${leaseHostId}`;
 }
 
 function resolveQmdManagerRuntimeConfig(

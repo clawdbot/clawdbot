@@ -749,9 +749,9 @@ export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContr
       const provider = requireProviderContractProvider("venice");
       const model = provider.normalizeResolvedModel?.({
         provider: "venice",
-        modelId: "grok-41-fast",
+        modelId: "grok-4-3",
         model: createModel({
-          id: "grok-41-fast",
+          id: "grok-4-3",
           provider: "venice",
           api: "openai-completions",
           baseUrl: "https://api.venice.ai/api/v1",

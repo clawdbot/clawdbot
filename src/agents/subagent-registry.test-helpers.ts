@@ -49,6 +49,7 @@ type RegistryDeps = {
   resolveAgentTimeoutMs: typeof import("./timeout.js").resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof import("./subagent-registry-state.js").restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
+  maybeWakeRequesterAfterAllChildrenSettled: typeof import("./subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
   resolveContextEngine?: typeof import("../context-engine/registry.js").resolveContextEngine;

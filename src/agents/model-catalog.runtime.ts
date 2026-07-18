@@ -1,2 +1,6 @@
 /** Runtime barrel for model catalog loading helpers. */
-export { loadManifestModelCatalog, loadModelCatalog } from "./model-catalog.js";
+export {
+  loadManifestModelCatalog,
+  loadModelCatalog,
+  loadModelCatalogSnapshot,
+} from "./model-catalog.js";

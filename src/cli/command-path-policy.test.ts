@@ -229,6 +229,12 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["config", "schema"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["gateway", "status"], {
       routeConfigGuard: "always",
       loadPlugins: "never",

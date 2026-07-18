@@ -229,6 +229,7 @@ function signalQaCliProcessTree(
         {
           stdio: "ignore",
           windowsHide: true,
+          timeout: 5_000,
         },
       );
       if (!result.error && result.status === 0) {

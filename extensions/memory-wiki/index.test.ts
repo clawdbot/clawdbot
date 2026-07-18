@@ -1,8 +1,23 @@
 // Memory Wiki tests cover index plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
+import {
+  createMemoryWikiCompiledCachePublicationId,
+  loadMemoryWikiCompiledCache,
+  resolveMemoryWikiCompiledCacheGeneration,
+  writeMemoryWikiCompiledCache,
+  type MemoryWikiCompiledCacheSnapshot,
+} from "./src/compiled-cache.js";
+import { resolveMemoryWikiConfig } from "./src/config.js";
+import {
+  appendMemoryWikiLog,
+  loadMemoryWikiValidatedVaultIdentity,
+  loadMemoryWikiVaultIdentity,
+  resolveMemoryWikiVaultSourceGeneration,
+} from "./src/log.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
 const toolMocks = vi.hoisted(() => {
@@ -32,14 +47,20 @@ describe("memory-wiki plugin", () => {
       registerCli,
       registerGatewayMethod,
       registerMemoryCorpusSupplement,
+      registerMemoryPromptPreparation,
       registerMemoryPromptSupplement,
+      registerService,
       registerTool,
     } = createPluginApi();
 
     plugin.register(api);
 
     expect(registerMemoryCorpusSupplement).toHaveBeenCalledTimes(1);
+    expect(registerMemoryPromptPreparation).toHaveBeenCalledTimes(1);
     expect(registerMemoryPromptSupplement).toHaveBeenCalledTimes(1);
+    expect(registerService).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "memory-wiki-compiled-cache-owner-cleanup" }),
+    );
     expect(registerGatewayMethod.mock.calls.map((call) => call[0])).toEqual([
       "wiki.status",
       "wiki.importRuns",
@@ -131,5 +152,73 @@ describe("memory-wiki plugin", () => {
       }
       expect(() => factory({ agentId: "finance" })).toThrow("Unknown memory-wiki agentId: finance");
     }
+  });
+
+  it("activates an initialized legacy vault before an external compile", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-legacy-vault-");
+    await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "", "utf8");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+
+    plugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+
+    await expect(loadMemoryWikiVaultIdentity(rootDir)).resolves.toMatchObject({
+      vaultGeneration: expect.any(String),
+    });
+  });
+
+  it("clears active owners before a fallible lifecycle identity refresh", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-refresh-failure-");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+    plugin.register(api);
+    const config = resolveMemoryWikiConfig(api.pluginConfig);
+    await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "", "utf8");
+    const service = registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+
+    const snapshot: MemoryWikiCompiledCacheSnapshot = {
+      digest: { claimCount: 0, contradictionCount: 0, pages: [] },
+      claims: [],
+    };
+    const publicationId = createMemoryWikiCompiledCachePublicationId();
+    const reservationId = createMemoryWikiCompiledCachePublicationId();
+    const parentPublicationId = (await loadMemoryWikiVaultIdentity(rootDir))
+      .compiledCachePublicationId;
+    await appendMemoryWikiLog(rootDir, {
+      type: "compile",
+      timestamp: "2026-07-17T00:00:00.000Z",
+      details: { compiledCacheReservationId: reservationId },
+    });
+    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(rootDir);
+    await appendMemoryWikiLog(rootDir, {
+      type: "compile",
+      timestamp: "2026-07-17T00:00:00.000Z",
+      details: {
+        compiledCachePublicationId: publicationId,
+        compiledCacheParentPublicationId: parentPublicationId,
+        compiledCacheReservationId: reservationId,
+        compiledCacheSourceGeneration: sourceGeneration,
+      },
+    });
+    await writeMemoryWikiCompiledCache(
+      config,
+      snapshot,
+      resolveMemoryWikiCompiledCacheGeneration(snapshot),
+      publicationId,
+      parentPublicationId,
+      async () => {},
+      async () => {},
+      () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+    );
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toEqual(snapshot);
+
+    vi.spyOn(fs, "readFile").mockRejectedValueOnce(new Error("transient restore read failure"));
+    await expect(service?.start?.()).rejects.toThrow("transient restore read failure");
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });
 });

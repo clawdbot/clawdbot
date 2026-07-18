@@ -61,15 +61,6 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     cost: { input: 0.6, output: 1.25, cacheRead: 0.6, cacheWrite: 0.6 },
   },
   {
-    id: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    name: "Llama 3.3 70B Instruct Turbo",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 131072,
-    maxTokens: 8192,
-    cost: { input: 0.88, output: 0.88, cacheRead: 0.88, cacheWrite: 0.88 },
-  },
-  {
     id: "openai/gpt-oss-120b",
     name: "GPT-OSS 120B",
     reasoning: false,
@@ -163,6 +154,7 @@ export async function discoverHuggingfaceModels(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 

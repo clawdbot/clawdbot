@@ -64,6 +64,7 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async (_params: unknown) => "mock-queue-id"),
+  enqueueDeliveryOnce: vi.fn(async (_params: unknown, id: string) => ({ id, created: true })),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn(async () => {}),
@@ -77,6 +78,11 @@ const queueMocks = vi.hoisted(() => ({
       fn: () => Promise<unknown>,
     ) => Promise<{ status: "claimed"; value: unknown } | { status: "claimed-by-other-owner" }>
   >(async (_entryId, fn) => ({ status: "claimed", value: await fn() })),
+}));
+const completionMocks = vi.hoisted(() => ({
+  completeDurableDelivery: vi.fn(),
+  rejectDurableDelivery: vi.fn(),
+  suppressDurableDelivery: vi.fn(),
 }));
 const logMocks = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -109,6 +115,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
+  enqueueDeliveryOnce: queueMocks.enqueueDeliveryOnce,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
   failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
@@ -117,6 +124,11 @@ vi.mock("./delivery-queue.js", () => ({
   markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted: queueMocks.markDeliveryPlatformSendAttemptStarted,
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
+}));
+vi.mock("./delivery-completion.js", () => ({
+  completeDurableDelivery: completionMocks.completeDurableDelivery,
+  rejectDurableDelivery: completionMocks.rejectDurableDelivery,
+  suppressDurableDelivery: completionMocks.suppressDurableDelivery,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -332,6 +344,14 @@ describe("deliverOutboundPayloads", () => {
     internalHookMocks.triggerInternalHook.mockClear();
     queueMocks.enqueueDelivery.mockClear();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
+    queueMocks.enqueueDeliveryOnce.mockClear();
+    queueMocks.enqueueDeliveryOnce.mockImplementation(async (_params, id) => ({
+      id,
+      created: true,
+    }));
+    completionMocks.completeDurableDelivery.mockClear();
+    completionMocks.rejectDurableDelivery.mockClear();
+    completionMocks.suppressDurableDelivery.mockClear();
     queueMocks.ackDelivery.mockClear();
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
@@ -724,6 +744,9 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockImplementationOnce(async () => {
       order.push("dispatch");
     });
+    completionMocks.completeDurableDelivery.mockImplementationOnce(() => {
+      order.push("complete");
+    });
     const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
       order.push("send");
       await ctx.onPlatformSendDispatch?.();
@@ -787,6 +810,11 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "hello" }],
       queuePolicy: "required",
       requireUnknownSendReconciliation: true,
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "operation-1",
+      },
     });
 
     expect(order).toEqual([
@@ -796,6 +824,7 @@ describe("deliverOutboundPayloads", () => {
       "dispatch",
       "after:pending-1:message-adapter-1",
       "mark-unknown",
+      "complete",
       "ack",
       "commit:pending-1:message-adapter-1",
     ]);
@@ -836,6 +865,105 @@ describe("deliverOutboundPayloads", () => {
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("message-adapter-1");
+  });
+
+  it("does not cross platform I/O when a stable queue intent already exists", async () => {
+    queueMocks.enqueueDeliveryOnce.mockResolvedValueOnce({
+      id: "operation-existing",
+      created: false,
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "must-not-send" });
+    const onDeliveryIntent = vi.fn();
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId: "operation-existing",
+        onDeliveryIntent,
+      }),
+    ).rejects.toThrow("Stable delivery intent is already queued: operation-existing");
+    expect(onDeliveryIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "operation-existing", queuePolicy: "required" }),
+    );
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("finalizes owner state only after a chunked batch completes", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "chunk-1" })
+      .mockResolvedValueOnce({ messageId: "chunk-2" });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "abcd" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required",
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "operation-chunked",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(completionMocks.completeDurableDelivery).toHaveBeenCalledOnce();
+    expect(completionMocks.completeDurableDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "operation-chunked" }),
+      expect.objectContaining({ messageId: "chunk-2" }),
+    );
+  });
+
+  it("persists owner suppression before acknowledging its durable intent", async () => {
+    const order: string[] = [];
+    queueMocks.enqueueDelivery.mockImplementationOnce(async () => {
+      order.push("queue");
+      return "queue-suppressed";
+    });
+    completionMocks.suppressDurableDelivery.mockImplementationOnce(() => {
+      order.push("suppress");
+    });
+    queueMocks.ackDelivery.mockImplementationOnce(async () => {
+      order.push("ack");
+    });
+    const sendMatrix = vi.fn();
+
+    const results = await deliverOutboundPayloads({
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "allow",
+              internal: "allow",
+            },
+          },
+        },
+      },
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "NO_REPLY" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:slash:!room",
+        policyKey: "agent:main:matrix:direct:!room",
+      },
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "operation-suppressed",
+      },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(order).toEqual(["queue", "suppress", "ack"]);
   });
 
   it("rejects provider-blocked deferred delivery before queue creation or platform work", async () => {
@@ -2046,6 +2174,75 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
+  it("terminally retires a permanent provider rejection before platform dispatch", async () => {
+    const order: string[] = [];
+    const rejection = new PlatformMessageNotDispatchedError("atomic message limit", {
+      cause: new Error("rendered text is too large"),
+      retryable: false,
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(rejection);
+    completionMocks.rejectDurableDelivery.mockImplementationOnce(() => {
+      order.push("reject-owner");
+    });
+    queueMocks.ackDelivery.mockImplementationOnce(async () => {
+      order.push("ack-queue");
+    });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "rendered text" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-rejected",
+        },
+      }),
+    ).rejects.toThrow("atomic message limit");
+
+    expect(order).toEqual(["reject-owner", "ack-queue"]);
+    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "operation-rejected" }),
+      "atomic message limit",
+    );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("normalizes an empty permanent rejection reason before durable retirement", async () => {
+    const sendMatrix = vi.fn().mockRejectedValueOnce(
+      new PlatformMessageNotDispatchedError("   ", {
+        cause: new Error("provider rejected the rendered payload"),
+        retryable: false,
+      }),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "rendered text" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-empty-rejection",
+        },
+      }),
+    ).rejects.toThrow("Platform rejected the message before dispatch");
+
+    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "operation-empty-rejection" }),
+      "Platform rejected the message before dispatch",
+    );
+  });
+
   it("preserves queued send evidence when a marked best-effort batch has an ambiguous failure", async () => {
     const ambiguousError = Object.assign(new Error("connect ECONNRESET"), {
       code: "ECONNRESET",
@@ -2647,6 +2844,47 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((entry) => entry.messageId)).toEqual(["ab", "cd"]);
   });
 
+  it("keeps a prepared transport-id delivery atomic", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "prepared-1",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              textChunkLimit: 2,
+              chunker: (text, limit) => [text.slice(0, limit), text.slice(limit)],
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "abcd" }],
+      preparedMessageId: "prepared-1",
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "abcd", preparedMessageId: "prepared-1" }),
+    );
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ preparedMessageId: "prepared-1" }),
+    );
+  });
+
   it("uses replyToId only on the first low-level send for single-use reply modes", async () => {
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
       channel: "matrix" as const,
@@ -3196,6 +3434,104 @@ describe("deliverOutboundPayloads", () => {
         },
       ],
     });
+  });
+
+  it("uses runtime fallback text only when native presentation rendering is unavailable", async () => {
+    const nativeRender = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { native: true },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "question-card",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              presentationCapabilities: { supported: true, buttons: true },
+              renderPresentation: nativeRender,
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          text: "Question with numbered fallback",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              { type: "text", text: "Question" },
+              { type: "buttons", buttons: [{ label: "Yes", value: "yes" }] },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(nativeRender, "native renderer").payload).toMatchObject({
+      text: undefined,
+      presentationTextMode: "fallback",
+    });
+    expect(requireMockCallArg(sendPayload, "send payload").payload).toMatchObject({
+      channelData: { native: true },
+      text: undefined,
+    });
+  });
+
+  it("keeps runtime presentation fallback text exact on button-less channels", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "question-text",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          text: "Question\n1. Yes\n2. No",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              { type: "text", text: "Question" },
+              { type: "buttons", buttons: [{ label: "Yes", value: "yes" }] },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "send text").text).toBe("Question\n1. Yes\n2. No");
   });
 
   it("runs adapter after-delivery hooks with the payload delivery results", async () => {
@@ -3955,6 +4291,43 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(results).toStrictEqual([]);
+  });
+
+  it("reports transport-normalized text only after identified delivery", async () => {
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: "m-normalized",
+      roomId: "!room:example",
+      text,
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sanitizeText: ({ text }) => `[safe] ${text}`,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+    const deliveredPayloads: Array<{ text: string; mediaUrls: string[] }> = [];
+
+    await deliverOutboundPayloadsInternal({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
+    });
+
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "[safe] hello" }));
+    expect(deliveredPayloads).toEqual([{ text: "[safe] hello", mediaUrls: [] }]);
   });
 
   it("preserves fenced blocks for markdown chunkers in newline mode", async () => {

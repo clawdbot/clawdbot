@@ -10,8 +10,9 @@ title: "Restart recovery"
 Restarting the gateway does not lose agent state. Conversations, transcripts,
 scheduled jobs, background task records, and queued outbound messages all live
 on disk, and work that was interrupted mid-turn is detected and resumed
-automatically after the gateway comes back up. No manual intervention is
-required, and there is nothing to configure: recovery is always on.
+automatically after the gateway comes back up. Recovery is always on and
+normally needs no manual intervention. Repeatedly failing recovery is bounded
+and may quarantine one session until you inspect or replace it.
 
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
@@ -75,12 +76,26 @@ A few seconds after startup, the gateway re-dispatches each marked session
 with a synthetic system message telling the agent its previous turn was
 interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
-so the agent can deliver it instead of redoing the work. Recovery retries up
-to 3 times with exponential backoff. Every retry reuses one durable dispatch
-identifier, so an ambiguous connection failure cannot start the same recovery
-twice. Completed and unresumable Control UI turns also retain bounded durable
-idempotency tombstones, allowing a reconnecting outbox to retire them without
-re-executing the request.
+so the agent can deliver it instead of redoing the work.
+
+Startup reconciliation retries transient failures up to three times with
+exponential backoff. Separately, each interrupted main-session cycle has a
+durable budget of three charged automatic dispatch attempts, retained across
+gateway restarts. OpenClaw charges an attempt before dispatch, refunds it when
+the gateway explicitly rejects the request before acceptance, and retains the
+charge when a post-dispatch result is uncertain to avoid replaying work.
+Foreground work that already owns the session keeps automatic recovery out
+until that work settles.
+
+After the durable budget is exhausted, the session is tombstoned instead of
+looping forever. Inspect the failed session and use `/new` or `/reset` to start a
+replacement. `openclaw doctor --fix` can repair a stale aborted flag that
+conflicts with a tombstone, but it does not re-enable that recovery cycle.
+
+Every retry reuses one durable dispatch identifier, so an ambiguous connection
+failure cannot start the same recovery twice. Completed and unresumable Control
+UI turns also retain bounded durable idempotency tombstones, allowing a
+reconnecting outbox to retire them without re-executing the request.
 
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
@@ -107,7 +122,7 @@ approval), the session is not blindly re-run; the agent instead posts a short
 notice asking the user to resend the last request. For WebChat, that notice is
 written directly to the session history so it remains visible after reconnect.
 
-OpenClaw can also reconstruct interrupted read-only [Code Mode](/reference/code-mode)
+OpenClaw can also reconstruct interrupted read-only [Code Mode](/tools/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting
 catalog tools or plugin namespaces before they execute. If a restart lands on
 the `wait` control, the new gateway reconstructs the turn from its transcript
@@ -144,11 +159,22 @@ SQLite before the process exits. After boot the gateway posts the outcome back
 to the originating chat and dispatches a one-shot continuation turn so the
 agent picks up exactly where it left off, on the same channel and thread.
 
+The sentinel's typed SQLite columns are authoritative for restart handling;
+its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
+and clears SQLite state without a file fallback. During the storage cutover, a
+bounded state migration runs at startup and through Doctor to preserve a
+validated `restart-sentinel.json` left by the older process after an update.
+The migration verifies the typed row and removes the source file before normal
+restart handling continues.
+
 ## Safety valves and observability
 
 - **Crash-loop breaker:** 3 unclean boots within 5 minutes trip a breaker that
   suppresses auto-start side services on the next boot, so a crashing gateway
   does not amplify itself. It recovers once the unclean-boot window drains.
+- **Main-session attempt budget:** three charged automatic dispatch attempts
+  per interrupted cycle; exhaustion tombstones that session until it is
+  inspected and replaced.
 - **Metrics:** recovery activity is exported via
   [Prometheus](/gateway/prometheus) as `openclaw_session_recovery_total` and
   `openclaw_session_recovery_age_seconds`.
@@ -167,3 +193,6 @@ agent picks up exactly where it left off, on the same channel and thread.
 - Work that was never admitted: messages arriving during the drain window are
   rejected with an explicit restart error rather than silently queued into a
   dying process.
+- Standalone embedded turns cannot take over a main session with pending
+  restart recovery because they do not share the gateway's lifecycle owner.
+  Run the turn through the gateway or reset it there with `/new` or `/reset`.

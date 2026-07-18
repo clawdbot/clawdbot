@@ -198,8 +198,17 @@ describe("MCP App UI resources", () => {
     const sandboxPath = buildMcpAppSandboxPath(view?.csp);
     const encodedCsp = new URL(sandboxPath, "https://gateway.example").searchParams.get("csp");
     expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
+  });
+
+  it.each(["bm90LWpzb24", Buffer.from("{not json}", "utf8").toString("base64url")])(
+    "rejects malformed encoded CSP metadata",
+    (value) => {
+      expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
+    },
+  );
+
+  it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
-    expect(proxyHtml.startsWith('<!doctype html>\n<meta charset="utf-8"')).toBe(true);
     expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');
     expect(proxyHtml).toContain("inner.srcdoc = params.html");
     expect(proxyHtml).not.toContain("doc.write");

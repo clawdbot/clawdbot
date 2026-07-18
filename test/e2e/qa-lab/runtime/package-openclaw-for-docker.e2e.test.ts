@@ -180,7 +180,13 @@ describe("package-openclaw-for-docker", () => {
     const sourceDir = tempDirs.make("openclaw-package-frozen-source-");
     fs.mkdirSync(path.join(sourceDir, "dist"), { recursive: true });
     fs.mkdirSync(path.join(sourceDir, "scripts"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "node_modules", "tsx"), { recursive: true });
     fs.writeFileSync(path.join(sourceDir, "package.json"), '{"name":"openclaw"}\n');
+    fs.writeFileSync(
+      path.join(sourceDir, "node_modules", "tsx", "package.json"),
+      '{"name":"tsx","exports":"./loader.mjs","type":"module"}\n',
+    );
+    fs.writeFileSync(path.join(sourceDir, "node_modules", "tsx", "loader.mjs"), "export {};\n");
     fs.writeFileSync(path.join(sourceDir, "dist", "entry.js"), "export {};\n");
     fs.writeFileSync(
       path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
@@ -190,7 +196,21 @@ describe("package-openclaw-for-docker", () => {
       ].join("\n"),
     );
 
-    await writePackageInventoryForDocker(sourceDir);
+    await writePackageInventoryForDocker(
+      sourceDir,
+      async (command: string, args: string[], cwd: string) => {
+        expect({ command, cwd }).toEqual({ command: "node", cwd: sourceDir });
+        expect(args).toEqual([
+          "--import",
+          pathToFileURL(path.join(sourceDir, "node_modules", "tsx", "loader.mjs")).href,
+          path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
+        ]);
+        fs.writeFileSync(
+          path.join(sourceDir, "dist", "postinstall-inventory.json"),
+          JSON.stringify(["dist/entry.js"]),
+        );
+      },
+    );
 
     expect(
       JSON.parse(
@@ -297,7 +317,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       {
         command: "node",
-        args: ["scripts/build-all.mjs", "ciArtifacts"],
+        args: ["scripts/build-all.mjs", "full"],
         cwd: "/repo",
         dockerBuildExtensions: undefined,
         internalDockerBuildPluginIds: undefined,

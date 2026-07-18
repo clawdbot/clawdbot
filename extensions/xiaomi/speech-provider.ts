@@ -30,7 +30,7 @@ const XIAOMI_TTS_VOICE_DESIGN_MODEL = "mimo-v2.5-tts-voicedesign";
 const DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE =
   "Warm, natural, and friendly voice with clear pronunciation and conversational pacing.";
 
-const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", "mimo-v2-tts", XIAOMI_TTS_VOICE_DESIGN_MODEL] as const;
+const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", XIAOMI_TTS_VOICE_DESIGN_MODEL] as const;
 
 const XIAOMI_TTS_VOICES = [
   "mimo_default",

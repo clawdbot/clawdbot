@@ -2,7 +2,6 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveDoctorCrossStateDirImports } from "../../commands/doctor-invocation.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
@@ -171,7 +170,6 @@ export function registerMaintenanceCommands(program: Command) {
           sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
           sessionSqliteGithubIssue: Boolean(opts.githubIssue),
           json: Boolean(opts.json),
-          crossStateDirImports: resolveDoctorCrossStateDirImports(),
         });
         defaultRuntime.exit(0);
       });

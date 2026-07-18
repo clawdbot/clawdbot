@@ -130,6 +130,8 @@ function resolveUpdateStatusBanner(params: {
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      "managed-service-handoff-already-running":
+        "Another managed update is already running. Wait for it to complete, then refresh update status.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
     }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
   return {

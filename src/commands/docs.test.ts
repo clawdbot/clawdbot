@@ -65,12 +65,25 @@ describe("docsSearchCommand", () => {
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
-  it("fails loudly when the Cloudflare docs search API fails", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 503 }));
+  it("cancels non-OK docs search response bodies and fails loudly", async () => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("unavailable"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 503 },
+    );
+    fetchMock.mockResolvedValueOnce(response);
     const runtime = makeRuntime();
 
     await docsSearchCommand(["browser", "existing-session"], runtime);
 
+    expect(cancelled).toBe(true);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

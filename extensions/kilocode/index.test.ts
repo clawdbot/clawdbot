@@ -53,7 +53,7 @@ describe("kilocode provider plugin", () => {
 
     const wrappedAuto = provider.wrapStreamFn?.({
       provider: "kilocode",
-      modelId: "kilo/auto",
+      modelId: "kilo-auto/balanced",
       thinkingLevel: "high",
       streamFn: baseStreamFn,
     } as never);
@@ -62,7 +62,7 @@ describe("kilocode provider plugin", () => {
       {
         api: "openai-completions",
         provider: "kilocode",
-        id: "kilo/auto",
+        id: "kilo-auto/balanced",
       } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},

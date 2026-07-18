@@ -14,7 +14,7 @@ on:
         default: ""
         type: string
       allow_unreleased_changelog:
-        description: Allow current-tree packaging to use Unreleased notes; canonical release contexts stay strict
+        description: Allow current-tree packaging to use Unreleased notes; release contexts require this explicit opt-in
         required: false
         default: false
         type: boolean
@@ -140,7 +140,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
-  GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
+  GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.15.0"
 
 jobs:
@@ -182,7 +182,7 @@ jobs:
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -382,6 +382,28 @@ jobs:
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
 
+  prepare_release_candidate:
+    name: Prepare shared release candidate
+    needs: [resolve_target, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && contains(fromJSON('["all","plugin-prerelease","release-checks","cross-os","live-e2e","package"]'), inputs.rerun_group) }}
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.sha }}
+      prepare_only: true
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: false
+      include_live_suites: false
+      allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+      release_test_profile: ${{ inputs.release_profile }}
+      shared_image_artifact_namespace: full-release
+      shared_image_policy: no-push-artifact
+
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target, evidence_reuse]
@@ -496,10 +518,13 @@ jobs:
 
             fail_fast_failed_jobs() {
               local failed_jobs_json
-              failed_jobs_json="$(
+              if ! failed_jobs_json="$(
                 fetch_child_jobs |
                   jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
-              )"
+              )"; then
+                echo "::warning::Could not list ${workflow} child jobs; continuing with authoritative workflow conclusion."
+                return 0
+              fi
               if jq -e 'length > 0' <<< "$failed_jobs_json" >/dev/null; then
                 echo "::error::${workflow} has failed child jobs before the workflow completed; cancelling the remaining matrix."
                 jq '.[] | {name, conclusion, url: .html_url}' <<< "$failed_jobs_json"
@@ -575,8 +600,8 @@ jobs:
 
   plugin_prerelease:
     name: Run plugin prerelease validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, evidence_reuse, prepare_release_candidate]
+    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
@@ -592,6 +617,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
         run: |
           set -euo pipefail
 
@@ -686,10 +712,13 @@ jobs:
 
             fail_fast_failed_jobs() {
               local failed_jobs_json
-              failed_jobs_json="$(
+              if ! failed_jobs_json="$(
                 fetch_child_jobs |
                   jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
-              )"
+              )"; then
+                echo "::warning::Could not list ${workflow} child jobs; continuing with authoritative workflow conclusion."
+                return 0
+              fi
               if jq -e 'length > 0' <<< "$failed_jobs_json" >/dev/null; then
                 echo "::error::${workflow} has failed child jobs before the workflow completed; cancelling the remaining matrix."
                 jq '.[] | {name, conclusion, url: .html_url}' <<< "$failed_jobs_json"
@@ -753,12 +782,16 @@ jobs:
 
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease"
           dispatch_run_name="Plugin Prerelease ${dispatch_id}"
-          dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"
+          args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")
+          if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
+            args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
+          fi
+          dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"
 
   release_checks:
     name: Run release/live/Docker/QA validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, evidence_reuse, prepare_release_candidate]
+    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'beta' && 240 || 60 }}
     outputs:
@@ -779,13 +812,14 @@ jobs:
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
         run: |
           set -euo pipefail
 
@@ -879,6 +913,9 @@ jobs:
             }
 
             release_check_blocking_job() {
+              if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then
+                return 1
+              fi
               case "$1" in
                 "resolve_target" | \
                 "Prepare release package artifact" | \
@@ -923,10 +960,13 @@ jobs:
               if [[ "$workflow" == "openclaw-release-checks.yml" && "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
                 return 0
               fi
-              failed_jobs_json="$(
+              if ! failed_jobs_json="$(
                 fetch_child_jobs |
                   jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
-              )"
+              )"; then
+                echo "::warning::Could not list ${workflow} child jobs; continuing with authoritative workflow conclusion."
+                return 0
+              fi
               if [[ "$workflow" == "openclaw-release-checks.yml" ]]; then
                 # These jobs are continue-on-error in the child workflow. Let its
                 # status-artifact verifier decide whether their evidence is usable.
@@ -949,12 +989,13 @@ jobs:
                 # E2E under the same caller stays blocking.
                 failed_jobs_json="$(
                   jq '[.[] | select(
-                    (.name | startswith("Run repo/live E2E validation / "))
-                    and ((.name | contains("Docker live"))
-                      or (.name | contains("Live media suites"))
-                      or (.name | contains("validate_live_provider_suites"))
-                      or (.name | contains("validate_release_live_cache"))
-                      or (.name | contains("prepare_live_test_image")))
+                    (((.name | startswith("Run repo/live E2E validation / "))
+                      and ((.name | contains("Docker live"))
+                        or (.name | contains("Live media suites"))
+                        or (.name | contains("validate_live_provider_suites"))
+                        or (.name | contains("validate_release_live_cache"))
+                        or (.name | contains("prepare_live_test_image"))))
+                      or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))
                     | not)]' <<< "$failed_jobs_json"
                 )"
               fi
@@ -1085,6 +1126,9 @@ jobs:
           fi
           if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
             args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
+          fi
+          if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
+            args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
           fi
 
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release-checks"
@@ -1279,6 +1323,7 @@ jobs:
         id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -1317,6 +1362,11 @@ jobs:
             exit 1
           fi
 
+          fail_on_regression=true
+          if [[ "$RELEASE_PROFILE" == "beta" ]]; then
+            fail_on_regression=false
+          fi
+
           {
             echo "### Product performance"
             echo
@@ -1325,8 +1375,13 @@ jobs:
             echo "- Repeat: \`3\`"
             echo "- Deep profile: \`false\`"
             echo "- Live OpenAI candidate: \`false\`"
+            echo "- Regression gate: \`${fail_on_regression}\`"
             echo "- Report publication: disabled (artifacts only)"
-            echo "- Release impact: blocking"
+            if [[ "$RELEASE_PROFILE" == "beta" ]]; then
+              echo "- Release impact: advisory"
+            else
+              echo "- Release impact: blocking"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -1341,7 +1396,7 @@ jobs:
             -f repeat=3 \
             -f deep_profile=false \
             -f live_openai_candidate=false \
-            -f fail_on_regression=true \
+            -f fail_on_regression="$fail_on_regression" \
             -f publish_reports=false \
             -f dispatch_id="$dispatch_id" 2>&1)"
           dispatch_status=$?
@@ -1423,6 +1478,10 @@ jobs:
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
           if [[ "$conclusion" != "success" ]]; then
+            if [[ "$RELEASE_PROFILE" == "beta" ]]; then
+              echo "::warning::OpenClaw Performance ended with ${conclusion}; advisory for beta: ${url}"
+              exit 0
+            fi
             echo "::error::OpenClaw Performance ended with ${conclusion}: ${url}"
             gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
             exit 1
@@ -1435,6 +1494,7 @@ jobs:
         resolve_target,
         evidence_reuse,
         docker_runtime_assets_preflight,
+        prepare_release_candidate,
         normal_ci,
         plugin_prerelease,
         release_checks,
@@ -1458,7 +1518,11 @@ jobs:
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
           PERFORMANCE_RESULT: ${{ needs.performance.result }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
           DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
+          PREPARE_RELEASE_CANDIDATE_RESULT: ${{ needs.prepare_release_candidate.result }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
           EVIDENCE_RUN_URL: ${{ needs.evidence_reuse.outputs.evidence_run_url }}
@@ -1565,6 +1629,10 @@ jobs:
             fi
 
             if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+              if [[ "$advisory_ok" == "1" && "$label" == "product_performance" && "$status" == "completed" ]]; then
+                echo "::warning::${label} ended with ${conclusion}; advisory for beta: ${url}"
+                return 0
+              fi
               if [[ "$advisory_ok" == "1" && "$label" == "release_checks" ]]; then
                 if release_checks_advisory_only "$run_json"; then
                   echo "::warning::${label} child run ended with ${status}/${conclusion}, but Verify release checks accepted Tideclaw alpha advisory lanes: ${url}"
@@ -1649,26 +1717,26 @@ jobs:
                   | .[])
               ' || echo "_Unable to summarize jobs for run ${run_id}._"
               echo
-              echo "### Longest queues: ${label}"
+              echo "### Longest start delays: ${label}"
               echo
               gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
                 def ts: fromdateiso8601;
-                "| Job | Result | Queue minutes | Run minutes |",
+                "| Job | Result | Start delay minutes | Run minutes |",
                 "| --- | --- | ---: | ---: |",
                 ([.[]
                   | select(.created_at != null and .started_at != null)
                   | . + {
-                      queueMin: ((((.started_at | ts) - (.created_at | ts)) / 60) * 10 | round / 10),
+                      startDelayMin: ((((.started_at | ts) - (.created_at | ts)) / 60) * 10 | round / 10),
                       durationMin: (if .completed_at == null then null else ((((.completed_at | ts) - (.started_at | ts)) / 60) * 10 | round / 10) end)
                     }
-                  | select(.queueMin > 0)
-                  | {name, conclusion, queueMin, durationMin}]
-                  | sort_by(.queueMin)
+                  | select(.startDelayMin > 0)
+                  | {name, conclusion, startDelayMin, durationMin}]
+                  | sort_by(.startDelayMin)
                   | reverse
                   | .[0:10]
-                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.queueMin | tostring) + " | " + ((.durationMin // "") | tostring) + " |")
+                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.startDelayMin | tostring) + " | " + ((.durationMin // "") | tostring) + " |")
                   | .[])
-              ' || echo "_Unable to summarize queue times for run ${run_id}._"
+              ' || echo "_Unable to summarize start delays for run ${run_id}._"
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
@@ -1725,6 +1793,18 @@ jobs:
           plugin_prerelease_required=0
           release_checks_required=0
           performance_required=0
+          candidate_required=0
+          if [[ -z "${RELEASE_PACKAGE_SPEC// }" && -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
+            case "$RERUN_GROUP" in
+              all|plugin-prerelease|release-checks|cross-os|live-e2e|package)
+                candidate_required=1
+                ;;
+            esac
+          fi
+          if [[ "$candidate_required" == "1" && "$EVIDENCE_REUSE" != "true" && "$PREPARE_RELEASE_CANDIDATE_RESULT" != "success" ]]; then
+            echo "::error::Shared release candidate preparation ended with ${PREPARE_RELEASE_CANDIDATE_RESULT}."
+            failed=1
+          fi
           if [[ "$RERUN_GROUP" == "all" && "$EVIDENCE_REUSE" == "true" ]]; then
             # Lanes were skipped because a prior green validation covers this
             # target; re-verify the chain-root run and its recorded child runs
@@ -1822,7 +1902,9 @@ jobs:
           if [[ "$PERFORMANCE_RESULT" == "skipped" && -z "${PERFORMANCE_RUN_ID// }" ]]; then
             check_child "product_performance" "" "$performance_required" || failed=1
           else
-            check_child "product_performance" "$PERFORMANCE_RUN_ID" "$performance_required" || failed=1
+            performance_advisory=0
+            [[ "$RELEASE_PROFILE" == "beta" ]] && performance_advisory=1
+            check_child "product_performance" "$PERFORMANCE_RUN_ID" "$performance_required" "$performance_advisory" || failed=1
           fi
 
           summarize_child_timing "normal_ci" "$NORMAL_CI_RUN_ID"
@@ -1906,6 +1988,8 @@ jobs:
           )"
 
           if ! curl --fail-with-body \
+            --connect-timeout 10 \
+            --max-time 30 \
             -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${RELEASES_DISPATCH_TOKEN}" \
@@ -2050,7 +2134,7 @@ jobs:
               },
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
-                performanceBlocking: true,
+                performanceBlocking: ($releaseProfile != "beta"),
                 performanceReportPublication: "artifact-only"
               },
               childRuns: {
@@ -2061,7 +2145,7 @@ jobs:
                 productPerformance: {
                   runId: $performanceRunId,
                   conclusion: $performanceConclusion,
-                  blocking: true
+                  blocking: ($releaseProfile != "beta")
                 }
               }
             }' > "${manifest_dir}/full-release-validation-manifest.json"

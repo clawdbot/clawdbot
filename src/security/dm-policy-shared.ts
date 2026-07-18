@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveGroupAllowFromSources } from "../channels/allow-from.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
-import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "../channels/message-access/effective-allow-from.js";
 import { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
@@ -156,13 +155,7 @@ export async function readStoreAllowFromForDmPolicy(params: {
   return await readChannelIngressStoreAllowFromForDmPolicy(params);
 }
 
-/**
- * Resolve legacy DM/group sender admission from already-computed allowlists.
- * Group messages are evaluated against group policy first; DM policy applies only outside groups.
- *
- * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
- */
-export function resolveDmGroupAccessDecision(params: {
+function resolveLegacyDmGroupAccessDecision(params: {
   isGroup: boolean;
   dmPolicy?: string | null;
   groupPolicy?: string | null;
@@ -253,7 +246,7 @@ export function resolveDmGroupAccessWithLists(params: DmGroupAccessInputParams):
     dmPolicy: params.dmPolicy,
     groupAllowFromFallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom,
   });
-  const access = resolveDmGroupAccessDecision({
+  const access = resolveLegacyDmGroupAccessDecision({
     isGroup: params.isGroup,
     dmPolicy: params.dmPolicy,
     groupPolicy: params.groupPolicy,
@@ -338,21 +331,4 @@ export function resolveDmGroupAccessWithCommandGate(
     commandAuthorized: commandGate.commandAuthorized,
     shouldBlockControlCommand: params.isGroup && commandGate.shouldBlock,
   };
-}
-
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
-export async function resolveDmAllowState(params: {
-  provider: ChannelId;
-  accountId: string;
-  allowFrom?: Array<string | number> | null;
-  dmPolicy?: string | null;
-  normalizeEntry?: (raw: string) => string;
-  readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
-}): Promise<{
-  configAllowFrom: string[];
-  hasWildcard: boolean;
-  allowCount: number;
-  isMultiUserDm: boolean;
-}> {
-  return await resolveDmAllowAuditState(params);
 }

@@ -23,7 +23,7 @@ import {
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
-import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
+import { isAnnounceSkip, selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
@@ -367,14 +367,25 @@ type ChildCompletionRow = {
 };
 
 function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  return (
-    child.completion?.resultText ??
-    child.delivery?.payload?.frozenResultText ??
+  const primary = child.completion?.resultText ?? child.delivery?.payload?.frozenResultText;
+  const fallback =
     child.completion?.fallbackResultText ??
     child.delivery?.payload?.fallbackFrozenResultText ??
-    child.frozenResultText ??
-    undefined
-  )?.trim();
+    child.frozenResultText;
+  if (child.outcome?.status === "ok") {
+    return selectDeliverableSessionsReply(primary, fallback);
+  }
+  return (primary ?? fallback)?.trim() || undefined;
+}
+
+function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
+  return [
+    child.completion?.resultText,
+    child.delivery?.payload?.frozenResultText,
+    child.completion?.fallbackResultText,
+    child.delivery?.payload?.fallbackFrozenResultText,
+    child.frozenResultText,
+  ].some((value) => Boolean(value?.trim()));
 }
 
 export function buildChildCompletionFindings(
@@ -393,11 +404,7 @@ export function buildChildCompletionFindings(
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
-    if (
-      child.outcome?.status === "ok" &&
-      resultText &&
-      (isAnnounceSkip(resultText) || isSilentReplyText(resultText, SILENT_REPLY_TOKEN))
-    ) {
+    if (child.outcome?.status === "ok" && !resultText && hasCapturedChildCompletionReply(child)) {
       continue;
     }
     const title =

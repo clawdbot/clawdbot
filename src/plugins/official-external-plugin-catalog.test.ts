@@ -159,6 +159,38 @@ function signedCatalogConfig(publicKeyPem: string): HostedCatalogConfig {
   };
 }
 
+function signedHostedCatalogSnapshot(params: {
+  body: string;
+  savedAt?: string;
+  monotonic?: { sequence: number; generatedAt: string };
+}): HostedOfficialExternalPluginCatalogSnapshot {
+  const savedAt = params.savedAt ?? "2026-06-22T00:00:10.000Z";
+  return {
+    body: params.body,
+    metadata: {
+      url: "https://packages.acme.example/openclaw/feed",
+      status: 200,
+      checksum: `sha256:${crypto.createHash("sha256").update(params.body).digest("hex")}`,
+    },
+    savedAt,
+    trust: {
+      mode: "signed",
+      signedBy: "acme-root",
+      signatureCount: 1,
+      threshold: 1,
+      verifiedAt: savedAt,
+    },
+    ...(params.monotonic
+      ? {
+          monotonic: {
+            mode: "signed-feed",
+            ...params.monotonic,
+          },
+        }
+      : {}),
+  };
+}
+
 describe("official external plugin catalog", () => {
   it("keeps hosted fetch guard loading lazy for bundled catalog import paths", () => {
     const source = readFileSync(
@@ -242,6 +274,50 @@ describe("official external plugin catalog", () => {
         entries: [],
       }),
     ).toBe(false);
+    for (const generatedAt of [
+      "not-a-date",
+      "2026-02-30T00:00:00.000Z",
+      "2026-02-30 00:00:00.000Z",
+    ]) {
+      expect(
+        isOfficialExternalPluginCatalogFeed({
+          schemaVersion: 1,
+          id: "openclaw-official-external-plugins",
+          generatedAt,
+          sequence: 2,
+          entries: [],
+        }),
+      ).toBe(false);
+    }
+    for (const sequence of [Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(
+        isOfficialExternalPluginCatalogFeed({
+          schemaVersion: 1,
+          id: "openclaw-official-external-plugins",
+          generatedAt: "2026-06-22T00:00:00.000Z",
+          sequence,
+          entries: [],
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("accepts valid timestamp serializations supported by shipped releases", () => {
+    for (const generatedAt of [
+      "2026-06-22T00:00:10Z",
+      "2026-06-22T01:00:10+01:00",
+      " 2026-06-22 00:00:10Z ",
+    ]) {
+      expect(
+        isOfficialExternalPluginCatalogFeed({
+          schemaVersion: 1,
+          id: "openclaw-official-external-plugins",
+          generatedAt,
+          sequence: 2,
+          entries: [],
+        }),
+      ).toBe(true);
+    }
   });
 
   it("accepts the live ClawHub feed schema version", () => {
@@ -269,6 +345,7 @@ describe("official external plugin catalog", () => {
           title: "Trusted",
           version: "1.2.3",
           state: "available",
+          featured: true,
           publisher: { id: "acme", trust: "official" },
           install: {
             candidates: [
@@ -336,6 +413,8 @@ describe("official external plugin catalog", () => {
       defaultChoice: "clawhub",
       expectedIntegrity: "sha256-s1XdoEQDvsqri7qwaf0eewV4Ji50WeWYzFsZYVtb2rk=",
     });
+    expect(trusted.featured).toBe(true);
+    expect(disabled).not.toHaveProperty("featured");
     expect(resolveOfficialExternalPluginInstall(disabled)).toBeNull();
     expect(resolveOfficialExternalPluginInstall(community)).toBeNull();
   });
@@ -454,6 +533,108 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("replaces malformed signed SQLite snapshot metadata with a valid snapshot", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-snapshot-repair-"));
+    const url = "https://packages.acme.example/openclaw/feed";
+    const malformed = signedHostedCatalogFeed({
+      feed: {
+        ...hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/malformed-current" }),
+        generatedAt: "2026-02-30T00:00:00.000Z",
+      },
+    });
+    const validFeed = hostedCatalogFeed({
+      sequence: 10,
+      pluginName: "@openclaw/repaired-current",
+    });
+    const valid = signedHostedCatalogFeed({
+      feed: validFeed,
+      privateKeyPem: malformed.privateKeyPem,
+    });
+    const lowerFeed = hostedCatalogFeed({
+      sequence: 9,
+      pluginName: "@openclaw/lower-current",
+    });
+    const lower = signedHostedCatalogFeed({
+      feed: lowerFeed,
+      privateKeyPem: malformed.privateKeyPem,
+    });
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+
+    try {
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: malformed.body,
+          monotonic: { sequence: 10, generatedAt: "2026-02-30T00:00:00.000Z" },
+        }),
+      );
+      await expect(
+        snapshotStore.write(
+          signedHostedCatalogSnapshot({
+            body: lower.body,
+            monotonic: {
+              sequence: lowerFeed.sequence,
+              generatedAt: lowerFeed.generatedAt,
+            },
+          }),
+        ),
+      ).rejects.toThrow("sequence is older");
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: valid.body,
+          monotonic: {
+            sequence: validFeed.sequence,
+            generatedAt: validFeed.generatedAt,
+          },
+        }),
+      );
+
+      await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: valid.body });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores an invalid recovered sequence when repairing a signed SQLite snapshot", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-snapshot-sequence-"));
+    const url = "https://packages.acme.example/openclaw/feed";
+    const malformedBody =
+      '{"schemaVersion":1,"id":"openclaw-official-external-plugins","generatedAt":"not-a-date","sequence":1e999,"entries":[]}';
+    const validFeed = hostedCatalogFeed({
+      sequence: 10,
+      pluginName: "@openclaw/repaired-sequence",
+    });
+    const valid = signedHostedCatalogFeed({ feed: validFeed });
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+
+    try {
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: malformedBody,
+          monotonic: { sequence: 10, generatedAt: "not-a-date" },
+        }),
+      );
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: valid.body,
+          monotonic: {
+            sequence: validFeed.sequence,
+            generatedAt: validFeed.generatedAt,
+          },
+        }),
+      );
+
+      await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: valid.body });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("verifies signed hosted feeds and rejects rollback before replacing snapshots", async () => {
     const newer = signedHostedCatalogFeed({
       feed: hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/signed-v10" }),
@@ -501,6 +682,97 @@ describe("official external plugin catalog", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed feed timestamps before rollback handling", async () => {
+    const malformed = signedHostedCatalogFeed({
+      feed: {
+        ...hostedCatalogFeed({ sequence: 11, pluginName: "@openclaw/malformed-date" }),
+        generatedAt: "not-a-date",
+      },
+    });
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(malformed.publicKeyPem),
+      fetchImpl: vi.fn(async () => new Response(malformed.body, { status: 200 })),
+      snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("signed envelope payload is invalid");
+    }
+  });
+
+  it("replaces a signed snapshot with an invalid timestamp using a valid feed", async () => {
+    const malformed = signedHostedCatalogFeed({
+      feed: {
+        ...hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/malformed-current" }),
+        generatedAt: "not-a-date",
+      },
+    });
+    const valid = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/repaired-current" }),
+      privateKeyPem: malformed.privateKeyPem,
+    });
+    const lower = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 9, pluginName: "@openclaw/lower-current" }),
+      privateKeyPem: malformed.privateKeyPem,
+    });
+    const url = "https://packages.acme.example/openclaw/feed";
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore([
+      signedHostedCatalogSnapshot({ body: malformed.body }),
+    ]);
+
+    const rejected = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(lower.publicKeyPem),
+      fetchImpl: vi.fn(async () => new Response(lower.body, { status: 200 })),
+      snapshotStore,
+    });
+
+    expect(rejected.source).toBe("bundled-fallback");
+    await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: malformed.body });
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(valid.publicKeyPem),
+      fetchImpl: vi.fn(async () => new Response(valid.body, { status: 200 })),
+      snapshotStore,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/repaired-current"]);
+    await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: valid.body });
+  });
+
+  it("does not replace a signed snapshot that fails current trust verification", async () => {
+    const current = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/current-key" }),
+    });
+    const candidate = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 9, pluginName: "@openclaw/new-key" }),
+    });
+    const url = "https://packages.acme.example/openclaw/feed";
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore([
+      signedHostedCatalogSnapshot({ body: current.body }),
+    ]);
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(candidate.publicKeyPem),
+      fetchImpl: vi.fn(async () => new Response(candidate.body, { status: 200 })),
+      snapshotStore,
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("signature is invalid");
+    }
+    expect(writeSpy).not.toHaveBeenCalled();
+    await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: current.body });
+  });
+
   it("fails closed for unsigned signed-profile responses and re-verifies offline snapshots", async () => {
     const signed = signedHostedCatalogFeed({
       feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/signed-offline" }),
@@ -524,22 +796,10 @@ describe("official external plugin catalog", () => {
     }
 
     const signedSnapshot = createInMemoryHostedCatalogSnapshotStore([
-      {
+      signedHostedCatalogSnapshot({
         body: signed.body,
-        metadata: {
-          url: "https://packages.acme.example/openclaw/feed",
-          status: 200,
-          checksum: `sha256:${crypto.createHash("sha256").update(signed.body).digest("hex")}`,
-        },
         savedAt: "2026-06-22T00:00:08.000Z",
-        trust: {
-          mode: "signed",
-          signedBy: "acme-root",
-          signatureCount: 1,
-          threshold: 1,
-          verifiedAt: "2026-06-22T00:00:08.000Z",
-        },
-      },
+      }),
     ]);
     const offline = await loadHostedCatalog({
       feedProfile: "acme",
@@ -1028,15 +1288,20 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("resolves external provider aliases beyond the primary provider id", () => {
+  it("resolves current external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
     expect(getOfficialExternalPluginCatalogEntry("modelstudio")).toBe(qwen);
-    expect(getOfficialExternalPluginCatalogEntry("qwen-oauth")).toBe(qwen);
-    expect(getOfficialExternalPluginCatalogEntry("qwen-portal")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-token-plan")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("bailian-token-plan")).toBe(qwen);
   });
+
+  it.each(["qwen-oauth", "qwen-portal", "qwen-cli"])(
+    "does not resolve retired Qwen Portal alias %s",
+    (providerId) => {
+      expect(getOfficialExternalPluginCatalogEntry(providerId)).toBeUndefined();
+    },
+  );
 
   it("maps external speech and web-fetch contracts to plugin owners", () => {
     expect(

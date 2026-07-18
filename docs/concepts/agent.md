@@ -47,7 +47,16 @@ Blank files are skipped. Large files are trimmed and truncated with a marker so 
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
 
-After a workspace has been observed, OpenClaw also keeps a state-dir attestation marker for the workspace path. If a recently attested workspace disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`; restore the workspace or use a full onboard reset so the workspace and marker are cleared together.
+After a workspace has been observed, OpenClaw stores its setup state and
+attestation in the shared SQLite database at
+`~/.openclaw/state/openclaw.sqlite`. If a recently attested workspace
+disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`;
+restore the workspace or use a full onboard reset so the workspace and its
+database state are cleared together.
+
+Older releases used workspace JSON and `.attested` sidecar files. Runtime does
+not read those files. Run `openclaw doctor --fix` to validate them, import their
+state into SQLite, and remove each source after the imported rows are verified.
 
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 

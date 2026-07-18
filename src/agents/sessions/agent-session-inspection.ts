@@ -107,8 +107,8 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
             if (contextTokens > 0) {
               hasPostCompactionUsage = true;
               estimateFromContent = false;
+              break;
             }
-            break;
           }
         }
       }
@@ -128,17 +128,6 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
       contextWindow,
       percent,
     };
-  }
-
-  /**
-   * @deprecated Use the OpenClaw session export command instead.
-   * @param outputPath Optional output path (defaults to session directory)
-   * @returns Path to exported file
-   */
-  async exportToHtml(_outputPath?: string): Promise<string> {
-    throw new Error(
-      "AgentSession.exportToHtml is deprecated; use the OpenClaw session export command.",
-    );
   }
 
   /**

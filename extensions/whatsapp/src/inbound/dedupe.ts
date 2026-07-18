@@ -1,32 +1,12 @@
 // Whatsapp plugin module implements dedupe behavior.
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
-import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 
-export const WHATSAPP_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
-const RECENT_WEB_MESSAGE_MAX = 5000;
 const RECENT_OUTBOUND_MESSAGE_TTL_MS = 20 * 60_000;
 const RECENT_OUTBOUND_MESSAGE_MAX = 5000;
-
-type WhatsAppInboundReplayKeys = string | readonly string[];
-
-export const whatsAppInboundReplayGuard = createChannelReplayGuard<WhatsAppInboundReplayKeys>({
-  dedupe: {
-    ttlMs: WHATSAPP_INBOUND_DEDUPE_TTL_MS,
-    memoryMaxSize: RECENT_WEB_MESSAGE_MAX,
-  },
-  buildReplayKey: (keys) => keys,
-});
 const recentOutboundMessages = createDedupeCache({
   ttlMs: RECENT_OUTBOUND_MESSAGE_TTL_MS,
   maxSize: RECENT_OUTBOUND_MESSAGE_MAX,
 });
-
-export class WhatsAppRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "WhatsAppRetryableInboundError";
-  }
-}
 
 function buildMessageKey(params: {
   accountId: string;
@@ -43,7 +23,6 @@ function buildMessageKey(params: {
 }
 
 export function resetWebInboundDedupe(): void {
-  whatsAppInboundReplayGuard.clearMemory();
   recentOutboundMessages.clear();
 }
 

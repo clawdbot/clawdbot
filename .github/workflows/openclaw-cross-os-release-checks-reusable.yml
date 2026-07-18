@@ -465,6 +465,7 @@ jobs:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
           submodules: recursive
 

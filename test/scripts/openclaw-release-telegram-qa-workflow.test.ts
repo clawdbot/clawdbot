@@ -207,10 +207,36 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
+  it("retries transient GitHub API responses during both provenance checks", () => {
+    const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as {
+      env?: Record<string, unknown>;
+    };
+    expect(workflow.env?.GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN).toContain(
+      "invalid character .* looking for beginning of value",
+    );
+
+    for (const [jobName, stepName] of [
+      ["build_candidate", "Validate candidate release provenance"],
+      ["run_telegram", "Revalidate candidate release provenance"],
+    ] as const) {
+      const script = workflowStep(workflowJob(jobName), stepName).run;
+      expect(script).toContain("gh_with_retry()");
+      expect(script).toContain("for attempt in 1 2 3 4 5");
+      expect(script).toContain('stdout="$(gh "$@" 2>"$stderr_file")"');
+      expect(script).toContain('cat "$stderr_file" >&2');
+      expect(script).not.toContain('output="$(gh "$@" 2>&1)"');
+      expect(script).toContain("gh_with_retry api \\\n");
+      expect(script).toContain("gh_with_retry api graphql");
+    }
+  });
+
   it("attributes GitHub web-flow and unsigned release merges to their exact maintainer merger", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
 
-    expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
+    expect(source.match(/associatedPullRequests\(first:100\)/gu)).toHaveLength(2);
+    expect(source.match(/headRefOid == \$sha/gu)).toHaveLength(2);
+    expect(source.match(/\.headRepository\.nameWithOwner == \$repo/gu)).toHaveLength(2);
+    expect(source).not.toContain("commits/${candidate_sha}/pulls");
     expect(source.match(/if \.signature == null then "missing"/gu)).toHaveLength(2);
     expect(source.match(/\$signature_status" == "invalid"/gu)).toHaveLength(2);
     expect(
@@ -231,7 +257,7 @@ describe("release Telegram QA workflow", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
 
     expect(source.match(/branches-where-head/gu)).toHaveLength(2);
-    expect(source.match(/gh api --paginate/gu)).toHaveLength(2);
+    expect(source.match(/gh_with_retry api --paginate/gu)).toHaveLength(2);
     expect(
       source.match(/git(?: -C \.candidate)? ls-remote --exit-code --refs origin/gu),
     ).toHaveLength(2);

@@ -1473,6 +1473,21 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized piped auth input before buffering it", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    const oversized = "x".repeat(1024 * 1024 + 1);
+    restoreStdin = withPipedStdin(oversized);
+
+    await expect(modelsAuthPasteApiKeyCommand({ provider: "openai" }, runtime)).rejects.toThrow(
+      "Piped auth input exceeds 1048576 bytes.",
+    );
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("writes pasted API keys to the requested agent store", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();

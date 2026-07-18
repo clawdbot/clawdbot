@@ -25,6 +25,11 @@ on:
         required: false
         default: ""
         type: string
+      candidate_artifact_json:
+        description: Immutable package and Docker image artifact tuple from Full Release Validation
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -121,9 +126,16 @@ jobs:
             }).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
-              runner: [0, 1, 2, 3].includes(shard.index)
-                ? "blacksmith-8vcpu-ubuntu-2404"
-                : "blacksmith-4vcpu-ubuntu-2404",
+              vitest_max_workers: shard.extensionIds.some((extensionId) =>
+                extensionId.startsWith("memory-"),
+              )
+                ? 4
+                : 1,
+              runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
+                ? "blacksmith-16vcpu-ubuntu-2404"
+                : [0, 1, 2, 3].includes(shard.index)
+                  ? "blacksmith-8vcpu-ubuntu-2404"
+                  : "blacksmith-4vcpu-ubuntu-2404",
               shard_index: shard.index + 1,
               task: "extensions-batch",
             }));
@@ -349,7 +361,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
-          OPENCLAW_VITEST_MAX_WORKERS: 1
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
 
@@ -553,6 +565,21 @@ jobs:
       include_live_suites: false
       live_models_only: false
       shared_image_artifact_namespace: plugin-prerelease
+      package_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName || '' }}
+      package_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}
+      package_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest || '' }}
+      package_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId || '' }}
+      package_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt || '' }}
+      package_file_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageFileName || '' }}
+      package_source_sha: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha || '' }}
+      package_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 || '' }}
+      package_version: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageVersion || '' }}
+      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
       shared_image_policy: no-push-artifact
 
   plugin-prerelease-suite:

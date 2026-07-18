@@ -108,6 +108,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
           },
           route: {
             agentId: resolved.route.agentId,
+            dmScope: resolved.route.dmScope,
             accountId: params.account.accountId,
             routeSessionKey: resolved.sessionKey,
             dispatchSessionKey: resolved.sessionKey,
@@ -125,20 +126,16 @@ export async function dispatchSynologyChatInboundEvent(params: {
             CommandAuthorized: params.msg.commandAuthorized,
           },
         });
-        const storePath = resolved.rt.channel.session.resolveStorePath(currentCfg.session?.store, {
-          agentId: resolved.route.agentId,
-        });
         return {
           cfg: currentCfg,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
-          agentId: resolved.route.agentId,
-          routeSessionKey: resolved.route.sessionKey,
-          storePath,
+          route: {
+            agentId: resolved.route.agentId,
+            dmScope: resolved.route.dmScope,
+            sessionKey: resolved.route.sessionKey,
+          },
           ctxPayload: msgCtx,
-          recordInboundSession: resolved.rt.channel.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            resolved.rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
             durable: () => ({
               to: sendUserId,

@@ -151,7 +151,7 @@ export async function createPtyAdapter(params: {
         typeof pty.pid === "number" &&
         pty.pid > 0
       ) {
-        signalProcessTree(pty.pid, signal);
+        signalProcessTree(pty.pid, signal, { detached: true });
       } else if (process.platform === "win32") {
         pty.kill();
       } else {

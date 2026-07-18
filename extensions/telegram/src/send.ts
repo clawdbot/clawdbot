@@ -33,6 +33,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import {
+  markdownToTelegramChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -1094,8 +1095,16 @@ async function sendMessageTelegramWithContext(
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
+    if (textMode === "markdown") {
+      // Chunk Markdown before rendering so HTML expansion cannot introduce a
+      // second mid-word split. Caller-authored HTML keeps its safe splitter below.
+      return markdownToTelegramChunks(rawText, 4000, { tableMode }).map((chunk) => ({
+        htmlText: chunk.html,
+        plainText: telegramHtmlToPlainTextFallback(chunk.html),
+      }));
+    }
     const htmlText = renderHtmlText(rawText);
-    const fallbackText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : rawText;
+    const fallbackText = telegramHtmlToPlainTextFallback(htmlText);
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);

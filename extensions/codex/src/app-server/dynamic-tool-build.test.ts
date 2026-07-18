@@ -192,6 +192,9 @@ describe("Codex app-server dynamic tool build", () => {
       "exec",
       "process",
       "update_plan",
+      "get_goal",
+      "create_goal",
+      "update_goal",
       "tool_call",
       "tool_describe",
       "tool_search",
@@ -503,7 +506,9 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
-    const tools = ["read", "write", "image_generate", "message"].map((name) => ({ name }));
+    const tools = ["read", "write", "get_goal", "image_generate", "message"].map((name) => ({
+      name,
+    }));
     const privateQaCodexEnv = {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_QA_FORCE_RUNTIME: "codex",
@@ -1363,6 +1368,25 @@ describe("Codex app-server dynamic tool build", () => {
     expect(toolOptions.config).toBe(runtimeConfig);
     expect(toolOptions.exec?.config).toBe(runtimeConfig);
     expect(toolOptions.exec?.mode).toBeUndefined();
+  });
+
+  it("passes the delegation capability into shared OpenClaw tool construction", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.delegationCapability = "report_only";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    expect(factoryOptions).toHaveLength(1);
+    expect(factoryOptions[0]).toMatchObject({ delegationCapability: "report_only" });
   });
 
   it("uses the tool auth profile store for Codex dynamic tool construction", async () => {

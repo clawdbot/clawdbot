@@ -17,6 +17,7 @@ const detected: SystemAgentSetupDetectResult = {
       modelRef: "openai/gpt-5",
       recommended: true,
       credentials: true,
+      icon: "https://cdn.example.com/codex.png",
     },
   ],
   unavailableCandidates: [
@@ -27,7 +28,14 @@ const detected: SystemAgentSetupDetectResult = {
       reason: "No active login",
     },
   ],
-  manualProviders: [{ id: "openai", label: "OpenAI", hint: "Use a project API key." }],
+  manualProviders: [
+    {
+      id: "openai",
+      label: "OpenAI",
+      hint: "Use a project API key.",
+      icon: "https://cdn.example.com/openai.png",
+    },
+  ],
   authOptions: [
     {
       id: "openai-oauth",
@@ -35,12 +43,22 @@ const detected: SystemAgentSetupDetectResult = {
       kind: "oauth",
       featured: true,
       hint: "Continue in your browser.",
+      icon: "https://cdn.example.com/openai.png",
     },
     {
       id: "other-device",
       label: "Other provider",
       kind: "device-code",
       featured: false,
+    },
+  ],
+  recommendedInstalls: [
+    {
+      id: "ollama",
+      label: "Ollama",
+      hint: "Run open models locally",
+      website: "https://ollama.com/download",
+      icon: "https://cdn.simpleicons.org/ollama",
     },
   ],
   workspace: "/tmp/workspace",
@@ -51,22 +69,31 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
   return {
     page: { phase: "ready", result: detected },
     activation: { phase: "idle" },
+    verify: { phase: "idle" },
     wizard: { phase: "idle" },
     wizardValue: undefined,
     canAdmin: true,
+    canVerify: true,
     gatewayTooOld: false,
     actionsDisabled: false,
     manualProviderId: "openai",
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
+    iconUrls: {
+      "https://cdn.example.com/codex.png": "blob:codex",
+      "https://cdn.example.com/openai.png": "blob:openai",
+      "https://cdn.simpleicons.org/ollama": "blob:ollama",
+    },
     onDetect: vi.fn(),
+    onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
     onStartAuth: vi.fn(),
     onManualProviderChange: vi.fn(),
     onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
     onMoreSignInToggle: vi.fn(),
+    onIconError: vi.fn(),
     onOpenChat: vi.fn(),
     onWizardValueChange: vi.fn(),
     onWizardAnswer: vi.fn(),
@@ -129,6 +156,44 @@ describe("renderModelSetup", () => {
     );
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelectorAll("img")).toHaveLength(3);
+  });
+
+  it("renders recommended install cards only when candidates and sign-ins are empty", () => {
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: { ...detected, candidates: [], authOptions: [] },
+        },
+      }),
+    );
+
+    expect(text(container)).toContain("Recommended installs");
+    expect(text(container)).toContain("Ollama Run open models locally");
+    const card = container.querySelector('[data-recommended-install="ollama"]');
+    const image = card?.querySelector<HTMLImageElement>("img");
+    const link = card?.querySelector<HTMLAnchorElement>("a");
+    expect(image?.getAttribute("src")).toBe("blob:ollama");
+    expect(image?.alt).toBe("Ollama");
+    expect(image?.width).toBe(24);
+    expect(link?.href).toBe("https://ollama.com/download");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener");
+
+    const withSignIn = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, candidates: [] } },
+      }),
+    );
+    expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
+  });
+
+  it("never renders remote icon URLs directly", () => {
+    const container = mount(props({ iconUrls: {} }));
+
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(container.innerHTML).not.toContain("https://cdn.example.com");
   });
 
   it("renders admin and older-gateway gates without actions", () => {
@@ -154,6 +219,76 @@ describe("renderModelSetup", () => {
     container.querySelector<HTMLButtonElement>(".model-setup__success button")?.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
     expect(container.querySelector(".settings-section")).toBeNull();
+  });
+
+  it("renders an idle current connection and verifies it", () => {
+    const onVerify = vi.fn();
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        onVerify,
+      }),
+    );
+    const current = container.querySelector(".model-setup__current");
+    expect(container.querySelector(".settings-section")).toBe(current);
+    expect(text(current!)).toContain("Current connection openai/gpt-5 Verify connection");
+    current?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onVerify).toHaveBeenCalledOnce();
+  });
+
+  it("renders connection verification progress", () => {
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        verify: { phase: "checking" },
+        actionsDisabled: true,
+      }),
+    );
+    expect(text(container)).toContain("Checking — asking openai/gpt-5 for a quick reply…");
+    expect(
+      container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
+    ).toBe(true);
+  });
+
+  it("renders successful connection verification with the answering model", () => {
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 },
+      }),
+    );
+    expect(text(container)).toContain("Answered in 1234 ms");
+    const current = container.querySelector(".model-setup__current");
+    expect(current?.textContent).toContain("anthropic/claude-opus-4-8");
+    expect(current?.querySelector("strong")?.textContent).not.toContain("openai/gpt-5");
+  });
+
+  it("renders failed connection verification", () => {
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        verify: { phase: "failed", status: "billing", error: "No credits" },
+      }),
+    );
+    expect(text(container)).toContain("Billing problem No credits");
+  });
+
+  it("hides the current connection without a configured model", () => {
+    const container = mount(props());
+    expect(container.querySelector(".model-setup__current")).toBeNull();
+  });
+
+  it("shows the current model without verification controls for non-admin and unsupported gateways", () => {
+    const result = { ...detected, configuredModel: "openai/gpt-5" };
+    const nonAdmin = mount(
+      props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
+    );
+    expect(text(nonAdmin)).toContain("Current connection openai/gpt-5");
+    expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
+
+    const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
+    expect(text(unsupportedGateway)).toContain("Current connection openai/gpt-5");
+    expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
   });
 
   it("renders manual activation progress and failure inline", () => {

@@ -11,6 +11,7 @@ import {
   genAiOperationName,
   modelCallSpanKind,
   modelCallSpanName,
+  modelCallObservationUnit,
   positiveFiniteNumber,
 } from "./service-genai-attributes.js";
 import { assignOtelModelContentAttributes } from "./service-genai-content.js";
@@ -39,16 +40,26 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     "openclaw.model": evt.model,
     "openclaw.api": lowCardinalityAttr(evt.api),
     "openclaw.transport": lowCardinalityAttr(evt.transport),
+    "openclaw.model_call.observation_unit": modelCallObservationUnit(evt),
   });
   const genAiModelCallMetricAttrs = (
     evt: ModelCallLifecycleDiagnosticEvent,
     errorType?: string,
   ) => ({
-    "gen_ai.operation.name": genAiOperationName(evt.api),
+    "gen_ai.operation.name": genAiOperationName(evt.api, evt.observationUnit),
     "gen_ai.provider.name": lowCardinalityAttr(evt.provider),
     "gen_ai.request.model": lowCardinalityAttr(evt.model),
     ...(errorType ? { "error.type": errorType } : {}),
   });
+  const recordGenAiModelCallDuration = (
+    evt: ModelCallLifecycleDiagnosticEvent,
+    errorType?: string,
+  ) => {
+    genAiOperationDurationHistogram.record(
+      evt.durationMs / 1000,
+      genAiModelCallMetricAttrs(evt, errorType),
+    );
+  };
   const recordModelCallSizeTimingMetrics = (
     evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" | "model.call.error" }>,
     attrs: ReturnType<typeof modelCallMetricAttrs>,
@@ -105,7 +116,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     const metricAttrs = modelCallMetricAttrs(evt);
     modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
     recordModelCallSizeTimingMetrics(evt, metricAttrs);
-    genAiOperationDurationHistogram.record(evt.durationMs / 1000, genAiModelCallMetricAttrs(evt));
+    recordGenAiModelCallDuration(evt);
     if (!tracesEnabled) {
       return;
     }
@@ -151,10 +162,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     };
     modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
     recordModelCallSizeTimingMetrics(evt, metricAttrs);
-    genAiOperationDurationHistogram.record(
-      evt.durationMs / 1000,
-      genAiModelCallMetricAttrs(evt, errorType),
-    );
+    recordGenAiModelCallDuration(evt, errorType);
     if (!tracesEnabled) {
       return;
     }

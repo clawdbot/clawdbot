@@ -12,6 +12,11 @@ import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
+import {
+  SecretSurfaceUnavailableError,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
+import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
@@ -87,6 +92,7 @@ describe("memory search config", () => {
   });
 
   afterEach(() => {
+    setActiveDegradedSecretOwners([]);
     clearMemoryEmbeddingProviders();
     restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
@@ -186,6 +192,27 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved).toBeNull();
+  });
+
+  it("throws the typed unavailable error only for the degraded agent owner", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [{ id: "cold" }, { id: "healthy" }],
+      },
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMemorySecretOwnerId("cold"),
+        state: "unavailable",
+        paths: ["agents.defaults.memorySearch.remote.apiKey"],
+        refKeys: ["env:default:MISSING_MEMORY_KEY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    expect(() => resolveMemorySearchConfig(cfg, "cold")).toThrow(SecretSurfaceUnavailableError);
+    expect(resolveMemorySearchConfig(cfg, "healthy")?.enabled).toBe(true);
   });
 
   it("returns null sync config when disabled", () => {

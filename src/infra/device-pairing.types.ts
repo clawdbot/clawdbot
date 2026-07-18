@@ -14,6 +14,7 @@ export type DevicePairingPendingRequest = {
   deviceFamily?: string;
   clientId?: string;
   clientMode?: string;
+  browserOrigin?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];
@@ -121,6 +122,7 @@ export type PairedDevice = {
   deviceFamily?: string;
   clientId?: string;
   clientMode?: string;
+  browserOrigin?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];

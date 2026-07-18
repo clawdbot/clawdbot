@@ -51,7 +51,7 @@ Choose your preferred auth method and follow the setup steps.
                 auth: "aws-sdk",
                 models: [
                   {
-                    id: "us.anthropic.claude-opus-4-6-v1:0",
+                    id: "us.anthropic.claude-opus-4-6-v1",
                     name: "Claude Opus 4.6 (Bedrock)",
                     reasoning: true,
                     input: ["text", "image"],
@@ -65,7 +65,7 @@ Choose your preferred auth method and follow the setup steps.
           },
           agents: {
             defaults: {
-              model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1:0" },
+              model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1" },
             },
           },
         }
@@ -262,8 +262,8 @@ openclaw models list
     first in `openclaw models list` since they generally offer better capacity
     and automatic failover.
 
-    Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1:0` (regional)
-    or `anthropic.claude-opus-4-6-v1:0` (global). If the backing model is already
+    Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1` (regional)
+    or `anthropic.claude-opus-4-6-v1` (global). If the backing model is already
     in the discovery results, the profile inherits its full capability set;
     otherwise safe defaults apply.
 

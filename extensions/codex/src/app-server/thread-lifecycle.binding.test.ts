@@ -92,6 +92,7 @@ function createParams(sessionFile: string, workspaceDir: string) {
 }
 
 const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  "features.goals": false,
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
@@ -1152,6 +1153,64 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
     expect(request.mock.calls[1]?.[1]).toMatchObject({
       config: { web_search: "disabled" },
+    });
+  });
+
+  it("uses a transient Codex thread for report-only fallback completion", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    let starts = 0;
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        starts += 1;
+        return threadStartResult(`thread-${starts}`);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult((requestParams as { threadId: string }).threadId);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+    params.delegationCapability = "report_only";
+    const restrictedBinding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+    const savedAfterRestriction = await readCodexAppServerBinding(sessionFile);
+    params.delegationCapability = "full";
+    const resumedBinding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    expect(restrictedBinding.threadId).toBe("thread-2");
+    expect(savedAfterRestriction?.threadId).toBe("thread-1");
+    expect(resumedBinding.threadId).toBe("thread-1");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/start",
+      "thread/resume",
+    ]);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      config: {
+        "features.multi_agent": false,
+        "features.multi_agent_v2": false,
+      },
     });
   });
 

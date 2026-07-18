@@ -40,6 +40,8 @@ import {
   type ChatRunEntry,
   type ChatRunRegistration,
   createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
@@ -149,6 +151,8 @@ export async function createGatewayRuntimeState(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  sessionEventSubscribers: ReturnType<typeof createSessionEventSubscriberRegistry>;
+  sessionMessageSubscribers: ReturnType<typeof createSessionMessageSubscriberRegistry>;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
   getMcpAppSandboxPort: () => number | undefined;
 }> {
@@ -163,7 +167,9 @@ export async function createGatewayRuntimeState(params: {
     const resolvePluginRouteRegistry = () =>
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
-    const gatewayBroadcaster = createGatewayBroadcaster({ clients });
+    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    const gatewayBroadcaster = createGatewayBroadcaster({ clients, sessionMessageSubscribers });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -478,6 +484,8 @@ export async function createGatewayRuntimeState(params: {
       chatAbortControllers,
       chatQueuedTurns,
       toolEventRecipients,
+      sessionEventSubscribers,
+      sessionMessageSubscribers,
       getWorkerIngressEndpoint: () =>
         workerIngressPort === undefined
           ? undefined

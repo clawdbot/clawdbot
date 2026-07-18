@@ -70,29 +70,19 @@ describe("qwen provider plugin", () => {
     expect(provider.suppressBuiltInModel).toBeUndefined();
   });
 
-  it("registers qwen-oauth as a portal provider", async () => {
+  it("does not register retired Qwen Portal providers", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: qwenPlugin,
       id: "qwen",
       name: "Qwen Provider",
     });
-    const provider = requireRegisteredProvider(providers, "qwen-oauth");
+    const retiredProviderIds = ["qwen-oauth", "qwen-portal", "qwen-cli"];
 
-    expect(provider.aliases).toEqual(["qwen-portal", "qwen-cli"]);
-    expect(provider.envVars).toEqual(["QWEN_API_KEY"]);
-    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key"]);
-
-    const result = await provider.staticCatalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({}),
-    } as never);
-    const catalogProvider = requireCatalogProvider(result);
-    expect(catalogProvider.baseUrl).toBe("https://portal.qwen.ai/v1");
-    expect(catalogProvider.models?.map((model) => model.id)).toContain("qwen3.5-plus");
-    expect(catalogProvider.models?.map((model) => model.id)).not.toContain(QWEN_36_FLASH_MODEL_ID);
-    expect(catalogProvider.models?.map((model) => model.id)).not.toContain(QWEN_37_MAX_MODEL_ID);
-    expect(catalogProvider.models?.map((model) => model.id)).not.toContain(QWEN_37_PLUS_MODEL_ID);
+    expect(providers.map((provider) => provider.id)).not.toEqual(
+      expect.arrayContaining(retiredProviderIds),
+    );
+    expect(manifest.providers).not.toEqual(expect.arrayContaining(retiredProviderIds));
+    expect(manifest.modelCatalog.providers).not.toHaveProperty("qwen-oauth");
   });
 
   it("registers canonical and legacy Token Plan owners without catalog aliasing", async () => {
@@ -304,81 +294,4 @@ describe("qwen provider plugin", () => {
     const modelIds = tokenPlanProvider(globalAgain)?.models?.map((model) => model.id) ?? [];
     expect(new Set(modelIds).size).toBe(modelIds.length);
   });
-
-  it("reuses legacy qwen portal auth profiles for qwen-oauth catalog", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: qwenPlugin,
-      id: "qwen",
-      name: "Qwen Provider",
-    });
-    const provider = requireRegisteredProvider(providers, "qwen-oauth");
-
-    const result = await provider.catalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: (providerId: string) =>
-        providerId === "qwen-portal" ? { apiKey: "portal-token" } : {},
-    } as never);
-
-    const catalogProvider = requireCatalogProvider(result);
-    expect(catalogProvider.apiKey).toBe("portal-token");
-    expect(catalogProvider.baseUrl).toBe("https://portal.qwen.ai/v1");
-  });
-
-  it.each([["qwen-oauth"], ["qwen-portal"], ["qwen-cli"]])(
-    "patches %s message payloads for portal compatibility",
-    async (providerId) => {
-      let patchedPayload: Record<string, unknown> | undefined;
-      const streamFn = wrapQwenProviderStream({
-        provider: providerId,
-        thinkingLevel: "off",
-        streamFn: ((
-          _model: unknown,
-          _context: unknown,
-          options?: {
-            onPayload?: (payload: Record<string, unknown>, model: unknown) => void;
-          },
-        ) => {
-          const payload = {
-            messages: [
-              { role: "system", content: "system text" },
-              { role: "user", content: ["hello", { type: "text", text: "world" }] },
-            ],
-          };
-          options?.onPayload?.(payload, _model);
-          patchedPayload = payload;
-          return (async function* () {})();
-        }) as never,
-      } as never);
-
-      const stream = streamFn!(
-        {
-          provider: providerId,
-          api: "openai-completions",
-          id: "qwen3.5-plus",
-        } as never,
-        {} as never,
-        {},
-      ) as AsyncIterable<unknown>;
-      for await (const event of stream) {
-        void event;
-        // Drain stream so the payload hook runs.
-      }
-
-      expect(patchedPayload?.vl_high_resolution_images).toBe(true);
-      expect(patchedPayload?.messages).toEqual([
-        {
-          role: "system",
-          content: [{ type: "text", text: "system text", cache_control: { type: "ephemeral" } }],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "hello" },
-            { type: "text", text: "world" },
-          ],
-        },
-      ]);
-    },
-  );
 });

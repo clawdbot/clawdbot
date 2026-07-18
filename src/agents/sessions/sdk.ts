@@ -16,6 +16,7 @@ import {
   Agent,
   type AgentMessage,
   type AgentOptions,
+  type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
@@ -143,6 +144,66 @@ export { createCodingTools, createReadTool, createEditTool, createWriteTool };
 
 function getDefaultAgentDir(): string {
   return getAgentDir();
+}
+
+function createSessionPrepareNextTurnWithContext(
+  getAgent: () => Agent,
+): NonNullable<AgentOptions["prepareNextTurnWithContext"]> {
+  let activeRunMessages: AgentMessage[] | undefined;
+  let effectiveModel: Model | undefined;
+  let effectiveThinkingLevel: ThinkingLevel | undefined;
+  let lastSessionModel: Model | undefined;
+  let lastSessionThinkingLevel: ThinkingLevel | undefined;
+  let lastSessionPrompt: string | undefined;
+  let lastSessionTools: AgentTool[] = [];
+  const sameTools = (left: AgentTool[], right: AgentTool[]) =>
+    left.length === right.length && left.every((tool, index) => tool === right[index]);
+
+  return async (turn, signal) => {
+    const agent = getAgent();
+    const firstTurnInRun = activeRunMessages !== turn.newMessages;
+    if (firstTurnInRun) {
+      activeRunMessages = turn.newMessages;
+      effectiveModel = agent.state.model;
+      effectiveThinkingLevel = agent.state.thinkingLevel;
+    }
+
+    const previousSnapshot = await agent.prepareNextTurn?.(signal);
+    const sessionPrompt = agent.state.systemPrompt;
+    const sessionTools = agent.state.tools;
+    const sessionModelChanged = firstTurnInRun || agent.state.model !== lastSessionModel;
+    const sessionThinkingChanged =
+      firstTurnInRun || agent.state.thinkingLevel !== lastSessionThinkingLevel;
+    const sessionPromptChanged = firstTurnInRun || sessionPrompt !== lastSessionPrompt;
+    const sessionToolsChanged = firstTurnInRun || !sameTools(sessionTools, lastSessionTools);
+
+    // Loop-only hook updates persist for the run; fresh session state wins only after it changes.
+    effectiveModel =
+      previousSnapshot?.model ?? (sessionModelChanged ? agent.state.model : effectiveModel);
+    effectiveThinkingLevel =
+      previousSnapshot?.thinkingLevel ??
+      (sessionThinkingChanged ? agent.state.thinkingLevel : effectiveThinkingLevel);
+
+    lastSessionModel = agent.state.model;
+    lastSessionThinkingLevel = agent.state.thinkingLevel;
+    lastSessionPrompt = sessionPrompt;
+    lastSessionTools = sessionTools.slice();
+
+    const nextContext = previousSnapshot?.context
+      ? { ...previousSnapshot.context }
+      : {
+          ...turn.context,
+          systemPrompt: sessionPromptChanged ? sessionPrompt : turn.context.systemPrompt,
+          tools: sessionToolsChanged ? sessionTools.slice() : turn.context.tools?.slice(),
+        };
+
+    return {
+      ...previousSnapshot,
+      context: nextContext,
+      model: effectiveModel,
+      thinkingLevel: effectiveThinkingLevel,
+    };
+  };
 }
 
 function getAttributionHeaders(
@@ -438,6 +499,7 @@ export async function createAgentSession(
       return runner.emitContext(messages);
     },
     resolveDeferredTool: options.resolveDeferredTool,
+    prepareNextTurnWithContext: createSessionPrepareNextTurnWithContext(() => agent),
     steeringMode: settingsManager.getSteeringMode(),
     followUpMode: settingsManager.getFollowUpMode(),
     transport: settingsManager.getTransport(),

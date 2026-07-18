@@ -14,7 +14,7 @@ export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () =
 );
 
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
-  () => Promise<{ counts: Record<string, number> }>
+  (_params: unknown) => Promise<{ counts: Record<string, number> }>
 > = vi.fn().mockResolvedValue({ counts: {} });
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
@@ -152,7 +152,7 @@ vi.mock("./runtime.js", () => ({
             kind: "message",
             canStartAgentTurn: true,
           });
-          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
+          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
             ctx: resolved.ctxPayload,
             cfg: mockRuntimeConfig,
             dispatcherOptions: {
@@ -166,7 +166,7 @@ vi.mock("./runtime.js", () => ({
             dispatched: true,
             dispatchResult,
             ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.routeSessionKey,
+            routeSessionKey: resolved.route.sessionKey,
           };
         }),
         buildContext: buildChannelInboundEventContextMock,

@@ -48,17 +48,35 @@ export type QueuedReplyDeliveryCorrelation = {
   begin: () => (() => void) | void;
 };
 
-/** Lifecycle hooks for queued follow-up replies. */
-export type QueuedReplyLifecycle = {
-  /** Stable cancellation owner used to keep collect-mode batches authorization-safe. */
-  ownerKey?: string;
-  /** Return false when the external owner rejects this queue identity. */
-  onEnqueued?: () => boolean | void;
-  /** Retires this source's cancellation ownership while retaining its live identity. */
+/**
+ * Exclusive: each lifecycle is its own collect-admission identity.
+ * Cancel-only: share collect identity via ownerKey (gateway chat.send).
+ */
+type TurnAdoptionAdmission = "exclusive" | "cancel-only";
+
+/**
+ * Canonical turn-ownership lifecycle (adopt / defer / abandon / settle).
+ * Single surface for durable ingress, gateway cancel identity, and reply-lane transfer.
+ */
+export type TurnAdoptionLifecycle = {
+  /**
+   * Admission isolation mode (closed). Exclusive isolates collect identity per
+   * lifecycle; cancel-only shares via ownerKey. Never inferred from onAbandoned.
+   * Durable ingress sets exclusive; gateway cancel identity sets cancel-only.
+   */
+  admission?: TurnAdoptionAdmission;
+  onAdopted: () => void | Promise<void>;
+  /** Return false to reject followup enqueue. */
+  onDeferred?: () => boolean | void;
+  /** Deferred turn finished without owning the reply lane. */
+  onAbandoned?: () => void;
+  /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
+  onSettled?: () => void;
+  /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
-  /** Called after the queued turn owns the reply lane, before model/tool execution. */
-  onAdmitted?: () => void | Promise<void>;
-  onComplete?: () => void;
+  /** Stable cancellation owner for collect-mode batches. */
+  ownerKey?: string;
+  abortSignal?: AbortSignal;
 };
 
 /** Partial assistant payload emitted during streaming or replacement updates. */
@@ -100,11 +118,9 @@ export type GetReplyOptions = {
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
   /**
-   * Called after the restart-recovery delivery-context persist attempt
-   * completes (context may be absent when source delivery is suppressed).
-   * Channels may complete ingress ownership here without waiting for settle.
+   * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
-  onTurnAdopted?: () => void | Promise<void>;
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Current user turn is already durable; replay it without appending another copy. */
@@ -242,14 +258,7 @@ export type GetReplyOptions = {
     phase?: string;
     title?: string;
     explanation?: string;
-    /**
-     * @deprecated Shipped pre-2026.8 shape: plain step text without statuses.
-     * Still populated for existing consumers; migrate to `planSteps` and
-     * remove with the deprecation window.
-     */
-    steps?: string[];
-    /** Canonical typed checklist snapshot; replaces `steps`. */
-    planSteps?: AgentPlanStep[];
+    steps?: AgentPlanStep[];
     source?: string;
   }) => Promise<void> | void;
   /** Called when an approval becomes pending or resolves. */
@@ -311,8 +320,6 @@ export type GetReplyOptions = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Starts delivery tracking when this turn later drains as a queued followup. */
   queuedDeliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
-  /** Tracks ownership transfer when this turn later drains as a queued followup. */
-  queuedFollowupLifecycle?: QueuedReplyLifecycle;
   /** Called after a queued followup owns the reply lane, before its model run starts. */
   onQueuedFollowupAdmitted?: () => Promise<void> | void;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */

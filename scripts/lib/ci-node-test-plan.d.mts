@@ -18,6 +18,7 @@ export type NodeTestShard = {
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
   planConcurrency?: number;
+  saveVitestFsCache?: boolean;
 };
 
 export type NodeTestPlanOptions = {
@@ -36,3 +37,6 @@ export function createNodeTestShardBundles(
   options: NodeTestPlanOptions & { compact: true },
 ): CompactNodeTestShard[];
 export function createNodeTestShardBundles(options?: NodeTestPlanOptions): NodeTestShard[];
+export function assignVitestFsCacheWriter<T extends Pick<NodeTestShard, "shardName" | "groups">>(
+  shards: T[],
+): Array<T & { saveVitestFsCache: boolean }>;

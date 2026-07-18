@@ -5,6 +5,7 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -50,4 +51,21 @@ export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
     isUpdatePlanToolEnabledForOpenClawTools(params) &&
     isToolAllowedByPolicyName("update_plan", { deny })
   );
+}
+
+/** Includes ask_user only on a primary session and when normal deny policy permits it. */
+export function shouldIncludeAskUserToolForOpenClawTools(params: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+  pluginToolDenylist?: string[];
+}): boolean {
+  const sessionKey = params.agentSessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  const deny = uniqueStrings([
+    ...(params.config?.tools?.deny ?? []),
+    ...(params.pluginToolDenylist ?? []),
+  ]);
+  return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName("ask_user", { deny });
 }

@@ -75,6 +75,26 @@ describe("executeProviderOperationWithRetry", () => {
   });
 
   it.each([
+    [429, Object.assign(new Error("Too Many Requests"), { status: 429 })],
+    ["HTTP 429", new Error("HTTP 429 Too Many Requests")],
+  ])("retries %s rate limit errors", async (_label, error) => {
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue("ok");
+
+    await expect(
+      executeProviderOperationWithRetry({
+        provider: "test",
+        stage: "read",
+        operation,
+        retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).resolves.toBe("ok");
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
     ["HTTP 400", Object.assign(new Error("Bad Request"), { status: 400 })],
     ["ENOENT", new Error("ENOENT: no such file or directory")],
   ])("does not retry %s failures", async (_label, error) => {

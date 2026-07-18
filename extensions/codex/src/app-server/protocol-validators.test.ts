@@ -66,6 +66,24 @@ describe("assertCodexThreadStartResponse", () => {
   });
 });
 
+describe("assertCodexThreadResumeResponse", () => {
+  it("accepts the bounded initial turns page shipped by the managed Codex version", () => {
+    const result = assertCodexThreadResumeResponse({
+      ...makeMinimalResponse(),
+      initialTurnsPage: {
+        data: [{ id: "turn-running", items: [], status: "inProgress" }],
+        nextCursor: null,
+        backwardsCursor: "resume-anchor",
+      },
+    });
+
+    expect(result.thread.turns).toEqual([]);
+    expect(result.initialTurnsPage?.data).toEqual([
+      { id: "turn-running", items: [], status: "inProgress" },
+    ]);
+  });
+});
+
 describe("readCodexModelListResponse", () => {
   it("applies defaults from generated schemas behind local refs", () => {
     const response = readCodexModelListResponse({

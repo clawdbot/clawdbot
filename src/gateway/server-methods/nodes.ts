@@ -69,7 +69,11 @@ import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
+import {
+  hasAuthorizedClientPluginNodeCapabilityUrl,
+  pluginNodeCapabilityScopedHostUrlsConflict,
+  refreshClientPluginNodeCapability,
+} from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
   deniesCrossDeviceManagement,
@@ -99,7 +103,7 @@ import {
   safeParseJson,
 } from "./nodes.helpers.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 export {
   clearNodeWakeState,
@@ -187,7 +191,9 @@ function listNodesForClient(params: {
   return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
 }
 
-function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
+function normalizePluginSurfaceRefreshParams(
+  params: unknown,
+): { surface: string; observedUrl?: string } | undefined {
   if (!params || typeof params !== "object") {
     return undefined;
   }
@@ -195,20 +201,47 @@ function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string
   if (!surface) {
     return undefined;
   }
-  return { surface };
+  const observedUrl = normalizeOptionalString((params as { observedUrl?: unknown }).observedUrl);
+  return { surface, ...(observedUrl ? { observedUrl } : {}) };
 }
 
 function respondRefreshedPluginSurface(params: {
   surface: string;
+  observedUrl?: string;
   client: GatewayClient | null;
   respond: RespondFn;
 }) {
+  const currentUrl = params.client?.pluginSurfaceUrls?.[params.surface];
+  const capabilitySurface = params.client?.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
+    surface: params.surface,
+  };
+  if (
+    params.client &&
+    currentUrl &&
+    params.observedUrl &&
+    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, params.observedUrl) &&
+    hasAuthorizedClientPluginNodeCapabilityUrl({
+      client: params.client,
+      surface: capabilitySurface,
+      url: currentUrl,
+    })
+  ) {
+    // A prior in-flight request already rotated this capability. Return its
+    // result instead of invalidating it with a second rotation.
+    params.respond(
+      true,
+      {
+        surface: params.surface,
+        pluginSurfaceUrls: { [params.surface]: currentUrl },
+      },
+      undefined,
+    );
+    return;
+  }
   const refreshed = params.client
     ? refreshClientPluginNodeCapability({
         client: params.client,
-        surface: params.client.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
-          surface: params.surface,
-        },
+        surface: capabilitySurface,
       })
     : undefined;
   if (!refreshed) {
@@ -229,6 +262,20 @@ function respondRefreshedPluginSurface(params: {
     undefined,
   );
 }
+
+const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, client }) => {
+  const parsed = normalizePluginSurfaceRefreshParams(params);
+  if (!parsed) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
+    return;
+  }
+  respondRefreshedPluginSurface({
+    surface: parsed.surface,
+    observedUrl: parsed.observedUrl,
+    client,
+    respond,
+  });
+};
 
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
@@ -1218,18 +1265,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.pluginSurface.refresh": async ({ params, respond, client }) => {
-    const parsed = normalizePluginSurfaceRefreshParams(params);
-    if (!parsed) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
-      return;
-    }
-    respondRefreshedPluginSurface({
-      surface: parsed.surface,
-      client,
-      respond,
-    });
-  },
+  "plugin.surface.refresh": handlePluginSurfaceRefresh,
+  "node.pluginSurface.refresh": handlePluginSurfaceRefresh,
   "node.pluginTools.update": async ({ params, respond, client, context }) => {
     if (!validateNodePluginToolsUpdateParams(params)) {
       respondInvalidParams({

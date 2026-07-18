@@ -1100,6 +1100,12 @@ export default function (api) {
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
 
+The host completes registered async memory prompt preparation before calling a
+non-legacy engine's `assemble()`. `buildMemorySystemPromptAddition(...)` stays
+synchronous and reads that immutable run snapshot while `assemble()` is active.
+Pass the supplied tool and citation context through unchanged so the snapshot
+cannot cross run boundaries.
+
 `assemble()` may return `contextProjection` when the active harness has a
 persistent backend thread. Omit it for legacy per-turn projection. Return
 `{ mode: "thread_bootstrap", epoch }` when the assembled context should be

@@ -188,6 +188,9 @@ The bundled Hermes provider follows `$HERMES_HOME` and the active profile, then 
 - MCP server definitions from `mcp_servers` or `mcp.servers`. Exact OpenClaw mappings cover default Streamable HTTP routing, OAuth scope, boolean TLS verification, separate client certificate/key paths, and Hermes native/resource/prompt tool policy. Unsupported Hermes-only runtime or credential fields are reported for manual review.
 - `SOUL.md` and `AGENTS.md` into the OpenClaw agent workspace.
 - `memories/MEMORY.md` and `memories/USER.md` appended to workspace memory files.
+  Memory-only surfaces (the onboarding memory page and the Control UI Memory
+  import page) instead copy these files under `memory/imports/hermes/` for
+  indexed recall without touching existing workspace memory.
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
 - Skills that include a `SKILL.md` file anywhere under `skills/`; nested skills are flattened into the workspace skill directory.
 - Per-skill config values from `skills.config`.

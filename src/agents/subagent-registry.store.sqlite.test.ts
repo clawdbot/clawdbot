@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -13,6 +15,8 @@ import {
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 
 function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -83,6 +87,15 @@ describe("subagent registry sqlite store", () => {
         outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
         terminalOwner: "interrupted-recovery",
         completion: { required: true, resultText: null, capturedAt: 250 },
+        requesterSettleWake: {
+          status: "dispatching",
+          attemptCount: 1,
+          replayCount: 1,
+          nextAttemptAt: 30_000,
+          batchRunIds: ["run-one", "run-two"],
+          lastError: "provider timeout",
+          retireAfterSettle: true,
+        },
       });
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
@@ -98,6 +111,7 @@ describe("subagent registry sqlite store", () => {
         terminalOwner: "interrupted-recovery",
         completion: run.completion,
         delivery: run.delivery,
+        requesterSettleWake: run.requesterSettleWake,
       });
       expect(await fs.stat(path.join(tempStateDir!, "state", "openclaw.sqlite"))).toBeTruthy();
       await expect(fs.stat(path.join(tempStateDir!, "subagents", "runs.json"))).rejects.toThrow();
@@ -118,6 +132,57 @@ describe("subagent registry sqlite store", () => {
       saveSubagentRegistryToSqlite(new Map([[second.runId, second]]));
 
       expect([...loadSubagentRegistryFromSqlite().keys()]).toEqual(["run-two"]);
+    });
+  });
+
+  it("preserves announcedAt for not_required delivery when completion was announced", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        expectsCompletionMessage: false,
+        completion: { required: false },
+        delivery: { status: "not_required", announcedAt: 300 },
+      });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      const restored = loadSubagentRegistryFromSqlite();
+      const restoredRun = restored.get(run.runId)!;
+      expect(restoredRun.delivery?.status).toBe("not_required");
+      expect(restoredRun.delivery?.announcedAt).toBe(300);
+      expect(restoredRun.delivery?.deliveredAt).toBeUndefined();
+    });
+  });
+
+  it("repairs a tainted delivered status when completion is not required", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        expectsCompletionMessage: false,
+        completion: { required: false },
+        delivery: { status: "not_required", announcedAt: 300 },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      const { db } = openOpenClawStateDatabase();
+      const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .updateTable("subagent_runs")
+          .set({
+            payload_json: JSON.stringify({
+              ...run,
+              delivery: { status: "delivered", announcedAt: 300, deliveredAt: 300 },
+            }),
+          })
+          .where("run_id", "=", run.runId),
+      );
+
+      const restoredRun = loadSubagentRegistryFromSqlite().get(run.runId)!;
+      expect(restoredRun.delivery).toMatchObject({
+        status: "not_required",
+        announcedAt: 300,
+        deliveredAt: 300,
+      });
     });
   });
 

@@ -2,7 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
+import { detectMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -37,6 +37,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -94,18 +95,6 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
-
-function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
-  // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
-  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
-  const extended = encodeURIComponent(filename).replace(
-    /[\x27()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  const kind = kindFromMime(mime);
-  const inline = kind === "image" || kind === "audio" || kind === "video";
-  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
-}
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -186,9 +175,12 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-  // The active Gateway may differ from the server that delivered this UI.
-  // Exact sandbox policies and iframe allow attributes still narrow delegation.
-  res.setHeader("Permissions-Policy", "camera=*, microphone=*, geolocation=*, clipboard-write=*");
+  // Browser Talk is owned by this same-origin Control UI document. Keep camera
+  // access here; the Gateway's default policy continues to deny it elsewhere.
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
+  );
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {

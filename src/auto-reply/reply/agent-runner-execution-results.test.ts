@@ -107,7 +107,8 @@ describe("runAgentTurnWithFallback: result and tool delivery", () => {
   );
 
   it("surfaces model capacity errors from pre-reply CLI failures", async () => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
+    vi.useFakeTimers();
+    state.runWithModelFallbackMock.mockRejectedValue(
       new Error("Selected model is at capacity. Please try a different model."),
     );
 
@@ -116,7 +117,7 @@ describe("runAgentTurnWithFallback: result and tool delivery", () => {
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.5";
 
-    const result = await runAgentTurnWithFallback({
+    const resultPromise = runAgentTurnWithFallback({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -138,7 +139,10 @@ describe("runAgentTurnWithFallback: result and tool delivery", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
+    await vi.advanceTimersByTimeAsync(217_500);
+    const result = await resultPromise;
 
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(11);
     expect(result).toEqual({
       kind: "final",
       payload: {

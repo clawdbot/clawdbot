@@ -489,8 +489,10 @@ private func queuedStateCount(_ vm: OpenClawChatViewModel) -> Int {
 private actor DelayingOutbox: OpenClawChatCommandOutbox {
     private nonisolated let base: OpenClawChatSQLiteTranscriptCache
     private var loadDelayNanoseconds: UInt64 = 0
+    private var enqueueRelease: DeleteGate?
     private var recoveryAvailable = true
     private var terminalWritesAvailable = true
+    private let enqueueStarted = DeleteGate()
     private let recoveryAttempted = DeleteGate()
 
     init(base: OpenClawChatSQLiteTranscriptCache) {
@@ -517,8 +519,25 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
         await self.recoveryAttempted.wait()
     }
 
+    func holdEnqueue() {
+        self.enqueueRelease = DeleteGate()
+    }
+
+    func waitUntilEnqueueStarted() async {
+        await self.enqueueStarted.wait()
+    }
+
+    func releaseEnqueue() async {
+        await self.enqueueRelease?.open()
+        self.enqueueRelease = nil
+    }
+
     func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
-        await self.base.enqueueCommand(command)
+        if let enqueueRelease {
+            await self.enqueueStarted.open()
+            await enqueueRelease.wait()
+        }
+        return await self.base.enqueueCommand(command)
     }
 
     func loadCommands() async -> [OpenClawChatOutboxCommand] {
@@ -1632,8 +1651,10 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("bootstrap healthy") {
-            await MainActor.run { vm.healthOK }
+            await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages }
         }
         await MainActor.run {
             vm.input = "keep this draft"
@@ -1658,8 +1679,10 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("bootstrap healthy") {
-            await MainActor.run { vm.healthOK }
+            await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages }
         }
         await MainActor.run {
             vm.input = "stale health send"
@@ -1933,6 +1956,80 @@ struct ChatViewModelOutboxTests {
         #expect(await MainActor.run { vm.input } == "does not fit")
         #expect(await userTexts(vm).isEmpty)
         #expect(await store.loadCommands().count == OpenClawChatSQLiteTranscriptCache.maxQueuedCommands)
+    }
+
+    @Test func `accepted enqueue after session switch preserves newer original-session draft`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let outbox = DelayingOutbox(base: store)
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        await MainActor.run { vm.load() }
+        try await waitUntil("initial outbox restore") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        await outbox.holdEnqueue()
+
+        await MainActor.run {
+            vm.input = "queued once"
+            vm.send()
+        }
+        await outbox.waitUntilEnqueueStarted()
+        await MainActor.run {
+            vm.switchSession(to: "other")
+            vm.switchSession(to: "main")
+            vm.input = ""
+            vm.input = "queued once"
+            vm.switchSession(to: "other")
+        }
+        await outbox.releaseEnqueue()
+        try await waitUntil("enqueue accepted after switch") {
+            await store.loadCommands().count == 1
+        }
+        try await waitUntil("newer original-session draft preserved") {
+            await MainActor.run { vm.draftsBySession["main"] == "queued once" }
+        }
+
+        await MainActor.run { vm.switchSession(to: "main") }
+        #expect(await MainActor.run { vm.input } == "queued once")
+        #expect(await MainActor.run { vm.recallPreviousInput(caretOnFirstLine: true) })
+        #expect(await MainActor.run { vm.input } == "queued once")
+        #expect(await MainActor.run { vm.recallNextInput() })
+        #expect(await MainActor.run { vm.input } == "queued once")
+    }
+
+    @Test func `accepted enqueue preserves retyped identical current-session draft`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let outbox = DelayingOutbox(base: store)
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        await MainActor.run { vm.load() }
+        try await waitUntil("initial outbox restore") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        await outbox.holdEnqueue()
+
+        await MainActor.run {
+            vm.input = "queued once"
+            vm.send()
+        }
+        await outbox.waitUntilEnqueueStarted()
+        await MainActor.run {
+            vm.input = ""
+            vm.input = "queued once"
+        }
+        await outbox.releaseEnqueue()
+        try await waitUntil("enqueue accepted") {
+            await store.loadCommands().count == 1
+        }
+        try await waitUntil("submission finished") {
+            await MainActor.run { !vm.isSubmittingDraft }
+        }
+
+        #expect(await MainActor.run { vm.input } == "queued once")
     }
 
     @Test func `queued send transport failure fails closed until explicit retry`() async throws {

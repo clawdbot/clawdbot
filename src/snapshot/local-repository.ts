@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
@@ -31,6 +30,10 @@ import { runExec } from "../process/exec.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
+import {
+  sanitizeOpenClawGlobalStateSnapshot,
+  sanitizeOpenClawStateLeaseRows,
+} from "../state/openclaw-state-snapshot-sanitizer.js";
 import {
   containsAsciiControlCharacter,
   copySnapshotArtifact,
@@ -272,7 +275,12 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       const result = await createVerifiedSqliteSnapshot({
         sourcePath,
         targetPath: artifactPath,
-        transform: identity.role === "global" ? sanitizeGlobalStateSnapshot : undefined,
+        transform:
+          identity.role === "global"
+            ? sanitizeOpenClawGlobalStateSnapshot
+            : identity.role === "agent"
+              ? sanitizeOpenClawStateLeaseRows
+              : undefined,
         validate: buildDatabaseValidator(identity),
       });
       applyPrivateModeSync(artifactPath, SNAPSHOT_FILE_MODE);
@@ -735,10 +743,6 @@ function buildManifestDatabaseValidator(
       );
     }
   };
-}
-
-function sanitizeGlobalStateSnapshot(database: DatabaseSync): void {
-  database.prepare("DELETE FROM delivery_queue_entries").run();
 }
 
 function buildSnapshotId(now: Date): string {

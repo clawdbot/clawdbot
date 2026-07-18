@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
-import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import {
   qaTestFileScenarioRunnerTesting,
@@ -1081,72 +1081,58 @@ describe("qa test file scenario runner", () => {
     expect(artifactPath?.includes("..")).toBe(false);
   });
 
-  describe("UX Matrix scenario composition", () => {
-    let outputDir: string;
-    let result: Awaited<ReturnType<typeof runQaTestFileScenarios>>;
-    let evidence: ReturnType<typeof validateQaEvidenceSummaryJson>;
+  it("imports the standalone UX Matrix producer as coverage-free infrastructure", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-producer-"));
+    tempRoots.push(outputDir);
+    // The runner accepts scenario-shaped execution input, but this test fixture is not cataloged
+    // and deliberately carries no product taxonomy coverage.
+    const infrastructureFixture: QaSeedScenarioWithSource = {
+      id: "scenario-script",
+      title: "UX Matrix producer infrastructure fixture",
+      surface: "qa-lab",
+      objective: "Exercise the standalone UX Matrix evidence producer through the script runner.",
+      successCriteria: ["The runner imports the producer's structured evidence bundle."],
+      codeRefs: ["scripts/qa/ux-matrix-evidence-producer.ts"],
+      sourcePath: "test/scripts/qa-ux-matrix-evidence-producer.test.ts",
+      execution: {
+        kind: "script",
+        path: "scripts/qa/ux-matrix-evidence-producer.ts",
+        allowBlockedEvidence: true,
+        args: ["--artifact-base", "${outputDir}", "--skip-visual-proof"],
+      },
+    };
 
-    beforeAll(async () => {
-      outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-script-"));
-      tempRoots.push(outputDir);
-      const scenario = readQaScenarioById("ux-matrix-evidence-dashboard");
-
-      expect(scenario.execution.kind).toBe("script");
-      result = await runQaTestFileScenarios({
-        repoRoot: process.cwd(),
-        outputDir,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        scenarios: [scenario],
-        env: {
-          OPENCLAW_QA_REF: "scenario-ref",
-        } as NodeJS.ProcessEnv,
-      });
-      evidence = validateQaEvidenceSummaryJson(
-        JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
-      );
+    const result = await runQaTestFileScenarios({
+      repoRoot: process.cwd(),
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [infrastructureFixture],
+      env: { OPENCLAW_QA_REF: "infrastructure-fixture" } as NodeJS.ProcessEnv,
     });
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
 
-    it("runs the checked-in producer and imports its evidence bundle", () => {
-      expect(result.executionKind).toBe("script");
-      expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
-      expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
-        "ux-matrix.qa-lab.producer-artifact-fixture",
-        "ux-matrix.control-ui.screenshot-artifact",
-        "ux-matrix.cli.entrypoint-help",
-      ]);
-      expect(
-        evidence.entries.flatMap((entry) => entry.coverage.map((coverage) => coverage.id)),
-      ).toEqual(
-        expect.arrayContaining([
-          "qa.artifact-safety",
-          "tools.evidence",
-          "workspace.artifacts",
-          "ui.control",
-          "gateway.control-ui-hosting",
-          "cli.entrypoint",
-          "cli.status-snapshots",
-        ]),
-      );
-      const artifactKinds = evidence.entries.flatMap(
+    expect(result.executionKind).toBe("script");
+    expect(result.results[0]).toMatchObject({ status: "pass" });
+    expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
+    expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
+      "ux-matrix.qa-lab.producer-artifact-fixture",
+      "ux-matrix.control-ui.screenshot-artifact",
+      "ux-matrix.cli.entrypoint-help",
+    ]);
+    expect(evidence.entries.every((entry) => entry.coverage.length === 0)).toBe(true);
+    expect(
+      evidence.entries.flatMap(
         (entry) => entry.execution?.artifacts.map((artifact) => artifact.kind) ?? [],
-      );
-      expect(artifactKinds).toEqual(expect.arrayContaining(["html", "log"]));
-      const fixtureEntry = evidence.entries.find(
-        (entry) => entry.test.id === "ux-matrix.qa-lab.producer-artifact-fixture",
-      );
-      expect(fixtureEntry?.execution?.artifacts.map((artifact) => artifact.path)).toContain(
-        path.join(
-          outputDir,
-          "ux-matrix-evidence-dashboard",
-          "surfaces",
-          "qa-lab",
-          "stages",
-          "producer-artifact-fixture",
-          "producer-artifact-fixture.html",
-        ),
-      );
-    });
+      ),
+    ).toEqual(expect.arrayContaining(["html", "log"]));
+    expect(
+      evidence.entries
+        .flatMap((entry) => entry.execution?.artifacts.map((artifact) => artifact.path) ?? [])
+        .some((artifactPath) => artifactPath.includes(path.join(outputDir, "scenario-script"))),
+    ).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

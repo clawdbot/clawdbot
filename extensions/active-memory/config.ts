@@ -13,6 +13,7 @@ import {
   DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
   DEFAULT_CACHE_TTL_MS,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
+  DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS,
   DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
   DEFAULT_MAX_SUMMARY_CHARS,
   DEFAULT_MIN_TIMEOUT_MS,
@@ -251,6 +252,7 @@ function normalizePluginConfig(
       minimumTimeoutMs,
       MAX_TIMEOUT_MS,
     ),
+    timeoutMsIsDefault: raw.timeoutMs === undefined || raw.timeoutMs === null,
     setupGraceTimeoutMs: clampInt(
       raw.setupGraceTimeoutMs,
       setupGraceTimeoutMs,
@@ -387,8 +389,28 @@ function setSetupGraceTimeoutMsForTests(value: number): void {
   setupGraceTimeoutMs = Math.max(0, Math.floor(value));
 }
 
+/**
+ * Recalls eligible for CLI-backend dispatch run a fresh CLI process, which
+ * measured runs place at 9-20s — over the plain 15s default. Eligibility is
+ * the runner's own dispatch decision (route, registered backend, stored
+ * credential mode), so API-key setups that keep the direct passthrough also
+ * keep the plain default. Explicit operator timeoutMs config always wins.
+ */
+function applyCliRuntimeRecallTimeoutDefault(
+  config: ResolvedActiveRecallPluginConfig,
+  cliDispatchEligible: boolean,
+): ResolvedActiveRecallPluginConfig {
+  if (!config.timeoutMsIsDefault || config.timeoutMs >= DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS) {
+    return config;
+  }
+  return cliDispatchEligible
+    ? { ...config, timeoutMs: DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS }
+    : config;
+}
+
 export {
   applyActiveMemoryRuntimeConfigSnapshot,
+  applyCliRuntimeRecallTimeoutDefault,
   clampInt,
   hasDeprecatedModelFallbackPolicy,
   isMissingRegisteredMemoryToolsError,

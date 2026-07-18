@@ -49,7 +49,9 @@ describe("terminal PTY teardown", () => {
   it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
     const { handle, pty } = await spawnFakePty();
     handle.kill(signal);
-    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL");
+    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL", {
+      detached: true,
+    });
     expect(pty.kill).not.toHaveBeenCalled();
   });
 

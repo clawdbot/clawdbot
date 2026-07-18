@@ -1,27 +1,27 @@
-// Matrix plugin module implements handler behavior.
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilder,
+  hasFinalInboundReplyDispatch,
+  resolveInboundMentionDecision,
   toInboundMediaFacts,
+  type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
-import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createPreviewMessageReceipt,
-  defineFinalizableLivePreviewAdapter,
-  deliverWithFinalizableLivePreviewAdapter,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
 import {
   type AgentPlanStep,
   buildChannelProgressDraftLineForEntry,
-  createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
+  createChannelProgressDraftGate,
+  createPreviewMessageReceipt,
+  defineFinalizableLivePreviewAdapter,
+  deliverWithFinalizableLivePreviewAdapter,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   evaluateSupplementalContextVisibility,
@@ -43,7 +43,7 @@ import {
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
@@ -227,6 +227,10 @@ type MatrixMonitorHandlerParams = {
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;
   resolveLiveUserAllowlist?: typeof resolveMatrixMonitorLiveUserAllowlist;
+  resolveStorePath?: typeof resolveStorePath;
+  createChannelInboundEnvelopeBuilder?: typeof createChannelInboundEnvelopeBuilder;
+  finalizeInboundContext?: (ctx: Record<string, unknown>) => unknown;
+  resolveHumanDelayConfig?: typeof resolveHumanDelayConfig;
 };
 
 function resolveMatrixMentionPrecheckText(params: {
@@ -471,6 +475,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getMemberDisplayName,
     needsRoomAliasesForConfig,
     resolveLiveUserAllowlist = resolveMatrixMonitorLiveUserAllowlist,
+    resolveStorePath: resolveStorePathImpl = resolveStorePath,
+    createChannelInboundEnvelopeBuilder:
+      createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilder,
+    finalizeInboundContext,
+    resolveHumanDelayConfig: resolveHumanDelayConfigImpl = resolveHumanDelayConfig,
   } = params;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
@@ -1156,16 +1165,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? roomConfig?.requireMention
                 : true
           : false;
-        const shouldBypassMention =
-          allowTextCommands &&
-          isRoom &&
-          shouldRequireMention &&
-          !wasMentioned &&
-          !hasExplicitMention &&
-          commandAuthorized &&
-          hasControlCommandInMessage;
+        const mentionDecision = resolveInboundMentionDecision({
+          facts: {
+            // Matrix native mention metadata lets us reliably decide absence even
+            // when no custom mention regex is configured.
+            canDetectMention: true,
+            wasMentioned,
+            hasAnyMention: hasExplicitMention,
+          },
+          policy: {
+            isGroup: isRoom,
+            requireMention: shouldRequireMention,
+            allowTextCommands,
+            hasControlCommand: hasControlCommandInMessage,
+            commandAuthorized,
+          },
+        });
+        const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-        if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
+        if (mentionDecision.shouldSkip) {
           const pendingHistoryBody = preflightAudioTranscript
             ? formatMatrixAudioTranscript(preflightAudioTranscript)
             : pendingHistoryText || pendingHistoryPollText;
@@ -1368,6 +1386,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
           shouldRequireMention,
           wasMentioned,
+          effectiveWasMentioned,
           shouldBypassMention,
           canDetectMention,
           commandAuthorized,
@@ -1438,6 +1457,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         isRoom,
         shouldRequireMention,
         wasMentioned,
+        effectiveWasMentioned,
         shouldBypassMention,
         canDetectMention,
         commandAuthorized,
@@ -1524,14 +1544,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const roomName = roomInfo?.name;
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
       const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
-      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+      const storePath = resolveStorePathImpl(cfg.session?.store, {
         agentId: _route.agentId,
       });
-      const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-      const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-        storePath,
-        sessionKey: _route.sessionKey,
-      });
+      const buildEnvelope = createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
       const sharedDmNoticeSessionKey = threadTarget
         ? _route.mainSessionKey || _route.sessionKey
         : _route.sessionKey;
@@ -1548,12 +1564,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               logVerboseMessage,
             })
         : null;
-      const body = core.channel.reply.formatAgentEnvelope({
+      const body = buildEnvelope({
         channel: "Matrix",
         from: envelopeFrom,
         timestamp: eventTs ?? undefined,
-        previousTimestamp,
-        envelope: envelopeOptions,
         body: textWithId,
       });
       const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
@@ -1567,8 +1581,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       );
       const ctxPayload = buildChannelInboundEventContext({
         channel: "matrix",
-        finalize: core.channel.reply.finalizeInboundContext,
         contextVisibility: contextVisibilityMode,
+        finalize: finalizeInboundContext,
         supplemental: {
           quote: replyContext
             ? {
@@ -1613,6 +1627,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
         route: {
           agentId: _route.agentId,
+          dmScope: _route.dmScope,
           accountId: _route.accountId,
           routeSessionKey: _route.sessionKey,
         },
@@ -1680,7 +1695,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             isMentionableGroup: isRoom,
             requireMention: shouldRequireMention,
             canDetectMention,
-            effectiveWasMentioned: wasMentioned || shouldBypassMention,
+            effectiveWasMentioned,
             shouldBypassMention,
           }),
         );
@@ -1957,7 +1972,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (payload.phase !== "update") {
               return;
             }
-            await pushPlanProgress(payload.planSteps, payload.explanation);
+            await pushPlanProgress(payload.steps, payload.explanation);
           },
           onApprovalEvent: async (payload) => {
             if (payload.phase !== "requested") {
@@ -2086,261 +2101,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         resetPreviewToolProgress();
       };
 
-      const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
-        core.channel.reply.createReplyDispatcherWithTyping({
-          ...prefixOptions,
-          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
-          deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-            if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
-              const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-              const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-              const fallbackPayload =
-                ttsSupplement &&
-                ttsSupplement.visibleTextAlreadyDelivered !== true &&
-                !payload.text?.trim()
-                  ? { ...payload, text: ttsSupplement.spokenText }
-                  : payload;
+      const dispatcherOptions = {
+        ...prefixOptions,
+        humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
+        deliver: async (payload: ReplyPayload, info: { kind: string }) => {
+          if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+            const fallbackPayload =
+              ttsSupplement &&
+              ttsSupplement.visibleTextAlreadyDelivered !== true &&
+              !payload.text?.trim()
+                ? { ...payload, text: ttsSupplement.spokenText }
+                : payload;
 
-              if (draftConsumed) {
-                await draftStream.discardPending();
-                await deliverMatrixReplies({
-                  cfg,
-                  replies: [fallbackPayload],
-                  roomId,
-                  client,
-                  runtime,
-                  textLimit,
-                  replyToMode,
-                  threadId: threadTarget,
-                  replyToId: threadTarget ?? replyToEventId ?? undefined,
-                  accountId: _route.accountId,
-                  mediaLocalRoots,
-                  tableMode,
-                });
-                return;
-              }
-
-              const payloadReplyToId = normalizeOptionalString(payload.replyToId);
-              const payloadReplyMismatch =
-                replyToMode !== "off" &&
-                !threadTarget &&
-                payloadReplyToId !== currentDraftReplyToId;
-              let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
-              const canPotentiallyFinalizeDraft =
-                Boolean(payload.text?.trim()) &&
-                !payload.isError &&
-                !payloadReplyMismatch &&
-                !mustDeliverFinalNormally;
-
-              if (canPotentiallyFinalizeDraft) {
-                await draftStream.stop();
-                mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
-              } else {
-                await draftStream.discardPending();
-              }
-              const draftEventId = draftStream.eventId();
-              const draftFinalTextNeedsNormalMentionDelivery =
-                Boolean(draftEventId) &&
-                typeof payload.text === "string" &&
-                Boolean(payload.text.trim()) &&
-                !payload.isError &&
-                !payloadReplyMismatch &&
-                !mustDeliverFinalNormally &&
-                (await matrixTextWouldActivateMentions(client, payload.text));
-
-              if (
-                draftEventId &&
-                payload.text &&
-                !payload.isError &&
-                !hasMedia &&
-                !payloadReplyMismatch &&
-                !mustDeliverFinalNormally &&
-                !draftFinalTextNeedsNormalMentionDelivery
-              ) {
-                const finalPreviewText = payload.text;
-                await deliverWithFinalizableLivePreviewAdapter<
-                  ReplyPayload,
-                  string,
-                  {
-                    text: string;
-                    finalizeLive: boolean;
-                    extraContent?: Record<string, unknown>;
-                  }
-                >({
-                  kind: "final",
-                  payload,
-                  adapter: defineFinalizableLivePreviewAdapter({
-                    draft: {
-                      flush: async () => {},
-                      clear: async () => {},
-                      discardPending: async () => {},
-                      id: () => draftEventId,
-                    },
-                    buildFinalEdit: () => ({
-                      text: finalPreviewText,
-                      finalizeLive: !(
-                        quietDraftStreaming || !draftStream.matchesPreparedText(finalPreviewText)
-                      ),
-                      ...(quietDraftStreaming
-                        ? { extraContent: buildMatrixFinalizedPreviewContent() }
-                        : {}),
-                    }),
-                    editFinal: async (_draftEventId, edit) => {
-                      if (edit.finalizeLive) {
-                        if (!(await draftStream.finalizeLive())) {
-                          throw new Error("Matrix draft live finalize failed");
-                        }
-                        return;
-                      }
-                      const { editMessageMatrix } = await loadMatrixSendModule();
-                      await editMessageMatrix(roomId, _draftEventId, edit.text, {
-                        client,
-                        cfg,
-                        threadId: threadTarget,
-                        accountId: _route.accountId,
-                        extraContent: edit.extraContent,
-                      });
-                    },
-                    createPreviewReceipt: (id): MessageReceipt =>
-                      createPreviewMessageReceipt({
-                        id,
-                        ...(threadTarget ? { threadId: threadTarget } : {}),
-                        ...(currentDraftReplyToId ? { replyToId: currentDraftReplyToId } : {}),
-                      }),
-                    logPreviewEditFailure: (err) => {
-                      logVerboseMessage(`matrix: preview final edit failed: ${String(err)}`);
-                    },
-                  }),
-                  deliverNormally: async () => {
-                    await redactMatrixDraftEvent(client, roomId, draftEventId);
-                    await deliverMatrixReplies({
-                      cfg,
-                      replies: [fallbackPayload],
-                      roomId,
-                      client,
-                      runtime,
-                      textLimit,
-                      replyToMode,
-                      threadId: threadTarget,
-                      replyToId: threadTarget ?? replyToEventId ?? undefined,
-                      accountId: _route.accountId,
-                      mediaLocalRoots,
-                      tableMode,
-                    });
-                  },
-                });
-                draftConsumed = true;
-              } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
-                let textEditOk = !mustDeliverFinalNormally;
-                const payloadText = payload.text ?? ttsSupplement?.spokenText;
-                const payloadTextMatchesDraft =
-                  typeof payloadText === "string" && draftStream.matchesPreparedText(payloadText);
-                const reusesDraftTextUnchanged =
-                  typeof payloadText === "string" &&
-                  Boolean(payloadText.trim()) &&
-                  payloadTextMatchesDraft;
-                const mediaTextNeedsNormalMentionDelivery =
-                  typeof payloadText === "string" &&
-                  Boolean(payloadText.trim()) &&
-                  (await matrixTextWouldActivateMentions(client, payloadText));
-                const requiresFinalTextEdit =
-                  quietDraftStreaming ||
-                  (typeof payloadText === "string" && !payloadTextMatchesDraft);
-                if (textEditOk && mediaTextNeedsNormalMentionDelivery) {
-                  textEditOk = false;
-                } else if (textEditOk && payloadText && requiresFinalTextEdit) {
-                  const { editMessageMatrix } = await loadMatrixSendModule();
-                  textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
-                    client,
-                    cfg,
-                    threadId: threadTarget,
-                    accountId: _route.accountId,
-                    extraContent: quietDraftStreaming
-                      ? buildMatrixFinalizedPreviewContent()
-                      : undefined,
-                  }).then(
-                    () => true,
-                    () => false,
-                  );
-                } else if (textEditOk && reusesDraftTextUnchanged) {
-                  textEditOk = await draftStream.finalizeLive();
-                }
-                const reusesDraftAsFinalText = Boolean(payloadText?.trim()) && textEditOk;
-                if (!reusesDraftAsFinalText) {
-                  await redactMatrixDraftEvent(client, roomId, draftEventId);
-                }
-                const mediaPayload =
-                  ttsSupplement && reusesDraftAsFinalText
-                    ? buildTtsSupplementMediaPayload(payload)
-                    : {
-                        ...payload,
-                        text: reusesDraftAsFinalText
-                          ? undefined
-                          : (payload.text ??
-                            (ttsSupplement?.visibleTextAlreadyDelivered === true
-                              ? undefined
-                              : ttsSupplement?.spokenText)),
-                      };
-                await deliverMatrixReplies({
-                  cfg,
-                  replies: [mediaPayload],
-                  roomId,
-                  client,
-                  runtime,
-                  textLimit,
-                  replyToMode,
-                  threadId: threadTarget,
-                  replyToId: threadTarget ?? replyToEventId ?? undefined,
-                  accountId: _route.accountId,
-                  mediaLocalRoots,
-                  tableMode,
-                });
-                draftConsumed = true;
-              } else {
-                const draftRedacted =
-                  Boolean(draftEventId) &&
-                  (payload.isError ||
-                    payloadReplyMismatch ||
-                    mustDeliverFinalNormally ||
-                    draftFinalTextNeedsNormalMentionDelivery);
-                if (draftRedacted && draftEventId) {
-                  await redactMatrixDraftEvent(client, roomId, draftEventId);
-                }
-                const deliveredFallback = await deliverMatrixReplies({
-                  cfg,
-                  replies: [fallbackPayload],
-                  roomId,
-                  client,
-                  runtime,
-                  textLimit,
-                  replyToMode,
-                  threadId: threadTarget,
-                  replyToId: threadTarget ?? replyToEventId ?? undefined,
-                  accountId: _route.accountId,
-                  mediaLocalRoots,
-                  tableMode,
-                });
-                if (draftRedacted || deliveredFallback) {
-                  draftConsumed = true;
-                }
-              }
-
-              if (info.kind === "block") {
-                draftConsumed = false;
-                advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
-                draftStream.reset();
-                currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
-                updateDraftFromLatestFullText();
-
-                // Re-assert typing so the user still sees the indicator while
-                // the next block generates.
-                const { sendTypingMatrix } = await loadMatrixSendModule();
-                await sendTypingMatrix(roomId, true, undefined, client).catch(() => {});
-              }
-            } else {
+            if (draftConsumed) {
+              await draftStream.discardPending();
               await deliverMatrixReplies({
                 cfg,
-                replies: [payload],
+                replies: [fallbackPayload],
                 roomId,
                 client,
                 runtime,
@@ -2352,22 +2131,260 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 mediaLocalRoots,
                 tableMode,
               });
+              return;
             }
-          },
-          onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
-            if (info.kind === "final") {
-              finalReplyDeliveryFailed = true;
+
+            const payloadReplyToId = normalizeOptionalString(payload.replyToId);
+            const payloadReplyMismatch =
+              replyToMode !== "off" && !threadTarget && payloadReplyToId !== currentDraftReplyToId;
+            let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
+            const canPotentiallyFinalizeDraft =
+              Boolean(payload.text?.trim()) &&
+              !payload.isError &&
+              !payloadReplyMismatch &&
+              !mustDeliverFinalNormally;
+
+            if (canPotentiallyFinalizeDraft) {
+              await draftStream.stop();
+              mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
             } else {
-              nonFinalReplyDeliveryFailed = true;
+              await draftStream.discardPending();
             }
+            const draftEventId = draftStream.eventId();
+            const draftFinalTextNeedsNormalMentionDelivery =
+              Boolean(draftEventId) &&
+              typeof payload.text === "string" &&
+              Boolean(payload.text.trim()) &&
+              !payload.isError &&
+              !payloadReplyMismatch &&
+              !mustDeliverFinalNormally &&
+              (await matrixTextWouldActivateMentions(client, payload.text));
+
+            if (
+              draftEventId &&
+              payload.text &&
+              !payload.isError &&
+              !hasMedia &&
+              !payloadReplyMismatch &&
+              !mustDeliverFinalNormally &&
+              !draftFinalTextNeedsNormalMentionDelivery
+            ) {
+              const finalPreviewText = payload.text;
+              await deliverWithFinalizableLivePreviewAdapter<
+                ReplyPayload,
+                string,
+                {
+                  text: string;
+                  finalizeLive: boolean;
+                  extraContent?: Record<string, unknown>;
+                }
+              >({
+                kind: "final",
+                payload,
+                adapter: defineFinalizableLivePreviewAdapter({
+                  draft: {
+                    flush: async () => {},
+                    clear: async () => {},
+                    discardPending: async () => {},
+                    id: () => draftEventId,
+                  },
+                  buildFinalEdit: () => ({
+                    text: finalPreviewText,
+                    finalizeLive: !(
+                      quietDraftStreaming || !draftStream.matchesPreparedText(finalPreviewText)
+                    ),
+                    ...(quietDraftStreaming
+                      ? { extraContent: buildMatrixFinalizedPreviewContent() }
+                      : {}),
+                  }),
+                  editFinal: async (_draftEventId, edit) => {
+                    if (edit.finalizeLive) {
+                      if (!(await draftStream.finalizeLive())) {
+                        throw new Error("Matrix draft live finalize failed");
+                      }
+                      return;
+                    }
+                    const { editMessageMatrix } = await loadMatrixSendModule();
+                    await editMessageMatrix(roomId, _draftEventId, edit.text, {
+                      client,
+                      cfg,
+                      threadId: threadTarget,
+                      accountId: _route.accountId,
+                      extraContent: edit.extraContent,
+                    });
+                  },
+                  createPreviewReceipt: (id): MessageReceipt =>
+                    createPreviewMessageReceipt({
+                      id,
+                      ...(threadTarget ? { threadId: threadTarget } : {}),
+                      ...(currentDraftReplyToId ? { replyToId: currentDraftReplyToId } : {}),
+                    }),
+                  logPreviewEditFailure: (err) => {
+                    logVerboseMessage(`matrix: preview final edit failed: ${String(err)}`);
+                  },
+                }),
+                deliverNormally: async () => {
+                  await redactMatrixDraftEvent(client, roomId, draftEventId);
+                  await deliverMatrixReplies({
+                    cfg,
+                    replies: [fallbackPayload],
+                    roomId,
+                    client,
+                    runtime,
+                    textLimit,
+                    replyToMode,
+                    threadId: threadTarget,
+                    replyToId: threadTarget ?? replyToEventId ?? undefined,
+                    accountId: _route.accountId,
+                    mediaLocalRoots,
+                    tableMode,
+                  });
+                },
+              });
+              draftConsumed = true;
+            } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
+              let textEditOk = !mustDeliverFinalNormally;
+              const payloadText = payload.text ?? ttsSupplement?.spokenText;
+              const payloadTextMatchesDraft =
+                typeof payloadText === "string" && draftStream.matchesPreparedText(payloadText);
+              const reusesDraftTextUnchanged =
+                typeof payloadText === "string" &&
+                Boolean(payloadText.trim()) &&
+                payloadTextMatchesDraft;
+              const mediaTextNeedsNormalMentionDelivery =
+                typeof payloadText === "string" &&
+                Boolean(payloadText.trim()) &&
+                (await matrixTextWouldActivateMentions(client, payloadText));
+              const requiresFinalTextEdit =
+                quietDraftStreaming ||
+                (typeof payloadText === "string" && !payloadTextMatchesDraft);
+              if (textEditOk && mediaTextNeedsNormalMentionDelivery) {
+                textEditOk = false;
+              } else if (textEditOk && payloadText && requiresFinalTextEdit) {
+                const { editMessageMatrix } = await loadMatrixSendModule();
+                textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
+                  client,
+                  cfg,
+                  threadId: threadTarget,
+                  accountId: _route.accountId,
+                  extraContent: quietDraftStreaming
+                    ? buildMatrixFinalizedPreviewContent()
+                    : undefined,
+                }).then(
+                  () => true,
+                  () => false,
+                );
+              } else if (textEditOk && reusesDraftTextUnchanged) {
+                textEditOk = await draftStream.finalizeLive();
+              }
+              const reusesDraftAsFinalText = Boolean(payloadText?.trim()) && textEditOk;
+              if (!reusesDraftAsFinalText) {
+                await redactMatrixDraftEvent(client, roomId, draftEventId);
+              }
+              const mediaPayload =
+                ttsSupplement && reusesDraftAsFinalText
+                  ? buildTtsSupplementMediaPayload(payload)
+                  : {
+                      ...payload,
+                      text: reusesDraftAsFinalText
+                        ? undefined
+                        : (payload.text ??
+                          (ttsSupplement?.visibleTextAlreadyDelivered === true
+                            ? undefined
+                            : ttsSupplement?.spokenText)),
+                    };
+              await deliverMatrixReplies({
+                cfg,
+                replies: [mediaPayload],
+                roomId,
+                client,
+                runtime,
+                textLimit,
+                replyToMode,
+                threadId: threadTarget,
+                replyToId: threadTarget ?? replyToEventId ?? undefined,
+                accountId: _route.accountId,
+                mediaLocalRoots,
+                tableMode,
+              });
+              draftConsumed = true;
+            } else {
+              const draftRedacted =
+                Boolean(draftEventId) &&
+                (payload.isError ||
+                  payloadReplyMismatch ||
+                  mustDeliverFinalNormally ||
+                  draftFinalTextNeedsNormalMentionDelivery);
+              if (draftRedacted && draftEventId) {
+                await redactMatrixDraftEvent(client, roomId, draftEventId);
+              }
+              const deliveredFallback = await deliverMatrixReplies({
+                cfg,
+                replies: [fallbackPayload],
+                roomId,
+                client,
+                runtime,
+                textLimit,
+                replyToMode,
+                threadId: threadTarget,
+                replyToId: threadTarget ?? replyToEventId ?? undefined,
+                accountId: _route.accountId,
+                mediaLocalRoots,
+                tableMode,
+              });
+              if (draftRedacted || deliveredFallback) {
+                draftConsumed = true;
+              }
+            }
+
             if (info.kind === "block") {
+              draftConsumed = false;
               advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
+              draftStream.reset();
+              currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
+              updateDraftFromLatestFullText();
+
+              // Re-assert typing so the user still sees the indicator while
+              // the next block generates.
+              const { sendTypingMatrix } = await loadMatrixSendModule();
+              await sendTypingMatrix(roomId, true, undefined, client).catch(() => {});
             }
-            runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
-          },
-          onReplyStart: typingCallbacks.onReplyStart,
-          onIdle: typingCallbacks.onIdle,
-        });
+          } else {
+            await deliverMatrixReplies({
+              cfg,
+              replies: [payload],
+              roomId,
+              client,
+              runtime,
+              textLimit,
+              replyToMode,
+              threadId: threadTarget,
+              replyToId: threadTarget ?? replyToEventId ?? undefined,
+              accountId: _route.accountId,
+              mediaLocalRoots,
+              tableMode,
+            });
+          }
+        },
+        onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
+          if (info.kind === "final") {
+            finalReplyDeliveryFailed = true;
+          } else {
+            nonFinalReplyDeliveryFailed = true;
+          }
+          if (info.kind === "block") {
+            advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
+          }
+          runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
+        },
+        onReplyStart: typingCallbacks.onReplyStart,
+        onIdle: typingCallbacks.onIdle,
+      };
+      const {
+        deliver: deliverReply,
+        onError: onReplyError,
+        ...turnDispatcherOptions
+      } = dispatcherOptions;
       const pinnedMainDmOwner = isDirectMessage
         ? await (async () => {
             const livePinnedCfg = core.config.current() as CoreConfig;
@@ -2410,12 +2427,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             raw: event,
           }),
           resolveTurn: () => ({
+            cfg,
             channel: "matrix",
             accountId: _route.accountId,
-            routeSessionKey: _route.sessionKey,
-            storePath,
+            route: { agentId: _route.agentId, sessionKey: _route.sessionKey },
             ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
             botLoopProtection,
             record: {
               updateLastRoute: isDirectMessage
@@ -2452,15 +2468,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 });
               },
             },
-            onPreDispatchFailure: () =>
-              core.channel.reply.settleReplyDispatcher({
-                dispatcher,
-                onSettled: () => {
-                  markRunComplete();
-                  markDispatchIdle();
-                },
-              }),
-            runDispatch: async () => {
+            afterRecord: async () => {
               if (
                 sharedDmContextNotice &&
                 markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)
@@ -2476,64 +2484,50 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   );
                 }
               }
-
-              return await core.channel.reply.withReplyDispatcher({
-                dispatcher,
-                onSettled: () => {
-                  markDispatchIdle();
-                },
-                run: async () => {
-                  try {
-                    return await core.channel.reply.dispatchReplyFromConfig({
-                      ctx: ctxPayload,
-                      cfg,
-                      dispatcher,
-                      replyOptions: {
-                        ...replyOptions,
-                        skillFilter: roomConfig?.skills,
-                        // Keep block streaming enabled when explicitly requested, even
-                        // with draft previews on. The draft remains the live preview
-                        // for the current assistant block, while block deliveries
-                        // finalize completed blocks into their own preserved events.
-                        disableBlockStreaming: !blockStreamingEnabled,
-                        onPartialReply: draftStream
-                          ? (payload) => {
-                              if (progressDraftStreaming) {
-                                return;
-                              }
-                              latestDraftFullText = payload.text ?? "";
-                              suppressPreviewToolProgressForAnswerText(latestDraftFullText);
-                              updateDraftFromLatestFullText();
-                            }
-                          : undefined,
-                        onBlockReplyQueued: draftStream
-                          ? (payload, context) => {
-                              if (payload.isCompactionNotice === true) {
-                                return;
-                              }
-                              queueDraftBlockBoundary(payload, context);
-                            }
-                          : undefined,
-                        // Reset draft boundary bookkeeping on assistant message
-                        // boundaries so post-tool blocks stream from a fresh
-                        // cumulative payload (payload.text resets upstream).
-                        onAssistantMessageStart: draftStream
-                          ? () => {
-                              resetDraftBlockOffsets();
-                              resetPreviewToolProgress();
-                            }
-                          : undefined,
-                        onQueuedFollowupAdmitted: draftStream ? resetDraftDeliveryState : undefined,
-                        ...buildPreviewToolProgressReplyOptions(),
-                        onModelSelected,
-                      },
-                    });
-                  } finally {
-                    progressDraftGate.cancel();
-                    markRunComplete();
+            },
+            delivery: {
+              deliver: deliverReply,
+              onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
+            },
+            dispatcherOptions: {
+              ...turnDispatcherOptions,
+              onSettled: () => progressDraftGate.cancel(),
+            },
+            replyOptions: {
+              skillFilter: roomConfig?.skills,
+              // Preserve explicit block streaming with draft previews: drafts update the live
+              // block, while block deliveries finalize completed blocks as separate events.
+              disableBlockStreaming: !blockStreamingEnabled,
+              onPartialReply: draftStream
+                ? (payload) => {
+                    if (progressDraftStreaming) {
+                      return;
+                    }
+                    latestDraftFullText = payload.text ?? "";
+                    suppressPreviewToolProgressForAnswerText(latestDraftFullText);
+                    updateDraftFromLatestFullText();
                   }
-                },
-              });
+                : undefined,
+              onBlockReplyQueued: draftStream
+                ? (payload, context) => {
+                    if (payload.isCompactionNotice === true) {
+                      return;
+                    }
+                    queueDraftBlockBoundary(payload, context);
+                  }
+                : undefined,
+              // Reset draft boundary bookkeeping on assistant message
+              // boundaries so post-tool blocks stream from a fresh
+              // cumulative payload (payload.text resets upstream).
+              onAssistantMessageStart: draftStream
+                ? () => {
+                    resetDraftBlockOffsets();
+                    resetPreviewToolProgress();
+                  }
+                : undefined,
+              onQueuedFollowupAdmitted: draftStream ? resetDraftDeliveryState : undefined,
+              ...buildPreviewToolProgressReplyOptions(),
+              onModelSelected,
             },
           }),
         },

@@ -361,7 +361,7 @@ export function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
   });
 }
 
-export function createMockReplyOperation(): {
+export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
   freezeAbortMock: ReturnType<typeof vi.fn>;
@@ -380,7 +380,7 @@ export function createMockReplyOperation(): {
     replyOperation: {
       key: "main",
       sessionId: "session",
-      abortSignal: new AbortController().signal,
+      abortSignal: options?.abortSignal ?? new AbortController().signal,
       resetTriggered: false,
       terminalRecovery: false,
       acceptedSteeredInboundAudio: false,
@@ -514,6 +514,7 @@ export function createMinimalRunAgentTurnParams(overrides?: {
     pendingToolTasks: new Set<Promise<void>>(),
     resetSessionAfterRoleOrderingConflict: async () => false,
     isHeartbeat: false,
+    hookTrigger: "user" as const,
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off" as const,

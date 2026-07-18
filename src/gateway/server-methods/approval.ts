@@ -5,9 +5,12 @@ import {
   errorShape,
   isWellFormedApprovalId,
   type ApprovalDecision,
+  type ApprovalHistoryParams,
+  type ApprovalHistoryResult,
   type ApprovalResolveParams,
   type ApprovalSnapshot,
   validateApprovalGetParams,
+  validateApprovalHistoryParams,
   validateApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
@@ -28,6 +31,8 @@ import {
 import {
   getOperatorApprovalDetailed,
   getOperatorApprovalDetailedByLocator,
+  listTerminalOperatorApprovals,
+  OperatorApprovalHistoryCursorError,
   type OperatorApprovalRecord,
   type OperatorApprovalResolver,
 } from "../operator-approval-store.js";
@@ -79,6 +84,18 @@ function buildApprovalSnapshot(
     ...common,
     resolvedAtMs: record.resolvedAtMs,
     reason: record.terminalReason,
+    source: {
+      ...(record.source.agentId ? { agentId: record.source.agentId } : {}),
+      ...(record.source.sessionKey ? { sessionKey: record.source.sessionKey } : {}),
+    },
+    ...(record.resolver
+      ? {
+          resolver: {
+            kind: record.resolver.kind,
+            ...(record.resolver.id ? { id: record.resolver.id } : {}),
+          },
+        }
+      : {}),
   };
   if (record.status === "allowed") {
     if (record.decision !== "allow-once" && record.decision !== "allow-always") {
@@ -122,7 +139,7 @@ function respondApprovalNotFound(respond: RespondFn): void {
 function respondApprovalUnavailable(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
-  operation: "lookup" | "resolve";
+  operation: "history" | "lookup" | "resolve";
   error: unknown;
 }): void {
   params.context.logGateway?.error?.(
@@ -335,6 +352,50 @@ export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
   return {
+    "approval.history": ({ params: rawParams, respond, context }) => {
+      if (!validateApprovalHistoryParams(rawParams)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history params"),
+        );
+        return;
+      }
+      const historyParams = rawParams as ApprovalHistoryParams;
+      let history: ReturnType<typeof listTerminalOperatorApprovals>;
+      try {
+        history = listTerminalOperatorApprovals({
+          cursor: historyParams.cursor,
+          limit: historyParams.limit,
+          kind: historyParams.kind,
+          databaseOptions: params.databaseOptions,
+        });
+      } catch (error) {
+        if (error instanceof OperatorApprovalHistoryCursorError) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history cursor"),
+          );
+          return;
+        }
+        respondApprovalUnavailable({ context, respond, operation: "history", error });
+        return;
+      }
+      const controlUiBasePath = normalizeControlUiBasePath(
+        context.getRuntimeConfig()?.gateway?.controlUi?.basePath,
+      );
+      const items = history.records.flatMap((record) => {
+        const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
+        return snapshot && snapshot.status !== "pending" ? [snapshot] : [];
+      });
+      const result: ApprovalHistoryResult = {
+        items,
+        ...(history.nextCursor ? { nextCursor: history.nextCursor } : {}),
+      };
+      respond(true, result, undefined);
+    },
+
     "approval.get": ({ params: rawParams, respond, client, context }) => {
       if (!validateApprovalGetParams(rawParams)) {
         respond(

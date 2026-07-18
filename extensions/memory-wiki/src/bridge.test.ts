@@ -147,7 +147,7 @@ describe("syncMemoryWikiBridgeSources", () => {
     const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
       .trim()
       .split("\n");
-    expect(logLines).toHaveLength(2);
+    expect(logLines).toHaveLength(3);
   });
 
   it("skips generated artifacts from its own vault", async () => {

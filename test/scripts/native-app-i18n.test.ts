@@ -275,6 +275,21 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
   });
 
+  it("ignores Android collection resource references", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/wear.xml",
+      `<resources>
+        <string-array name="capabilities">
+          <item>@string/native_capability</item>
+          <item>Visible choice</item>
+        </string-array>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["Visible choice"]);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));

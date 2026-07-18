@@ -219,7 +219,7 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledWith(
       darwinNode,
       ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8" },
+      { encoding: "utf8", timeoutMs: 5_000 },
     );
   });
 
@@ -462,7 +462,7 @@ describe("resolveSystemNodeInfo", () => {
     expect(execFile).toHaveBeenCalledWith(
       homebrewOptNode,
       ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8" },
+      { encoding: "utf8", timeoutMs: 5_000 },
     );
   });
 

@@ -181,8 +181,8 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
     models: [
       DEFAULT_TOGETHER_VIDEO_MODEL,
       "Wan-AI/Wan2.2-I2V-A14B",
-      "minimax/Hailuo-02",
-      "Kwai/Kling-2.1-Master",
+      "minimax/hailuo-02",
+      "kwaivgI/kling-2.1-master",
     ],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({

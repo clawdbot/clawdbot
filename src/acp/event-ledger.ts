@@ -1,12 +1,7 @@
 /** Persistent/replayable ACP event ledger implementations for session rehydration. */
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
 import { resolveIntegerOption } from "@openclaw/acp-core/numeric-options";
-import { resolveStateDir } from "../config/paths.js";
-import { withFileLock } from "../infra/file-lock.js";
-import { readJsonFile } from "../infra/json-files.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -18,16 +13,6 @@ const LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
 const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
-const FILE_LEDGER_LOCK_OPTIONS = {
-  retries: {
-    retries: 8,
-    factor: 2,
-    minTimeout: 50,
-    maxTimeout: 5_000,
-    randomize: true,
-  },
-  stale: 15_000,
-} as const;
 
 type AcpEventLedgerEntry = {
   seq: number;
@@ -176,60 +161,6 @@ function normalizeEvent(raw: unknown): AcpEventLedgerEntry | undefined {
     ...(typeof runId === "string" && runId ? { runId } : {}),
     update: cloneJsonValue(raw.update) as SessionUpdate,
   };
-}
-
-function normalizeSession(raw: unknown): LedgerSession | undefined {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const sessionId = raw.sessionId;
-  const sessionKey = raw.sessionKey;
-  const cwd = raw.cwd;
-  const createdAt = raw.createdAt;
-  const updatedAt = raw.updatedAt;
-  const nextSeq = raw.nextSeq;
-  if (
-    typeof sessionId !== "string" ||
-    typeof sessionKey !== "string" ||
-    typeof cwd !== "string" ||
-    typeof createdAt !== "number" ||
-    !Number.isFinite(createdAt) ||
-    typeof updatedAt !== "number" ||
-    !Number.isFinite(updatedAt) ||
-    typeof nextSeq !== "number" ||
-    !Number.isInteger(nextSeq) ||
-    nextSeq < 1
-  ) {
-    return undefined;
-  }
-  const events = Array.isArray(raw.events)
-    ? raw.events.map(normalizeEvent).filter((event): event is AcpEventLedgerEntry => Boolean(event))
-    : [];
-  return {
-    sessionId,
-    sessionKey,
-    cwd,
-    complete: raw.complete === true,
-    createdAt,
-    updatedAt,
-    nextSeq,
-    events,
-  };
-}
-
-function normalizeStore(raw: unknown): LedgerStore {
-  if (!isRecord(raw) || raw.version !== LEDGER_VERSION || !isRecord(raw.sessions)) {
-    return createEmptyStore();
-  }
-  const sessions: Record<string, LedgerSession> = {};
-  for (const [sessionId, value] of Object.entries(raw.sessions)) {
-    const session = normalizeSession(value);
-    if (!session || session.sessionId !== sessionId) {
-      continue;
-    }
-    sessions[sessionId] = session;
-  }
-  return { version: LEDGER_VERSION, sessions };
 }
 
 function getOrCreateSession(
@@ -439,95 +370,6 @@ export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEv
     },
     read: async (fn) => fn(),
   });
-}
-
-/** Resolves the legacy file-backed ACP ledger path under the OpenClaw state directory. */
-export function resolveDefaultAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "acp", "event-ledger.json");
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Migrates a legacy file ledger into the SQLite state database, preserving replay order. */
-export async function migrateFileAcpEventLedgerToSqlite(
-  params: { filePath: string; archiveSource?: boolean } & OpenClawStateDatabaseOptions,
-): Promise<{ importedSessions: number; importedEvents: number; archived?: boolean }> {
-  if (!(await fileExists(params.filePath))) {
-    return { importedSessions: 0, importedEvents: 0 };
-  }
-
-  const legacy = await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () =>
-    normalizeStore(await readJsonFile(params.filePath)),
-  );
-  const sessions = Object.values(legacy.sessions);
-  if (sessions.length === 0) {
-    return { importedSessions: 0, importedEvents: 0 };
-  }
-
-  let importedSessions = 0;
-  let importedEvents = 0;
-  runOpenClawStateWriteTransaction((database) => {
-    const sessionExists = database.db.prepare(
-      "SELECT 1 FROM acp_replay_sessions WHERE session_id = ?",
-    );
-    const insertSession = database.db.prepare(
-      `INSERT INTO acp_replay_sessions (
-         session_id, session_key, cwd, complete, created_at, updated_at, next_seq
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const insertEvent = database.db.prepare(
-      `INSERT OR IGNORE INTO acp_replay_events (
-         session_id, seq, at, session_key, run_id, update_json
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
-    );
-    for (const session of sessions) {
-      if (sessionExists.get(session.sessionId)) {
-        continue;
-      }
-      insertSession.run(
-        session.sessionId,
-        session.sessionKey,
-        session.cwd,
-        session.complete ? 1 : 0,
-        session.createdAt,
-        session.updatedAt,
-        session.nextSeq,
-      );
-      importedSessions++;
-      for (const event of session.events) {
-        const result = insertEvent.run(
-          event.sessionId,
-          event.seq,
-          event.at,
-          event.sessionKey,
-          event.runId ?? null,
-          JSON.stringify(event.update),
-        );
-        importedEvents += Number(result.changes);
-      }
-    }
-  }, params);
-
-  if (params.archiveSource !== true || importedSessions === 0) {
-    return { importedSessions, importedEvents };
-  }
-  const archivePath = `${params.filePath}.migrated`;
-  try {
-    if (!(await fileExists(archivePath))) {
-      await fs.rename(params.filePath, archivePath);
-      return { importedSessions, importedEvents, archived: true };
-    }
-  } catch {
-    // The SQLite import succeeded; archiving is a best-effort cleanup.
-  }
-  return { importedSessions, importedEvents };
 }
 
 function normalizeSqliteInteger(value: number | bigint | null): number {

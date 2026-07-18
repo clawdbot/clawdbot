@@ -67,6 +67,13 @@ import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
 type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const restartTesting = {
   resetSigusr1State() {
     resetGatewayRestartStateForInProcessRestart();
@@ -936,8 +943,8 @@ describe("gateway hot reload model state", () => {
     expect(cron.stop).toHaveBeenCalledTimes(1);
     expect(stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(newCron.start).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(order.at(-1)).toBe("hook"));
+    await waitForFast(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(order.at(-1)).toBe("hook"));
     expect(order).toEqual([
       "build-new",
       "invalidate-old",
@@ -975,7 +982,7 @@ describe("gateway hot reload model state", () => {
       await applyHotReload(createCronRestartPlan(), nextConfig);
     });
 
-    await vi.waitFor(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
     expect(cronReconciliation.arm).toHaveBeenCalledWith({
       reason: "reload",
       config: nextConfig,
@@ -1085,7 +1092,7 @@ describe("gateway hot reload model state", () => {
       ).resolves.toBeUndefined();
 
       expect(setState).toHaveBeenCalledOnce();
-      await vi.waitFor(() => expect(signalSpy).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(signalSpy).toHaveBeenCalledOnce());
       expect(logReload.warn).toHaveBeenCalledWith(
         "cron reload failed after config commit: cron start failed; restarting gateway",
       );
@@ -1129,10 +1136,10 @@ describe("gateway hot reload model state", () => {
 
     await withGatewayRestartSignal(async (signalSpy) => {
       await applyHotReload(createCronRestartPlan(), { cron: { enabled: true } });
-      await vi.waitFor(() => expect(firstCronState.cron.start).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(firstCronState.cron.start).toHaveBeenCalledOnce());
       await applyHotReload(createCronRestartPlan(), { cron: { enabled: true } });
       rejectFirstStart?.(new Error("superseded start failed"));
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(logCron.error).toHaveBeenCalledWith(
           "failed to start: Error: superseded start failed",
         ),
@@ -4071,11 +4078,10 @@ describe("gateway Gmail hot reload handlers", () => {
       const deferredPlan = buildGatewayReloadPlan(
         diffConfigPaths(harness.initialConfig, harness.deferredConfig),
       );
-      await vi.waitFor(() =>
-        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-          [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
-        ]),
-      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(harness.requestRecoveryRestart.mock.calls).toEqual([
+        [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
+      ]);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
       await harness.reloader.stop();
@@ -4172,9 +4178,9 @@ describe("gateway Gmail hot reload handlers", () => {
         harness.writeConfig(acceptedConfig, `accepted-after-${_kind}`, 3);
         await vi.advanceTimersByTimeAsync(0);
         await acceptedPromotion;
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(500);
 
-        await vi.waitFor(() => expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce());
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
       } finally {
         hoisted.activeTaskBlockers.length = 0;
         await harness.reloader.stop();
@@ -4321,11 +4327,10 @@ describe("gateway Gmail hot reload handlers", () => {
         reason: "restart-check",
         activate: false,
       });
-      await vi.waitFor(() =>
-        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-          [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
-        ]),
-      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(harness.requestRecoveryRestart.mock.calls).toEqual([
+        [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
+      ]);
     } finally {
       releaseEmissionPreflight();
       hoisted.activeTaskBlockers.length = 0;

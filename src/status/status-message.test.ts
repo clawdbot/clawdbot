@@ -84,6 +84,31 @@ describe("buildStatusMessage context window", () => {
     expect(text).toContain("pinned session; config primary ollama-cloud/deepseek-v4-pro");
     expect(text).toContain("Context: 128k/200k");
     expect(text).not.toContain("Context: 128k/1.0m");
+    expect(text).not.toContain("live switch pending");
+  });
+
+  it("flags a pending live model switch on the model line", () => {
+    // A /model switch issued during an active run stays pending until a turn
+    // applies it; /status must not imply the new selection is already running.
+    const text = buildStatusMessage({
+      config: {},
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: {
+        sessionId: "pending-live-switch",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+        liveModelSwitchPending: true,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("Model: openai/gpt-5.5");
+    expect(text).toContain("⏳ live switch pending");
   });
 
   it("keeps trusted runtime context for config-backed runtime aliases", () => {

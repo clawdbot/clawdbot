@@ -154,6 +154,14 @@ const mocks = vi.hoisted(() => {
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
+    resolveAgentHarnessOwnerPluginIds: vi.fn().mockReturnValue(["codex"]),
+    runPluginPayloadSmokeCheckForManifestRecords: vi
+      .fn()
+      .mockResolvedValue({ checked: ["codex"], failures: [] }),
+    resolveAgentHarnessRuntimeAvailability: vi.fn().mockReturnValue({
+      status: "available",
+      ownerPluginIds: ["codex"],
+    }),
     loadModelCatalog: vi.fn().mockResolvedValue([]),
     modelCatalogRouteVariants: undefined as unknown[] | undefined,
     openAIModelRouteOverride: undefined as ((params: unknown) => unknown) | undefined,
@@ -275,6 +283,13 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
 }));
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
+}));
+vi.mock("../../agents/harness/runtime-plugin.js", () => ({
+  resolveAgentHarnessOwnerPluginIds: mocks.resolveAgentHarnessOwnerPluginIds,
+  resolveAgentHarnessRuntimeAvailability: mocks.resolveAgentHarnessRuntimeAvailability,
+}));
+vi.mock("../../cli/update-cli/plugin-payload-validation.js", () => ({
+  runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
 }));
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalogSnapshot: async (...args: unknown[]) => {
@@ -768,6 +783,90 @@ describe("modelsStatusCommand auth overview", () => {
     ]);
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
     expect(textRuntime.log.mock.calls.flat().join("\n")).not.toContain("set an API key env var");
+  });
+
+  it("reports usable Codex auth as unavailable when its harness plugin is quarantined", async () => {
+    const localRuntime = createRuntime();
+    const textRuntime = createRuntime();
+    const payloadFailure = {
+      pluginId: "codex",
+      installPath: "/private/plugin",
+      reason: "missing-package-dir" as const,
+      detail: "missing",
+    };
+    mocks.runPluginPayloadSmokeCheckForManifestRecords
+      .mockResolvedValueOnce({ checked: ["codex"], failures: [payloadFailure] })
+      .mockResolvedValueOnce({ checked: ["codex"], failures: [payloadFailure] });
+    const resolveAvailability = (params: {
+      payloadFailures: Array<{ pluginId: string; reason: string }>;
+    }) =>
+      params.payloadFailures.some((failure) => failure.pluginId === "codex")
+        ? {
+            status: "unavailable",
+            ownerPluginIds: ["codex", "openai"],
+            reason: "owner-plugin-degraded",
+            detail:
+              'Agent harness "codex" owner plugin "codex" is unavailable (missing-package-dir).',
+          }
+        : { status: "available", ownerPluginIds: ["codex", "openai"] };
+    mocks.resolveAgentHarnessRuntimeAvailability
+      .mockImplementationOnce(resolveAvailability)
+      .mockImplementationOnce(resolveAvailability);
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.5",
+        profiles: {
+          "openai:default": {
+            type: "oauth",
+            provider: "openai",
+            access: "oauth-access",
+            refresh: "oauth-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        await modelsStatusCommand({ check: true }, textRuntime as never);
+      },
+    );
+
+    expect(mocks.runPluginPayloadSmokeCheckForManifestRecords).toHaveBeenCalledWith(
+      expect.objectContaining({ env: process.env }),
+    );
+    expect(mocks.resolveAgentHarnessRuntimeAvailability).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: "codex",
+        provider: "openai",
+        payloadFailures: [payloadFailure],
+        payloadCheckedPluginIds: ["codex"],
+        selectedPluginRootDirs: expect.any(Map),
+      }),
+    );
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.auth.runtimeAuthRoutes).toEqual([
+      {
+        provider: "openai",
+        runtime: "codex",
+        authProvider: "openai",
+        status: "unavailable",
+        authStatus: "usable",
+        runtimeStatus: "unavailable",
+        runtimeReason: "owner-plugin-degraded",
+        runtimeDetail:
+          'Agent harness "codex" owner plugin "codex" is unavailable (missing-package-dir).',
+        runtimePluginIds: ["codex", "openai"],
+        effective: {
+          kind: "profiles",
+          detail: "/tmp/openclaw-agent/auth-profiles.json",
+        },
+      },
+    ]);
+    expect(localRuntime.exit).toHaveBeenCalledWith(1);
+    expect(textRuntime.exit).toHaveBeenCalledWith(1);
+    expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("status=unavailable");
+    expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("auth=usable");
+    expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("runtime=unavailable");
   });
 
   it("evaluates mixed primary and fallback OpenAI routes independently", async () => {

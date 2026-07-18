@@ -17,7 +17,8 @@ export type SessionStoreSnapshotEntry = DeepReadonly<SessionEntry>;
 
 type SessionStoreCacheEntry = {
   store: Record<string, SessionEntry>;
-  mtimeMs?: number;
+  ctimeNs?: bigint;
+  mtimeNs?: bigint;
   sizeBytes?: number;
   serialized?: string;
 };
@@ -298,7 +299,8 @@ export function dropSessionStoreObjectCache(storePath: string): void {
 
 export function readSessionStoreCache(params: {
   storePath: string;
-  mtimeMs?: number;
+  ctimeNs?: bigint;
+  mtimeNs?: bigint;
   sizeBytes?: number;
   clone?: boolean;
 }): Record<string, SessionEntry> | null {
@@ -306,7 +308,11 @@ export function readSessionStoreCache(params: {
   if (!cached) {
     return null;
   }
-  if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+  if (
+    params.ctimeNs !== cached.ctimeNs ||
+    params.mtimeNs !== cached.mtimeNs ||
+    params.sizeBytes !== cached.sizeBytes
+  ) {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
@@ -318,14 +324,19 @@ export function readSessionStoreCache(params: {
 
 export function takeMutableSessionStoreCache(params: {
   storePath: string;
-  mtimeMs?: number;
+  ctimeNs?: bigint;
+  mtimeNs?: bigint;
   sizeBytes?: number;
 }): Record<string, SessionEntry> | null {
   const cached = SESSION_STORE_CACHE.get(params.storePath);
   if (!cached) {
     return null;
   }
-  if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+  if (
+    params.ctimeNs !== cached.ctimeNs ||
+    params.mtimeNs !== cached.mtimeNs ||
+    params.sizeBytes !== cached.sizeBytes
+  ) {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
@@ -336,7 +347,8 @@ export function takeMutableSessionStoreCache(params: {
 export function writeSessionStoreCache(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
-  mtimeMs?: number;
+  ctimeNs?: bigint;
+  mtimeNs?: bigint;
   sizeBytes?: number;
   serialized?: string;
   serializedPromptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
@@ -352,7 +364,8 @@ export function writeSessionStoreCache(params: {
   }
   SESSION_STORE_CACHE.set(params.storePath, {
     store,
-    mtimeMs: params.mtimeMs,
+    ctimeNs: params.ctimeNs,
+    mtimeNs: params.mtimeNs,
     sizeBytes: params.sizeBytes,
     serialized: params.cloneSerialized,
   });

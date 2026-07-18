@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
 import type { CopilotClientPool } from "./runtime.js";

@@ -627,7 +627,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: vi.fn(async () => ({}) as never),
     });
@@ -664,7 +664,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "codex"
           ? { supported: true, priority: 100 }
@@ -715,7 +715,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: vi.fn(async () => ({}) as never),
     });
@@ -749,7 +749,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "codex"
           ? { supported: true, priority: 100 }
@@ -794,7 +794,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "codex"
           ? { supported: true, priority: 100 }
@@ -847,7 +847,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "codex"
           ? { supported: true, priority: 100 }
@@ -897,7 +897,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: vi.fn(async () => ({}) as never),
     });
@@ -934,7 +934,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "codex"
           ? { supported: true, priority: 100 }
@@ -977,7 +977,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "codex"
           ? { supported: true, priority: 100 }
@@ -1046,7 +1046,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "codex"
           ? { supported: true, priority: 100 }
@@ -1092,7 +1092,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "custom",
       label: "Custom",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { visibleReplies: "message_tool" },
       supports: (ctx) =>
         ctx.provider === "custom"
           ? { supported: true, priority: 200 }

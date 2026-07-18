@@ -11,8 +11,6 @@ import {
   isQwenTokenPlanThinkingOnlyModelId,
   QWEN_BASE_URL,
   QWEN_DEFAULT_MODEL_REF,
-  QWEN_OAUTH_DEFAULT_MODEL_REF,
-  QWEN_OAUTH_PROVIDER_ID,
   QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
   QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
   QWEN_TOKEN_PLAN_PROVIDER_ID,
@@ -21,22 +19,16 @@ import {
 import {
   applyQwenConfig,
   applyQwenConfigCn,
-  applyQwenOAuthConfig,
   applyQwenStandardConfig,
   applyQwenStandardConfigCn,
   applyQwenTokenPlanConfig,
 } from "./onboard.js";
-import {
-  buildQwenOAuthProvider,
-  buildQwenProvider,
-  buildQwenTokenPlanProvider,
-} from "./provider-catalog.js";
+import { buildQwenProvider, buildQwenTokenPlanProvider } from "./provider-catalog.js";
 import { wrapQwenProviderStream } from "./stream.js";
 import { buildQwenVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "qwen";
 const LEGACY_PROVIDER_ID = "modelstudio";
-const QWEN_OAUTH_AUTH_PROVIDER_IDS = [QWEN_OAUTH_PROVIDER_ID, "qwen-portal", "qwen-cli"] as const;
 const QWEN_TOKEN_PLAN_THINKING_LEVEL_IDS = [
   "off",
   "minimal",
@@ -117,7 +109,7 @@ function createQwenTokenPlanAuthMethod(region: "global" | "cn") {
       choiceHint: `Endpoint: ${host}`,
       groupId: "qwen",
       groupLabel: "Qwen Cloud",
-      groupHint: "Standard / Coding Plan / Token Plan / OAuth",
+      groupHint: "Standard / Coding Plan / Token Plan",
     },
   });
 }
@@ -279,62 +271,6 @@ export default defineSingleProviderPluginEntry({
     },
   },
   register(api) {
-    api.registerProvider({
-      id: QWEN_OAUTH_PROVIDER_ID,
-      label: "Qwen OAuth",
-      docsPath: "/providers/qwen",
-      aliases: ["qwen-portal", "qwen-cli"],
-      envVars: ["QWEN_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: QWEN_OAUTH_PROVIDER_ID,
-          methodId: "api-key",
-          label: "Qwen OAuth token",
-          hint: "Portal token for portal.qwen.ai",
-          optionKey: "qwenOauthToken",
-          flagName: "--qwen-oauth-token",
-          envVar: "QWEN_API_KEY",
-          promptMessage: "Enter Qwen OAuth token",
-          defaultModel: QWEN_OAUTH_DEFAULT_MODEL_REF,
-          applyConfig: (cfg) => applyQwenOAuthConfig(cfg),
-          wizard: {
-            choiceId: QWEN_OAUTH_PROVIDER_ID,
-            choiceLabel: "Qwen OAuth",
-            choiceHint: "Portal token for portal.qwen.ai",
-            groupId: "qwen",
-            groupLabel: "Qwen Cloud",
-            groupHint: "Standard / Coding Plan / OAuth",
-          },
-        }),
-      ],
-      catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const apiKey = QWEN_OAUTH_AUTH_PROVIDER_IDS.map(
-            (providerId) => ctx.resolveProviderApiKey(providerId).apiKey,
-          ).find(
-            (candidate): candidate is string =>
-              typeof candidate === "string" && candidate.length > 0,
-          );
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...buildQwenOAuthProvider(),
-              apiKey,
-            },
-          };
-        },
-      },
-      staticCatalog: {
-        order: "simple",
-        run: async () => ({
-          provider: buildQwenOAuthProvider(),
-        }),
-      },
-      wrapStreamFn: wrapQwenProviderStream,
-    });
     api.registerProvider({
       id: QWEN_TOKEN_PLAN_PROVIDER_ID,
       label: "Qwen Token Plan",

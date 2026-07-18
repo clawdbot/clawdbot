@@ -190,7 +190,11 @@ describe("official external plugin catalog signed envelopes", () => {
         signedEnvelope({ keys: [key], feed: { entries: [] } }),
         { trustedKeys },
       ),
-    ).toMatchObject({ ok: false, error: "invalid-payload" });
+    ).toMatchObject({
+      ok: false,
+      error: "invalid-payload",
+      authenticatedPayload: { entries: [] },
+    });
   });
 
   it("rejects malformed envelopes before verification", () => {

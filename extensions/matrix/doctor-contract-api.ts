@@ -2,10 +2,16 @@ import type { Dirent } from "node:fs";
 // Matrix API module exposes the plugin public contract.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  requiresExplicitMatrixDefaultAccount,
+  resolveMatrixDefaultOrOnlyAccountId,
+} from "./src/account-selection.js";
 import {
   hasMatrixSyncCacheStateInStore,
   openMatrixSyncCacheStoreOptions,
@@ -20,6 +26,15 @@ import {
   writeMatrixStorageMetaStateToStore,
   type MatrixStorageMetadata,
 } from "./src/matrix/client/storage.js";
+import {
+  MATRIX_CREDENTIALS_MAX_ENTRIES,
+  MATRIX_CREDENTIALS_NAMESPACE,
+  isMatrixCredentialRevocation,
+  matrixCredentialsStoreKey,
+  normalizeMatrixStoredCredentials,
+  type MatrixCredentialStateRecord,
+  type MatrixStoredCredentialRecord,
+} from "./src/matrix/credentials-read.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
@@ -50,11 +65,73 @@ import {
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { readLegacyMatrixIdbSnapshotState } from "./src/matrix/sdk/idb-persistence.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
+import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
+
+type LegacyMatrixCredentialSource = {
+  accountId: string | null;
+  filePath: string;
+};
+
+async function collectLegacyMatrixCredentialSources(params: {
+  config: Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0]["config"];
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): Promise<LegacyMatrixCredentialSource[]> {
+  const credentialsDir = resolveMatrixCredentialsDir(params.stateDir);
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(credentialsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files = entries
+    .filter((entry) => entry.isFile() && /^credentials(?:-[a-z0-9._-]+)?\.json$/iu.test(entry.name))
+    .toSorted((left, right) => {
+      if (left.name === "credentials.json") {
+        return 1;
+      }
+      if (right.name === "credentials.json") {
+        return -1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+  return files.map((entry) => {
+    const match = /^credentials(?:-([a-z0-9._-]+))?\.json$/iu.exec(entry.name);
+    const namedAccount = match?.[1];
+    const accountId = namedAccount
+      ? normalizeAccountId(namedAccount)
+      : requiresExplicitMatrixDefaultAccount(params.config, params.env)
+        ? null
+        : normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(params.config, params.env));
+    return { accountId, filePath: path.join(credentialsDir, entry.name) };
+  });
+}
+
+async function readLegacyMatrixCredentials(
+  source: LegacyMatrixCredentialSource,
+): Promise<MatrixStoredCredentialRecord | null> {
+  if (!source.accountId) {
+    return null;
+  }
+  try {
+    const raw = JSON.parse(await fs.readFile(source.filePath, "utf8")) as unknown;
+    const createdAt =
+      isRecord(raw) && typeof raw.createdAt === "string" && raw.createdAt
+        ? raw.createdAt
+        : (await fs.stat(source.filePath)).mtime.toISOString();
+    return normalizeMatrixStoredCredentials(
+      isRecord(raw) ? { ...raw, createdAt } : raw,
+      source.accountId,
+    );
+  } catch {
+    return null;
+  }
+}
 
 async function collectLegacyMatrixStateRoots(
   stateDir: string,
@@ -138,6 +215,94 @@ async function archiveLegacyMatrixStateFile(params: {
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  {
+    id: "matrix-credentials-json-to-plugin-state",
+    label: "Matrix credentials",
+    async detectLegacyState(params) {
+      const sources = await collectLegacyMatrixCredentialSources(params);
+      return sources.length > 0
+        ? {
+            preview: [
+              `Matrix credential JSON can migrate to SQLite (${sources.length} ${sources.length === 1 ? "file" : "files"})`,
+            ],
+          }
+        : null;
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const sources = await collectLegacyMatrixCredentialSources(params);
+      const store = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
+        namespace: MATRIX_CREDENTIALS_NAMESPACE,
+        maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      for (const source of sources) {
+        if (!source.accountId) {
+          warnings.push(
+            `Left ambiguous Matrix credential legacy source in place because no default account is selected: ${source.filePath}`,
+          );
+          continue;
+        }
+        const credentials = await readLegacyMatrixCredentials(source);
+        if (!credentials) {
+          warnings.push(
+            `Left invalid Matrix credential legacy source in place: ${source.filePath}`,
+          );
+          continue;
+        }
+        const key = matrixCredentialsStoreKey(source.accountId);
+        const stored = await store.lookup(key);
+        if (isMatrixCredentialRevocation(stored, source.accountId)) {
+          changes.push(
+            `Archived revoked Matrix credential legacy source for account ${source.accountId}`,
+          );
+          await archiveLegacyStateSource({
+            filePath: source.filePath,
+            label: "Matrix credentials",
+            changes,
+            warnings,
+          });
+          continue;
+        }
+        const existing = normalizeMatrixStoredCredentials(stored, source.accountId);
+        if (existing && JSON.stringify(existing) !== JSON.stringify(credentials)) {
+          warnings.push(
+            `Kept existing Matrix credentials for account ${source.accountId}; left differing legacy source in place`,
+          );
+          continue;
+        }
+        if (!existing) {
+          try {
+            await store.registerIfAbsent(key, credentials);
+          } catch (error) {
+            warnings.push(
+              `Failed importing Matrix credentials for account ${source.accountId}: ${String(error)}; left legacy source in place`,
+            );
+            continue;
+          }
+        }
+        const persisted = normalizeMatrixStoredCredentials(
+          await store.lookup(key),
+          source.accountId,
+        );
+        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
+          warnings.push(
+            `Failed verifying Matrix credentials for account ${source.accountId}; left legacy source in place`,
+          );
+          continue;
+        }
+        changes.push(`Migrated Matrix credentials for account ${source.accountId} to SQLite`);
+        await archiveLegacyStateSource({
+          filePath: source.filePath,
+          label: "Matrix credentials",
+          changes,
+          warnings,
+        });
+      }
+      return { changes, warnings };
+    },
+  },
   {
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",

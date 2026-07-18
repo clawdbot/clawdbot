@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
+  resolveInboundSupplementalSenderAllowed,
   type BuildChannelInboundEventContextParams,
 } from "./context.js";
 
@@ -35,6 +36,71 @@ function createBaseContextParams(
   };
 }
 
+describe("resolveInboundSupplementalSenderAllowed", () => {
+  it.each([
+    {
+      name: "allows direct context without consulting the channel matcher",
+      isGroup: false,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: true,
+      matcherCalls: 0,
+    },
+    {
+      name: "allows open group context without consulting the channel matcher",
+      isGroup: true,
+      groupPolicy: "open",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: true,
+      matcherCalls: 0,
+    },
+    {
+      name: "allows an allowlisted supplemental sender",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: true,
+      expected: true,
+      matcherCalls: 1,
+    },
+    {
+      name: "blocks a non-allowlisted supplemental sender",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: false,
+      matcherCalls: 1,
+    },
+    {
+      name: "delegates empty allowlists to the channel matcher",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      matcherResult: false,
+      expected: false,
+      matcherCalls: 1,
+    },
+  ])("$name", ({ isGroup, groupPolicy, allowFrom, matcherResult, expected, matcherCalls }) => {
+    const isSenderAllowed = vi.fn(() => matcherResult);
+
+    expect(
+      resolveInboundSupplementalSenderAllowed({
+        isGroup,
+        groupPolicy,
+        allowFrom,
+        isSenderAllowed,
+      }),
+    ).toBe(expected);
+    expect(isSenderAllowed).toHaveBeenCalledTimes(matcherCalls);
+    if (matcherCalls > 0) {
+      expect(isSenderAllowed).toHaveBeenCalledWith(allowFrom);
+    }
+  });
+});
+
 describe("buildChannelInboundEventContext", () => {
   it("maps normalized inbound facts into a finalized message context", async () => {
     const ctx = buildChannelInboundEventContext({
@@ -62,6 +128,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       route: {
         agentId: "main",
+        dmScope: "main",
         accountId: "acct",
         routeSessionKey: "agent:main:test:group:room-1",
         parentSessionKey: "agent:main:test:group",
@@ -129,6 +196,8 @@ describe("buildChannelInboundEventContext", () => {
       },
     });
 
+    expect(ctx.InboundAccessAuthorized).toBe(true);
+
     const expectedFields = {
       Body: "[User One] hello",
       InboundEventKind: "user_request",
@@ -140,6 +209,7 @@ describe("buildChannelInboundEventContext", () => {
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
       AgentId: "main",
+      DmScope: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",

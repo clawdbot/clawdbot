@@ -1104,11 +1104,6 @@
       "translated": "送信用の添付ファイルを準備できませんでした。"
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "後で配信するメッセージをキューに追加できませんでした。"
-    },
-    {
       "id": "native.android.c3899241029d152c",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "translated": "オフラインキューが上限（$OUTBOX_MAX_QUEUED件）に達しています。先にキュー内の項目を削除してください。"
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gatewayの状態が正常ではないため、送信できません"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "後で配信するメッセージをキューに追加できませんでした。"
     },
     {
       "id": "native.android.8c2ff49af3e78aee",
@@ -7029,9 +7029,94 @@
       "translated": "この画像をデコードできませんでした。"
     },
     {
+      "id": "native.android.e2004e8205154dd2",
+      "source": "Couldn’t load background tasks",
+      "translated": "バックグラウンドタスクを読み込めませんでした"
+    },
+    {
+      "id": "native.android.bfa286f1b0a3c526",
+      "source": "Couldn’t load task details",
+      "translated": "タスクの詳細を読み込めませんでした"
+    },
+    {
+      "id": "native.android.6811e525782306c1",
+      "source": "Background tasks",
+      "translated": "バックグラウンドタスク"
+    },
+    {
+      "id": "native.android.754676bf2d2a50e7",
+      "source": "Refresh background tasks",
+      "translated": "バックグラウンドタスクを更新"
+    },
+    {
+      "id": "native.android.99e93f4520a61356",
+      "source": "No background tasks for this agent.",
+      "translated": "このエージェントにはバックグラウンドタスクがありません。"
+    },
+    {
+      "id": "native.android.26f0aae060212535",
+      "source": "Finished",
+      "translated": "終了"
+    },
+    {
+      "id": "native.android.6f4ef7e03dd153f5",
+      "source": "Back to background tasks",
+      "translated": "バックグラウンドタスクに戻る"
+    },
+    {
+      "id": "native.android.193a6c8583fe0dfb",
+      "source": "${statusLabel} · ${task.runtime}",
+      "translated": "${statusLabel} · ${task.runtime}"
+    },
+    {
+      "id": "native.android.c00ea0e2c7802a9f",
+      "source": "Prompt",
+      "translated": "プロンプト"
+    },
+    {
+      "id": "native.android.4cdf83cd30fac87e",
+      "source": "Prompt unavailable",
+      "translated": "プロンプトを利用できません"
+    },
+    {
+      "id": "native.android.a093c342398c1d62",
+      "source": "No output yet",
+      "translated": "出力はまだありません"
+    },
+    {
+      "id": "native.android.3adeec85d4a8e797",
+      "source": "Output",
+      "translated": "出力"
+    },
+    {
+      "id": "native.android.e378f4d3069dc5f4",
+      "source": "Queued",
+      "translated": "待機中"
+    },
+    {
+      "id": "native.android.7e4ab752e691e19a",
+      "source": "Running",
+      "translated": "実行中"
+    },
+    {
+      "id": "native.android.c3b1223090fc9f15",
+      "source": "Completed",
+      "translated": "完了"
+    },
+    {
+      "id": "native.android.7a5134f615d03ff9",
+      "source": "Failed",
+      "translated": "失敗"
+    },
+    {
       "id": "native.android.6384b9802cfdacfe",
       "source": "$text ",
       "translated": "$text "
+    },
+    {
+      "id": "native.android.d1712183ebf86197",
+      "source": "Widget unavailable",
+      "translated": "ウィジェットを利用できません"
     },
     {
       "id": "native.android.cd2033b0a82a72dd",
@@ -7294,9 +7379,9 @@
       "translated": "オフライン"
     },
     {
-      "id": "native.android.6b0f8ea129bca167",
-      "source": "More new chat options",
-      "translated": "その他の新規チャットオプション"
+      "id": "native.android.6c2e520fd54edeb4",
+      "source": "Chat actions",
+      "translated": "チャット操作"
     },
     {
       "id": "native.android.0066c3883e9eff15",
@@ -7304,9 +7389,24 @@
       "translated": "チャットを更新"
     },
     {
+      "id": "native.android.b57a1b542cff8f55",
+      "source": "Background tasks",
+      "translated": "バックグラウンドタスク"
+    },
+    {
       "id": "native.android.707eccff20a79f65",
       "source": "Chat",
       "translated": "チャット"
+    },
+    {
+      "id": "native.android.ec49cca2ed03f9f9",
+      "source": "Messages to recover",
+      "translated": "Messages to recover"
+    },
+    {
+      "id": "native.android.7983bb6667118aa1",
+      "source": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+      "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
     },
     {
       "id": "native.android.882cc14a58e7e105",
@@ -7452,6 +7552,21 @@
       "id": "native.android.98a0d4d5bba788c4",
       "source": "OpenClaw is preparing a response.",
       "translated": "OpenClaw が応答を準備しています。"
+    },
+    {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "計画チェックリストを折りたたむ"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "計画チェックリストを展開"
     },
     {
       "id": "native.android.f3806d79e43f568f",
@@ -10179,6 +10294,111 @@
       "translated": "OK"
     },
     {
+      "id": "native.apple.013dc12863bed23b",
+      "source": "Background task",
+      "translated": "バックグラウンドタスク"
+    },
+    {
+      "id": "native.apple.d33ca570a77c6d6f",
+      "source": "Queued",
+      "translated": "待機中"
+    },
+    {
+      "id": "native.apple.4e4498e6144974b7",
+      "source": "Completed",
+      "translated": "完了"
+    },
+    {
+      "id": "native.apple.8773684d27996e83",
+      "source": "Failed",
+      "translated": "失敗"
+    },
+    {
+      "id": "native.apple.92f69cf86443d64d",
+      "source": "Subagent",
+      "translated": "サブエージェント"
+    },
+    {
+      "id": "native.apple.924830db78883b2d",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.apple.d5433fcd3232cd16",
+      "source": "Task",
+      "translated": "タスク"
+    },
+    {
+      "id": "native.apple.0b972513797e7385",
+      "source": "Loading background tasks…",
+      "translated": "バックグラウンドタスクを読み込み中…"
+    },
+    {
+      "id": "native.apple.fb3147cbc796dd3a",
+      "source": "Tasks for this agent will appear here.",
+      "translated": "このエージェントのタスクがここに表示されます。"
+    },
+    {
+      "id": "native.apple.336cf64ef5611816",
+      "source": "No running tasks",
+      "translated": "実行中のタスクはありません"
+    },
+    {
+      "id": "native.apple.d5955a199881b73e",
+      "source": "Running",
+      "translated": "実行中"
+    },
+    {
+      "id": "native.apple.a3c63b936f7f31a9",
+      "source": "No finished tasks",
+      "translated": "完了したタスクはありません"
+    },
+    {
+      "id": "native.apple.889ef61e5911c728",
+      "source": "Finished",
+      "translated": "完了"
+    },
+    {
+      "id": "native.apple.bb086e78b05fff33",
+      "source": "Background Tasks",
+      "translated": "バックグラウンドタスク"
+    },
+    {
+      "id": "native.apple.b109300cc5265643",
+      "source": "Refresh",
+      "translated": "更新"
+    },
+    {
+      "id": "native.apple.51dd4026b0e770aa",
+      "source": "Prompt",
+      "translated": "プロンプト"
+    },
+    {
+      "id": "native.apple.e3268d00448fe1e3",
+      "source": "Loading…",
+      "translated": "読み込み中…"
+    },
+    {
+      "id": "native.apple.56b9f7324f04a28d",
+      "source": "Prompt unavailable.",
+      "translated": "プロンプトを利用できません。"
+    },
+    {
+      "id": "native.apple.f8ed60c4d4b277ed",
+      "source": "Output",
+      "translated": "出力"
+    },
+    {
+      "id": "native.apple.f4545f1ff911f4e2",
+      "source": "No output yet.",
+      "translated": "出力はまだありません。"
+    },
+    {
+      "id": "native.apple.e2c229b2828a7152",
+      "source": "Task Details",
+      "translated": "タスクの詳細"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "トランスクリプトをエクスポートできません"
@@ -10219,9 +10439,24 @@
       "translated": "worktree で新規チャット"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "セッション…"
+    },
+    {
+      "id": "native.apple.17c13312e7532c89",
+      "source": "Background Tasks",
+      "translated": "バックグラウンドタスク"
+    },
+    {
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "トランスクリプトをエクスポート"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "推論とツールのアクティビティを表示"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -12884,6 +13119,11 @@
       "translated": "共有セルフテストを実行"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Appleヘルスケア"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "検出デバッグログ"
@@ -13689,6 +13929,21 @@
       "translated": "続行する前にこの exec リクエストを確認してください。あなたの判断は gateway に送信されます。"
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "プラグイン"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "ツール"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "重大度"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "ホスト"
@@ -14059,6 +14314,36 @@
       "translated": "今後表示しない"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Appleヘルスケアのサマリー"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "このデバイスではAppleヘルスケアのデータを利用できません。"
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "サマリーがリクエストされた場合にのみ、Apple Healthから歩数、睡眠、安静時心拍数、ワークアウトを読み取ります。集計データのみがGatewayを通じて設定済みのAIプロバイダーに送信されます。生のサンプルはこのデバイスに保持され、結果はチャット履歴に残る場合があります。"
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "Appleヘルスケアアプリから、歩数、睡眠、安静時心拍数、ワークアウトの読み取り専用サマリーを作成します。リクエストされたサマリーのみがGatewayを経由して、設定済みのAIプロバイダーに送信されます。生のサンプルデータはこのデバイスに保持されます。"
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "サマリーをオフにする"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Appleヘルスケアのサマリーを有効にする"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClawは、カレンダーへのアクセスを有効にしたときに、イベントとスケジュールのコンテキストを表示するためにカレンダーを使用します。"
@@ -14104,14 +14389,14 @@
       "translated": "OpenClawは、デバイス対応のインタラクションと自動化をサポートするためにモーションデータを使用する場合があります。"
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "ヘルスケア概要を有効にすると、OpenClaw は歩数、睡眠、安静時心拍数、ワークアウトを読み取り、要求された集計データを設定済みの AI プロバイダーと共有します。"
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClawはAppleヘルスケアアプリから歩数、睡眠、安静時心拍数、ワークアウトを読み取り、リクエストされたサマリーを作成して、Gatewayを経由して設定済みのAIプロバイダーに送信します。"
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw はヘルスデータの書き込みや変更を行いません。ヘルスサマリーは、歩数、睡眠、安静時心拍数、ワークアウトを読み取り、リクエストされた集計データを設定済みの AI プロバイダーと共有します。"
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClawはAppleヘルスケアアプリにデータを書き込みません。読み取り専用データを使用してリクエストされたサマリーを作成し、Gatewayを経由して設定済みのAIプロバイダーに送信します。"
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15279,11 +15564,6 @@
       "translated": "追加のみ"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "ヘルスケア概要"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "許可"
@@ -15292,31 +15572,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "設定を開く"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "このデバイスではヘルスケアデータを利用できません。"
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "要求された歩数、睡眠、安静時心拍数、ワークアウトの集計データのみを、Gateway 経由で設定済みの AI プロバイダーと共有します。結果はチャット履歴に残る場合があります。"
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "デフォルトではオフです。有効にすると、要求された集計データが Gateway と設定済みの AI プロバイダーを経由してこの iPhone から送信されます。"
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "無効にする"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "概要を有効にして共有"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -18529,6 +18784,26 @@
       "translated": "ステータスアイコンのアイドル時のまばたきや揺れを有効にします。"
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "クイックチャット"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "グローバルショートカットで呼び出せる、クイックメッセージ用のフローティング入力欄を表示します。"
+    },
+    {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "クイックチャットのショートカット"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "メインセッション用のフローティングチャットバーを開くグローバルショートカット。"
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "機能"
@@ -19214,6 +19489,11 @@
       "translated": "チャットを開く"
     },
     {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "クイックチャット"
+    },
+    {
       "id": "native.apple.5e3cd7734f27f447",
       "source": "Close Canvas",
       "translated": "Canvas を閉じる"
@@ -19609,9 +19889,19 @@
       "translated": "この Gateway で利用可能な AI アクセスが見つかりませんでした"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "問題ありません。API キーまたはトークンで接続できます。Claude Code または Codex にサインインするか、適切なモデルを読み込んだ Ollama または LM Studio を起動してから、「もう一度確認」を押すこともできます。"
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "以下のプロバイダーに API キーまたはトークンで接続してから、もう一度確認してください。"
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "これらのツールのいずれかをインストールしてから、もう一度確認してください。以下のプロバイダーに接続することもできます。"
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "推奨インストール"
     },
     {
       "id": "native.apple.e2749739df556643",
@@ -19794,6 +20084,26 @@
       "translated": "エラーをコピー"
     },
     {
+      "id": "native.apple.7dee24e5bf088dd5",
+      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
+      "translated": "\\(incomplete) 件の\\(Self.memoryNoun(incomplete))をインポートできませんでした。"
+    },
+    {
+      "id": "native.apple.84189c39ea5803c6",
+      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
+      "translated": "Gateway から一貫性のないプロバイダープランが返されました。もう一度プランを作成してください。"
+    },
+    {
+      "id": "native.apple.4c9e75d64cbc5cc2",
+      "source": "The Gateway did not return a usable import plan. Try planning again.",
+      "translated": "Gateway から使用可能なインポートプランが返されませんでした。もう一度プランを作成してください。"
+    },
+    {
+      "id": "native.apple.2070bf43a67680ee",
+      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
+      "translated": "Gateway は \\(plan.summary.errors) 件の\\(Self.memoryNoun(plan.summary.errors))のプランを作成できませんでした。もう一度お試しください。"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<編集済みのシークレット>"
@@ -19837,6 +20147,106 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "戻る"
+    },
+    {
+      "id": "native.apple.7ca0977d5f73356d",
+      "source": "Bring your memories along",
+      "translated": "思い出を引き継ぐ"
+    },
+    {
+      "id": "native.apple.b57ee4f83cff23f3",
+      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "OpenClaw では、すでに使用している AI ツールから役立つコンテキストを新しいアシスタントに引き継ぐことができます。"
+    },
+    {
+      "id": "native.apple.46cab71d748860b8",
+      "source": "Looking for memories…",
+      "translated": "思い出を検索中…"
+    },
+    {
+      "id": "native.apple.c9e5f1aebe85e201",
+      "source": "Checking supported AI tools on this Mac.",
+      "translated": "この Mac でサポートされている AI ツールを確認しています。"
+    },
+    {
+      "id": "native.apple.77290f36f36f00e5",
+      "source": "No memories to import",
+      "translated": "インポートする思い出はありません"
+    },
+    {
+      "id": "native.apple.e5cca7b9f082ace9",
+      "source": "You can import memories later from the dashboard.",
+      "translated": "思い出は後でダッシュボードからインポートできます。"
+    },
+    {
+      "id": "native.apple.963add2f12fd18cb",
+      "source": "Import memories",
+      "translated": "思い出をインポート"
+    },
+    {
+      "id": "native.apple.9db369e036a38a29",
+      "source": "Importing memories…",
+      "translated": "思い出をインポート中…"
+    },
+    {
+      "id": "native.apple.71b8e38a5e7040ef",
+      "source": "Refresh plan",
+      "translated": "プランを更新"
+    },
+    {
+      "id": "native.apple.e87bec72cb9c9dbf",
+      "source": "Retry pending imports before refreshing the plan.",
+      "translated": "プランを更新する前に、保留中のインポートを再試行してください。"
+    },
+    {
+      "id": "native.apple.f678888102fded6e",
+      "source": "You can skip this and import later from the dashboard’s Memory import page.",
+      "translated": "ここではスキップして、後でダッシュボードの「思い出のインポート」ページからインポートできます。"
+    },
+    {
+      "id": "native.apple.36108528c6acc448",
+      "source": "\\(provider.alreadyImportedCount) already imported",
+      "translated": "\\(provider.alreadyImportedCount) 件はインポート済み"
+    },
+    {
+      "id": "native.apple.9b3444de8c9b2acc",
+      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
+      "translated": "\\(result.migrated) 件の\\(self.memoryLabel(result.migrated))をインポートしました。"
+    },
+    {
+      "id": "native.apple.3252fea4dac8669a",
+      "source": "Couldn’t check for memories",
+      "translated": "思い出を確認できませんでした"
+    },
+    {
+      "id": "native.apple.d371deb696de9e6b",
+      "source": "Retry",
+      "translated": "再試行"
+    },
+    {
+      "id": "native.apple.406ae454540725d0",
+      "source": "You can do this later from the dashboard’s Memory import page.",
+      "translated": "後でダッシュボードの「思い出のインポート」ページから実行できます。"
+    },
+    {
+      "id": "native.apple.d1b5d99f67dae42e",
+      "source": "Your memories are ready",
+      "translated": "メモリの準備ができました"
+    },
+    {
+      "id": "native.apple.6dbe5b174271b62a",
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
+      "translated": "\\(imported)件の\\(self.memoryLabel(imported))をOpenClawにインポートしました。"
+    },
+    {
+      "id": "native.apple.d47b887f98e13e24",
+      "source": "\\(result.migrated) imported",
+      "translated": "\\(result.migrated)件をインポートしました"
+    },
+    {
+      "id": "native.apple.6ac3d513f0ec5da7",
+      "source": "You can manage imported memories anytime from the dashboard.",
+      "translated": "インポートしたメモリは、ダッシュボードからいつでも管理できます。"
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -20189,9 +20599,9 @@
       "translated": "メニューバーパネルを開く"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "クイックチャットとステータスを確認するには、OpenClaw メニューバーアイコンをクリックしてください。"
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "コンパクトなチャットパネルとステータスを表示するには、メニューバーのOpenClawアイコンをクリックします。"
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20224,9 +20634,9 @@
       "translated": "パネル + Canvas を使用"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "コンパクトなチャットパネルを開きます。エージェントはCanvasでプレビューやよりリッチなビジュアルを表示できます。"
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20379,6 +20789,11 @@
       "translated": "システムアクセス"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "位置情報"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "セットアップ"
@@ -20492,46 +20907,6 @@
       "id": "native.apple.c8a3879230179938",
       "source": "Request access",
       "translated": "アクセスをリクエスト"
-    },
-    {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "自動化（AppleScript）"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "通知"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "アクセシビリティ"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "画面収録"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "マイク"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "音声認識"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "カメラ"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "位置情報"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -20747,6 +21122,36 @@
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "続ける"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "\\(self.model.agentDisplay.name)にメッセージを送信"
+    },
+    {
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "ウインドウのスクリーンショットを送信"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "メッセージを送信"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "追加の権限が必要です"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "許可"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "後で"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22029,6 +22434,71 @@
       "translated": "音声ウェイクを検出しました!"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "トークモードはオフです"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "トークモードは一時停止中です"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "トークモードの準備ができました"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "聞き取り中"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "考え中"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "話しています"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "何に取り組みますか？"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "OpenClawのステータスを確認"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "現在のOpenClawのステータスを要約し、注意が必要な点を教えてください。"
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "何ができますか？"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "今このMacで何を手伝えるか教えてください。"
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "最新情報を教えて"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "昨日以降、セッションで何が起きたか要約してください。"
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": " (ローカルでフィルタ済み)"
@@ -22084,9 +22554,49 @@
       "translated": "コンテキストの%@%%を使用"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@（上書き）"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "思考中"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "最大"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "詳細度"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "デフォルト（継承）"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "オン"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "オフ"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "高速"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "高速な応答"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22099,14 +22609,14 @@
       "translated": "最近"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "モデル"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "モデル"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "デフォルト"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22274,6 +22784,46 @@
       "translated": "%@トークンを使用"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "メッセージ全文を読み込み中…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "メッセージ全文を利用できません"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "メッセージ全文"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "閉じる"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "メッセージ全文は利用できなくなりました。"
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "メッセージ全文に読み取れるテキストがありません。"
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "メッセージ全文を読み込めませんでした。"
+    },
+    {
+      "id": "native.apple.2c865ac4a69645d3",
+      "source": "Widget unavailable",
+      "translated": "ウィジェットを利用できません"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -22344,6 +22894,161 @@
       "translated": "ツールを実行中…"
     },
     {
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "その他"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "計画を折りたたむ"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "計画を展開"
+    },
+    {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "ユーザー"
+    },
+    {
+      "id": "native.apple.8ec708a3605a2cc3",
+      "source": "Search sessions",
+      "translated": "セッションを検索"
+    },
+    {
+      "id": "native.apple.23b069b4e7f97039",
+      "source": "No Sessions",
+      "translated": "セッションがありません"
+    },
+    {
+      "id": "native.apple.2d4ee298bdd1c05d",
+      "source": "No Results",
+      "translated": "結果がありません"
+    },
+    {
+      "id": "native.apple.0058923f2ce8a3ec",
+      "source": "New Session",
+      "translated": "新規セッション"
+    },
+    {
+      "id": "native.apple.66ba42960eb4135b",
+      "source": "New session",
+      "translated": "新規セッション"
+    },
+    {
+      "id": "native.apple.36753ef2f1ed4264",
+      "source": "Rename Session",
+      "translated": "セッション名を変更"
+    },
+    {
+      "id": "native.apple.c9de0a1510ef475f",
+      "source": "Session name",
+      "translated": "セッション名"
+    },
+    {
+      "id": "native.apple.6ec5a13c0e6c20d9",
+      "source": "Rename",
+      "translated": "名前を変更"
+    },
+    {
+      "id": "native.apple.4c76665d89af4bec",
+      "source": "Cancel",
+      "translated": "キャンセル"
+    },
+    {
+      "id": "native.apple.afb4e6c99c63a28d",
+      "source": "Delete Session",
+      "translated": "セッションを削除"
+    },
+    {
+      "id": "native.apple.3d4ef32e42f136a4",
+      "source": "The session and its transcript are removed from the gateway.",
+      "translated": "セッションとそのトランスクリプトがGatewayから削除されます。"
+    },
+    {
+      "id": "native.apple.90bcad5f067b4be1",
+      "source": "Delete “%@”?",
+      "translated": "「%@」を削除しますか？"
+    },
+    {
+      "id": "native.apple.9a7dca238fba628d",
+      "source": "Session running",
+      "translated": "セッションを実行中"
+    },
+    {
+      "id": "native.apple.fcfbfe5e97a95e9c",
+      "source": "Session failed",
+      "translated": "セッションに失敗しました"
+    },
+    {
+      "id": "native.apple.ac85292b16a7465f",
+      "source": "Unread",
+      "translated": "未読"
+    },
+    {
+      "id": "native.apple.a174cb1027a9b881",
+      "source": "Rename…",
+      "translated": "名前を変更…"
+    },
+    {
+      "id": "native.apple.134d6bf84d58fb38",
+      "source": "Pin",
+      "translated": "ピン留め"
+    },
+    {
+      "id": "native.apple.e7815cc4ba359513",
+      "source": "Unpin",
+      "translated": "ピン留めを解除"
+    },
+    {
+      "id": "native.apple.83f9f2db7eef6a19",
+      "source": "Fork",
+      "translated": "フォーク"
+    },
+    {
+      "id": "native.apple.235614194dc19df2",
+      "source": "Mark Read",
+      "translated": "既読にする"
+    },
+    {
+      "id": "native.apple.bc71f0d20b7f72a0",
+      "source": "Mark Unread",
+      "translated": "未読にする"
+    },
+    {
+      "id": "native.apple.c9e118f6aae18d97",
+      "source": "Archive",
+      "translated": "アーカイブ"
+    },
+    {
+      "id": "native.apple.10365a351a1b58b3",
+      "source": "Restore",
+      "translated": "復元"
+    },
+    {
+      "id": "native.apple.660f63319b89bd8e",
+      "source": "Copy Session Key",
+      "translated": "セッションキーをコピー"
+    },
+    {
+      "id": "native.apple.4aeb7c14c26dabac",
+      "source": "Delete Session…",
+      "translated": "セッションを削除…"
+    },
+    {
+      "id": "native.apple.6a3425ea2811ff88",
+      "source": "Gateway connected",
+      "translated": "Gatewayに接続済み"
+    },
+    {
+      "id": "native.apple.e3958d1053259f1d",
+      "source": "Connecting…",
+      "translated": "接続中…"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "ピン留め済み"
@@ -22399,6 +23104,16 @@
       "translated": "セッションが見つかりません"
     },
     {
+      "id": "native.apple.f0e9d8f69c1d9190",
+      "source": "Restore",
+      "translated": "復元"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "アーカイブ"
+    },
+    {
       "id": "native.apple.05cb1fecc5844b69",
       "source": "Pinned",
       "translated": "ピン留め済み"
@@ -22419,14 +23134,34 @@
       "translated": "ピン留めを解除"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "アーカイブ"
+      "id": "native.apple.6de479e9d780869a",
+      "source": "Fork",
+      "translated": "フォーク"
     },
     {
-      "id": "native.apple.34b910911a05110e",
-      "source": "Unarchive",
-      "translated": "アーカイブ解除"
+      "id": "native.apple.1398a2f69867f22d",
+      "source": "Mark Read",
+      "translated": "既読にする"
+    },
+    {
+      "id": "native.apple.4f259c4409cfcc75",
+      "source": "Mark Unread",
+      "translated": "未読にする"
+    },
+    {
+      "id": "native.apple.946b677d8dbf0f37",
+      "source": "Hide talk transcript",
+      "translated": "会話の文字起こしを非表示"
+    },
+    {
+      "id": "native.apple.cb1d1c999a859927",
+      "source": "Show talk transcript",
+      "translated": "会話の文字起こしを表示"
+    },
+    {
+      "id": "native.apple.e7beeef6043ffd2a",
+      "source": "System Default",
+      "translated": "システムデフォルト"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
@@ -22474,11 +23209,6 @@
       "translated": "聞く"
     },
     {
-      "id": "native.apple.fe9f30f12f1dcfaf",
-      "source": "Copy Message",
-      "translated": "メッセージをコピー"
-    },
-    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "最新に移動"
@@ -22492,6 +23222,31 @@
       "id": "native.apple.9ab586b85834705c",
       "source": "Refresh",
       "translated": "更新"
+    },
+    {
+      "id": "native.apple.fe9f30f12f1dcfaf",
+      "source": "Copy Message",
+      "translated": "メッセージをコピー"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "メッセージ全文を開く"
+    },
+    {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "返信"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "あなた"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "アシスタント"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -22579,9 +23334,39 @@
       "translated": "%@の会話がリセットされます。セッションキーは変更されません。"
     },
     {
+      "id": "native.apple.a92e96bed98bd553",
+      "source": "Rename Session",
+      "translated": "セッション名を変更"
+    },
+    {
+      "id": "native.apple.848e2388f3466f40",
+      "source": "Session name",
+      "translated": "セッション名"
+    },
+    {
+      "id": "native.apple.8d636ca6b4764418",
+      "source": "Rename",
+      "translated": "名前を変更"
+    },
+    {
+      "id": "native.apple.32b4a79f1b889aa6",
+      "source": "Cancel",
+      "translated": "キャンセル"
+    },
+    {
       "id": "native.apple.2ee7858b00a47c42",
       "source": "Export Transcript",
       "translated": "トランスクリプトをエクスポート"
+    },
+    {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "セッション"
+    },
+    {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@（上書き）"
     },
     {
       "id": "native.apple.b1f10b5e9113881d",
@@ -22594,6 +23379,41 @@
       "translated": "思考レベル"
     },
     {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "最大"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "詳細度"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "デフォルト（継承）"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "オン"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "オフ"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "高速"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "高速な応答"
+    },
+    {
       "id": "native.apple.17ea1ddec4a7b7a8",
       "source": "Pinned",
       "translated": "ピン留め済み"
@@ -22604,14 +23424,19 @@
       "translated": "最近"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "モデル"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "モデル"
+    },
+    {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "デフォルト"
+    },
+    {
+      "id": "native.apple.eb58552e43c8dde2",
+      "source": "New Session",
+      "translated": "新規セッション"
     },
     {
       "id": "native.apple.5361129a24118af6",
@@ -22619,9 +23444,69 @@
       "translated": "更新"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "セッション…"
+    },
+    {
+      "id": "native.apple.c36e008b051adb38",
+      "source": "Rename Session…",
+      "translated": "セッション名を変更…"
+    },
+    {
+      "id": "native.apple.ea0ef95a159bffe0",
+      "source": "Fork Session",
+      "translated": "セッションをフォーク"
+    },
+    {
+      "id": "native.apple.8768f9ed198edc54",
+      "source": "Unpin",
+      "translated": "ピン留めを解除"
+    },
+    {
+      "id": "native.apple.a8a2f4b248663f97",
+      "source": "Pin",
+      "translated": "ピン留め"
+    },
+    {
+      "id": "native.apple.e53f1d7e094dc542",
+      "source": "Mark Read",
+      "translated": "既読にする"
+    },
+    {
+      "id": "native.apple.99579b05ec001672",
+      "source": "Mark Unread",
+      "translated": "未読にする"
+    },
+    {
+      "id": "native.apple.b39c58e213137cc8",
+      "source": "Restore",
+      "translated": "復元"
+    },
+    {
+      "id": "native.apple.6f5686f621b44307",
+      "source": "Archive",
+      "translated": "アーカイブ"
+    },
+    {
+      "id": "native.apple.27ddbe5e4643b60f",
+      "source": "Copy Session Key",
+      "translated": "セッションキーをコピー"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "トランスクリプトをエクスポート…"
+    },
+    {
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "推論を表示"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "ツールのアクティビティを表示"
     },
     {
       "id": "native.apple.4b24d792545e5086",
@@ -22647,76 +23532,6 @@
       "id": "native.apple.f0a4720df5f5f403",
       "source": "Compact Session",
       "translated": "セッションを圧縮"
-    },
-    {
-      "id": "native.apple.0b9fc81ff2031799",
-      "source": "Search sessions",
-      "translated": "セッションを検索"
-    },
-    {
-      "id": "native.apple.f10d5ccfd0530fec",
-      "source": "No Results",
-      "translated": "結果なし"
-    },
-    {
-      "id": "native.apple.42b0ee4c8b3326b6",
-      "source": "No Sessions",
-      "translated": "セッションなし"
-    },
-    {
-      "id": "native.apple.eb58552e43c8dde2",
-      "source": "New Session",
-      "translated": "新規セッション"
-    },
-    {
-      "id": "native.apple.247771e4350c006f",
-      "source": "New session",
-      "translated": "新しいセッション"
-    },
-    {
-      "id": "native.apple.d9a72d07e8d95d35",
-      "source": "Delete Session",
-      "translated": "セッションを削除"
-    },
-    {
-      "id": "native.apple.499537ec30a28ae0",
-      "source": "The session and its transcript are removed from the gateway.",
-      "translated": "セッションとそのトランスクリプトがGatewayから削除されます。"
-    },
-    {
-      "id": "native.apple.1bd1b747fd161df5",
-      "source": "Unread",
-      "translated": "未読"
-    },
-    {
-      "id": "native.apple.a8a2f4b248663f97",
-      "source": "Pin",
-      "translated": "ピン留め"
-    },
-    {
-      "id": "native.apple.8768f9ed198edc54",
-      "source": "Unpin",
-      "translated": "ピン留めを解除"
-    },
-    {
-      "id": "native.apple.27ddbe5e4643b60f",
-      "source": "Copy Session Key",
-      "translated": "セッションキーをコピー"
-    },
-    {
-      "id": "native.apple.a994d072ab35cb35",
-      "source": "Delete Session…",
-      "translated": "セッションを削除…"
-    },
-    {
-      "id": "native.apple.22d5ce71e22a7f73",
-      "source": "Connecting…",
-      "translated": "接続中…"
-    },
-    {
-      "id": "native.apple.8d0606ab1a2c0f44",
-      "source": "Gateway connected",
-      "translated": "Gateway接続済み"
     },
     {
       "id": "native.apple.f74d150ce05205dd",

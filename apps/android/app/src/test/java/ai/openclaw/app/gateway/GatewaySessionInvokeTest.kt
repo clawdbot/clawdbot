@@ -93,6 +93,121 @@ private data class InvokeScenarioResult(
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
   @Test
+  fun canvasRoutePinsOnlyTheConnectedTlsEndpoint() {
+    val fingerprint = "ab".repeat(32)
+    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 7443)
+
+    assertEquals(
+      fingerprint,
+      gatewayTlsFingerprintForCanvasSurface(
+        fingerprint = fingerprint,
+        surfaceUrl = "https://gateway.example:7443/__openclaw__/cap/token",
+        endpoint = endpoint,
+        isTlsConnection = true,
+      ),
+    )
+    assertNull(
+      gatewayTlsFingerprintForCanvasSurface(
+        fingerprint = fingerprint,
+        surfaceUrl = "https://canvas.example:7443/__openclaw__/cap/token",
+        endpoint = endpoint,
+        isTlsConnection = true,
+      ),
+    )
+    assertNull(
+      gatewayTlsFingerprintForCanvasSurface(
+        fingerprint = fingerprint,
+        surfaceUrl = "https://gateway.example:9443/__openclaw__/cap/token",
+        endpoint = endpoint,
+        isTlsConnection = true,
+      ),
+    )
+  }
+
+  @Test
+  fun refreshCanvasHostUrl_usesNodeRefreshMethod() =
+    runBlocking {
+      assertCanvasHostRefreshMethod(role = "node", expectedMethod = "node.pluginSurface.refresh")
+    }
+
+  @Test
+  fun refreshCanvasHostUrl_usesOperatorRefreshMethod() =
+    runBlocking {
+      assertCanvasHostRefreshMethod(role = "operator", expectedMethod = "plugin.surface.refresh")
+    }
+
+  private suspend fun assertCanvasHostRefreshMethod(
+    role: String,
+    expectedMethod: String,
+  ) {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val lastDisconnect = AtomicReference("")
+    val refreshRequests = AtomicInteger()
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" ->
+            webSocket.send(
+              connectResponseFrame(
+                id,
+                pluginSurfaceUrls =
+                  mapOf("canvas" to "http://127.0.0.1:18789/__openclaw__/cap/old-token"),
+              ),
+            )
+          expectedMethod -> {
+            refreshRequests.incrementAndGet()
+            assertEquals(
+              "canvas",
+              frame["params"]
+                ?.jsonObject
+                ?.get("surface")
+                ?.jsonPrimitive
+                ?.content,
+            )
+            assertTrue(
+              frame["params"]
+                ?.jsonObject
+                ?.get("observedUrl")
+                ?.jsonPrimitive
+                ?.content
+                ?.endsWith("/old-token") == true,
+            )
+            webSocket.send(
+              """{"type":"res","id":"$id","ok":true,"payload":{"surface":"canvas","pluginSurfaceUrls":{"canvas":"http://127.0.0.1:18789/__openclaw__/cap/new-token"}}}""",
+            )
+          }
+        }
+      }
+    val harness =
+      createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
+        GatewaySession.InvokeResult.ok("""{"handled":true}""")
+      }
+
+    try {
+      connectNodeSession(
+        session = harness.session,
+        port = server.port,
+        role = role,
+        scopes = if (role == "operator") listOf("operator.read") else listOf("node:invoke"),
+      )
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+      val oldUrl = requireNotNull(harness.session.currentCanvasHostUrl())
+      assertTrue(oldUrl.endsWith("/old-token"))
+
+      val refreshed = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
+      val lagging = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
+
+      assertTrue(refreshed?.endsWith("/new-token") == true)
+      assertEquals(refreshed, harness.session.currentCanvasHostUrl())
+      assertEquals(refreshed, lagging)
+      assertEquals(1, refreshRequests.get())
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
+  @Test
   fun connect_advertisesCompatibleProtocolRange() =
     runBlocking {
       val json = testJson()

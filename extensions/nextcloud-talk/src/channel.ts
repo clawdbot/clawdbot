@@ -89,13 +89,16 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
       config: {
         ...nextcloudTalkConfigAdapter,
-        isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+        isConfigured: (account) =>
+          Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
         describeAccount: (account) =>
           describeWebhookAccountSnapshot({
             account,
-            configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+            configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
             extra: {
               secretSource: account.secretSource,
+              tokenStatus: account.tokenStatus,
+              apiCredentialStatus: account.apiCredentialStatus,
               baseUrl: account.baseUrl ? "[set]" : "[missing]",
             },
           }),
@@ -155,9 +158,11 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           accountId: account.accountId,
           name: account.name,
           enabled: account.enabled,
-          configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+          configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
           extra: {
             secretSource: account.secretSource,
+            tokenStatus: account.tokenStatus,
+            apiCredentialStatus: account.apiCredentialStatus,
             baseUrl: account.baseUrl ? "[set]" : "[missing]",
             mode: "webhook",
           },

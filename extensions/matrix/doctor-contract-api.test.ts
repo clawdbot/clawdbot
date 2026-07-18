@@ -18,6 +18,13 @@ import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
 import {
+  MATRIX_CREDENTIALS_MAX_ENTRIES,
+  MATRIX_CREDENTIALS_NAMESPACE,
+  matrixCredentialsStoreKey,
+  type MatrixCredentialStateRecord,
+  type MatrixStoredCredentialRecord,
+} from "./src/matrix/credentials-read.js";
+import {
   MATRIX_RECOVERY_KEY_FILENAME,
   readMatrixIdbSnapshotJson,
   readMatrixRecoveryKeyStateForPath,
@@ -69,6 +76,85 @@ describe("matrix doctor contract state migrations", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("imports account credentials into SQLite before archiving the JSON", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const credentialsDir = path.join(stateDir, "credentials", "matrix");
+    const filePath = path.join(credentialsDir, "credentials-ops.json");
+    const credentials = {
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      deviceId: "DEVICE123",
+      createdAt: "2026-07-01T12:00:00.000Z",
+      lastUsedAt: "2026-07-02T12:00:00.000Z",
+    };
+    fs.mkdirSync(credentialsDir, { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(credentials));
+    const migration = migrationById("matrix-credentials-json-to-plugin-state");
+    const params = createMigrationParams(stateDir);
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: ["Matrix credential JSON can migrate to SQLite (1 file)"],
+    });
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Matrix credentials for account ops to SQLite",
+      expect.stringContaining("Archived Matrix credentials legacy source"),
+    ]);
+    const store = params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>({
+      namespace: MATRIX_CREDENTIALS_NAMESPACE,
+      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(store.lookup(matrixCredentialsStoreKey("ops"))).resolves.toEqual({
+      accountId: "ops",
+      ...credentials,
+    });
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
+  });
+
+  it("archives legacy credentials without restoring an explicitly cleared account", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const credentialsDir = path.join(stateDir, "credentials", "matrix");
+    const filePath = path.join(credentialsDir, "credentials-ops.json");
+    fs.mkdirSync(credentialsDir, { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "legacy-token",
+        createdAt: "2026-07-01T12:00:00.000Z",
+      }),
+    );
+    const params = createMigrationParams(stateDir);
+    const credentialStore = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
+      namespace: MATRIX_CREDENTIALS_NAMESPACE,
+      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await credentialStore.register(matrixCredentialsStoreKey("ops"), {
+      accountId: "ops",
+      kind: "revoked",
+      revokedAt: "2026-07-02T12:00:00.000Z",
+    });
+
+    const result = await migrationById(
+      "matrix-credentials-json-to-plugin-state",
+    ).migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Archived revoked Matrix credential legacy source for account ops",
+      expect.stringContaining("Archived Matrix credentials legacy source"),
+    ]);
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
   });
 
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {

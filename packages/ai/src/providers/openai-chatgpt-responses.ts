@@ -75,7 +75,7 @@ import { buildBaseOptions } from "./simple-options.js";
 // ============================================================================
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-const MAX_RETRIES = 3;
+const DEFAULT_MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
@@ -271,14 +271,9 @@ export const streamOpenAICodexResponses: StreamFunction<
       // per request, which forfeits session-affinity routing on the WS transport (the
       // backend routes by session_id/x-client-request-id). Left as-is for this fix;
       // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
-      const websocketRequestId = options?.sessionId || createCodexRequestId();
-      const sseHeaders = buildSSEHeaders(
-        modelHeaders,
-        optionHeaders,
-        accountId,
-        apiKey,
-        options?.sessionId,
-      );
+      const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
+      const websocketRequestId = sessionId || createCodexRequestId();
+      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
       const websocketHeaders = buildWebSocketHeaders(
         modelHeaders,
         optionHeaders,
@@ -371,8 +366,9 @@ export const streamOpenAICodexResponses: StreamFunction<
       // Fetch with retry logic for rate limits and transient errors
       let response: Response | undefined;
       let lastError: Error | undefined;
+      const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
 
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (activeSignal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -394,7 +390,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           }
 
           const errorText = await readChatGptResponsesErrorTextLimited(response);
-          if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
+          if (attempt < maxRetries && isRetryableError(response.status, errorText)) {
             let delayMs = BASE_DELAY_MS * 2 ** attempt;
 
             const retryAfterMs = response.headers.get("retry-after-ms");
@@ -453,7 +449,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           }
           lastError = error instanceof Error ? error : new Error(String(error));
           // Network errors are retryable
-          if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
+          if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
             await sleepWithAbort(delayMs, activeSignal);
             continue;

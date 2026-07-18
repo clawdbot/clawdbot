@@ -176,7 +176,7 @@ describe("monitorSignalProvider tool results", () => {
     });
     replyMock.mockResolvedValue({ text: "accepted reply" });
     streamMock.mockImplementation(async ({ onEvent }) => {
-      onEvent({
+      await onEvent({
         event: "receive",
         data: JSON.stringify({
           envelope: {
@@ -187,6 +187,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         }),
       });
+      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1));
       abortController.abort(new Error("monitor stopped"));
     });
 

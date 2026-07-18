@@ -2,8 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import type { PluginPayloadSmokeFailure } from "../cli/update-cli/plugin-payload-validation.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
+  parseConfigJson5,
+  preserveConfigSnapshotAsClobbered,
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
@@ -13,6 +16,14 @@ import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import {
+  buildDegradedPluginsFromVerificationFailures,
+  formatPluginVerificationDiagnostic,
+  setActiveDegradedPlugins,
+  type DegradedPlugin,
+} from "../plugins/runtime-degraded-state.js";
+import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
@@ -139,22 +150,73 @@ function noteStateMigrationResult(result: {
   }
 }
 
-async function runStartupUpgradeConvergence(params: {
+type StartupPluginVerificationDiagnostic = {
+  kind: "plugin-verification";
+  messages: string[];
+};
+
+type StartupPluginConvergenceResult = {
+  blockingDiagnostic: StartupPluginVerificationDiagnostic | null;
+  quarantinedPlugins: DegradedPlugin[];
+};
+
+async function planStartupPluginVerification(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<string[]> {
+}) {
   const { planStartupPluginConvergence } = await measureStartupPreflightStep(
     "plugin-plan-import",
     () => import("./doctor/shared/startup-plugin-convergence-plan.js"),
   );
-  const plan = await measureStartupPreflightStep("plugin-plan", () =>
+  return await measureStartupPreflightStep("plugin-plan", () =>
     planStartupPluginConvergence({
       config: params.cfg,
       env: params.env,
     }),
   );
+}
+
+function buildStartupPluginQuarantine(params: {
+  cfg: OpenClawConfig;
+  failures: readonly PluginPayloadSmokeFailure[];
+}): DegradedPlugin[] {
+  return buildDegradedPluginsFromVerificationFailures(
+    params.failures.filter(
+      (failure) =>
+        Boolean(failure.installPath) &&
+        isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+    ),
+  );
+}
+
+function isStartupPluginVerificationFailureActive(params: {
+  cfg: OpenClawConfig;
+  failure: PluginPayloadSmokeFailure;
+}): boolean {
+  return resolveEffectiveEnableState({
+    id: params.failure.pluginId,
+    origin: "global",
+    config: normalizePluginsConfig(params.cfg.plugins),
+    rootConfig: params.cfg,
+  }).enabled;
+}
+
+function formatStartupPluginSmokeFailure(failure: PluginPayloadSmokeFailure): string {
+  return `Plugin "${failure.pluginId}": ${formatPluginVerificationDiagnostic({
+    kind: "plugin-verification",
+    reason: failure.reason,
+    detail: failure.detail,
+    ...(failure.installPath ? { installPath: failure.installPath } : {}),
+  })}. Run \`openclaw update repair\` to retry plugin repair.`;
+}
+
+async function runStartupUpgradeConvergence(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<StartupPluginConvergenceResult> {
+  const plan = await planStartupPluginVerification(params);
   if (!plan.required) {
-    return [];
+    return { blockingDiagnostic: null, quarantinedPlugins: [] };
   }
   const { runPostCorePluginConvergence } = await measureStartupPreflightStep(
     "plugin-convergence-import",
@@ -183,7 +245,91 @@ async function runStartupUpgradeConvergence(params: {
   if (warnings.length > 0) {
     note(warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
   }
-  return warnings;
+  const quarantinedPlugins = buildStartupPluginQuarantine({
+    cfg: params.cfg,
+    failures: convergence.smokeFailures,
+  });
+  const nonBlockingWarningKeys = new Set(
+    convergence.smokeFailures
+      .filter(
+        (failure) =>
+          Boolean(failure.installPath) ||
+          !isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+      )
+      .map((failure) => JSON.stringify([failure.pluginId, `${failure.reason}: ${failure.detail}`])),
+  );
+  const blockingMessages = convergence.warnings
+    .filter(
+      (warning) =>
+        !warning.pluginId ||
+        !nonBlockingWarningKeys.has(JSON.stringify([warning.pluginId, warning.reason])),
+    )
+    .map((warning) => `${warning.message} ${warning.guidance.join(" ")}`.trim());
+  return {
+    blockingDiagnostic:
+      blockingMessages.length > 0
+        ? { kind: "plugin-verification", messages: blockingMessages }
+        : null,
+    quarantinedPlugins,
+  };
+}
+
+async function refreshStartupPluginQuarantine(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<StartupPluginConvergenceResult> {
+  const plan = await planStartupPluginVerification(params);
+  if (!plan.required) {
+    return { blockingDiagnostic: null, quarantinedPlugins: [] };
+  }
+  const { runActivePluginPayloadSmokeCheck } = await measureStartupPreflightStep(
+    "plugin-payload-verification-import",
+    () => import("../cli/update-cli/active-plugin-payload-validation.js"),
+  );
+  const smoke = await measureStartupPreflightStep("plugin-payload-verification", () =>
+    runActivePluginPayloadSmokeCheck({
+      cfg: params.cfg,
+      records: plan.installRecords,
+      env: params.env,
+    }),
+  );
+  const quarantinedPlugins = buildStartupPluginQuarantine({
+    cfg: params.cfg,
+    failures: smoke.failures,
+  });
+  const blockingFailures = smoke.failures.filter(
+    (failure) =>
+      !failure.installPath &&
+      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+  );
+  if (quarantinedPlugins.length > 0) {
+    note(
+      quarantinedPlugins
+        .map(
+          (plugin) =>
+            `- ${formatStartupPluginSmokeFailure({
+              pluginId: plugin.pluginId,
+              reason: plugin.diagnostic.reason,
+              detail: plugin.diagnostic.detail,
+              ...(plugin.diagnostic.installPath
+                ? { installPath: plugin.diagnostic.installPath }
+                : {}),
+            })}`,
+        )
+        .join("\n"),
+      "Doctor warnings",
+    );
+  }
+  return {
+    blockingDiagnostic:
+      blockingFailures.length > 0
+        ? {
+            kind: "plugin-verification",
+            messages: blockingFailures.map(formatStartupPluginSmokeFailure),
+          }
+        : null,
+    quarantinedPlugins,
+  };
 }
 
 function formatStartupMigrationFailure(params: { warnings: string[]; blockers: string[] }): string {
@@ -196,6 +342,22 @@ function formatStartupMigrationFailure(params: { warnings: string[]; blockers: s
     ...details,
     'Run "openclaw doctor --fix" against the mounted state/config, then restart the container.',
   ].join("\n");
+}
+
+function formatStartupPluginVerificationFailure(
+  diagnostic: StartupPluginVerificationDiagnostic,
+): string {
+  return [
+    "OpenClaw plugin verification failed; refusing to report the gateway ready.",
+    ...diagnostic.messages.map((message) => `- ${message}`),
+    "Resolve the plugin verification errors above, then restart the container.",
+  ].join("\n");
+}
+
+function throwStartupMigrationRefusal(message: string): never {
+  // ExitError bypasses entry.ts's generic failure formatter, so report the owned reason here.
+  console.error(message);
+  throw new ExitError(1, message);
 }
 
 function throwStartupMigrationGuardRejected(): never {
@@ -225,13 +387,6 @@ export async function runDoctorConfigPreflight(
     skipPristineCoreStateMigrations?: boolean;
     /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
     skipPristineStartupStateMigrations?: boolean;
-    /**
-     * Allows legacy imports whose source lives in the DEFAULT home state dir
-     * while OPENCLAW_STATE_DIR points elsewhere. Only explicit doctor repair
-     * runs opt in; the implicit CLI/gateway preflight must never archive
-     * files that belong to another install's state dir.
-     */
-    crossStateDirImports?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -348,6 +503,21 @@ export async function runDoctorConfigPreflight(
         );
         snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
       }
+      if (
+        !snapshot.valid &&
+        typeof snapshot.raw === "string" &&
+        !parseConfigJson5(snapshot.raw).ok
+      ) {
+        const clobberedPath = await preserveConfigSnapshotAsClobbered(snapshot);
+        if (!clobberedPath) {
+          throw new Error(
+            `Config could not be parsed or recovered, and doctor could not preserve a .clobbered snapshot. The original remains unchanged at ${snapshot.path}; refusing to apply repairs.`,
+          );
+        }
+        throw new Error(
+          `Config could not be parsed or recovered. Original preserved at ${clobberedPath}. The current file remains unchanged; refusing to apply repairs.`,
+        );
+      }
     }
     const invalidConfigNote =
       options.invalidConfigNote ?? "Config invalid; doctor will run with best-effort config.";
@@ -420,7 +590,6 @@ export async function runDoctorConfigPreflight(
                 : {}),
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -433,7 +602,6 @@ export async function runDoctorConfigPreflight(
           noteStartupStateMigrationResult(
             await autoMigrateLegacyTaskStateSidecars({
               env: process.env,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         }
@@ -441,36 +609,62 @@ export async function runDoctorConfigPreflight(
         noteStartupStateMigrationResult(
           await autoMigrateLegacyTaskStateSidecars({
             env: process.env,
-            crossStateDirImports: options.crossStateDirImports,
           }),
         );
       }
     }
 
-    if (shouldRecordStartupCheckpoint) {
-      if (startupMigrationHeartbeatError) {
-        throw startupMigrationHeartbeatError instanceof Error
-          ? startupMigrationHeartbeatError
-          : new Error("OpenClaw startup migration lease heartbeat failed.");
+    if (startupCheckpoint) {
+      if (shouldRecordStartupCheckpoint) {
+        if (startupMigrationHeartbeatError) {
+          throw startupMigrationHeartbeatError instanceof Error
+            ? startupMigrationHeartbeatError
+            : new Error("OpenClaw startup migration lease heartbeat failed.");
+        }
+        if (startupMigrationWarnings.length > 0) {
+          throwStartupMigrationRefusal(
+            formatStartupMigrationFailure({
+              warnings: startupMigrationWarnings,
+              blockers: [],
+            }),
+          );
+        }
+        if (!snapshot.valid) {
+          throwStartupMigrationRefusal(
+            formatStartupMigrationFailure({
+              warnings: [],
+              blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
+            }),
+          );
+        }
       }
-      const blockers =
-        startupMigrationWarnings.length > 0
-          ? []
-          : snapshot.valid
-            ? await runStartupUpgradeConvergence({ cfg: baseConfig, env: process.env })
-            : ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'];
-      if (startupMigrationWarnings.length > 0 || blockers.length > 0) {
-        throw new Error(
-          formatStartupMigrationFailure({
-            warnings: startupMigrationWarnings,
-            blockers,
-          }),
-        );
+      // This state is established before the first Gateway plugin load and remains
+      // fixed for the boot. Refresh it on every process start because migration
+      // checkpoints do not persist plugin availability or quarantine state.
+      setActiveDegradedPlugins([]);
+      if (snapshot.valid) {
+        const pluginConvergence = shouldRecordStartupCheckpoint
+          ? await runStartupUpgradeConvergence({
+              cfg: baseConfig,
+              env: process.env,
+            })
+          : await refreshStartupPluginQuarantine({
+              cfg: baseConfig,
+              env: process.env,
+            });
+        setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
+        if (pluginConvergence.blockingDiagnostic) {
+          throwStartupMigrationRefusal(
+            formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
+          );
+        }
       }
-      startupCheckpoint?.recordSuccessfulStartupMigrations({
-        env: startupMigrationEnv,
-        lease: startupMigrationLease,
-      });
+      if (shouldRecordStartupCheckpoint) {
+        startupCheckpoint.recordSuccessfulStartupMigrations({
+          env: startupMigrationEnv,
+          lease: startupMigrationLease,
+        });
+      }
     }
 
     return {
