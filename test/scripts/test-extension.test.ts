@@ -686,7 +686,7 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("isolates concurrent extension caches below a configured CI cache root", async () => {
-    const runGroup = vi.fn(async () => 0);
+    const runGroup = vi.fn(async (_params: RunGroupParams) => 0);
     const cacheRoot = path.join(process.cwd(), ".tmp", "vitest-cache");
 
     await expect(
@@ -711,14 +711,18 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("isolates a sequential extension batch from a configured CI cache root", async () => {
-    const runGroup = vi.fn(async () => 0);
+    const runGroup = vi.fn(async (_params: RunGroupParams) => 0);
     const cacheRoot = path.join(process.cwd(), ".tmp", "vitest-cache");
+    const [firstGroup] = createConcurrentExtensionBatchPlan().planGroups;
+    if (!firstGroup) {
+      throw new Error("expected first extension batch group");
+    }
 
     await expect(
       runExtensionBatchPlan(
         {
           ...createConcurrentExtensionBatchPlan(),
-          planGroups: [createConcurrentExtensionBatchPlan().planGroups[0]],
+          planGroups: [firstGroup],
         },
         {
           env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheRoot },
