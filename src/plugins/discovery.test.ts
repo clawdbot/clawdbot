@@ -507,13 +507,22 @@ describe("discoverOpenClawPlugins", () => {
     const workspaceDir = path.join(stateDir, "workspace");
     const globalExt = path.join(stateDir, "extensions");
     mkdirSafe(globalExt);
-    fs.writeFileSync(path.join(globalExt, "types.d.ts"), "export type Foo = string;", "utf-8");
-    fs.writeFileSync(path.join(globalExt, "types.d.mts"), "export type Bar = number;", "utf-8");
-    fs.writeFileSync(path.join(globalExt, "types.d.cts"), "export type Baz = boolean;", "utf-8");
 
-    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, { workspaceDir });
+    fs.writeFileSync(path.join(globalExt, "alpha.d.ts"), "export type Foo = string;", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "bravo.d.mts"), "export type Bar = number;", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "charlie.d.cts"), "export type Baz = boolean;", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "delta.mts"), "export default {};", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "echo.cts"), "export default {};", "utf-8");
 
-    expectCandidateIds(candidates, { excludes: ["types"] });
+    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {
+      workspaceDir,
+      extraPaths: [globalExt],
+    });
+
+    expectCandidateIds(candidates, {
+      includes: ["delta", "echo"],
+      excludes: ["alpha.d", "bravo.d", "charlie.d"],
+    });
     expect(diagnostics).toStrictEqual([]);
   });
 
