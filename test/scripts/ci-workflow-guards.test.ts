@@ -4971,6 +4971,44 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(true);
   });
 
+  it("bounds test-performance-agent git fetch operations", () => {
+    const workflow = readWorkflow(".github/workflows/test-performance-agent.yml");
+    const optimizeTestsJob = workflow.jobs["optimize-tests"];
+    expect(optimizeTestsJob).toBeDefined();
+    const fetchSteps = optimizeTestsJob.steps.filter((step: WorkflowStep) =>
+      (step.run ?? "").includes("git fetch"),
+    );
+
+    expect(fetchSteps.map((step: WorkflowStep) => step.name)).toEqual([
+      "Gate trusted main activity and daily cadence",
+      "Commit test performance updates",
+    ]);
+    const gitFetchLines = fetchSteps.flatMap((step: WorkflowStep) =>
+      (step.run ?? "")
+        .split("\n")
+        .filter((line: string) => line.includes("git fetch"))
+        .map((line: string) => line.trimStart()),
+    );
+
+    expect(gitFetchLines).toHaveLength(2);
+    expect(
+      gitFetchLines.every((line: string) =>
+        line.includes("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+      ),
+    ).toBe(true);
+    expect(
+      gitFetchLines.every((line: string) => {
+        const timeoutAt = line.indexOf("timeout --signal=TERM --kill-after=10s 120s");
+        const fetchAt = line.indexOf("git fetch");
+        return timeoutAt !== -1 && fetchAt !== -1 && timeoutAt < fetchAt;
+      }),
+    ).toBe(true);
+    expect(gitFetchLines.some((line: string) => line.includes("origin main"))).toBe(true);
+    expect(gitFetchLines.some((line: string) => line.includes('origin "${TARGET_BRANCH}"'))).toBe(
+      true,
+    );
+  });
+
   it("keeps maturity scorecard generated QA evidence handoff strict", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
     const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
