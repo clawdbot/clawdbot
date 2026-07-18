@@ -359,6 +359,10 @@ describe("subagent announce targeted continuation return integration", () => {
       const requesterSessionKey = "agent:main:subagent:all-cleaned";
       const liveSessionKey = "agent:main:root:all-live";
       allSessionKeysMock.mockReturnValue([requesterSessionKey, liveSessionKey]);
+      // Exercise the same inactive internal-requester admission gate as the
+      // live cleaned-intermediary failure: the live all-recipient must still
+      // be routed while the cleaned requester stays closed.
+      registryRuntimeMock.isSubagentSessionRunActive.mockReturnValueOnce(false);
       registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
         (sessionKey: string) => sessionKey === requesterSessionKey,
       );
@@ -398,6 +402,9 @@ describe("subagent announce targeted continuation return integration", () => {
     await withTempDir({ prefix: "openclaw-targeted-return-default-cleaned-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const requesterSessionKey = "agent:main:subagent:default-cleaned";
+      // The untargeted path must still take the inactive internal-requester
+      // early gate, then leave the cleaned recipient closed with no wake.
+      registryRuntimeMock.isSubagentSessionRunActive.mockReturnValueOnce(false);
       registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
         (sessionKey: string) => sessionKey === requesterSessionKey,
       );
