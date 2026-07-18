@@ -685,6 +685,55 @@ describe("scripts/test-extension.mjs", () => {
     });
   });
 
+  it("isolates concurrent extension caches below a configured CI cache root", async () => {
+    const runGroup = vi.fn(async () => 0);
+    const cacheRoot = path.join(process.cwd(), ".tmp", "vitest-cache");
+
+    await expect(
+      runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+        env: {
+          OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheRoot,
+        },
+        runGroup: runGroup as NonNullable<
+          NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+        >,
+      }),
+    ).resolves.toBe(0);
+
+    expect(
+      runGroup.mock.calls.map(([params]) => params.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH),
+    ).toEqual([
+      path.join(cacheRoot, "extension-batch", "0-heavy"),
+      path.join(cacheRoot, "extension-batch", "1-middle"),
+      path.join(cacheRoot, "extension-batch", "2-light"),
+    ]);
+  });
+
+  it("isolates a sequential extension batch from a configured CI cache root", async () => {
+    const runGroup = vi.fn(async () => 0);
+    const cacheRoot = path.join(process.cwd(), ".tmp", "vitest-cache");
+
+    await expect(
+      runExtensionBatchPlan(
+        {
+          ...createConcurrentExtensionBatchPlan(),
+          planGroups: [createConcurrentExtensionBatchPlan().planGroups[0]],
+        },
+        {
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheRoot },
+          runGroup: runGroup as NonNullable<
+            NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+          >,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(requireFirstMockArg<RunGroupParams>(runGroup).env).toMatchObject({
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(cacheRoot, "extension-batch", "0-light"),
+    });
+  });
+
   it("stops admitting extension batch groups after a parallel failure", async () => {
     const started: string[] = [];
     let resolveHeavy: ((code: number) => void) | undefined;

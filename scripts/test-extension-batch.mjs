@@ -78,17 +78,18 @@ function sanitizeCacheSegment(value) {
 }
 
 function createGroupEnv({ baseEnv, group, groupIndex, useDedicatedCache }) {
-  if (!useDedicatedCache || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+  const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  if (!useDedicatedCache && !configuredCacheRoot) {
     return baseEnv;
   }
 
+  const cacheRoot = configuredCacheRoot
+    ? path.join(configuredCacheRoot, "extension-batch")
+    : path.join(process.cwd(), "node_modules", ".experimental-vitest-cache", "extension-batch");
   return {
     ...baseEnv,
     [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-      process.cwd(),
-      "node_modules",
-      ".experimental-vitest-cache",
-      "extension-batch",
+      cacheRoot,
       sanitizeCacheSegment(`${groupIndex}-${group.config}`),
     ),
   };
