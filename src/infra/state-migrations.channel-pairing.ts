@@ -105,24 +105,35 @@ function parseAllowFromFilename(
       continue;
     }
     const accountKey = stem.slice(channel.length + 1);
-    const matchingAccountIds = (accountIds[channel] ?? []).filter((accountId) => {
-      try {
-        return safeAccountKey(accountId) === accountKey;
-      } catch {
-        // One invalid configured candidate must not abort every legacy migration.
-        // With no valid match, the source remains in place as unresolved below.
-        return false;
+    // Normalize the filename segment the same way as configured account ids
+    // so that raw spellings (e.g. HY_RIN_Bot) match their canonical safe key.
+    let normalizedAccountKey: string | undefined;
+    try {
+      normalizedAccountKey = safeAccountKey(accountKey);
+    } catch {
+      // Pathological filename segment; skip this channel safely.
+    }
+    if (normalizedAccountKey) {
+      const matchingAccountIds = (accountIds[channel] ?? []).filter((accountId) => {
+        try {
+          return safeAccountKey(accountId) === normalizedAccountKey;
+        } catch {
+          // One invalid configured candidate must not abort every legacy migration.
+          // With no valid match, the source remains in place as unresolved below.
+          return false;
+        }
+      });
+      if (matchingAccountIds.length === 1 && matchingAccountIds[0]) {
+        targets.push({ channel: channel as PairingChannel, accountId: matchingAccountIds[0] });
+      } else if (matchingAccountIds.length > 1) {
+        hasAccountCollision = true;
+      } else if (accountKey === DEFAULT_ACCOUNT_ID && CHANNEL_IDS.includes(channel)) {
+        // Bundled <channel>-default files resolve without config.
+        // This implicit fallback applies only when the filename suffix is the
+        // literal canonical "default"; a non-canonical spelling (e.g. DEFAULT)
+        // that did not match any configured account remains unresolved.
+        targets.push({ channel: channel as PairingChannel, accountId: DEFAULT_ACCOUNT_ID });
       }
-    });
-    if (matchingAccountIds.length === 1 && matchingAccountIds[0]) {
-      targets.push({ channel: channel as PairingChannel, accountId: matchingAccountIds[0] });
-    } else if (matchingAccountIds.length > 1) {
-      hasAccountCollision = true;
-    } else if (accountKey === DEFAULT_ACCOUNT_ID && CHANNEL_IDS.includes(channel)) {
-      // "default" is canonical, so bundled `<channel>-default` files resolve without config.
-      // Keep this on CHANNEL_IDS: knownChannelIds also includes configured and pairing-file ids.
-      // After safeAccountKey finds no match, those other channels must remain unresolved.
-      targets.push({ channel: channel as PairingChannel, accountId: DEFAULT_ACCOUNT_ID });
     }
   }
   if (hasAccountCollision || targets.length > 1) {
