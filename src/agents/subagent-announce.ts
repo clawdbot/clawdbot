@@ -345,9 +345,9 @@ export async function runSubagentAnnounceFlow(params: {
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
-     // Keep this aligned with the targeted-return router. Any explicit target,
-     // plural target set, or fanout mode must reach that router even if the
-     // immediate requester has already been cleaned up.
+    // Keep this aligned with the targeted-return router. Any explicit target,
+    // plural target set, or fanout mode must reach that router even if the
+    // immediate requester has already been cleaned up.
     const hasTargeting = Boolean(
       params.continuationTargetSessionKey ||
       (params.continuationTargetSessionKeys && params.continuationTargetSessionKeys.length > 0) ||
