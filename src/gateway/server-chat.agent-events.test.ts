@@ -2543,6 +2543,84 @@ describe("agent event handler", () => {
     ).toBe(false);
   });
 
+  it("carries the effective serving model and provider on the terminal chat payload", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-served-model",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    chatRunState.registry.add("run-served", {
+      sessionKey: "session-served-model",
+      clientRunId: "run-served",
+    });
+    registerAgentRunContext("run-served", { sessionKey: "session-served-model" });
+
+    handler({
+      runId: "run-served",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "final answer" },
+    });
+    handler({
+      runId: "run-served",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end", model: "moonshotai/Kimi-K2.5", provider: "deepinfra" },
+    });
+
+    const payload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      model?: string;
+      provider?: string;
+      message?: { model?: string; provider?: string };
+    };
+    expect(payload.state).toBe("final");
+    expect(payload.model).toBe("moonshotai/Kimi-K2.5");
+    expect(payload.provider).toBe("deepinfra");
+    expect(payload.message?.model).toBe("moonshotai/Kimi-K2.5");
+    expect(payload.message?.provider).toBe("deepinfra");
+
+    const nodePayload = sessionChatCalls(nodeSendToSession).at(-1)?.[2] as {
+      model?: string;
+      provider?: string;
+    };
+    expect(nodePayload.model).toBe("moonshotai/Kimi-K2.5");
+    expect(nodePayload.provider).toBe("deepinfra");
+  });
+
+  it("carries the fallback serving model and provider on an error terminal", () => {
+    const { broadcast, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-served-error",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    registerAgentRunContext("run-served-error", { sessionKey: "session-served-error" });
+
+    handler({
+      runId: "run-served-error",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: "Google Generative AI API error (429): You exceeded your current quota.",
+        model: "fireworks/kimi-fallback",
+        provider: "fireworks",
+      },
+    });
+
+    const payload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      errorKind?: string;
+      model?: string;
+      provider?: string;
+    };
+    expect(payload.state).toBe("error");
+    expect(payload.errorKind).toBe("rate_limit");
+    expect(payload.model).toBe("fireworks/kimi-fallback");
+    expect(payload.provider).toBe("fireworks");
+  });
+
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({

@@ -417,6 +417,15 @@ export function createAgentEventHandler({
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         const evtErrorKind =
           readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error);
+        // Effective serving model/provider (after `/model` override and any
+        // failover fallback) carried on the terminal lifecycle event.
+        const evtModel = typeof evt.data?.model === "string" ? evt.data.model : undefined;
+        const evtProvider = typeof evt.data?.provider === "string" ? evt.data.provider : undefined;
+        const terminalOpts = {
+          controlUiVisible: isControlUiVisible,
+          ...(evtModel ? { model: evtModel } : {}),
+          ...(evtProvider ? { provider: evtProvider } : {}),
+        };
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
@@ -433,7 +442,7 @@ export function createAgentEventHandler({
               evt.data?.error,
               evtStopReason,
               evtErrorKind,
-              { controlUiVisible: isControlUiVisible },
+              terminalOpts,
             );
           }
         } else if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
@@ -446,7 +455,7 @@ export function createAgentEventHandler({
             evt.data?.error,
             evtStopReason,
             evtErrorKind,
-            { controlUiVisible: isControlUiVisible },
+            terminalOpts,
           );
         }
       } else {
@@ -665,11 +674,17 @@ export function createAgentEventHandler({
     error?: unknown,
     stopReason?: string,
     errorKind?: ErrorKind,
-    opts?: { controlUiVisible?: boolean },
+    opts?: { controlUiVisible?: boolean; model?: string; provider?: string },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: false,
     });
+    // Effective serving model/provider for this turn (after `/model` override
+    // and any failover fallback), so subscribers can attribute the reply.
+    const servedFields = {
+      ...(opts?.model ? { model: opts.model } : {}),
+      ...(opts?.provider ? { provider: opts.provider } : {}),
+    };
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
     // suppressed the most recent chunk, leaving the client with stale text.
@@ -685,10 +700,12 @@ export function createAgentEventHandler({
         seq,
         state: "final" as const,
         ...(stopReason && { stopReason }),
+        ...servedFields,
         message:
           text && !shouldSuppressSilent
             ? {
                 role: "assistant",
+                ...servedFields,
                 content: [{ type: "text", text }],
                 timestamp: Date.now(),
               }
@@ -708,6 +725,7 @@ export function createAgentEventHandler({
       // failure class (rate_limit/quota, timeout, unknown). Unrecognized
       // provider errors fall back to "unknown" rather than an absent field.
       errorKind: errorKind ?? "unknown",
+      ...servedFields,
     };
     sendChatPayload(sessionKey, payload, opts);
   };
