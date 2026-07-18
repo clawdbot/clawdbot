@@ -99,7 +99,7 @@ export async function enqueueContinuationReturnDeliveries(
   const deliveryIds: string[] = [];
   let delivered = 0;
 
-  for (const [index, sessionKey] of targetSessionKeys.entries()) {
+  for (const sessionKey of targetSessionKeys) {
     const deliveryId = await deps.enqueueSessionDelivery(
       {
         kind: "systemEvent",
@@ -107,7 +107,10 @@ export async function enqueueContinuationReturnDeliveries(
         text: params.text,
         ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
         ...(params.traceparent ? { traceparent: params.traceparent } : {}),
-        idempotencyKey: `${params.idempotencyKeyBase}:${index}:${sessionKey}`,
+        // Recipients can disappear from a tree between attempts. Keying by
+        // their transient fanout index would turn the same recipient into a
+        // second durable delivery after a cleanup transition.
+        idempotencyKey: `${params.idempotencyKeyBase}:${sessionKey}`,
       },
       params.stateDir,
     );

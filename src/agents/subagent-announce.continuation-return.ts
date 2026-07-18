@@ -92,20 +92,18 @@ export async function routeSubagentContinuationReturn(params: {
     params.continuationFanoutMode,
   );
   if (hasTargeting) {
+    // Resolve the full tree first, then remove completed recipients. Filtering
+    // before target resolution makes an all-cleaned tree look like a missing
+    // tree and incorrectly re-enables the requester fallback.
     const treeSessionKeys =
       params.continuationFanoutMode === "tree"
-        ? params.registryRuntime
-            ?.listAncestorSessionKeys(params.targetRequesterSessionKey)
-            .filter(
-              (sessionKey) =>
-                !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
-            )
+        ? params.registryRuntime?.listAncestorSessionKeys(params.targetRequesterSessionKey)
         : undefined;
     const allSessionKeys =
       params.continuationFanoutMode === "all"
         ? await listKnownSessionKeysOnHost(params.cfg)
         : undefined;
-    const targetSessionKeys = resolveContinuationReturnTargetSessionKeys({
+    const resolvedTargetSessionKeys = resolveContinuationReturnTargetSessionKeys({
       defaultSessionKey: params.targetRequesterSessionKey,
       targetSessionKey: params.continuationTargetSessionKey,
       targetSessionKeys: params.continuationTargetSessionKeys,
@@ -114,6 +112,13 @@ export async function routeSubagentContinuationReturn(params: {
       allSessionKeys,
       childSessionKey: params.childSessionKey,
     });
+    const targetSessionKeys =
+      params.continuationFanoutMode === "tree"
+        ? resolvedTargetSessionKeys.filter(
+            (sessionKey) =>
+              !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
+          )
+        : resolvedTargetSessionKeys;
     await enqueueContinuationReturnDeliveries({
       targetSessionKeys,
       text:

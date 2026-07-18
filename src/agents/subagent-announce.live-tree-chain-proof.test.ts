@@ -1,5 +1,6 @@
-import { mkdirSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayRequest = {
@@ -68,6 +69,7 @@ import {
 } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions.js";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
@@ -75,14 +77,14 @@ import { loadSessionEntryByKey } from "./subagent-announce-delivery.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { listSubagentRunsForRequester } from "./subagent-registry-announce-read.js";
 import { getSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
 import "./subagent-registry.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 
 const rootSessionKey = "agent:main:root";
-const stateDir = resolve(process.cwd(), ".proof-state-live-tree-chain");
+let stateDir: string;
 
-function makeConfig() {
+function makeConfig(): OpenClawConfig {
   return {
     session: { mainKey: "main", scope: "per-sender" as const },
     agents: {
@@ -141,15 +143,14 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     gatewayState.chatHistoryBySessionKey.clear();
     callGatewayMock.mockClear();
 
-    rmSync(stateDir, { recursive: true, force: true });
-    mkdirSync(stateDir, { recursive: true });
+    stateDir = mkdtempSync(join(tmpdir(), "openclaw-proof-state-live-tree-chain-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     resetAgentEventsForTest();
     resetSubagentRegistryForTests();
     resetDelegateStoreForTests();
     resetSystemEventsForTest();
-    setRuntimeConfigSnapshot(makeConfig() as never);
+    setRuntimeConfigSnapshot(makeConfig());
     expect(getRuntimeConfig().agents?.defaults?.continuation?.enabled).toBe(true);
 
     await upsertMainSessionEntry(rootSessionKey, "sess-root", Date.now());
