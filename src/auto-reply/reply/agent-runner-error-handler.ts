@@ -267,11 +267,15 @@ export async function handleAgentExecutionError(params: {
     outcome: "error",
     error: message,
   });
-  const isFallbackSummary = isFallbackSummaryError(err);
+  // err is a reassignable let (the takeover block may swap in the preserved
+  // prompt error), so the isFallbackSummaryError type guard does not flow to
+  // later err.attempts reads. Capture the narrowed value in a const instead.
+  const fallbackSummary = isFallbackSummaryError(err) ? err : undefined;
+  const isFallbackSummary = fallbackSummary !== undefined;
   const isPureOverloadSummary =
-    isFallbackSummary &&
-    err.attempts.length > 0 &&
-    err.attempts.every((attempt) => attempt.reason === "overloaded");
+    fallbackSummary !== undefined &&
+    fallbackSummary.attempts.length > 0 &&
+    fallbackSummary.attempts.every((attempt) => attempt.reason === "overloaded");
   const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
   const isOverloaded = isFallbackSummary
     ? isPureOverloadSummary
