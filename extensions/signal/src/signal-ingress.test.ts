@@ -138,6 +138,36 @@ describe("Signal durable ingress", () => {
     });
   });
 
+  it("waits for accepted dispatch before stopping the drain", async () => {
+    await withQueue(async (queue) => {
+      let finishDispatch: (() => void) | undefined;
+      const dispatchGate = new Promise<void>((resolve) => {
+        finishDispatch = resolve;
+      });
+      const dispatch = vi.fn(async () => {
+        await dispatchGate;
+      });
+      const started = await startMonitor(queue, dispatch);
+      let stopPromise: Promise<void> | undefined;
+
+      try {
+        await started.monitor.receive(signalEvent());
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+        let stopped = false;
+        stopPromise = started.monitor.stop().then(() => {
+          stopped = true;
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(stopped).toBe(false);
+      } finally {
+        finishDispatch?.();
+        await (stopPromise ?? started.monitor.stop());
+      }
+
+      expect(await queue.listClaims()).toHaveLength(0);
+    });
+  });
+
   it("completes only when deferred dispatch adoption becomes durable", async () => {
     await withQueue(async (queue) => {
       const event = signalEvent();
