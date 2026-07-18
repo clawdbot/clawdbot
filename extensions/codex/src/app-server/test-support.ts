@@ -106,18 +106,28 @@ export type CodexTestAppServerClientFactory = (
   options?: CodexAppServerClientOptions,
 ) => Promise<CodexAppServerClient>;
 
+let testClientInstanceSequence = 0;
+
 /** Adapts a positional test factory to the production options-object contract. */
 export function adaptCodexTestClientFactory(
   factory: CodexTestAppServerClientFactory,
 ): CodexAppServerClientFactory {
-  return (options) =>
-    factory(
+  return async (options) => {
+    const client = await factory(
       options?.startOptions,
       options?.authProfileId ?? undefined,
       options?.agentDir,
       options?.config,
       options,
     );
+    if (typeof client.getInstanceId !== "function") {
+      const instanceId = `codex-test-client-${++testClientInstanceSequence}`;
+      // Narrow doubles still need stable physical-client identity. Otherwise startup
+      // fails before turn/start and long harness waits hide the fixture error.
+      client.getInstanceId = () => instanceId;
+    }
+    return client;
+  };
 }
 
 /** Builds a representative Codex-capable model fixture for app-server tests. */
