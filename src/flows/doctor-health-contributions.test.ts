@@ -2039,7 +2039,7 @@ describe("doctor health contributions", () => {
     );
     expect(check).toBeDefined();
 
-    const zeroValues: Array<unknown> = [0, "0", "0mb", "0MB", "0kb", "0gb", "0b"];
+    const zeroValues: Array<string | number> = [0, "0", "0mb", "0MB", "0kb", "0gb", "0b"];
 
     for (const value of zeroValues) {
       const ctx = {
