@@ -54,7 +54,6 @@ function stripHeartbeatHtmlComments(content: string): string[] {
  * - Whitespace / empty lines
  * - Markdown/HTML comments
  * - Markdown ATX headers (`#`, `##`, ...)
- * - One-line HTML comments (`<!-- ... -->`)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
@@ -69,15 +68,14 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
+  // stripHeartbeatHtmlComments removes leading HTML-comment scaffolding from
+  // each line before the loop, so the loop body does not need to check for
+  // them — see parseHeartbeatTasks for the same pattern.
   const lines = stripHeartbeatHtmlComments(content);
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines
     if (!trimmed) {
-      continue;
-    }
-    // Skip single-line HTML comments used by the bundled runtime template.
-    if (/^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Skip markdown header lines (# followed by space or EOL, ## etc)
@@ -86,16 +84,13 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^#+(\s|$)/.test(trimmed)) {
       continue;
     }
-    if (/^<!--.*-->$/.test(trimmed)) {
-      continue;
-    }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
       continue;
     }
-    // Ignore markdown fence markers and HTML comments that only document the
-    // workspace template; neither carries heartbeat task semantics.
-    if (/^```[A-Za-z0-9_-]*$/.test(trimmed) || /^<!--.*-->$/.test(trimmed)) {
+    // Ignore markdown fence markers that only document the workspace
+    // template; they do not carry heartbeat task semantics.
+    if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content

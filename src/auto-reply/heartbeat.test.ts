@@ -212,6 +212,8 @@ tasks:
     ).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("<!-- One --> <!-- Two -->")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("<!-- One -->\n# Header")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("# Header\n<!-- note -->")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("- [ ]\n<!-- note -->")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
   });
 
