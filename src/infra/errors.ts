@@ -164,7 +164,14 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
     message.includes("rate limit") ||
     message.includes("too many requests") ||
     message.includes("429") ||
-    code === "429"
+    code === "429" ||
+    // Provider quota exhaustion (e.g. Gemini "RESOURCE_EXHAUSTED" /
+    // "You exceeded your current quota") is a rate-limit class failure even
+    // when the raw message omits the numeric 429 code.
+    message.includes("resource_exhausted") ||
+    message.includes("resource exhausted") ||
+    message.includes("exceeded your current quota") ||
+    message.includes("quota exceeded")
   ) {
     return "rate_limit";
   }

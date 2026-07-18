@@ -402,9 +402,17 @@ export function createAgentEventHandler({
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+    // A lifecycle "error" terminal means the run genuinely failed (a model /
+    // provider error, e.g. a 429 quota exhaustion after failover). Genuine
+    // user/system aborts always arrive as phase "end" with aborted meta, never
+    // as phase "error". So an error terminal must surface honestly as
+    // state:"error" even when a racing/stale abort marker set abortedRuns —
+    // otherwise subscribers see a misleading empty state:"aborted" and never
+    // learn the run failed.
+    const isGenuineError = lifecyclePhase === "error";
 
     if (sessionKey && (isControlUiVisible || sessionMessageSubscribers.get(sessionKey).size > 0)) {
-      if (!isAborted) {
+      if (!isAborted || isGenuineError) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         const evtErrorKind =
@@ -696,7 +704,10 @@ export function createAgentEventHandler({
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
-      ...(errorKind && { errorKind }),
+      // Always classify error terminals so the client can branch on the
+      // failure class (rate_limit/quota, timeout, unknown). Unrecognized
+      // provider errors fall back to "unknown" rather than an absent field.
+      errorKind: errorKind ?? "unknown",
     };
     sendChatPayload(sessionKey, payload, opts);
   };

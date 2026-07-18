@@ -135,6 +135,14 @@ describe("error helpers", () => {
       expected: "rate_limit",
     },
     {
+      value: new Error("Google Generative AI API error (429): You exceeded your current quota."),
+      expected: "rate_limit",
+    },
+    {
+      value: new Error("[RESOURCE_EXHAUSTED] provider quota depleted"),
+      expected: "rate_limit",
+    },
+    {
       value: new Error("context_window exceeded with too many tokens"),
       expected: "context_length",
     },

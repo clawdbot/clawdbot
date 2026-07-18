@@ -2452,6 +2452,97 @@ describe("agent event handler", () => {
     expect(nodePayload.errorKind).toBe("rate_limit");
   });
 
+  it("surfaces an honest error terminal for a 429-failed run even when marked aborted", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-429-aborted",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    registerAgentRunContext("run-429-aborted", { sessionKey: "session-429-aborted" });
+    // A racing/stale abort marker must not mask a genuine provider failure that
+    // ended the run with a real error terminal (regression: the run reached WS
+    // subscribers as an empty state:"aborted" and the failure was never shown).
+    chatRunState.abortedRuns.set("run-429-aborted", 1_000);
+
+    handler({
+      runId: "run-429-aborted",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: "Google Generative AI API error (429): You exceeded your current quota.",
+      },
+    });
+
+    const payload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      errorKind?: string;
+      errorMessage?: string;
+    };
+    expect(payload.state).toBe("error");
+    expect(payload.errorKind).toBe("rate_limit");
+    expect(payload.errorMessage).toContain("exceeded your current quota");
+
+    const nodePayload = sessionChatCalls(nodeSendToSession).at(-1)?.[2] as {
+      state?: string;
+      errorKind?: string;
+    };
+    expect(nodePayload.state).toBe("error");
+    expect(nodePayload.errorKind).toBe("rate_limit");
+
+    // The handler must not emit a misleading empty aborted terminal.
+    expect(
+      chatBroadcastCalls(broadcast).some(([, p]) => (p as { state?: string }).state === "aborted"),
+    ).toBe(false);
+  });
+
+  it("defaults errorKind to unknown for unclassified error terminals", () => {
+    const { broadcast, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-unknown-error",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    registerAgentRunContext("run-unknown-error", { sessionKey: "session-unknown-error" });
+
+    handler({
+      runId: "run-unknown-error",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error: "something went sideways" },
+    });
+
+    const payload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      errorKind?: string;
+    };
+    expect(payload.state).toBe("error");
+    expect(payload.errorKind).toBe("unknown");
+  });
+
+  it("does not downgrade a genuine abort terminal (phase end) into an error", () => {
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-genuine-abort",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    registerAgentRunContext("run-genuine-abort", { sessionKey: "session-genuine-abort" });
+    chatRunState.abortedRuns.set("run-genuine-abort", 1_000);
+
+    // Genuine user/system aborts arrive as phase "end" with aborted meta; the
+    // state:"aborted" terminal is emitted by the abort path (see chat-abort.ts),
+    // so this handler must never fabricate a state:"error" for them.
+    handler({
+      runId: "run-genuine-abort",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end", aborted: true, stopReason: "rpc" },
+    });
+
+    expect(
+      chatBroadcastCalls(broadcast).some(([, p]) => (p as { state?: string }).state === "error"),
+    ).toBe(false);
+  });
+
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
