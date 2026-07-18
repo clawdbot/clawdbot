@@ -14,7 +14,7 @@ const allSessionKeysMock = vi.hoisted(() => vi.fn(() => [] as string[]));
 const requesterDepthMock = vi.hoisted(() => vi.fn(() => 0));
 
 const registryRuntimeMock = vi.hoisted(() => ({
-  shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
+  shouldIgnorePostCompletionAnnounceForSession: vi.fn((_sessionKey: string) => false),
   isSubagentSessionRunActive: vi.fn(() => true),
   countActiveDescendantRuns: vi.fn(() => 0),
   countPendingDescendantRuns: vi.fn(() => 0),
@@ -43,13 +43,15 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
 }));
 
-vi.mock("../config/sessions/targets.js", () => ({
-  resolveAllAgentSessionStoreTargetsSync: () => [{ storePath: "/tmp/targeted-return-all.json" }],
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: () =>
+    allSessionKeysMock().map((sessionKey: string) => ({ sessionKey, entry: {} })),
 }));
 
-vi.mock("../config/sessions/store-load.js", () => ({
-  loadSessionStore: () =>
-    Object.fromEntries(allSessionKeysMock().map((sessionKey: string) => [sessionKey, {}])),
+vi.mock("../config/sessions/targets.js", () => ({
+  resolveAllAgentSessionStoreTargetsSync: () => [
+    { agentId: "main", storePath: "/tmp/targeted-return-all.sqlite" },
+  ],
 }));
 
 vi.mock("./subagent-announce.runtime.js", () => ({
@@ -102,7 +104,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 vi.mock("./subagent-announce.registry.runtime.js", () => registryRuntimeMock);
 
 vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: (...args: unknown[]) => requesterDepthMock(...args),
+  getSubagentDepthFromSessionStore: () => requesterDepthMock(),
 }));
 
 const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");

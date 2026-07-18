@@ -11,7 +11,6 @@ import type { SessionDeliveryContext } from "../../infra/session-delivery-queue-
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
-  hasContinuationDelegateTargeting,
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
@@ -24,7 +23,6 @@ import type {
 
 export {
   CONTINUATION_DELEGATE_FANOUT_MODES,
-  hasContinuationDelegateTargeting,
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,

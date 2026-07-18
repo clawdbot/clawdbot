@@ -1,9 +1,10 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   enqueueContinuationReturnDeliveries,
   resolveContinuationReturnTargetSessionKeys,
 } from "../auto-reply/continuation/targeting.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   markTrustedContinuationHeartbeatWake,
@@ -22,16 +23,14 @@ type RegistryReturnRuntime = {
 };
 
 async function listKnownSessionKeysOnHost(cfg: OpenClawConfig): Promise<string[]> {
-  const [{ resolveAllAgentSessionStoreTargetsSync }, { loadSessionStore }] = await Promise.all([
-    import("../config/sessions/targets.js"),
-    import("../config/sessions/store-load.js"),
-  ]);
   const keys = new Set<string>();
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    for (const key of Object.keys(loadSessionStore(target.storePath))) {
-      const normalized = normalizeOptionalString(key);
-      if (normalized) {
-        keys.add(normalized);
+    for (const { sessionKey } of listSessionEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    })) {
+      if (sessionKey) {
+        keys.add(sessionKey);
       }
     }
   }

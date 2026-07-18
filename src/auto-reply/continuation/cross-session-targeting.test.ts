@@ -147,7 +147,7 @@ describe("continuation cross-session targeting", () => {
   it("keeps a recipient idempotency key stable when earlier tree recipients disappear", async () => {
     const keys: string[] = [];
     const enqueueSessionDelivery = vi.fn(async (payload: QueuedSessionDeliveryPayload) => {
-      keys.push(payload.idempotencyKey);
+      keys.push(expectDefined(payload.idempotencyKey, "delivery idempotency key"));
       return `delivery-${keys.length}`;
     });
     const deps = {

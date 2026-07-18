@@ -90,7 +90,7 @@ function makeConfig(): OpenClawConfig {
   return {
     session: { mainKey: "main", scope: "per-sender" as const },
     agents: {
-      main: {},
+      list: [{ id: "main" }],
       defaults: {
         workspace: process.cwd(),
         subagents: {
@@ -219,7 +219,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       mode: "silent-wake",
       delayMs: 0,
       fanoutMode: "tree",
-      createdAt: Date.now(),
+      firstArmedAt: Date.now(),
     });
     expect(pendingDelegateCount(hop1ChildSessionKey)).toBe(1);
 
@@ -262,8 +262,8 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
             task: entry.task,
           })),
           pendingDelegates: pendingDelegateCount(hop1ChildSessionKey),
-          logs: logSpy.mock.calls.map(([message]) => String(message)),
-          errors: errorSpy.mock.calls.map(([message]) => String(message)),
+          logs: logSpy.mock.calls.map(([message]: [unknown]) => String(message)),
+          errors: errorSpy.mock.calls.map(([message]: [unknown]) => String(message)),
         }),
       );
     }
@@ -285,7 +285,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         ([request]) => request.method === "agent",
       ).length;
       const logMessages = logSpy.mock.calls
-        .map(([message]) => (typeof message === "string" ? message : String(message)))
+        .map(([message]: [unknown]) => (typeof message === "string" ? message : String(message)))
         .slice(0, 12);
       throw new Error(
         `hop2 run missing childRuns=${JSON.stringify(childRunIds)} agentCalls=${agentCallCount} logs=${JSON.stringify(logMessages)}`,
@@ -319,7 +319,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     const rootEventsBeforeHop2Lifecycle = peekSystemEventEntries(rootSessionKey).length;
     const cleanedHop1EventsBeforeHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
     const targetedReturnLogsBeforeHop2Lifecycle = logSpy.mock.calls.filter(
-      ([message]) =>
+      ([message]: [unknown]) =>
         typeof message === "string" && message.includes("[continuation:targeted-return]"),
     ).length;
 
@@ -333,7 +333,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     await waitFor(
       () =>
         logSpy.mock.calls.some(
-          ([message]) =>
+          ([message]: [unknown]) =>
             typeof message === "string" &&
             message.includes("[continuation:targeted-return]") &&
             message.includes(rootSessionKey) &&
@@ -345,7 +345,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     const rootEventsAfterHop2Lifecycle = peekSystemEventEntries(rootSessionKey).length;
     const cleanedHop1EventsAfterHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
     const targetedReturnLogsAfterHop2Lifecycle = logSpy.mock.calls.filter(
-      ([message]) =>
+      ([message]: [unknown]) =>
         typeof message === "string" && message.includes("[continuation:targeted-return]"),
     ).length;
     expect(rootEventsAfterHop2Lifecycle).toBeGreaterThan(rootEventsBeforeHop2Lifecycle);
