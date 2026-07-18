@@ -92,9 +92,10 @@ export async function routeSubagentContinuationReturn(params: {
     params.continuationFanoutMode,
   );
   if (hasTargeting) {
-    // Resolve the full tree first, then remove completed recipients. Filtering
-    // before target resolution makes an all-cleaned tree look like a missing
-    // tree and incorrectly re-enables the requester fallback.
+    // Resolve the complete targeting set before applying the late-announcement
+    // guard.  Filtering tree ancestors before resolution makes an all-cleaned
+    // tree look empty and causes targeting.ts to fall back to the cleaned
+    // requester.  The same guard must apply to explicit and `all` targets.
     const treeSessionKeys =
       params.continuationFanoutMode === "tree"
         ? params.registryRuntime?.listAncestorSessionKeys(params.targetRequesterSessionKey)
@@ -112,13 +113,10 @@ export async function routeSubagentContinuationReturn(params: {
       allSessionKeys,
       childSessionKey: params.childSessionKey,
     });
-    const targetSessionKeys =
-      params.continuationFanoutMode === "tree"
-        ? resolvedTargetSessionKeys.filter(
-            (sessionKey) =>
-              !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
-          )
-        : resolvedTargetSessionKeys;
+    const targetSessionKeys = resolvedTargetSessionKeys.filter(
+      (sessionKey) =>
+        !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
+    );
     await enqueueContinuationReturnDeliveries({
       targetSessionKeys,
       text:

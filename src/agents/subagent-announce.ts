@@ -360,7 +360,7 @@ export async function runSubagentAnnounceFlow(params: {
           // child, so dropping here strands a completed grandchild before the
           // targeted-return router can deliver to the root.
           if (
-            params.continuationFanoutMode !== "tree" &&
+            !hasTargeting &&
             subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
               targetRequesterSessionKey,
             )

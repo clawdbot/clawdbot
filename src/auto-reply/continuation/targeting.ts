@@ -107,9 +107,9 @@ export async function enqueueContinuationReturnDeliveries(
         text: params.text,
         ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
         ...(params.traceparent ? { traceparent: params.traceparent } : {}),
-        // Recipients can disappear from a tree between attempts. Keying by
-        // their transient fanout index would turn the same recipient into a
-        // second durable delivery after a cleanup transition.
+        // Recipient position is not stable when a cleaned intermediate is
+        // removed from a tree/all fanout.  Keep retries keyed to the durable
+        // recipient identity instead.
         idempotencyKey: `${params.idempotencyKeyBase}:${sessionKey}`,
       },
       params.stateDir,
