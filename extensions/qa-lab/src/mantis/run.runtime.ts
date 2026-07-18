@@ -1,8 +1,9 @@
 // Qa Lab plugin module implements run behavior.
-import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
 import { trimToValue } from "../mantis-options.runtime.js";
@@ -11,6 +12,7 @@ export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
   baseline?: string;
   candidate?: string;
+  commandTimeoutMs?: number;
   commandRunner?: CommandRunner;
   credentialRole?: string;
   credentialSource?: string;
@@ -36,7 +38,12 @@ type MantisBeforeAfterResult = {
 type CommandRunner = (
   command: string,
   args: readonly string[],
-  options: SpawnOptions,
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    stdio: "inherit";
+    timeoutMs: number;
+  },
 ) => Promise<void>;
 
 type DiscordQaSummary = {
@@ -109,6 +116,9 @@ const DEFAULT_PROVIDER_MODE = "live-frontier";
 const DEFAULT_MODEL = "openai/gpt-5.4";
 const DEFAULT_CREDENTIAL_SOURCE = "convex";
 const DEFAULT_CREDENTIAL_ROLE = "ci";
+// A lane may install, build, and run live QA. Match the existing QA test-file
+// command budget while still guaranteeing eventual process-tree cleanup.
+const DEFAULT_COMMAND_TIMEOUT_MS = 30 * 60_000;
 
 const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
   [DEFAULT_SCENARIO]: {
@@ -153,26 +163,39 @@ function defaultOutputDir(repoRoot: string, startedAt: Date) {
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `run-${stamp}`);
 }
 
-function defaultCommandRunner(
+async function defaultCommandRunner(
   command: string,
   args: readonly string[],
-  options: SpawnOptions,
+  options: Parameters<CommandRunner>[2],
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      ...options,
-      stdio: options.stdio ?? "inherit",
+  const commandLabel = [command, ...args].join(" ");
+  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+  try {
+    result = await runCommandWithTimeout([command, ...args], {
+      cwd: options.cwd,
+      env: options.env,
+      killProcessTree: true,
+      outputCapture: "discard",
+      timeoutMs: options.timeoutMs,
+      onOutputChunk(chunk, stream) {
+        (stream === "stdout" ? process.stdout : process.stderr).write(chunk);
+      },
     });
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(new Error(`${command} ${args.join(" ")} failed with ${detail}`));
+  } catch (error) {
+    throw new Error(`${commandLabel} failed to run: ${formatErrorMessage(error)}`, {
+      cause: error,
     });
-  });
+  }
+  if (result.termination === "timeout") {
+    throw new Error(`${commandLabel} timed out after ${options.timeoutMs}ms`);
+  }
+  if (result.code === 0) {
+    return;
+  }
+  const detail = result.signal
+    ? `signal ${result.signal}`
+    : `exit code ${result.code ?? "unknown"}`;
+  throw new Error(`${commandLabel} failed with ${detail}`);
 }
 
 async function runCommand(params: {
@@ -180,11 +203,13 @@ async function runCommand(params: {
   command: string;
   cwd: string;
   runner: CommandRunner;
+  timeoutMs: number;
 }) {
   await params.runner(params.command, params.args, {
     cwd: params.cwd,
     env: process.env,
     stdio: "inherit",
+    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -436,6 +461,7 @@ async function runLane(params: {
   repoRoot: string;
   runner: CommandRunner;
   scenario: string;
+  timeoutMs: number;
   worktreeRoot: string;
   opts: Required<
     Pick<
@@ -456,6 +482,7 @@ async function runLane(params: {
     args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
     cwd: params.repoRoot,
     runner: params.runner,
+    timeoutMs: params.timeoutMs,
   });
   if (!params.opts.skipInstall) {
     await runCommand({
@@ -463,6 +490,7 @@ async function runLane(params: {
       args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
       cwd: params.repoRoot,
       runner: params.runner,
+      timeoutMs: params.timeoutMs,
     });
   }
   if (!params.opts.skipBuild) {
@@ -471,6 +499,7 @@ async function runLane(params: {
       args: ["--dir", worktreeDir, "build"],
       cwd: params.repoRoot,
       runner: params.runner,
+      timeoutMs: params.timeoutMs,
     });
   }
   await runCommand({
@@ -502,6 +531,7 @@ async function runLane(params: {
     ],
     cwd: params.repoRoot,
     runner: params.runner,
+    timeoutMs: params.timeoutMs,
   });
   const publishedLaneDir = path.join(params.outputDir, params.lane);
   await copyDirContents(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
@@ -548,6 +578,10 @@ export async function runMantisBeforeAfter(
   }
   const baseline = trimToValue(opts.baseline) ?? scenarioConfig.defaultBaselineRef;
   const candidate = trimToValue(opts.candidate) ?? DEFAULT_CANDIDATE_REF;
+  const commandTimeoutMs = resolvePositiveTimerTimeoutMs(
+    opts.commandTimeoutMs,
+    DEFAULT_COMMAND_TIMEOUT_MS,
+  );
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const worktreeRoot = path.join(outputDir, "worktrees");
   const comparisonPath = path.join(outputDir, "comparison.json");
@@ -571,6 +605,7 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
+      timeoutMs: commandTimeoutMs,
       worktreeRoot,
       opts: commonOpts,
     });
@@ -581,6 +616,7 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
+      timeoutMs: commandTimeoutMs,
       worktreeRoot,
       opts: commonOpts,
     });

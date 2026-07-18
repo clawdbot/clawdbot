@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, buildQaSuiteEvidenceSummary } from "../evidence-summary.js";
@@ -13,6 +14,42 @@ function requireArgAfter(args: readonly string[], flag: string): string {
     throw new Error(`expected ${flag} argument`);
   }
   return expectDefined(args[index + 1], `${flag} argument value`);
+}
+
+function isProcessRunning(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readPid(filePath: string, timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    try {
+      const pid = Number(await fs.readFile(filePath, "utf8"));
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    } catch {
+      // retry until the process writes its pid
+    }
+    await sleep(5);
+  }
+  throw new Error(`timeout waiting for pid in ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessRunning(pid)) {
+      return;
+    }
+    await sleep(5);
+  }
+  throw new Error(`process ${pid} still alive`);
 }
 
 describe("mantis before/after runtime", () => {
@@ -221,4 +258,70 @@ describe("mantis before/after runtime", () => {
     );
     expect(candidateArtifact?.alt).toBe("Candidate Discord thread reply with filePath attachment");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "times out a stuck lane command and kills its process tree",
+    async () => {
+      const commandTimeoutMs = 1_500;
+      const binDir = path.join(repoRoot, "bin");
+      const parentPidPath = path.join(repoRoot, "parent.pid");
+      const descendantPidPath = path.join(repoRoot, "descendant.pid");
+      const descendantScript = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const gitShimPath = path.join(binDir, "git");
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(
+        gitShimPath,
+        [
+          "#!/usr/bin/env node",
+          "const { spawn } = require('node:child_process');",
+          "const { writeFileSync } = require('node:fs');",
+          `writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));`,
+          `const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: 'ignore' });`,
+          `writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+        { encoding: "utf8", mode: 0o755 },
+      );
+
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+      let parentPid: number | undefined;
+      let descendantPid: number | undefined;
+      try {
+        const run = runMantisBeforeAfter({
+          baseline: "baseline-ref",
+          candidate: "candidate-ref",
+          commandTimeoutMs,
+          outputDir: ".artifacts/qa-e2e/mantis/timeout-run",
+          repoRoot,
+          skipBuild: true,
+          skipInstall: true,
+        });
+        [parentPid, descendantPid] = await Promise.all([
+          readPid(parentPidPath, 2_000),
+          readPid(descendantPidPath, 2_000),
+        ]);
+
+        await expect(run).rejects.toThrow(
+          new RegExp(`git worktree add .* timed out after ${commandTimeoutMs}ms`, "u"),
+        );
+        await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
+      } finally {
+        if (previousPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = previousPath;
+        }
+        for (const pid of [parentPid, descendantPid]) {
+          if (pid !== undefined && isProcessRunning(pid)) {
+            process.kill(pid, "SIGKILL");
+          }
+        }
+      }
+    },
+  );
 });
