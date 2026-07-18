@@ -1,4 +1,5 @@
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
+import { parseNonNegativeByteSize } from "../config/byte-size.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { formatHealthFindings } from "./doctor-health-contribution-core.js";
@@ -168,8 +169,8 @@ export async function collectCompactionByteGuardFindings(
     return [];
   }
 
-  const str = String(configured).trim();
-  if (str === "" || str === "0") {
+  const effectiveBytes = parseNonNegativeByteSize(configured);
+  if (effectiveBytes === null || effectiveBytes <= 0) {
     return [];
   }
 
@@ -178,11 +179,12 @@ export async function collectCompactionByteGuardFindings(
     return [];
   }
 
+  const displayValue = String(configured).trim();
   return [
     {
       checkId: "core/doctor/inactive-compaction-byte-guard",
       severity: "warning",
-      message: `agents.defaults.compaction.maxActiveTranscriptBytes is set to "${str}" but truncateAfterCompaction is not enabled, so the byte guard has no effect.`,
+      message: `agents.defaults.compaction.maxActiveTranscriptBytes is set to "${displayValue}" but truncateAfterCompaction is not enabled, so the byte guard has no effect.`,
       path: "agents.defaults.compaction",
       requirement: "truncateAfterCompaction enabled when maxActiveTranscriptBytes is configured",
       fixHint:

@@ -2032,6 +2032,44 @@ describe("doctor health contributions", () => {
     expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
   });
 
+  it("stays silent for zero-value byte sizes like 0, 0mb, or 0kb", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/inactive-compaction-byte-guard",
+    );
+    expect(check).toBeDefined();
+
+    const zeroValues: Array<unknown> = [0, "0", "0mb", "0MB", "0kb", "0gb", "0b"];
+
+    for (const value of zeroValues) {
+      const ctx = {
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                maxActiveTranscriptBytes: value,
+                truncateAfterCompaction: false,
+              },
+            },
+          },
+        },
+        mode: "lint",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      } as const;
+
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [check!],
+          onlyIds: ["core/doctor/inactive-compaction-byte-guard"],
+        }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [],
+      });
+    }
+  });
+
   it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
