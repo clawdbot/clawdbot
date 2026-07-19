@@ -827,6 +827,7 @@ jobs:
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
+          CLAWHUB_PLAN_OUTCOME: ${{ steps.clawhub_plan.outcome }}
         run: |
           set -euo pipefail
 
@@ -2242,7 +2243,14 @@ jobs:
             start_openclaw_publish
           fi
 
-          if ! resolve_clawhub_release_plan; then
+          if [[ "${CLAWHUB_PLAN_OUTCOME}" != "success" ]]; then
+            ecosystem_failed=1
+            plugin_ecosystem_setup_ready="false"
+            echo "::warning::ClawHub release planning step failed; prerelease ecosystem repair is required."
+            if plugin_ecosystem_is_required; then
+              exit 1
+            fi
+          elif ! resolve_clawhub_release_plan; then
             ecosystem_failed=1
             plugin_ecosystem_setup_ready="false"
             echo "::warning::ClawHub release planning failed; prerelease ecosystem repair is required."
