@@ -1,4 +1,5 @@
 name: Plugin ClawHub Release
+run-name: ClawHub OIDC continuation ${{ inputs.continuation_id || 'direct' }}
 
 on:
   workflow_dispatch:
@@ -26,6 +27,10 @@ on:
         type: string
       release_publish_branch:
         description: Branch name of the approving OpenClaw Release Publish workflow run
+        required: false
+        type: string
+      continuation_id:
+        description: Unique trusted continuation correlation used for ambiguous dispatch recovery
         required: false
         type: string
       dry_run:

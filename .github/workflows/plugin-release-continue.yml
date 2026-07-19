@@ -124,6 +124,32 @@ jobs:
         run: |
           set -euo pipefail
 
+          normal_run_id=""
+          bootstrap_run_id=""
+          unresolved_correlations_json='[]'
+          continuation_status="continuation-started"
+          write_evidence() {
+            jq -n \
+              --arg bootstrap_run_id "${bootstrap_run_id}" \
+              --arg normal_run_id "${normal_run_id}" \
+              --arg parent_run_id "${RELEASE_PUBLISH_RUN_ID}" \
+              --arg plugin_npm_run_id "${PLUGIN_NPM_RUN_ID}" \
+              --arg release_sha "${RELEASE_SHA}" \
+              --arg status "${continuation_status}" \
+              --argjson unresolved_correlations "${unresolved_correlations_json}" '{
+                schemaVersion: 1,
+                status: $status,
+                releasePublishRunId: $parent_run_id,
+                releaseSha: $release_sha,
+                pluginNpmRunId: $plugin_npm_run_id,
+                clawHubRunId: (if $normal_run_id == "" then null else $normal_run_id end),
+                clawHubBootstrapRunId: (if $bootstrap_run_id == "" then null else $bootstrap_run_id end),
+                unresolvedCorrelations: $unresolved_correlations
+              }' > "${EVIDENCE_PATH}"
+          }
+          write_evidence
+          trap 'write_evidence || true' ERR
+
           jq -e \
             --arg parent_run_id "${RELEASE_PUBLISH_RUN_ID}" \
             --arg plugin_npm_run_id "${PLUGIN_NPM_RUN_ID}" \
@@ -166,9 +192,75 @@ jobs:
                  .bootstrap.inputs.ref == $release_sha))
             ' "${PLAN_PATH}" >/dev/null
 
+          target_correlation() {
+            local target="$1"
+            echo "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${target}"
+          }
+
+          target_title() {
+            local target="$1"
+            local continuation_id
+            continuation_id="$(target_correlation "${target}")"
+            if [[ "${target}" == "normal" ]]; then
+              echo "ClawHub OIDC continuation ${continuation_id}"
+            else
+              echo "ClawHub bootstrap continuation ${continuation_id}"
+            fi
+          }
+
+          reconcile_target() {
+            local target="$1"
+            local max_attempts="$2"
+            local workflow expected_title run_id attempt
+            workflow="$(jq -er --arg target "${target}" '.[$target].workflow' "${PLAN_PATH}")"
+            expected_title="$(target_title "${target}")"
+            for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+              run_id="$(gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=100" 2>/dev/null | \
+                jq -sr \
+                  --arg expected_title "${expected_title}" '
+                    [.[].workflow_runs[]
+                     | select(.event == "workflow_dispatch" and
+                              .display_title == $expected_title)]
+                    | sort_by(.id)
+                    | last
+                    | .id // empty
+                  ' || true)"
+              if [[ "${run_id}" =~ ^[1-9][0-9]*$ ]]; then
+                echo "${run_id}"
+                return 0
+              fi
+              [[ "${attempt}" == "${max_attempts}" ]] || sleep 5
+            done
+            return 1
+          }
+
+          mark_target_pending() {
+            local target="$1"
+            local correlation
+            correlation="$(target_correlation "${target}")"
+            unresolved_correlations_json="$(jq -cn \
+              --argjson current "${unresolved_correlations_json}" \
+              --arg correlation "${correlation}" \
+              '$current + [$correlation] | unique')"
+            write_evidence
+          }
+
+          clear_target_pending() {
+            local target="$1"
+            local correlation
+            correlation="$(target_correlation "${target}")"
+            unresolved_correlations_json="$(jq -cn \
+              --argjson current "${unresolved_correlations_json}" \
+              --arg correlation "${correlation}" \
+              '$current | map(select(. != $correlation))')"
+            write_evidence
+          }
+
           dispatch_target() {
             local target="$1"
             local expected_sha ref workflow encoded_ref resolved_sha inputs_json dispatch_body response run_id child_sha attempt
+            local continuation_id dispatch_status
             if [[ "$(jq -r --arg target "${target}" '.[$target].shouldDispatch' "${PLAN_PATH}")" != "true" ]]; then
               return
             fi
@@ -185,15 +277,35 @@ jobs:
               echo "ClawHub ${target} ref ${ref} resolved to ${resolved_sha}, expected ${expected_sha}." >&2
               exit 1
             }
-            inputs_json="$(jq -c --arg target "${target}" '.[$target].inputs' "${PLAN_PATH}")"
+            continuation_id="$(target_correlation "${target}")"
+            inputs_json="$(jq -c \
+              --arg continuation_id "${continuation_id}" \
+              --arg target "${target}" \
+              '.[$target].inputs + {continuation_id: $continuation_id}' \
+              "${PLAN_PATH}")"
             dispatch_body="$(jq -cn --arg ref "${ref}" --argjson inputs "${inputs_json}" '{ref: $ref, inputs: $inputs, return_run_details: true}')"
+            set +e
             response="$(printf '%s' "${dispatch_body}" | gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
-              --input -)"
-            run_id="$(printf '%s' "${response}" | jq -er '.workflow_run_id')"
+                --method POST \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
+                --input -)"
+            dispatch_status=$?
+            set -e
+            run_id=""
+            if [[ "${dispatch_status}" -eq 0 ]]; then
+              run_id="$(printf '%s' "${response}" | jq -r '.workflow_run_id // empty' 2>/dev/null || true)"
+            fi
+            if [[ ! "${run_id}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Dispatch response for ClawHub ${target} was ambiguous; reconciling correlation ${continuation_id}." >&2
+              run_id="$(reconcile_target "${target}" 24 || true)"
+            fi
+            [[ "${run_id}" =~ ^[1-9][0-9]*$ ]] || {
+              echo "Unable to reconcile ClawHub ${target} dispatch correlation ${continuation_id}." >&2
+              echo "UNRESOLVED:${target}"
+              return 1
+            }
             child_sha=""
             for attempt in {1..12}; do
               child_sha="$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" --json headSha --jq '.headSha' 2>/dev/null || true)"
@@ -204,45 +316,182 @@ jobs:
             done
             [[ "${child_sha}" == "${expected_sha}" ]] || {
               echo "ClawHub ${target} run ${run_id} used ${child_sha}, expected ${expected_sha}." >&2
-              gh run cancel --repo "${GITHUB_REPOSITORY}" "${run_id}" >/dev/null 2>&1 || true
-              exit 1
+              # Preserve the discovered id for the caller's verified cleanup.
+              echo "${run_id}"
+              return 1
             }
             echo "${run_id}"
           }
 
-          normal_run_id="$(dispatch_target normal)"
-          bootstrap_run_id="$(dispatch_target bootstrap)"
+          cancel_and_drain() {
+            local run_id="$1"
+            local state attempt cancel_status
+            for attempt in {1..6}; do
+              state="$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" --json conclusion,status 2>/dev/null || true)"
+              if jq -e '.status == "completed"' <<<"${state}" >/dev/null 2>&1; then
+                echo "ClawHub child ${run_id} already terminal: $(jq -r '.conclusion // "unknown"' <<<"${state}")." >&2
+                return 0
+              fi
+              set +e
+              gh run cancel --repo "${GITHUB_REPOSITORY}" "${run_id}" >/dev/null 2>&1
+              cancel_status=$?
+              set -e
+              if [[ "${cancel_status}" -eq 0 ]]; then
+                break
+              fi
+              [[ "${attempt}" == "6" ]] || sleep 5
+            done
+            for attempt in {1..60}; do
+              state="$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" --json conclusion,status 2>/dev/null || true)"
+              if jq -e '.status == "completed"' <<<"${state}" >/dev/null 2>&1; then
+                echo "ClawHub child ${run_id} terminal after cleanup: $(jq -r '.conclusion // "unknown"' <<<"${state}")." >&2
+                return 0
+              fi
+              [[ "${attempt}" == "60" ]] || sleep 5
+            done
+            echo "ClawHub child ${run_id} did not reach a terminal state during cleanup." >&2
+            return 1
+          }
+
+          dispatch_failed=false
+          normal_dispatch_result=""
+          bootstrap_dispatch_result=""
+          unresolved_targets=()
+          if [[ "$(jq -r '.normal.shouldDispatch' "${PLAN_PATH}")" == "true" ]]; then
+            mark_target_pending normal
+          fi
+          if ! normal_dispatch_result="$(dispatch_target normal)"; then
+            dispatch_failed=true
+            if [[ "${normal_dispatch_result}" == "UNRESOLVED:normal" ]]; then
+              unresolved_targets+=(normal)
+            else
+              normal_run_id="${normal_dispatch_result}"
+              clear_target_pending normal
+            fi
+          else
+            normal_run_id="${normal_dispatch_result}"
+            continuation_status="clawhub-dispatched"
+            clear_target_pending normal
+          fi
+          if [[ "${dispatch_failed}" != "true" ]]; then
+            if [[ "$(jq -r '.bootstrap.shouldDispatch' "${PLAN_PATH}")" == "true" ]]; then
+              mark_target_pending bootstrap
+            fi
+            if ! bootstrap_dispatch_result="$(dispatch_target bootstrap)"; then
+              dispatch_failed=true
+              if [[ "${bootstrap_dispatch_result}" == "UNRESOLVED:bootstrap" ]]; then
+                unresolved_targets+=(bootstrap)
+              else
+                bootstrap_run_id="${bootstrap_dispatch_result}"
+                clear_target_pending bootstrap
+              fi
+            else
+              bootstrap_run_id="${bootstrap_dispatch_result}"
+              clear_target_pending bootstrap
+            fi
+          fi
           {
             echo "### Plugin ecosystem continuation"
             echo
             echo "- Plugin npm: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PLUGIN_NPM_RUN_ID}"
-            echo "- ClawHub OIDC: ${normal_run_id:-not needed}"
-            echo "- ClawHub bootstrap: ${bootstrap_run_id:-not needed}"
+            echo "- ClawHub OIDC: ${normal_run_id:+https://github.com/${GITHUB_REPOSITORY}/actions/runs/${normal_run_id}}"
+            echo "- ClawHub bootstrap: ${bootstrap_run_id:+https://github.com/${GITHUB_REPOSITORY}/actions/runs/${bootstrap_run_id}}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+          if [[ "${dispatch_failed}" == "true" ]]; then
+            continuation_status="ecosystem-dispatch-failed"
+            write_evidence
+            cleanup_failed=false
+            remaining_unresolved_json='[]'
+            for target in "${unresolved_targets[@]}"; do
+              if reconciled_run_id="$(reconcile_target "${target}" 60)"; then
+                if [[ "${target}" == "normal" ]]; then
+                  normal_run_id="${reconciled_run_id}"
+                else
+                  bootstrap_run_id="${reconciled_run_id}"
+                fi
+              else
+                cleanup_failed=true
+                correlation="$(target_correlation "${target}")"
+                remaining_unresolved_json="$(jq -cn \
+                  --argjson current "${remaining_unresolved_json}" \
+                  --arg correlation "${correlation}" \
+                  '$current + [$correlation]')"
+              fi
+            done
+            unresolved_correlations_json="${remaining_unresolved_json}"
+            for run_id in "${normal_run_id}" "${bootstrap_run_id}"; do
+              if [[ -n "${run_id}" ]]; then
+                if ! cancel_and_drain "${run_id}"; then
+                  cleanup_failed=true
+                fi
+              fi
+            done
+            if [[ "${cleanup_failed}" == "true" ]]; then
+              continuation_status="ecosystem-cleanup-incomplete"
+              write_evidence
+              echo "ClawHub dispatch failed and at least one child cleanup remains incomplete." >&2
+              exit 1
+            fi
+            write_evidence
+            echo "ClawHub dispatch failed; every known child reached a terminal state." >&2
+            exit 1
+          fi
+
+          watch_run() {
+            local run_id="$1"
+            local log_path="$2"
+            timeout --signal=TERM --kill-after=10s 7200s \
+              gh run watch --repo "${GITHUB_REPOSITORY}" "${run_id}" --exit-status \
+              >"${log_path}" 2>&1
+          }
+
+          watch_pids=()
+          watch_logs=()
           for run_id in "${normal_run_id}" "${bootstrap_run_id}"; do
             if [[ -n "${run_id}" ]]; then
-              timeout --signal=TERM --kill-after=10s 7200s \
-                gh run watch --repo "${GITHUB_REPOSITORY}" "${run_id}" --exit-status
+              watch_log="${RUNNER_TEMP}/clawhub-watch-${run_id}.log"
+              watch_run "${run_id}" "${watch_log}" &
+              watch_pids+=("$!")
+              watch_logs+=("${watch_log}")
             fi
           done
 
-          jq -n \
-            --arg bootstrap_run_id "${bootstrap_run_id}" \
-            --arg normal_run_id "${normal_run_id}" \
-            --arg parent_run_id "${RELEASE_PUBLISH_RUN_ID}" \
-            --arg plugin_npm_run_id "${PLUGIN_NPM_RUN_ID}" \
-            --arg release_sha "${RELEASE_SHA}" '{
-              schemaVersion: 1,
-              status: "ecosystem-converged",
-              releasePublishRunId: $parent_run_id,
-              releaseSha: $release_sha,
-              pluginNpmRunId: $plugin_npm_run_id,
-              clawHubRunId: (if $normal_run_id == "" then null else $normal_run_id end),
-              clawHubBootstrapRunId: (if $bootstrap_run_id == "" then null else $bootstrap_run_id end)
-            }' > "${EVIDENCE_PATH}"
+          watch_failed=false
+          set +e
+          for index in "${!watch_pids[@]}"; do
+            wait "${watch_pids[$index]}"
+            watch_status=$?
+            cat "${watch_logs[$index]}"
+            if [[ "${watch_status}" -ne 0 ]]; then
+              watch_failed=true
+            fi
+          done
+          set -e
+          if [[ "${watch_failed}" == "true" ]]; then
+            cleanup_failed=false
+            for run_id in "${normal_run_id}" "${bootstrap_run_id}"; do
+              if [[ -n "${run_id}" ]] && ! cancel_and_drain "${run_id}"; then
+                cleanup_failed=true
+              fi
+            done
+            if [[ "${cleanup_failed}" == "true" ]]; then
+              continuation_status="ecosystem-cleanup-incomplete"
+              write_evidence
+              echo "ClawHub child watching failed and at least one child cleanup remains incomplete." >&2
+              exit 1
+            fi
+            continuation_status="ecosystem-failed"
+            write_evidence
+            echo "One or more ClawHub children failed; all dispatched child outcomes were collected." >&2
+            exit 1
+          fi
+
+          continuation_status="ecosystem-converged"
+          write_evidence
 
       - name: Upload continuation evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: plugin-release-continuation-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
