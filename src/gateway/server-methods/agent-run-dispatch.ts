@@ -176,23 +176,30 @@ export function dispatchAgentRunFromGateway(params: {
         timeoutPhase,
         providerStarted: result?.meta?.providerStarted,
       });
+      const responseTimedOut = aborted || terminalOutcome.status === "timeout";
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: aborted ? resolveAbortedAgentTaskStatus(stopReason) : "succeeded",
-          terminalSummary: aborted ? "aborted" : "completed",
+          status: aborted
+            ? resolveAbortedAgentTaskStatus(stopReason)
+            : responseTimedOut
+              ? "timed_out"
+              : "succeeded",
+          terminalSummary: responseTimedOut ? "aborted" : "completed",
           log: params.context.logGateway,
         });
       }
       const payload = {
         runId: params.runId,
-        status: aborted ? ("timeout" as const) : ("ok" as const),
-        summary: aborted ? "aborted" : "completed",
-        ...(aborted ? { stopReason } : {}),
-        ...(aborted && terminalOutcome.timeoutPhase
+        status: responseTimedOut ? ("timeout" as const) : ("ok" as const),
+        summary: responseTimedOut ? "aborted" : "completed",
+        ...(responseTimedOut && terminalOutcome.stopReason
+          ? { stopReason: terminalOutcome.stopReason }
+          : {}),
+        ...(responseTimedOut && terminalOutcome.timeoutPhase
           ? { timeoutPhase: terminalOutcome.timeoutPhase }
           : {}),
-        ...(aborted && terminalOutcome.providerStarted !== undefined
+        ...(responseTimedOut && terminalOutcome.providerStarted !== undefined
           ? { providerStarted: terminalOutcome.providerStarted }
           : {}),
         result,

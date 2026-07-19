@@ -528,6 +528,68 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("projects a provider timeout result without an abort flag or stop reason as timed out", async () => {
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
+      meta: {
+        durationMs: 30_454,
+        aborted: false,
+        replayInvalid: true,
+        livenessState: "working",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "Request timed out before a response was generated.",
+        },
+      },
+    });
+    const context = makeContext();
+    const respond = vi.fn();
+    const onSettled = vi.fn(() => true);
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "run a command that exceeds the provider deadline",
+        sessionKey: "agent:main:main",
+        timeout: "10",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-provider-timeout-result",
+      dedupeKeys: ["agent:agent-run-provider-timeout-result"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: expect.objectContaining({
+          status: "timeout",
+          reason: "hard_timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        }),
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "agent-run-provider-timeout-result",
+          status: "timeout",
+          summary: "aborted",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        }),
+        undefined,
+        { runId: "agent-run-provider-timeout-result" },
+      );
+    });
+  });
+
   it.each([
     {
       label: "tool use past the nominal deadline without an abort signal",
