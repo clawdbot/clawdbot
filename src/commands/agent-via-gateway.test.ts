@@ -132,6 +132,7 @@ function createSignalProcess() {
   type SignalName = "SIGINT" | "SIGTERM";
   const listeners = new Map<SignalName, Set<() => void>>();
   const processLike = {
+    exitCode: undefined as NodeJS.Process["exitCode"],
     on(signal: SignalName, handler: () => void) {
       const current = listeners.get(signal) ?? new Set<() => void>();
       current.add(handler);
