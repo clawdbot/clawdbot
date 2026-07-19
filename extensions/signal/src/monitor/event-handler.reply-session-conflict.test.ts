@@ -223,7 +223,7 @@ describe("signal reply session init conflict retry", () => {
     }
   });
 
-  it("cancels a merged pending retry when any durable claim is reclaimed", async () => {
+  it("abandons merged siblings when any durable claim is reclaimed", async () => {
     dispatchInboundMessageMock.mockRejectedValueOnce(CONFLICT_ERROR);
     const firstClaimAbort = new AbortController();
     const secondClaimAbort = new AbortController();
@@ -286,7 +286,7 @@ describe("signal reply session init conflict retry", () => {
       await Promise.all(trackedTasks);
 
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(firstOnAbandoned).not.toHaveBeenCalled();
+      expect(firstOnAbandoned).toHaveBeenCalledOnce();
       expect(secondOnAbandoned).not.toHaveBeenCalled();
       expect(errorLogs).toEqual([]);
     } finally {

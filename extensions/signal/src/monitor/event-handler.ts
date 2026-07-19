@@ -809,11 +809,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           current.cause,
           current.error,
         ]);
-        const abortSignals = [
-          deps.abortSignal,
-          ...entries.map((entry) => entry.turnAdoptionLifecycle?.abortSignal),
-        ].filter((signal): signal is AbortSignal => signal?.aborted === true);
-        if (abortSignals.some((signal) => errorGraph.includes(signal.reason))) {
+        const abortedEntrySignals = entries
+          .map((entry) => entry.turnAdoptionLifecycle?.abortSignal)
+          .filter((signal): signal is AbortSignal => signal?.aborted === true);
+        if (abortedEntrySignals.some((signal) => errorGraph.includes(signal.reason))) {
+          // A merged abort may reclaim only one constituent claim. Release only
+          // still-live siblings; disposed/reclaimed claims retain drain ownership.
+          await Promise.all(
+            entries
+              .filter((entry) => entry.turnAdoptionLifecycle?.abortSignal.aborted === false)
+              .map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+          );
+          return;
+        }
+        if (deps.abortSignal?.aborted && errorGraph.includes(deps.abortSignal.reason)) {
           return;
         }
         if (isSignalReplySessionInitConflictError(err)) {
