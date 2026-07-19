@@ -38,6 +38,17 @@ type OpenClawReleaseClawHubPlan = {
   bootstrapWorkflowSha: string;
   clawHubWorkflowRef: string;
   releasePublishBranch: string;
+  pluginNpm: {
+    workflow: "plugin-npm-release.yml";
+    inputs: {
+      publish_scope: PluginReleaseSelectionMode;
+      ref: string;
+      plugins: string;
+      release_publish_run_id: string;
+      preflight_only: "false";
+      npm_dist_tag: "default";
+    };
+  };
   normal: ClawHubDispatchTarget;
   bootstrap: ClawHubDispatchTarget;
   summary: {
@@ -355,6 +366,17 @@ export async function buildOpenClawReleaseClawHubPlan(
     bootstrapWorkflowSha,
     clawHubWorkflowRef: releaseTag,
     releasePublishBranch,
+    pluginNpm: {
+      workflow: "plugin-npm-release.yml",
+      inputs: {
+        publish_scope: args.pluginPublishScope,
+        ref: releaseSha,
+        plugins: joinPackageNames(args.plugins),
+        release_publish_run_id: releasePublishRunId,
+        preflight_only: "false",
+        npm_dist_tag: "default",
+      },
+    },
     normal: createDispatchTarget({
       workflow: "plugin-clawhub-release.yml",
       ref: releaseTag,
