@@ -916,6 +916,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `main`; the tag still selects the exact release commit, including a commit on
   `release/YYYY.M.PATCH`. Tideclaw alpha publish runs remain on their matching
   alpha branch. Reuse the successful preflight for that exact release SHA.
+- Prerelease core npm and the draft GitHub release start concurrently with
+  plugin npm. Plugin npm or ClawHub failure leaves a `beta-live` release plus an
+  asynchronous ecosystem repair; it never blocks beta core publication. Stable
+  and plugin-only publication keep plugin npm and ClawHub blocking.
 - The release workflows stay tag-based; rely on the documented release sequence
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
@@ -997,7 +1001,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    `repeat=3`, deep profiling
    off, live OpenAI off, and regression failure off. Let it run in parallel
    with Code SHA validation.
-8. Run the deterministic source preflight, then Full Release Validation against
+8. Run `pnpm release:readiness`, then Full Release Validation against
    the exact Code SHA with
    `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`.
    Use one transition watcher. Product failures return to step 6 with a new
@@ -1028,7 +1032,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 <release-sha-validation-run-id> --npm-preflight-run <preflight-run-id>
 --skip-dispatch` to consume the existing reused full evidence and exact
     Release SHA preflight instead of dispatching either again. It completes
-    package/install proof and prints the publish command.
+    package/install proof and prints the publish command. Add
+    `--dispatch-publish` when the controller should dispatch and watch the
+    mutating parent. Add `--wait-for-ecosystem` only when the controller must
+    remain open after `beta-live` until plugin npm and ClawHub converge. A
+    failed explicit wait exits red only after prerelease core and GitHub
+    publication complete; repair the ecosystem without redrafting the beta.
 18. Start publication only after the candidate bundle is green. Reuse successful
     immutable child runs/artifacts on retry; do not rebuild or republish versions
     that already succeeded.
@@ -1051,6 +1060,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     SHA evidence after the exact delta is reverified. Tooling, credential,
     approval, registry selector, or publication-child failures keep the
     candidate unchanged and resume the smallest failed surface.
+    Use `pnpm release:evidence-impact -- --base <sha> --head <sha>` to select the
+    smallest diagnostic rerun. Except for an exact changelog-only finalization,
+    targeted diagnostics do not replace final full validation for the new SHA.
 24. Start `.github/workflows/openclaw-release-publish.yml` from the exact pinned
     trusted workflow source
     with the same tag for the real beta or stable publish, choose `npm_dist_tag` (`beta` default,
@@ -1067,10 +1079,11 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 26. Wait for the real publish workflow to run postpublish verification,
     create or update the GitHub release as a draft, upload dependency evidence,
     promote and verify the required Windows Hub assets for stable releases,
-    append release verification proof, and only then undraft/publish it. If a
-    waited plugin publish or Windows Hub promotion fails after OpenClaw npm
-    succeeds, the workflow keeps the release draft with OpenClaw npm evidence
-    and exits red; do not undraft until the gap is repaired. The standalone
+    append release verification proof, and only then undraft/publish it. For a
+    beta, plugin npm and ClawHub convergence are asynchronous: a failure records
+    `beta-live` and repair evidence without blocking the core npm package or
+    GitHub release. Stable and plugin-only releases keep that gap blocking.
+    Windows Hub promotion remains blocking for stable. The standalone
     verifier command remains the first recovery probe:
     `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>`.
     For a failed postpublish parent after successful publish children, also run

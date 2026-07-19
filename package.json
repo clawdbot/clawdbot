@@ -1646,6 +1646,8 @@
     "qa:prometheus:smoke": "node scripts/run-node.mjs qa suite --provider-mode mock-openai --scenario docker-prometheus-smoke --concurrency 1 --fast",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta": "node scripts/release-candidate-checklist.mjs",
+    "release:readiness": "node scripts/release-readiness-check.mjs",
+    "release:evidence-impact": "node scripts/release-evidence-impact.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:candidate": "node scripts/release-candidate-checklist.mjs",
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
