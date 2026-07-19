@@ -111,10 +111,20 @@ on:
         required: false
         default: false
         type: boolean
+      packaged_upgrade_advisory:
+        description: Keep packaged-upgrade evidence visible without blocking faster beta validation
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       advisory:
         description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
+      packaged_upgrade_advisory:
+        description: Keep packaged-upgrade evidence visible without blocking faster beta validation
         required: false
         default: false
         type: boolean
@@ -704,7 +714,7 @@ jobs:
   cross_os_release_checks:
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || (inputs.packaged_upgrade_advisory && matrix.suite == 'packaged-upgrade') }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -732,6 +742,13 @@ jobs:
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
           use-actions-cache: "false"
+
+      - name: Restore packaged-upgrade baseline prefix
+        if: ${{ matrix.suite == 'packaged-upgrade' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ${{ runner.temp }}/openclaw-cross-os-baseline-prefix
+          key: openclaw-cross-os-baseline-prefix-v1-${{ runner.os }}-${{ runner.arch }}-node-${{ env.NODE_VERSION }}-${{ needs.prepare.outputs.baseline_sha256 }}
 
       - name: Validate prepared candidate artifact binding
         env:
@@ -960,6 +977,7 @@ jobs:
           SUITE: ${{ matrix.suite }}
           REF: ${{ inputs.ref }}
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
+          OPENCLAW_CROSS_OS_BASELINE_PREFIX_CACHE_DIR: ${{ runner.temp }}/openclaw-cross-os-baseline-prefix
         run: |
           DISCORD_ARGS=()
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
