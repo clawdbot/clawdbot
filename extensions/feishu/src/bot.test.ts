@@ -571,6 +571,39 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers a visible notice when reply-session init conflict exhausts its retry (#108320)", async () => {
+    mockDispatchInboundMessage.mockRejectedValue(
+      new Error("reply session initialization conflicted for agent:main:feishu:direct:ou_sender_1"),
+    );
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-conflict",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockSendMessageFeishu).toHaveBeenCalledTimes(1);
+    const notice = mockCallArg<{ text?: string; to?: string; replyToMessageId?: string }>(
+      mockSendMessageFeishu,
+      0,
+      0,
+    );
+    expect(notice.to).toBe("chat:oc_dm");
+    expect(notice.replyToMessageId).toBe("msg-conflict");
+    expect(notice.text).toContain("session stayed busy");
+  });
+
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
     mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
     mockEnsureConfiguredBindingRouteReady.mockResolvedValue(
