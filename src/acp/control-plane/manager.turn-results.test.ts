@@ -1107,14 +1107,79 @@ describe("AcpSessionManager turn results", () => {
     expectFreshRetry(scenario);
   });
 
-  it("does not retry a generic Internal error that is not a resume-required failure", async () => {
+  it.each([
+    ["bare internal error", "Internal error"],
+    ["closed app-server client", "codex app-server client is closed"],
+    ["closed query", "query closed before response received"],
+  ])(
+    "retries a transient pre-output turn failure without discarding the persistent session: %s",
+    async (_label, message) => {
+      const scenario = setupStaleResumeScenario(async function* () {
+        yield {
+          type: "error" as const,
+          code: "ACP_TURN_FAILED",
+          message,
+        };
+      });
+      await expect(scenario.runTurn()).resolves.toBeUndefined();
+      expect(scenario.runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+      expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(mockCallArg(scenario.runtimeState.ensureSession, 1).resumeSessionId).toBe(
+        "acpx-sid-stale",
+      );
+      const states = extractStatesFromUpserts();
+      expect(states).toContain("running");
+      expect(states).toContain("idle");
+      expect(states).not.toContain("error");
+    },
+  );
+
+  it("retries a transient turn failure thrown before any output", async () => {
     const scenario = setupStaleResumeScenario(async function* () {
-      // No SESSION_RESUME_REQUIRED detail code: a generic backend failure must
-      // surface, not silently discard the persistent session and retry.
+      yield { type: "status" as const, text: "starting" };
+      throw new Error("query closed before response received");
+    });
+    await expect(scenario.runTurn()).resolves.toBeUndefined();
+    expect(scenario.runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a transient turn failure after output was seen", async () => {
+    const scenario = setupStaleResumeScenario(async function* () {
+      yield { type: "text_delta" as const, stream: "output" as const, text: "partial" };
       yield {
         type: "error" as const,
         code: "ACP_TURN_FAILED",
         message: "Internal error",
+      };
+    });
+    await expect(scenario.runTurn()).rejects.toThrow("Internal error");
+    expect(scenario.runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a transient turn failure more than once", async () => {
+    const failingTurn = async function* () {
+      yield {
+        type: "error" as const,
+        code: "ACP_TURN_FAILED",
+        message: "Internal error",
+      };
+    };
+    const scenario = setupStaleResumeScenario(failingTurn);
+    scenario.runtimeState.runTurn.mockReset();
+    scenario.runtimeState.runTurn.mockImplementation(failingTurn);
+    await expect(scenario.runTurn()).rejects.toThrow("Internal error");
+    expect(scenario.runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry an enriched turn failure that is not a transient shape", async () => {
+    const scenario = setupStaleResumeScenario(async function* () {
+      yield {
+        type: "error" as const,
+        code: "ACP_TURN_FAILED",
+        message: "Internal error: stream error: unexpected status 401 Unauthorized",
       };
     });
     await expect(scenario.runTurn()).rejects.toThrow();

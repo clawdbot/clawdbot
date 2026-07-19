@@ -41,6 +41,13 @@ function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeErro
   return false;
 }
 
+const TRANSIENT_CLOSED_TURN_ERROR_PATTERN = /\b(?:client|connection|query)(?: is)? closed\b/i;
+
+function isRecoverableManagerTransientAcpTurnError(message: string): boolean {
+  const normalized = message.trim();
+  return normalized === "Internal error" || TRANSIENT_CLOSED_TURN_ERROR_PATTERN.test(normalized);
+}
+
 /** Prepares a one-time fresh-handle retry for recoverable pre-output runtime failures. */
 export async function prepareFreshManagerRuntimeHandleRetry(params: {
   attempt: number;
@@ -64,38 +71,45 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     return true;
   }
   if (
-    !params.runtime ||
-    !params.meta ||
-    params.meta.mode !== "persistent" ||
-    !isRecoverableMissingManagerPersistentSessionError(params.error)
+    params.runtime &&
+    params.meta &&
+    params.meta.mode === "persistent" &&
+    isRecoverableMissingManagerPersistentSessionError(params.error)
   ) {
-    return false;
-  }
-  const cleared = await clearPersistedRuntimeResumeState({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    writeSessionMeta: params.writeSessionMeta,
-  });
-  if (!cleared) {
-    return false;
-  }
-  if (params.runtime.prepareFreshSession) {
-    try {
-      await params.runtime.prepareFreshSession({
-        sessionKey: params.sessionKey,
-      });
-    } catch (error) {
-      logVerbose(
-        `acp-manager: failed preparing a fresh persistent session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
-      );
+    const cleared = await clearPersistedRuntimeResumeState({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      writeSessionMeta: params.writeSessionMeta,
+    });
+    if (!cleared) {
       return false;
     }
+    if (params.runtime.prepareFreshSession) {
+      try {
+        await params.runtime.prepareFreshSession({
+          sessionKey: params.sessionKey,
+        });
+      } catch (error) {
+        logVerbose(
+          `acp-manager: failed preparing a fresh persistent session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
+        );
+        return false;
+      }
+    }
+    params.runtimeHandles.clear(params.sessionKey);
+    logVerbose(
+      `acp-manager: retrying ${params.sessionKey} with a fresh persistent session after missing backend resume target: ${params.error.message}`,
+    );
+    return true;
   }
-  params.runtimeHandles.clear(params.sessionKey);
-  logVerbose(
-    `acp-manager: retrying ${params.sessionKey} with a fresh persistent session after missing backend resume target: ${params.error.message}`,
-  );
-  return true;
+  if (isRecoverableManagerTransientAcpTurnError(params.error.message)) {
+    params.runtimeHandles.clear(params.sessionKey);
+    logVerbose(
+      `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after transient pre-output turn failure: ${params.error.message}`,
+    );
+    return true;
+  }
+  return false;
 }
 
 async function clearPersistedRuntimeResumeState(params: {
