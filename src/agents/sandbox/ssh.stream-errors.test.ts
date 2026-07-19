@@ -100,4 +100,25 @@ describe("SSH sandbox stream errors", () => {
       expect(ssh.kill).toHaveBeenCalledOnce();
     },
   );
+
+  it("rejects an upload whose children never close after the timeout", async () => {
+    const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-timeout-test-"));
+    tempDirs.push(localDir);
+    const tar = createMockChildProcess();
+    const ssh = createMockChildProcess();
+    spawnMock
+      .mockReturnValueOnce(tar as unknown as ChildProcess)
+      .mockReturnValueOnce(ssh as unknown as ChildProcess);
+
+    await expect(
+      uploadDirectoryToSshTarget({
+        session: fakeSession(),
+        localDir,
+        remoteDir: "/remote/workspace",
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(/timed out/);
+    expect(tar.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(ssh.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  });
 });

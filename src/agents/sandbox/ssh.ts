@@ -753,6 +753,8 @@ export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "done",
 ].join("\n");
 
+const SSH_UPLOAD_TIMEOUT_MS = 30_000;
+
 /** Stream a local directory to the remote sandbox with tar over ssh. */
 export async function uploadDirectoryToSshTarget(params: {
   session: SshSandboxSession;
@@ -760,6 +762,7 @@ export async function uploadDirectoryToSshTarget(params: {
   remoteDir: string;
   remoteRootDir?: string;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<void> {
   await assertSafeUploadSymlinks(params.localDir);
   const remoteCommand = buildRemoteCommand([
@@ -797,12 +800,19 @@ export async function uploadDirectoryToSshTarget(params: {
     let tarCode = 0;
     let sshCode = 0;
     let settled = false;
+    const timeoutMs = params.timeoutMs ?? SSH_UPLOAD_TIMEOUT_MS;
+    // An SSH peer that accepts TCP but never completes the banner keeps both
+    // children alive forever, so bound the pipeline even when no signal is set.
+    const timeout = setTimeout(() => {
+      fail(new Error(`SSH directory upload timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
 
     const fail = (error: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearTimeout(timeout);
       for (const child of [tar, ssh]) {
         try {
           child.kill("SIGKILL");
@@ -841,6 +851,7 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       settled = true;
+      clearTimeout(timeout);
       if (tarCode !== 0) {
         reject(
           new Error(
