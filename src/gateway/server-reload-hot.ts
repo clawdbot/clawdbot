@@ -454,11 +454,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             channelsStoppedBeforePluginReload.add(channel);
             // The paired post-replace restart owns this handoff. Do not expose
             // the pre-replace stop as a health-monitor restart candidate while
-            // secret activation or plugin preparation is still in flight.
+            // secret activation or plugin preparation is still in flight. When
+            // autostart is suppressed, there will be no paired restart, so avoid
+            // keeping a private known-account marker that can resurrect removed
+            // accounts after suppression clears.
             await params.stopChannel(channel, undefined, {
               manual: false,
               restartPending: false,
-              preserveKnownAccount: true,
+              preserveKnownAccount: !getChannelAutostartSuppression(),
             });
             if (isPluginReloadAborted()) {
               pluginReloadAborted = true;
