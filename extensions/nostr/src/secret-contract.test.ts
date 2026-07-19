@@ -6,6 +6,7 @@ import {
   resolveSecretRefValues,
 } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
+import { nostrPlugin } from "./channel.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { listNostrAccountIds, resolveNostrAccount } from "./types.js";
 
@@ -45,6 +46,10 @@ describe("nostr secret contract", () => {
     expect(secretTargetRegistryEntries.map((entry) => entry.id)).toEqual([
       "channels.nostr.privateKey",
     ]);
+    expect(nostrPlugin.secrets).toMatchObject({
+      collectRuntimeConfigAssignments,
+      secretTargetRegistryEntries,
+    });
   });
 
   it("materializes a SecretRef privateKey so the channel resolves as configured", async () => {
