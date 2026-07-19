@@ -2925,6 +2925,55 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("retries a hot-reload handoff that stopped while the account was still starting", async () => {
+    let accountIds = ["account-a"];
+    let configuredCalls = 0;
+    const firstConfiguredGate = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        isConfigured: async () => {
+          configuredCalls += 1;
+          if (configuredCalls === 1) {
+            await firstConfiguredGate.promise;
+          }
+          return true;
+        },
+      }),
+    );
+    const manager = createManager();
+
+    const initialStart = manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => configuredCalls === 1,
+      "expected account-a to pause during configuration",
+    );
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    const reloadStart = manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    firstConfiguredGate.resolve();
+    await Promise.all([initialStart, reloadStart]);
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-b", "account-a"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
   it("does not mark inactive listed accounts as restart candidates during hot reload", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(

@@ -627,8 +627,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         }
         const existingStart = store.starting.get(id);
         if (existingStart) {
+          const shouldRetryAfterDeferredStart =
+            includeKnownAccounts && getRuntime(channelId, id).restartPending === true;
           await existingStart;
-          return;
+          if (
+            !shouldRetryAfterDeferredStart ||
+            store.tasks.has(id) ||
+            store.starting.has(id) ||
+            manuallyStopped.has(rKey)
+          ) {
+            return;
+          }
         }
 
         let resolveStart: (() => void) | undefined;
