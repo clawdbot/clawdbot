@@ -1,4 +1,12 @@
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -13,6 +21,7 @@ import type {
 import {
   buildPackagedUpgradeUpdateArgs,
   buildRealUpdateEnv,
+  CROSS_OS_RELEASE_INSTALL_STAGE_TIMEOUT_MS,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
   normalizeRequestedRef,
@@ -202,7 +211,24 @@ export async function runUpgradeLane(
   const cleanup: Cleanup[] = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
+    const baselinePrefixCacheDir = process.env.OPENCLAW_CROSS_OS_BASELINE_PREFIX_CACHE_DIR?.trim();
+    let restoredBaselinePrefix = false;
     await runTimedLanePhase(lane, "install-baseline", async () => {
+      if (baselinePrefixCacheDir && existsSync(baselinePrefixCacheDir)) {
+        try {
+          readInstalledVersion(baselinePrefixCacheDir);
+          cpSync(baselinePrefixCacheDir, lane.prefixDir, {
+            recursive: true,
+            force: true,
+            verbatimSymlinks: true,
+          });
+          restoredBaselinePrefix = true;
+          return;
+        } catch {
+          // An interrupted cache save is not evidence. Rebuild it below.
+          rmSync(baselinePrefixCacheDir, { force: true, recursive: true });
+        }
+      }
       if (!params.baselineTgz && params.baselineSpec) {
         await installPackageSpec({
           lane,
@@ -210,6 +236,7 @@ export async function runUpgradeLane(
           packageSpec: params.baselineSpec,
           logPath: join(params.logsDir, "upgrade-install-baseline.log"),
           ignoreScripts: true,
+          timeoutMs: CROSS_OS_RELEASE_INSTALL_STAGE_TIMEOUT_MS,
         });
       } else {
         await installTarballPackage({
@@ -219,16 +246,29 @@ export async function runUpgradeLane(
           logPath: join(params.logsDir, "upgrade-install-baseline.log"),
           ignoreScripts: true,
           restoreBundledPluginPostinstall: false,
+          timeoutMs: CROSS_OS_RELEASE_INSTALL_STAGE_TIMEOUT_MS,
         });
       }
     });
-    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
-        lane,
-        env,
-        logPath: join(params.logsDir, "upgrade-install-baseline.log"),
+    if (!restoredBaselinePrefix) {
+      await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", async () => {
+        await runBundledPluginPostinstall({
+          lane,
+          env,
+          logPath: join(params.logsDir, "upgrade-install-baseline.log"),
+        });
       });
-    });
+      if (baselinePrefixCacheDir) {
+        await runTimedLanePhase(lane, "save-baseline-prefix-cache", async () => {
+          mkdirSync(baselinePrefixCacheDir, { recursive: true });
+          cpSync(lane.prefixDir, baselinePrefixCacheDir, {
+            recursive: true,
+            force: true,
+            verbatimSymlinks: true,
+          });
+        });
+      }
+    }
 
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
@@ -279,6 +319,7 @@ export async function runUpgradeLane(
           packageSpec: params.candidateUrl,
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
+          timeoutMs: CROSS_OS_RELEASE_INSTALL_STAGE_TIMEOUT_MS,
         });
         const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
         verifyWindowsPackagedUpgradeFallbackInstall({

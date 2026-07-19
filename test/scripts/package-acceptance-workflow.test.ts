@@ -609,7 +609,7 @@ describe("package acceptance workflow", () => {
       'plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml',
     );
     const pluginNpmWait = orchestration.indexOf(
-      'if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"',
+      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"',
     );
     const clawHubDispatch = orchestration.indexOf(
       'plugin_clawhub_run_id="$(dispatch_workflow_at_ref',
@@ -626,6 +626,56 @@ describe("package acceptance workflow", () => {
       "Plugin npm publish failed; ClawHub publish was not dispatched.",
     );
     expect(orchestration).not.toContain("cancelling dispatched ClawHub child workflows");
+  });
+
+  it("starts prerelease core publication before plugin npm convergence", () => {
+    const orchestration = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
+      "Dispatch publish workflows",
+    ).run;
+    if (!orchestration) {
+      throw new Error("Expected release publish orchestration script");
+    }
+
+    const pluginNpmWait = orchestration.indexOf(
+      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"',
+    );
+    const prereleaseCoreStart = orchestration.indexOf(
+      'if ! is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then',
+    );
+
+    expect(prereleaseCoreStart).toBeGreaterThan(-1);
+    expect(prereleaseCoreStart).toBeLessThan(pluginNpmWait);
+    expect(orchestration).toContain(
+      "ClawHub convergence failed; beta core release remains publishable.",
+    );
+    expect(orchestration).toContain(
+      "Release state: beta-live; plugin ecosystem convergence remains asynchronous",
+    );
+    expect(orchestration).toContain(
+      "Core prerelease publication starts before every fallible plugin",
+    );
+    expect(orchestration).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
+    expect(orchestration).toMatch(
+      /plugin_ecosystem_is_required\(\) \{\n\s+is_stable_release \|\|\n\s+\[\[ "\$\{PUBLISH_OPENCLAW_NPM\}" != "true" \]\]/,
+    );
+    expect(orchestration).toContain(
+      'if should_wait_for_plugin_ecosystem && [[ "${ecosystem_failed}" == "0" && "${clawhub_failed}" == "0" && "${plugin_npm_succeeded}" == "true" ]]; then',
+    );
+    expect(orchestration).toContain('if ! plugin_clawhub_run_id="$(dispatch_workflow_at_ref');
+    expect(orchestration).toContain(
+      "Plugin ecosystem did not converge; prerelease core and GitHub publication completed at beta-live.",
+    );
+    expect(orchestration).toMatch(
+      /upload_release_evidence_assets\n\s+publish_github_release\n\s+mark_release_completion\n\s+upload_release_evidence_assets/,
+    );
+    expect(orchestration).toContain('.releaseState = "verification-passed"');
+    expect(orchestration).toContain(".pluginPublishScope = $plugin_publish_scope");
+    expect(orchestration).toContain(".releaseProfile = $release_profile");
+    expect(orchestration).toContain(
+      ".windowsNodeInstallerDigests = $windows_node_installer_digests",
+    );
+    expect(orchestration).toContain("windows_node_installer_digests='{}'");
   });
 
   it("compares dependency evidence zip contents independently of archive timestamps", () => {
@@ -4072,6 +4122,10 @@ describe("package artifact reuse", () => {
       "Install trusted release tooling dependencies",
     );
     const trustedClawHubPlan = workflowStep(releasePublishJob, "Resolve ClawHub release plan");
+    const attestClawHubApproval = workflowStep(
+      releasePublishJob,
+      "Attest ClawHub bootstrap approval",
+    );
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
@@ -4091,6 +4145,8 @@ describe("package artifact reuse", () => {
     expect(trustedReleaseToolingInstall.run).toContain(
       "ln -s .release-harness/node_modules node_modules",
     );
+    expect(trustedClawHubPlan["continue-on-error"]).toContain("contains(inputs.tag, '-beta.')");
+    expect(attestClawHubApproval["continue-on-error"]).toContain("contains(inputs.tag, '-beta.')");
     expect(fastPretagScript).toContain(
       "node --import tsx scripts/plugin-release-pretag-pack-check.ts",
     );
@@ -4167,35 +4223,36 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("missing_trusted_publisher_count");
     expect(clawHubWorkflow).toContain("Bootstrap candidates requiring token bootstrap:");
     expect(clawHubWorkflow).toContain("Missing trusted publisher candidates:");
-    expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
+    expect(clawHubWorkflow).toContain("verify_published_clawhub_packages:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
     const clawHubVerifier = workflowJob(
       PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
-      "verify_published_clawhub_package",
+      "verify_published_clawhub_packages",
     );
     expect(clawHubVerifier["timeout-minutes"]).toBe(60);
-    expect(clawHubVerifier.strategy?.["max-parallel"]).toBe(8);
+    expect(clawHubVerifier.strategy).toBeUndefined();
     expect(clawHubVerifier.env).toMatchObject({
       OPENCLAW_CLAWHUB_VERIFY_ATTEMPTS: "54",
+      OPENCLAW_CLAWHUB_VERIFY_CONCURRENCY: "8",
       OPENCLAW_CLAWHUB_VERIFY_DELAY_MS: "30000",
     });
     expect(clawHubVerifier.permissions).toMatchObject({ actions: "read", contents: "read" });
-    expect(workflowStep(clawHubVerifier, "Download published package input")).toMatchObject({
+    expect(workflowStep(clawHubVerifier, "Download published package inputs")).toMatchObject({
       uses: DOWNLOAD_ARTIFACT_V8,
       with: {
-        name: "${{ matrix.plugin.artifactName }}",
-        path: "${{ runner.temp }}/clawhub-package-artifact",
+        pattern: "clawhub-package-*",
+        path: "${{ runner.temp }}/clawhub-package-artifacts",
+        "merge-multiple": false,
       },
     });
-    const clawHubVerifyRun = workflowStep(clawHubVerifier, "Verify published ClawHub package").run;
+    const clawHubVerifyRun = workflowStep(clawHubVerifier, "Verify published ClawHub packages").run;
     expectTextToIncludeAll(clawHubVerifyRun, [
-      "scripts/verify-clawhub-published-artifact.mjs",
-      '--expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact"',
-      '--package-name "${PACKAGE_NAME}"',
-      '--package-version "${PACKAGE_VERSION}"',
-      '--publish-tag "${PACKAGE_TAG}"',
+      "scripts/verify-clawhub-release-batch.mjs",
+      '--plan "${RUNNER_TEMP}/clawhub-batch-evidence/plan.json"',
+      '--artifacts-root "${RUNNER_TEMP}/clawhub-package-artifacts"',
       '--registry "${CLAWHUB_REGISTRY}"',
+      '--output "${RUNNER_TEMP}/clawhub-batch-evidence/evidence.json"',
     ]);
     expect(clawHubVerifyRun).not.toContain("fetchWithRetry");
     expect(clawHubVerifyRun).not.toContain(".json()");
@@ -4423,7 +4480,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
     expect(releaseWorkflow).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
     expect(releaseWorkflow).toContain(
-      '[[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]',
+      '[[ -n "${plugin_clawhub_bootstrap_run_id}" ]] && should_wait_for_plugin_ecosystem',
     );
     expect(clawHubReleasePlanScript).toContain("--skip-clawhub");
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");

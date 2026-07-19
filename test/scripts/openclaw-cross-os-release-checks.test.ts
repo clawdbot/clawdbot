@@ -44,6 +44,7 @@ import {
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
   CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
+  CROSS_OS_RELEASE_INSTALL_STAGE_TIMEOUT_MS,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS,
   CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS,
@@ -359,17 +360,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
-    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeLessThanOrEqual(10 * 60);
+    expect(CROSS_OS_RELEASE_INSTALL_STAGE_TIMEOUT_MS).toBe(5 * 60 * 1000);
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeLessThanOrEqual(5 * 60);
     expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeGreaterThan(
       CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
     );
     expect(
       CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS -
         CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
-    ).toBeGreaterThanOrEqual(2 * 60 * 1000);
-    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeLessThanOrEqual(
-      12 * 60 * 1000,
-    );
+    ).toBeGreaterThanOrEqual(60 * 1000);
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeLessThanOrEqual(6 * 60 * 1000);
+  });
+
+  it("restores a verified packaged-upgrade baseline prefix before reinstalling", () => {
+    const source = readFileSync("scripts/lib/cross-os-release-checks/lanes.ts", "utf8");
+
+    expect(source).toContain("OPENCLAW_CROSS_OS_BASELINE_PREFIX_CACHE_DIR");
+    expect(source).toContain("readInstalledVersion(baselinePrefixCacheDir)");
+    expect(source).toContain("cpSync(baselinePrefixCacheDir, lane.prefixDir");
+    expect(source.match(/verbatimSymlinks: true/g)).toHaveLength(2);
+    expect(source).toContain("timeoutMs: CROSS_OS_RELEASE_INSTALL_STAGE_TIMEOUT_MS");
+    expect(source).toContain('runTimedLanePhase(lane, "save-baseline-prefix-cache"');
   });
 
   it("prints command heartbeats before long release commands hit job timeouts", () => {
