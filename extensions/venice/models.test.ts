@@ -337,6 +337,54 @@ describe("venice-models", () => {
     expect(headers.get("authorization")).toBeNull();
   });
 
+  it("uses the live context window for catalog models", async () => {
+    stubVeniceModelsFetch([
+      {
+        id: "zai-org-glm-4.7",
+        availableContextTokens: 128_000,
+      },
+    ]);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const glm = models.find((model) => model.id === "zai-org-glm-4.7");
+    expect(glm?.contextWindow).toBe(128_000);
+  });
+
+  it("bounds a catalog maxTokens value to a smaller live context", async () => {
+    stubVeniceModelsFetch([
+      {
+        id: "qwen3-coder-480b-a35b-instruct-turbo",
+        availableContextTokens: 32_000,
+      },
+    ]);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const qwen = models.find((model) => model.id === "qwen3-coder-480b-a35b-instruct-turbo");
+    expect(qwen?.contextWindow).toBe(32_000);
+    expect(qwen?.maxTokens).toBe(32_000);
+  });
+
+  it.each([
+    ["omits", undefined],
+    ["returns zero for", 0],
+    ["returns a negative value for", -1],
+  ] as const)(
+    "retains static limits when the API %s availableContextTokens",
+    async (_caseName, availableContextTokens) => {
+      stubVeniceModelsFetch([
+        {
+          id: "zai-org-glm-4.7",
+          availableContextTokens,
+        },
+      ]);
+
+      const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+      const glm = models.find((model) => model.id === "zai-org-glm-4.7");
+      expect(glm?.contextWindow).toBe(198_000);
+      expect(glm?.maxTokens).toBe(16_384);
+    },
+  );
+
   it("retains catalog maxTokens when the API omits maxCompletionTokens", async () => {
     stubVeniceModelsFetch([
       {

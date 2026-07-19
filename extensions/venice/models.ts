@@ -105,6 +105,8 @@ function projectVeniceModels(
       continue;
     }
     const catalogEntry = catalogById.get(apiModel.id);
+    const apiSpec = apiModel.model_spec;
+    const apiContextWindow = normalizePositiveInt(apiSpec?.availableContextTokens);
     const apiMaxTokens = resolveApiMaxCompletionTokens({
       apiModel,
       knownMaxTokens: catalogEntry?.maxTokens,
@@ -120,6 +122,10 @@ function projectVeniceModels(
       if (apiMaxTokens !== undefined) {
         definition.maxTokens = apiMaxTokens;
       }
+      if (apiContextWindow !== undefined) {
+        definition.contextWindow = apiContextWindow;
+        definition.maxTokens = Math.min(definition.maxTokens, apiContextWindow);
+      }
       if (apiSupportsTools === false) {
         definition.compat = {
           ...definition.compat,
@@ -128,7 +134,6 @@ function projectVeniceModels(
       }
       models.push(definition);
     } else {
-      const apiSpec = apiModel.model_spec;
       const lowerModelId = normalizeLowercaseStringOrEmpty(apiModel.id);
       const isReasoning =
         apiSpec?.capabilities?.supportsReasoning ||
@@ -142,8 +147,7 @@ function projectVeniceModels(
         reasoning: isReasoning,
         input: hasVision ? ["text", "image"] : ["text"],
         cost: VENICE_DEFAULT_COST,
-        contextWindow:
-          normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
+        contextWindow: apiContextWindow ?? VENICE_DEFAULT_CONTEXT_WINDOW,
         maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
         compat: {
           supportsUsageInStreaming: false,
