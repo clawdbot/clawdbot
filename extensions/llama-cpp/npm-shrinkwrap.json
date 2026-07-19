@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/llama-cpp-provider",
-  "version": "2026.7.2-beta.3",
+  "version": "2026.7.2-beta.4",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/llama-cpp-provider",
-      "version": "2026.7.2-beta.3",
+      "version": "2026.7.2-beta.4",
       "optionalDependencies": {
         "node-llama-cpp": "3.19.0"
       }

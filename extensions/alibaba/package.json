@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/alibaba-provider",
-  "version": "2026.7.2-beta.3",
+  "version": "2026.7.2-beta.4",
   "private": true,
   "description": "OpenClaw Alibaba Model Studio video provider plugin",
   "type": "module",
