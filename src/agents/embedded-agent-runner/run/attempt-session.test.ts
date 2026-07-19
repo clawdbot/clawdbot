@@ -13,6 +13,7 @@ const hoisted = vi.hoisted(() => ({
   getGlobalHookRunner: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
+  resolveCompactionEnabled: vi.fn(() => true),
   resolveEffectiveCompactionMode: vi.fn(),
   isSilentOverflowProneModel: vi.fn(),
   resolveToolSearchCatalogTool: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock("../../agent-settings.js", () => ({
   applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig: hoisted.applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
+  resolveCompactionEnabled: hoisted.resolveCompactionEnabled,
   resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
 }));
 vi.mock("../../agent-tool-definition-adapter.js", () => ({
