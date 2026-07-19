@@ -8,6 +8,7 @@ import {
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
+  shouldDeleteTemporaryWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
 describe("full-release-validation-at-sha", () => {
@@ -153,6 +154,30 @@ describe("full-release-validation-at-sha", () => {
     expect(source).toContain("workflowRun.head_sha !== workflowSha");
     expect(source).not.toContain('"graphql"');
     expect(source).not.toContain('["run", "watch"');
+  });
+
+  it("keeps the temporary workflow ref until parent completion is confirmed", () => {
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: false,
+        keepBranch: false,
+        parentRunCompleted: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: false,
+        keepBranch: false,
+        parentRunCompleted: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: true,
+        keepBranch: false,
+        parentRunCompleted: false,
+      }),
+    ).toBe(true);
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {
