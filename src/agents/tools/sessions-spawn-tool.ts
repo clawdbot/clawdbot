@@ -30,6 +30,10 @@ import {
   spawnSubagentDirect,
 } from "../subagent-spawn.js";
 import { normalizeSubagentTaskName } from "../subagent-task-name.js";
+import {
+  SWARM_CODE_MODE_IDEMPOTENCY_KEY,
+  SWARM_CODE_MODE_REQUEST_FINGERPRINT,
+} from "../swarm-code-mode.js";
 import { resolveSwarmConfig } from "../swarm-config.js";
 import {
   describeSessionsSpawnTool,
@@ -264,7 +268,7 @@ export function createSessionsSpawnTool(
       swarmEnabled: swarmConfig.enabled,
     }),
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      const params = args as Record<PropertyKey, unknown>;
       if (opts?.swarmCollector && params.collect !== true) {
         throw new ToolInputError(
           "sessions_spawn from a collector requires collect=true so approvals stay non-interactive.",
@@ -473,6 +477,14 @@ export function createSessionsSpawnTool(
               ? params.fastMode
               : undefined,
           groupId: readStringParam(params, "groupId"),
+          swarmLaunchReplayKey:
+            typeof params[SWARM_CODE_MODE_IDEMPOTENCY_KEY] === "string"
+              ? params[SWARM_CODE_MODE_IDEMPOTENCY_KEY]
+              : undefined,
+          swarmLaunchRequestFingerprint:
+            typeof params[SWARM_CODE_MODE_REQUEST_FINGERPRINT] === "string"
+              ? params[SWARM_CODE_MODE_REQUEST_FINGERPRINT]
+              : undefined,
           cwd,
           thread,
           mode,

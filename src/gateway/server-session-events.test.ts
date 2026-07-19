@@ -35,7 +35,8 @@ vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
   };
 });
 
-const { createTranscriptUpdateBroadcastHandler } = await import("./server-session-events.js");
+const { createLifecycleEventBroadcastHandler, createTranscriptUpdateBroadcastHandler } =
+  await import("./server-session-events.js");
 
 function createActiveRun(projectSessionActive: boolean): ChatAbortControllerEntry {
   return {
@@ -165,5 +166,35 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     ).resolves.toMatchObject({
       senderIsOwner: true,
     });
+  });
+});
+
+describe("createLifecycleEventBroadcastHandler", () => {
+  it("projects swarm phase and log payload fields", () => {
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      chatAbortControllers: new Map(),
+    });
+
+    handler({
+      sessionKey: "agent:main:main",
+      reason: "swarm-note",
+      swarmGroupId: "swarm:agent:main:main:run-1",
+      kind: "phase",
+      text: "Research",
+    } as never);
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        swarmGroupId: "swarm:agent:main:main:run-1",
+        kind: "phase",
+        text: "Research",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
   });
 });

@@ -1,5 +1,5 @@
 // Discord tests cover message handler.preflight plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
@@ -22,6 +22,10 @@ vi.mock("./dm-command-auth.js", async (importOriginal) => ({
 vi.mock("./dm-command-decision.js", () => ({
   handleDiscordDmCommandDecision: handleDiscordDmCommandDecisionMock,
 }));
+import {
+  isRecentOutboundMessageIdentity,
+  recordOutboundMessageIdentity,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
@@ -2282,6 +2286,10 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     threadBindingTesting.resetThreadBindingsForTests();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns true when inbound webhook id matches the bound thread webhook", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
@@ -2324,7 +2332,9 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     ).toBe(false);
   });
 
-  it("returns true for recently unbound thread webhook echoes", async () => {
+  it("leaves a sent webhook identity suppressible after the Discord thread is unbound", async () => {
+    let nowMs = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const manager = createThreadBindingManager({
       cfg: DEFAULT_PREFLIGHT_CFG,
       accountId: "default",
@@ -2340,74 +2350,73 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       webhookId: "wh-1",
       webhookToken: "tok-1",
     });
-    if (!binding) {
-      throw new Error("Expected Discord thread binding");
-    }
-    expect(binding.accountId).toBe("default");
-    expect(binding.channelId).toBe("parent-1");
-    expect(binding.threadId).toBe("thread-1");
-    expect(binding.targetKind).toBe("subagent");
-    expect(binding.targetSessionKey).toBe("agent:main:subagent:child-1");
-    expect(binding.agentId).toBe("main");
-    expect(binding.webhookId).toBe("wh-1");
-    expect(binding.webhookToken).toBe("tok-1");
-    expect(binding.boundBy).toBe("system");
-    expect(binding.idleTimeoutMs).toBe(24 * 60 * 60 * 1000);
-    expect(binding.maxAgeMs).toBe(0);
-    expect(typeof binding.boundAt).toBe("number");
-    expect(binding.boundAt).toBeGreaterThan(0);
-    expect(binding.lastActivityAt).toBe(binding.boundAt);
-    expect(binding.label).toBeUndefined();
-    expect(binding.metadata).toBeUndefined();
-
-    manager.unbindThread({
-      threadId: "thread-1",
-      sendFarewell: false,
+    expect(binding).not.toBeNull();
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      sourceId: "wh-1",
     });
 
+    nowMs += 30_000;
+    manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
+
+    expect(
+      isRecentOutboundMessageIdentity({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "thread-1",
+        sourceId: "wh-1",
+      }),
+    ).toBe(true);
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
-        accountId: "default",
         threadId: "thread-1",
         webhookId: "wh-1",
       }),
-    ).toBe(true);
-  });
-
-  it("does not suppress unbound thread webhook echoes when echo expiry overflows", async () => {
-    const manager = createThreadBindingManager({
-      cfg: DEFAULT_PREFLIGHT_CFG,
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-    });
-    const binding = await manager.bindTarget({
-      threadId: "thread-overflow",
-      channelId: "parent-1",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child-1",
-      agentId: "main",
-      webhookId: "wh-overflow",
-      webhookToken: "tok-1",
-    });
-    expect(binding).not.toBeNull();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    try {
-      manager.unbindThread({
-        threadId: "thread-overflow",
-        sendFarewell: false,
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
-
-    expect(
-      shouldIgnoreBoundThreadWebhookMessage({
-        accountId: "default",
-        threadId: "thread-overflow",
-        webhookId: "wh-overflow",
-      }),
     ).toBe(false);
+
+    const guildHistories = new Map();
+    const message = createDiscordMessage({
+      id: "m-unbound-webhook-echo-1",
+      channelId: "thread-1",
+      content: "outbound webhook echo without a mention",
+      webhookId: "wh-1",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "OpenClaw",
+      },
+    });
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: { allowBots: true } as DiscordConfig,
+        data: createGuildEvent({
+          channelId: "thread-1",
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createThreadClient({ threadId: "thread-1", parentId: "parent-1" }),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      threadBindings: manager,
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            "parent-1": {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(guildHistories.get("thread-1")).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

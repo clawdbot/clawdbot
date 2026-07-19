@@ -5,6 +5,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
@@ -129,6 +130,62 @@ function resolveBotLoopProtectionDrop<TDispatchResult>(
   };
 }
 
+function resolveOutboundEchoDrop<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): ChannelTurnResult<TDispatchResult> | undefined {
+  const conversationId = [params.ctxPayload.NativeChannelId, params.ctxPayload.ChatId].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (!conversationId) {
+    return undefined;
+  }
+  const messageIds = [
+    params.messageId,
+    params.ctxPayload.MessageSidFull,
+    params.ctxPayload.MessageSid,
+  ];
+  const matchedMessageId = messageIds.find(
+    (messageId): messageId is string =>
+      typeof messageId === "string" &&
+      isRecentOutboundMessageIdentity({
+        channel: params.channel,
+        accountId: params.accountId,
+        conversationId,
+        messageId,
+      }),
+  );
+  const sourceId = params.outboundEchoSourceId?.trim();
+  const matchesSource = sourceId
+    ? isRecentOutboundMessageIdentity({
+        channel: params.channel,
+        accountId: params.accountId,
+        conversationId,
+        sourceId,
+      })
+    : false;
+  if (!matchedMessageId && !matchesSource) {
+    return undefined;
+  }
+  const admission: ChannelTurnAdmission = { kind: "drop", reason: "outbound-echo" };
+  emit({
+    ...params,
+    event: {
+      stage: "authorize",
+      event: "drop",
+      messageId: params.messageId ?? matchedMessageId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      admission: admission.kind,
+      reason: admission.reason,
+    },
+  });
+  return {
+    admission,
+    dispatched: false,
+    ctxPayload: params.ctxPayload,
+    routeSessionKey: params.routeSessionKey,
+  };
+}
+
 export async function runPreparedChannelTurnCore<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
@@ -148,6 +205,12 @@ async function runPreparedChannelTurnCoreInTrace<
   options: { suppressObserveOnlyDispatch: boolean },
 ): Promise<ChannelTurnResult<TDispatchResult>> {
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
+  const outboundEchoDrop = resolveOutboundEchoDrop(params);
+  if (outboundEchoDrop) {
+    clearPendingHistoryAfterTurn(params.history);
+    await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
+    return outboundEchoDrop;
+  }
   const botLoopDrop = resolveBotLoopProtectionDrop(params);
   if (botLoopDrop) {
     clearPendingHistoryAfterTurn(params.history);
@@ -267,27 +330,6 @@ async function runPreparedChannelTurnCoreInTrace<
   };
 }
 
-type PreparedChannelTurnWithBotLoopProtection<TDispatchResult> =
-  PreparedChannelTurn<TDispatchResult> & {
-    botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
-  };
-
-type PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
-  PreparedChannelTurn<TDispatchResult>,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
-  params: PreparedChannelTurnWithBotLoopProtection<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
-function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
-  params: PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult>,
-): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
-function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
 async function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {

@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onSubagentRegistryPersisted } from "../subagent-registry-state.js";
 import { getSubagentRunsByRunIds } from "../subagent-registry.js";
 import type { SubagentRunRecord } from "../subagent-registry.types.js";
 import { resolveSwarmConfig } from "../swarm-config.js";
@@ -43,6 +44,66 @@ function completionResult(entry: SubagentRunRecord) {
     ...(entry.label ? { label: entry.label } : {}),
     ...(completion.usage ? { usage: completion.usage } : {}),
   };
+}
+
+export type CollectorCompletionResult = NonNullable<ReturnType<typeof completionResult>>;
+
+/** Park one host bridge until its collector completes; registry writes wake it without polling. */
+export async function waitForCollectorCompletion(params: {
+  runId: string;
+  currentSessionKeys: ReadonlySet<string>;
+  signal?: AbortSignal;
+}): Promise<CollectorCompletionResult> {
+  const readCompletion = (): CollectorCompletionResult | undefined => {
+    const state = readWaitState([params.runId], params.currentSessionKeys);
+    const error = state.errors?.[0];
+    if (error) {
+      throw new ToolInputError(`agents.run ${error.error}: ${error.runId}`);
+    }
+    return state.completed[0];
+  };
+  const immediate = readCompletion();
+  if (immediate) {
+    return immediate;
+  }
+  if (params.signal?.aborted) {
+    throw new ToolInputError("agents.run wait aborted.");
+  }
+  return await new Promise<CollectorCompletionResult>((resolve, reject) => {
+    let settled = false;
+    const finish = (result: CollectorCompletionResult | Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      unsubscribe();
+      params.signal?.removeEventListener("abort", onAbort);
+      if (result instanceof Error) {
+        reject(result);
+      } else {
+        resolve(result);
+      }
+    };
+    const check = () => {
+      try {
+        const completion = readCompletion();
+        if (completion) {
+          finish(completion);
+        }
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    const onAbort = () => finish(new ToolInputError("agents.run wait aborted."));
+    const unsubscribe = onSubagentRegistryPersisted(check);
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    // Close the read/subscribe race if completion persisted between both operations.
+    if (params.signal?.aborted) {
+      onAbort();
+    } else {
+      check();
+    }
+  });
 }
 
 function resolveWaitTargets(ids: readonly string[], currentSessionKeys: ReadonlySet<string>) {

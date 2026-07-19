@@ -41,6 +41,7 @@ import {
   formatDiscordReplySkip,
 } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
+import { resolveDiscordWebhookId } from "./sender-identity.js";
 
 const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
@@ -607,6 +608,7 @@ async function processDiscordMessageInner(
       cfg,
       channel: "discord",
       accountId: route.accountId,
+      outboundEchoSourceId: resolveDiscordWebhookId(message) ?? undefined,
       route: { agentId: route.agentId, sessionKey: persistedSessionKey },
       ctxPayload,
       afterRecord: reactions.queueInitialAckReactionAfterRecord,

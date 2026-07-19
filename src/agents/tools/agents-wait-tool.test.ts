@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
+const registryEvents = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 
 vi.mock("../subagent-registry.js", () => ({
   getSubagentRunsByRunIds: (runIds: readonly string[]) => ({
@@ -19,7 +20,14 @@ vi.mock("../subagent-registry.js", () => ({
   }),
 }));
 
-import { createAgentsWaitTool } from "./agents-wait-tool.js";
+vi.mock("../subagent-registry-state.js", () => ({
+  onSubagentRegistryPersisted: (listener: () => void) => {
+    registryEvents.listeners.add(listener);
+    return () => registryEvents.listeners.delete(listener);
+  },
+}));
+
+import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
 import { testing } from "./agents-wait-tool.test-support.js";
 
 function collectorRun(
@@ -45,7 +53,52 @@ function collectorRun(
 }
 
 describe("agents_wait", () => {
-  beforeEach(() => records.clear());
+  beforeEach(() => {
+    records.clear();
+    registryEvents.listeners.clear();
+  });
+
+  it("settles a parked collector bridge from a registry write event", async () => {
+    const entry = collectorRun("event-driven", "agent:main:main");
+    records.set(entry.runId, entry);
+    const completion = waitForCollectorCompletion({
+      runId: entry.runId,
+      currentSessionKeys: new Set(["agent:main:main"]),
+    });
+
+    entry.completion = { required: false, resultText: "event result" };
+    entry.collectorCompletion = { status: "done" };
+    for (const listener of registryEvents.listeners) {
+      listener();
+    }
+
+    await expect(completion).resolves.toMatchObject({
+      runId: "event-driven",
+      status: "done",
+      result: "event result",
+    });
+    expect(registryEvents.listeners.size).toBe(0);
+  });
+
+  it("rejects when abort wins the listener-registration race", async () => {
+    const entry = collectorRun("abort-race", "agent:main:main");
+    records.set(entry.runId, entry);
+    const controller = new AbortController();
+    const originalAddEventListener = controller.signal.addEventListener.bind(controller.signal);
+    vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
+      controller.abort();
+      originalAddEventListener(...args);
+    });
+
+    await expect(
+      waitForCollectorCompletion({
+        runId: entry.runId,
+        currentSessionKeys: new Set(["agent:main:main"]),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("agents.run wait aborted");
+    expect(registryEvents.listeners.size).toBe(0);
+  });
 
   it("exposes ownership helpers through test support", () => {
     const entry = collectorRun("owned", "agent:main:main");

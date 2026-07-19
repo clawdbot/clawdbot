@@ -23,6 +23,12 @@ describe("createDiscordPluginBase", () => {
         defaultName: "status",
       }),
     ).toBe("status");
+    expect(
+      plugin.commands?.resolveNativeCommandName?.({
+        commandKey: "login",
+        defaultName: "login",
+      }),
+    ).toBe("login");
   });
 
   it("exposes security checks on the setup surface", () => {

@@ -19,17 +19,25 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
+import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
-import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
+import type { ChannelTurnResult } from "./kernel.js";
 import {
   dispatchAssembledChannelTurn,
+  dispatchChannelInboundTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
   runPreparedInboundReply,
   runChannelInboundEvent,
 } from "./kernel.js";
-import type { ChannelTurnResolved, PreparedChannelTurn } from "./types.js";
+import type {
+  AssembledChannelTurn,
+  ChannelTurnPlan,
+  ChannelTurnResolved,
+  PreparedChannelTurn,
+} from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
@@ -192,6 +200,15 @@ function finalizeResult(value: unknown): FinalizeResult {
   return value as FinalizeResult;
 }
 
+function expectDispatched<TDispatchResult>(
+  result: ChannelTurnResult<TDispatchResult>,
+): asserts result is Extract<ChannelTurnResult<TDispatchResult>, { dispatched: true }> {
+  expect(result.dispatched).toBe(true);
+  if (!result.dispatched) {
+    throw new Error("expected dispatch");
+  }
+}
+
 function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
   return log.mock.calls.map(([event]) => {
     const entry = event as TurnLogEvent;
@@ -208,6 +225,7 @@ describe("channel turn kernel", () => {
     vi.clearAllMocks();
     recordInboundSessionCore.mockResolvedValue(undefined);
     dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch());
+    outboundMessageIdentities.clear();
     resetDiagnosticEventsForTest();
     resetLogger();
     setLoggerOverride({ level: "info" });
@@ -219,20 +237,26 @@ describe("channel turn kernel", () => {
     resetLogger();
   });
 
-  it("types optionally guarded prepared turns as drop-capable", () => {
+  it("types every inbound turn entry point as drop-capable", () => {
     type DispatchResult = { queuedFinal: true };
     const guarded = {} as PreparedChannelTurn<DispatchResult>;
     const unguarded = {} as Omit<PreparedChannelTurn<DispatchResult>, "botLoopProtection"> & {
       botLoopProtection?: undefined;
     };
+    const assembled = {} as AssembledChannelTurn;
+    const plan = {} as ChannelTurnPlan;
 
     if (Date.now() < 0) {
       expectTypeOf(runPreparedInboundReply(guarded)).toEqualTypeOf<
         Promise<ChannelTurnResult<DispatchResult>>
       >();
       expectTypeOf(runPreparedInboundReply(unguarded)).toEqualTypeOf<
-        Promise<DispatchedChannelTurnResult<DispatchResult>>
+        Promise<ChannelTurnResult<DispatchResult>>
       >();
+      expectTypeOf(dispatchAssembledChannelTurn(assembled)).toEqualTypeOf<
+        Promise<ChannelTurnResult>
+      >();
+      expectTypeOf(dispatchChannelInboundTurn(plan)).toEqualTypeOf<Promise<ChannelTurnResult>>();
     }
   });
 
@@ -658,7 +682,7 @@ describe("channel turn kernel", () => {
       },
     });
 
-    expect(result.dispatched).toBe(true);
+    expectDispatched(result);
     expect(result.dispatchResult?.counts.final).toBe(1);
     expect(events).toEqual(["record", "dispatch", "deliver"]);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
@@ -696,6 +720,7 @@ describe("channel turn kernel", () => {
     });
 
     expect(events).toEqual(["record", "dispatch"]);
+    expectDispatched(result);
     expect(result.dispatchResult?.queuedFinal).toBe(true);
     expect(loggedEvents(log)).toEqual([
       { stage: "record", event: "start", messageId: "msg-1" },
@@ -841,6 +866,7 @@ describe("channel turn kernel", () => {
       },
     });
 
+    expectDispatched(result);
     expect(result.dispatchResult?.queuedFinal).toBe(false);
     expect(log.mock.calls).toContainEqual([
       expect.objectContaining({
@@ -878,6 +904,7 @@ describe("channel turn kernel", () => {
       },
     });
 
+    expectDispatched(result);
     expect(result.dispatchResult?.observedReplyDelivery).toBe(true);
     expect(log.mock.calls).not.toContainEqual([
       expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
@@ -909,6 +936,7 @@ describe("channel turn kernel", () => {
       },
     });
 
+    expectDispatched(result);
     expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
     expect(log.mock.calls).toContainEqual([
       expect.objectContaining({
@@ -995,6 +1023,67 @@ describe("channel turn kernel", () => {
     ]);
   });
 
+  it("drops a recorded Discord webhook echo after thread unbind before record and dispatch", async () => {
+    const recordInboundSession = createRecordInboundSession();
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+    const deliver = vi.fn();
+    const onAdopted = vi.fn(async () => {});
+    const log = vi.fn();
+    const historyMap = new Map([["thread-1", [{ sender: "Bot", body: "echo" }]]]);
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      sourceId: "webhook-1",
+    });
+
+    // Unbinding removes Discord's thread route, not the core-owned outbound identity.
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      agentId: "main",
+      routeSessionKey: "agent:main:discord:channel:thread-1",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        Provider: "discord",
+        Surface: "discord",
+        ChatId: "thread-1",
+        MessageSid: "webhook-message-1",
+      }),
+      outboundEchoSourceId: "webhook-1",
+      recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver },
+      turnAdoptionLifecycle: { onAdopted },
+      history: {
+        isGroup: true,
+        historyKey: "thread-1",
+        historyMap,
+        limit: 50,
+      },
+      log,
+    });
+
+    expect(result).toMatchObject({
+      admission: { kind: "drop", reason: "outbound-echo" },
+      dispatched: false,
+      routeSessionKey: "agent:main:discord:channel:thread-1",
+    });
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(historyMap.get("thread-1")).toStrictEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "authorize",
+        event: "drop",
+        reason: "outbound-echo",
+      }),
+    );
+  });
+
   it("suppresses direct prepared dispatches for observe-only admission", async () => {
     const events: string[] = [];
     const recordInboundSession = createRecordInboundSession(events);
@@ -1030,7 +1119,7 @@ describe("channel turn kernel", () => {
     expect(runDispatch).not.toHaveBeenCalled();
     expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
     expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
-    expect(result.dispatched).toBe(true);
+    expectDispatched(result);
     expect(result.dispatchResult).toBe(observeOnlyDispatchResult);
     expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
   });

@@ -179,6 +179,10 @@ type SpawnSubagentBaseParams = {
   collect?: boolean;
   outputSchema?: Record<string, unknown>;
   groupId?: string;
+  /** Host bridge identity used to recover a replay-safe collector launch. */
+  swarmLaunchReplayKey?: string;
+  /** Canonical request hash checked before reusing a host-reserved collector. */
+  swarmLaunchRequestFingerprint?: string;
   cwd?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
@@ -1247,9 +1251,16 @@ export async function spawnSubagentDirect(
   if (initialSwarmCapError) {
     return { status: "forbidden", error: initialSwarmCapError };
   }
+  const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   const childIdem = params.continuationDelegateFlowId
     ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
-    : crypto.randomUUID();
+    : swarmLaunchReplayKey
+      ? `swarm_${crypto
+          .createHash("sha256")
+          .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
+          .digest("hex")
+          .slice(0, 32)}`
+      : crypto.randomUUID();
   let childRunId: string = childIdem;
   let swarmReservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
@@ -1872,6 +1883,10 @@ export async function spawnSubagentDirect(
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
           swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
+          swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
+          swarmLaunchRequestFingerprint: params.collect
+            ? params.swarmLaunchRequestFingerprint
+            : undefined,
           outputSchema: params.outputSchema,
           groupId: swarmGroupId,
           queuedLaunch:

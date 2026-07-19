@@ -289,6 +289,11 @@ export function createLifecycleEventBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   return (event: SessionLifecycleEvent): void => {
+    const swarmEvent = event as SessionLifecycleEvent & {
+      swarmGroupId?: string;
+      kind?: "phase" | "log";
+      text?: string;
+    };
     const connIds = params.sessionEventSubscribers.getAll();
     if (connIds.size === 0) {
       return;
@@ -320,6 +325,13 @@ export function createLifecycleEventBroadcastHandler(params: {
           hasActiveRun: activeRunState?.active,
           activeRunIds: activeRunState?.runIds,
         }),
+        ...(swarmEvent.swarmGroupId
+          ? {
+              swarmGroupId: swarmEvent.swarmGroupId,
+              kind: swarmEvent.kind,
+              text: swarmEvent.text,
+            }
+          : {}),
       },
       connIds,
       { dropIfSlow: true },

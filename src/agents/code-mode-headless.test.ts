@@ -19,9 +19,15 @@ function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
   };
 }
 
-function createHeadlessHarness(tools: AnyAgentTool[] = []): ToolSearchToolContext {
+function createHeadlessHarness(
+  tools: AnyAgentTool[] = [],
+  options: { swarmEnabled?: boolean } = {},
+): ToolSearchToolContext {
   const config = {
-    tools: { codeMode: { enabled: false, timeoutMs: 60_000 } },
+    tools: {
+      codeMode: { enabled: false, timeoutMs: 60_000 },
+      ...(options.swarmEnabled ? { swarm: true } : {}),
+    },
   } as never;
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
@@ -86,6 +92,17 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(2);
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
+  });
+
+  it("does not expose collector globals without resumable snapshot state", async () => {
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([], { swarmEnabled: true }),
+        code: "return [typeof agents, typeof phase, typeof log];",
+      }),
+    );
+
+    expect(result.value).toEqual(["undefined", "undefined", "undefined"]);
   });
 
   it("injects deeply frozen trigger state and emits replacement state through json", async () => {

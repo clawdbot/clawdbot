@@ -2,7 +2,7 @@
  * Host-side Code Mode controller for isolated QuickJS execution with bridged
  * tool search/call/yield support.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -14,7 +14,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
+import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
@@ -37,6 +39,14 @@ import {
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { stableStringify } from "./stable-stringify.js";
+import { getSwarmRunByLaunchReplayKey, initSubagentRegistry } from "./subagent-registry.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  SWARM_CODE_MODE_IDEMPOTENCY_KEY,
+  SWARM_CODE_MODE_REQUEST_FINGERPRINT,
+} from "./swarm-code-mode.js";
+import { resolveSwarmConfig } from "./swarm-config.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -52,11 +62,16 @@ import {
   type ToolSearchToolContext,
 } from "./tool-search.js";
 import {
+  waitForCollectorCompletion,
+  type CollectorCompletionResult,
+} from "./tools/agents-wait-tool.js";
+import {
   asToolParamsRecord,
   jsonResult,
   ToolInputError,
   type AnyAgentTool,
 } from "./tools/common.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -68,7 +83,9 @@ const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
+const MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS = 4;
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
+const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
 
 type CodeModeLanguage = "javascript" | "typescript";
 
@@ -88,7 +105,16 @@ type CodeModeConfig = {
   maxSearchLimit: number;
 };
 
-type CodeModeBridgeMethod = "search" | "describe" | "call" | "callValue" | "yield" | "namespace";
+type CodeModeBridgeMethod =
+  | "search"
+  | "describe"
+  | "call"
+  | "callValue"
+  | "yield"
+  | "namespace"
+  | "agentSpawn"
+  | "agentWait"
+  | "swarmNote";
 
 type PendingBridgeRequest = {
   id: string;
@@ -101,10 +127,12 @@ type SettledBridgeRequest = { id: string } & Result<unknown, string>;
 type PendingBridgeState = PendingBridgeRequest & {
   promise: Promise<SettledBridgeRequest>;
   settled?: SettledBridgeRequest;
+  cancel?: () => void;
 };
 
 type CodeModeRunState = {
   runId: string;
+  replayId: string;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -115,6 +143,7 @@ type CodeModeRunState = {
   output: unknown[];
   createdAt: number;
   expiresAt: number;
+  agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
 };
@@ -171,6 +200,22 @@ const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript
   cacheRejections: true,
 });
 let typescriptRuntimeForTest: typeof import("typescript") | null = null;
+
+type CodeModeSwarmDeps = {
+  emitSessionLifecycleEvent: typeof emitSessionLifecycleEvent;
+  getSwarmRunByLaunchReplayKey: typeof getSwarmRunByLaunchReplayKey;
+  initSubagentRegistry: typeof initSubagentRegistry;
+  waitForCollectorCompletion: typeof waitForCollectorCompletion;
+};
+
+const defaultCodeModeSwarmDeps: CodeModeSwarmDeps = {
+  emitSessionLifecycleEvent,
+  getSwarmRunByLaunchReplayKey,
+  initSubagentRegistry,
+  waitForCollectorCompletion,
+};
+
+let codeModeSwarmDeps = defaultCodeModeSwarmDeps;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -312,10 +357,32 @@ function resolveCodeModeHeadlessConfig(
 function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
     if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
-      activeRuns.delete(runId);
-      resumingRunIds.delete(runId);
+      // Parked collectors extend idle TTL, bounded so a lost terminal event cannot pin all slots.
+      if (
+        state.pending?.some((entry) => entry.method === "agentWait" && !entry.settled) &&
+        state.agentWaitRetainUntil !== undefined &&
+        isFutureDateTimestampMs(state.agentWaitRetainUntil, { nowMs: now })
+      ) {
+        const renewed = resolveCodeModeSnapshotExpiresAt(now, state.config.snapshotTtlSeconds);
+        if (renewed !== undefined) {
+          state.expiresAt = Math.min(renewed, state.agentWaitRetainUntil);
+          continue;
+        }
+      }
+      disposeCodeModeRun(runId);
     }
   }
+}
+
+function disposeCodeModeRun(runId: string): void {
+  const state = activeRuns.get(runId);
+  for (const pending of state?.pending ?? []) {
+    if (!pending.settled) {
+      pending.cancel?.();
+    }
+  }
+  activeRuns.delete(runId);
+  resumingRunIds.delete(runId);
 }
 
 function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
@@ -548,10 +615,230 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+function codeModeReplayIdForToolCall(
+  ctx: ToolSearchToolContext,
+  toolCallId: string,
+  code: string,
+  assistantTurnId?: string,
+): string {
+  const outerRunId = ctx.runId?.trim();
+  if (!outerRunId) {
+    // Swarm bridges require an outer run id; ordinary Code Mode still gets an isolated identity.
+    return `cm_replay_${randomUUID()}`;
+  }
+  // Provider response ids survive transcript restore and scope resettable tool-call ids to one turn.
+  const identity = JSON.stringify([
+    ctx.sessionKey ?? "",
+    ctx.sessionId ?? "",
+    outerRunId,
+    assistantTurnId?.trim() ?? "",
+    toolCallId,
+    code,
+  ]);
+  const digest = createHash("sha256").update(identity).digest("hex").slice(0, 24);
+  return `cm_replay_${digest}`;
+}
+
+function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
+  if (!resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled) {
+    throw new ToolInputError("code mode swarm globals are disabled.");
+  }
+}
+
+function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string {
+  const sessionKey = ctx.sessionKey?.trim();
+  if (!sessionKey) {
+    throw new ToolInputError("code mode swarm globals require session and run identity.");
+  }
+  const { mainKey, alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
+  return resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+}
+
+function resolveCodeModeSwarmGroupId(ctx: ToolSearchToolContext): string {
+  const sessionKey = resolveCodeModeRequesterSessionKey(ctx);
+  const runId = ctx.runId?.trim();
+  if (!runId) {
+    throw new ToolInputError("code mode swarm globals require session and run identity.");
+  }
+  return `swarm:${sessionKey}:${runId}`;
+}
+
+function replayedSpawnResult(entry: SubagentRunRecord) {
+  return {
+    status: "accepted",
+    runId: entry.swarmRunId ?? entry.runId,
+    sessionKey: entry.childSessionKey,
+    ...(entry.label ? { label: entry.label } : {}),
+  };
+}
+
+function readOptionalStringOption(
+  options: Record<string, unknown>,
+  key: "label" | "model" | "thinking" | "agentId",
+): string | undefined {
+  const value = options[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new ToolInputError(`agents.run ${key} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+
+async function runAgentSpawnBridge(params: {
+  runtime: ToolSearchRuntime;
+  parentToolCallId: string;
+  request: PendingBridgeRequest;
+  codeModeRunId: string;
+  ctx: ToolSearchToolContext;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+}) {
+  requireCodeModeSwarmEnabled(params.ctx);
+  const prompt = params.request.args[0];
+  const options = isRecord(params.request.args[1]) ? params.request.args[1] : {};
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    throw new ToolInputError("agents.run prompt must be a non-empty string.");
+  }
+  const fastMode = options.fastMode;
+  if (fastMode !== undefined && fastMode !== true && fastMode !== false && fastMode !== "auto") {
+    throw new ToolInputError('agents.run fastMode must be boolean or "auto".');
+  }
+  const schema = options.schema;
+  if (schema !== undefined && !isRecord(schema)) {
+    throw new ToolInputError("agents.run schema must be a JSON schema object.");
+  }
+  const label = readOptionalStringOption(options, "label");
+  const model = readOptionalStringOption(options, "model");
+  const thinking = readOptionalStringOption(options, "thinking");
+  const agentId = readOptionalStringOption(options, "agentId");
+  const spawnEntry = params.runtime
+    .namespaceEntries()
+    .find((entry) => entry.source === "openclaw" && entry.name === "sessions_spawn");
+  if (!spawnEntry) {
+    throw new ToolInputError("agents.run requires the sessions_spawn tool.");
+  }
+  const spawnInput: Record<PropertyKey, unknown> = {
+    task: prompt.trim(),
+    collect: true,
+    groupId: resolveCodeModeSwarmGroupId(params.ctx),
+    ...(label ? { label } : {}),
+    ...(model ? { model } : {}),
+    ...(thinking ? { thinking } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(schema ? { outputSchema: schema } : {}),
+  };
+  const requestFingerprint = `sha256:${createHash("sha256")
+    .update(stableStringify(spawnInput))
+    .digest("hex")}`;
+  // The registry persists this exact tuple and payload hash before launch.
+  const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
+  const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
+  let existing = codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(
+    idempotencyKey,
+    requesterSessionKey,
+  );
+  if (existing) {
+    if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
+      throw new ToolInputError("agents.run replay request does not match the persisted collector.");
+    }
+    if (existing.swarmLaunchPending === true) {
+      if (!existing.queuedLaunch) {
+        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
+      }
+      // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
+      codeModeSwarmDeps.initSubagentRegistry();
+      existing =
+        codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey) ??
+        existing;
+      if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
+        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
+      }
+    }
+    return replayedSpawnResult(existing);
+  }
+  Object.defineProperty(spawnInput, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
+    value: idempotencyKey,
+  });
+  Object.defineProperty(spawnInput, SWARM_CODE_MODE_REQUEST_FINGERPRINT, {
+    value: requestFingerprint,
+  });
+  const called = await params.runtime.callExactId(spawnEntry.id, spawnInput, {
+    parentToolCallId: params.parentToolCallId,
+    signal: params.signal,
+    onUpdate: params.onUpdate,
+  });
+  const value =
+    isRecord(called.result) && "details" in called.result ? called.result.details : called.result;
+  if (!isRecord(value) || value.status !== "accepted" || typeof value.runId !== "string") {
+    const detail =
+      isRecord(value) && typeof value.error === "string"
+        ? value.error
+        : "collector spawn was not accepted";
+    throw new ToolInputError(`agents.run spawn failed: ${detail}`);
+  }
+  return value;
+}
+
+async function runAgentWaitBridge(params: {
+  request: PendingBridgeRequest;
+  ctx: ToolSearchToolContext;
+  signal?: AbortSignal;
+}): Promise<CollectorCompletionResult> {
+  requireCodeModeSwarmEnabled(params.ctx);
+  const runId = params.request.args[0];
+  if (typeof runId !== "string" || !runId.trim()) {
+    throw new ToolInputError("agentWait run id must be a non-empty string.");
+  }
+  const rawSessionKey = params.ctx.sessionKey?.trim();
+  if (!rawSessionKey) {
+    throw new ToolInputError("agents.run wait requires session identity.");
+  }
+  const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
+  return await codeModeSwarmDeps.waitForCollectorCompletion({
+    runId: runId.trim(),
+    currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
+    signal: params.signal,
+  });
+}
+
+function runSwarmNoteBridge(params: {
+  request: PendingBridgeRequest;
+  ctx: ToolSearchToolContext;
+}): { ok: true } {
+  requireCodeModeSwarmEnabled(params.ctx);
+  const note = isRecord(params.request.args[0]) ? params.request.args[0] : undefined;
+  const kind = note?.kind;
+  const text = note?.text;
+  if ((kind !== "phase" && kind !== "log") || typeof text !== "string" || !text.trim()) {
+    throw new ToolInputError("swarmNote requires phase/log kind and non-empty text.");
+  }
+  const sessionKey = params.ctx.sessionKey?.trim();
+  if (!sessionKey) {
+    throw new ToolInputError("swarmNote requires session identity.");
+  }
+  codeModeSwarmDeps.emitSessionLifecycleEvent({
+    sessionKey,
+    reason: "swarm-note",
+    swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
+    kind,
+    text: text.trim(),
+  } as Parameters<typeof emitSessionLifecycleEvent>[0] & {
+    swarmGroupId: string;
+    kind: "phase" | "log";
+    text: string;
+  });
+  return { ok: true };
+}
+
 async function runBridgeRequest(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
+  codeModeRunId: string;
+  ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -659,6 +946,18 @@ async function runBridgeRequest(params: {
               : called.result;
           },
         );
+        break;
+      }
+      case "agentSpawn": {
+        value = await runAgentSpawnBridge(params);
+        break;
+      }
+      case "agentWait": {
+        value = await runAgentWaitBridge(params);
+        break;
+      }
+      case "swarmNote": {
+        value = runSwarmNoteBridge(params);
         break;
       }
     }
@@ -911,7 +1210,10 @@ async function runHeadlessWorkerLeg(params: {
 }): Promise<CodeModeWorkerResult> {
   const remainingMs = remainingHeadlessMs(params.deadline);
   const timeoutMs = Math.max(1, Math.min(params.config.timeoutMs, remainingMs));
-  const workerTimeoutMs = Math.max(1, Math.min(remainingMs, timeoutMs + 1000));
+  const workerTimeoutMs = Math.max(
+    1,
+    Math.min(remainingMs, timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS),
+  );
   return await runCodeModeWorker(
     {
       ...params.input,
@@ -986,6 +1288,14 @@ function headlessNamespaceFreezePrelude(descriptors: CodeModeNamespaceDescriptor
   })();\n`;
 }
 
+function createCodeModeApiFilesForRun(
+  catalog: Parameters<typeof createCodeModeApiVirtualFiles>[0],
+  swarmEnabled: boolean,
+) {
+  const files = createCodeModeApiVirtualFiles(catalog);
+  return swarmEnabled ? files : files.filter((file) => file.path !== "agents.d.ts");
+}
+
 /** Run Code Mode to completion without publishing resumable snapshot state. */
 export async function runCodeModeScriptHeadless(params: {
   ctx: ToolSearchToolContext;
@@ -1014,6 +1324,9 @@ export async function runCodeModeScriptHeadless(params: {
   const output: unknown[] = [];
   let toolCallCount = 0;
   try {
+    // Headless runs publish no resumable snapshot/handle, so collector globals stay unavailable.
+    const swarmEnabled = false;
+    const codeModeRunId = `cm_headless_${randomUUID()}`;
     const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
     const catalog = runtime.all({ includeMcp: false });
     const namespaceCatalog = runtime.namespaceEntries();
@@ -1039,8 +1352,9 @@ export async function runCodeModeScriptHeadless(params: {
           kind: "exec",
           source,
           catalog,
-          apiFiles: createCodeModeApiVirtualFiles(namespaceCatalog),
+          apiFiles: createCodeModeApiFilesForRun(namespaceCatalog, swarmEnabled),
           namespaces,
+          swarmEnabled,
         },
         config,
         deadline,
@@ -1088,6 +1402,8 @@ export async function runCodeModeScriptHeadless(params: {
               runtime,
               namespaceRuntime,
               parentToolCallId,
+              codeModeRunId,
+              ctx: params.ctx,
               request,
               signal: abortScope.signal,
             }),
@@ -1127,6 +1443,7 @@ function snapshotState(params: {
   pendingRequests: PendingBridgeRequest[];
   snapshotBytes: Uint8Array;
   parentToolCallId: string;
+  codeModeReplayId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
@@ -1137,9 +1454,16 @@ function snapshotState(params: {
   onUpdate?: AgentToolUpdateCallback;
 }) {
   enforceSnapshotStateLimits(params);
+  const runId = `cm_${randomUUID()}`;
   return storeSnapshotState({
     ...params,
-    pending: createPendingBridgeStates(params),
+    runId,
+    replayId: params.codeModeReplayId,
+    pending: createPendingBridgeStates({
+      ...params,
+      activeRunId: runId,
+      codeModeRunId: params.codeModeReplayId,
+    }),
     replaySafe:
       params.replaySafe && pendingBridgeRequestsReplaySafe(params.pendingRequests, params.runtime),
   });
@@ -1153,7 +1477,9 @@ function pendingBridgeRequestsReplaySafe(
     if (
       request.method === "search" ||
       request.method === "describe" ||
-      request.method === "yield"
+      request.method === "yield" ||
+      request.method === "agentSpawn" ||
+      request.method === "agentWait"
     ) {
       return true;
     }
@@ -1190,29 +1516,56 @@ function createPendingBridgeStates(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
+  codeModeRunId: string;
+  activeRunId?: string;
+  ctx: ToolSearchToolContext;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): PendingBridgeState[] {
   return params.pendingRequests.map((request) => {
     // Bridge calls start immediately while the VM snapshot is stored. Their
     // settled values are later replayed into QuickJS by the wait tool.
+    const abortController = new AbortController();
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, abortController.signal])
+      : abortController.signal;
     const promise = runBridgeRequest({
       runtime: params.runtime,
       namespaceRuntime: params.namespaceRuntime,
       parentToolCallId: params.parentToolCallId,
+      codeModeRunId: params.codeModeRunId,
+      ctx: params.ctx,
       request,
-      signal: params.signal,
+      signal,
       onUpdate: params.onUpdate,
     });
-    const state: PendingBridgeState = { ...request, promise };
+    const state: PendingBridgeState = {
+      ...request,
+      promise,
+      cancel: () => abortController.abort(),
+    };
     void promise.then((settled) => {
       state.settled = settled;
+      if (state.method === "agentWait" && params.activeRunId) {
+        const active = activeRuns.get(params.activeRunId);
+        if (active?.pending.includes(state)) {
+          const renewed = resolveCodeModeSnapshotExpiresAt(
+            Date.now(),
+            active.config.snapshotTtlSeconds,
+          );
+          if (renewed !== undefined) {
+            active.expiresAt = renewed;
+          }
+        }
+      }
     });
     return state;
   });
 }
 
 function storeSnapshotState(params: {
+  runId: string;
+  replayId: string;
   pending: PendingBridgeState[];
   replaySafe: boolean;
   snapshotBytes: Uint8Array;
@@ -1223,14 +1576,23 @@ function storeSnapshotState(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
 }) {
-  const runId = `cm_${randomUUID()}`;
   const now = Date.now();
   const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
   if (expiresAt === undefined) {
     throw new ToolInputError("code mode run expiry is unavailable.");
   }
-  activeRuns.set(runId, {
-    runId,
+  const hasPendingAgentWait = params.pending.some(
+    (entry) => entry.method === "agentWait" && !entry.settled,
+  );
+  const agentWaitRetainUntil = hasPendingAgentWait
+    ? resolveCodeModeSnapshotExpiresAt(
+        now,
+        params.config.snapshotTtlSeconds * MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS,
+      )
+    : undefined;
+  activeRuns.set(params.runId, {
+    runId: params.runId,
+    replayId: params.replayId,
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
@@ -1240,12 +1602,13 @@ function storeSnapshotState(params: {
     output: params.output,
     createdAt: now,
     expiresAt,
+    agentWaitRetainUntil,
     runtime: params.runtime,
     namespaceRuntime: params.namespaceRuntime,
   });
   return {
     status: "waiting" as const,
-    runId,
+    runId: params.runId,
     reason: codeModeWaitingReason(params.pending),
     pendingToolCalls: pendingToolCalls(params.pending),
     replaySafe: params.replaySafe,
@@ -1332,16 +1695,19 @@ function createCodeModeExecDescription(
   catalog?: readonly ToolSearchCatalogEntry[],
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(ctx, catalog);
-  // A known run catalog with no MCP tools has no virtual API files, so drop the
-  // API.list/API.read/MCP guidance instead of luring the model into wasting exec
-  // turns probing an empty surface. An unknown catalog (initial tool creation,
-  // before compaction binds the run catalog) keeps the full guidance.
+  // A known run catalog with neither MCP nor swarm has no virtual API files.
   const catalogKnown = catalog !== undefined;
   const hasMcp = catalog?.some((entry) => entry.source === "mcp") ?? false;
-  const mcpGuidance =
-    !catalogKnown || hasMcp
-      ? " Read TypeScript-style declaration files with `API.list(prefix?)` and `API.read(path)`. MCP tools are available only through the `MCP` namespace."
+  const swarmEnabled = resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled;
+  const apiGuidance =
+    !catalogKnown || hasMcp || swarmEnabled
+      ? " Read TypeScript-style declaration files with `API.list(prefix?)` and `API.read(path)`."
       : "";
+  const mcpGuidance =
+    !catalogKnown || hasMcp ? " MCP tools are available only through the `MCP` namespace." : "";
+  const swarmGuidance = swarmEnabled
+    ? " Swarm globals `agents.run`, `phase`, and `log` are available; read `agents.d.ts` for types and orchestration idioms."
+    : "";
   const namespaceGuidance =
     !catalogKnown || namespacePrompt
       ? " Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog."
@@ -1349,7 +1715,9 @@ function createCodeModeExecDescription(
   const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
     "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. When the needed tool has an unknown output, including a final dependent call after declared-output calls, the first exec must return the raw tool value unchanged with `return await tools.callValue(id, args);`; do not wrap it in the requested answer shape or read guessed fields; filter or map it only in a later exec after observing its shape. When the arrow declares the fields you need, select, call, and process them in the first exec; do not spend another exec inspecting that declared shape. Within that exec, perform dependent reads, checks, and follow-up calls in order; nested calls still enforce normal tool policy and approvals. Parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids, input hints, and declared output hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
+    apiGuidance +
     mcpGuidance +
+    swarmGuidance +
     namespaceGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
@@ -1361,6 +1729,7 @@ async function runExec(params: {
   toolCallId: string;
   ctx: CodeModeToolContext;
   code: string;
+  assistantTurnId?: string;
   language?: CodeModeLanguage;
   restartSafe: boolean;
   signal?: AbortSignal;
@@ -1387,10 +1756,20 @@ async function runExec(params: {
   }
   const catalog = runtime.all({ includeMcp: false });
   const namespaceCatalog = runtime.namespaceEntries();
+  const swarmEnabled = resolveSwarmConfig(
+    params.ctx.runtimeConfig ?? params.ctx.config,
+    params.ctx.agentId,
+  ).enabled;
+  const codeModeReplayId = codeModeReplayIdForToolCall(
+    params.ctx,
+    params.toolCallId,
+    params.code,
+    params.assistantTurnId,
+  );
   // Namespace scope factories are trusted plugin registrations; abort is
   // re-checked at the worker boundary rather than racing this setup.
   const namespaceRuntime = await createCodeModeNamespaceRuntime(params.ctx, namespaceCatalog);
-  const apiFiles = createCodeModeApiVirtualFiles(namespaceCatalog);
+  const apiFiles = createCodeModeApiFilesForRun(namespaceCatalog, swarmEnabled);
   let source: string;
   try {
     source = await prepareSource({ code: params.code, language: params.language, config });
@@ -1415,8 +1794,9 @@ async function runExec(params: {
           catalog,
           apiFiles,
           namespaces: namespaceRuntime.descriptors,
+          swarmEnabled,
         },
-        config.timeoutMs + 1000,
+        config.timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
         undefined,
         params.signal,
       ),
@@ -1427,6 +1807,7 @@ async function runExec(params: {
       replaySafe: params.restartSafe,
       deadlineMs,
       parentToolCallId: params.toolCallId,
+      codeModeReplayId,
       ctx: params.ctx,
       config,
       runtime,
@@ -1501,6 +1882,7 @@ async function settleCodeModeResult(params: {
   output: unknown[];
   replaySafe: boolean;
   parentToolCallId: string;
+  codeModeReplayId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
@@ -1566,11 +1948,15 @@ async function settleCodeModeResult(params: {
     });
     const releaseReservation = reserveActiveRunSlot();
     try {
+      const activeRunId = `cm_${randomUUID()}`;
       const pending = createPendingBridgeStates({
         pendingRequests: result.pendingRequests,
         runtime: params.runtime,
         namespaceRuntime: params.namespaceRuntime,
         parentToolCallId: params.parentToolCallId,
+        codeModeRunId: params.codeModeReplayId,
+        activeRunId,
+        ctx: params.ctx,
         signal: params.signal,
         onUpdate: params.onUpdate,
       });
@@ -1588,6 +1974,8 @@ async function settleCodeModeResult(params: {
         // Parked rather than resumed: without a usable budget the restore alone
         // would burn the remaining deadline and fail a recoverable run.
         return storeSnapshotState({
+          runId: activeRunId,
+          replayId: params.codeModeReplayId,
           pending,
           replaySafe: false,
           snapshotBytes: result.snapshotBytes,
@@ -1604,7 +1992,7 @@ async function settleCodeModeResult(params: {
         settledRequests.push(entry.settled ?? (await entry.promise));
       }
       // The resumed guest inherits only the remaining shared budget as its
-      // QuickJS interrupt deadline; the extra 1000ms is host watchdog grace,
+      // QuickJS interrupt deadline; the extra host margin is watchdog grace,
       // not extra guest run time.
       result = normalizeCodeModeWorkerResult(
         await runCodeModeWorker(
@@ -1617,7 +2005,7 @@ async function settleCodeModeResult(params: {
             },
             settledRequests,
           },
-          resumeBudgetMs + 1000,
+          resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
           undefined,
           params.signal,
         ),
@@ -1650,6 +2038,7 @@ async function settleCodeModeResult(params: {
       pendingRequests: result.pendingRequests,
       snapshotBytes: result.snapshotBytes,
       parentToolCallId: params.parentToolCallId,
+      codeModeReplayId: params.codeModeReplayId,
       ctx: params.ctx,
       config: params.config,
       runtime: params.runtime,
@@ -1715,7 +2104,7 @@ async function runWait(params: {
       // An aborted wait drops the suspended run: nothing will resume it, and
       // parking it would pin a process-global active-run slot until TTL expiry.
       if (params.signal?.aborted) {
-        activeRuns.delete(state.runId);
+        disposeCodeModeRun(state.runId);
         return {
           status: "failed" as const,
           error: "code mode execution aborted",
@@ -1740,13 +2129,13 @@ async function runWait(params: {
       };
     }
 
-    activeRuns.delete(state.runId);
+    disposeCodeModeRun(state.runId);
     const settledRequests: SettledBridgeRequest[] = [];
     for (const entry of state.pending) {
       settledRequests.push(entry.settled ?? (await entry.promise));
     }
     // The resumed guest inherits only the remaining shared budget as its QuickJS
-    // interrupt deadline; the extra 1000ms is host watchdog grace only.
+    // interrupt deadline; the extra host margin is watchdog grace only.
     const result = normalizeCodeModeWorkerResult(
       await runCodeModeWorker(
         {
@@ -1758,7 +2147,7 @@ async function runWait(params: {
           },
           settledRequests,
         },
-        resumeBudgetMs + 1000,
+        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
         undefined,
         params.signal,
       ),
@@ -1771,6 +2160,7 @@ async function runWait(params: {
       replaySafe: state.replaySafe,
       deadlineMs,
       parentToolCallId: params.toolCallId,
+      codeModeReplayId: state.replayId,
       ctx: state.ctx,
       config: state.config,
       runtime: state.runtime,
@@ -1828,12 +2218,16 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       onUpdate?: AgentToolUpdateCallback,
     ) => {
       const input = readCode(args);
+      const executionContext = getAgentToolExecutionContext();
       return jsonResult(
         normalizeCodeModeTimeoutResult(
           await runExec({
             toolCallId,
             ctx,
             code: input.code,
+            assistantTurnId:
+              executionContext?.assistantMessage.responseId?.trim() ||
+              executionContext?.assistantMessage.turnId?.trim(),
             language: input.language,
             restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
             signal,
@@ -1950,6 +2344,9 @@ export function addClientToolsToCodeModeCatalog(params: {
 const testing = {
   activeRuns,
   resumingRunIds,
+  codeModeReplayIdForToolCall,
+  removeExpiredRuns,
+  runBridgeRequest,
   createHeadlessAbortScope,
   normalizeCodeModeWorkerResult,
   runCodeModeWorker,
@@ -1959,6 +2356,11 @@ const testing = {
     typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
+  },
+  setSwarmDepsForTest: (overrides?: Partial<CodeModeSwarmDeps>) => {
+    codeModeSwarmDeps = overrides
+      ? { ...defaultCodeModeSwarmDeps, ...overrides }
+      : defaultCodeModeSwarmDeps;
   },
 };
 

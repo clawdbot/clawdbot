@@ -11,12 +11,14 @@ const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";
 const CODE_MODE_NAMESPACE_TOOL_CALL = Symbol.for("openclaw.codeMode.namespaceToolCall");
 const RESERVED_NAMESPACE_GLOBALS = new Set([
   "ALL_TOOLS",
+  "agents",
   "API",
   "Array",
   "Boolean",
   "Date",
   "Error",
   "globalThis",
+  "log",
   "json",
   "JSON",
   "Map",
@@ -26,6 +28,7 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
   "Number",
   "Object",
   "Promise",
+  "phase",
   "Set",
   "String",
   "text",
@@ -872,23 +875,59 @@ function createMcpNamespaceScope(
   return createMcpNamespaceModel(catalog)?.root;
 }
 
-/** Builds virtual API declaration files for visible MCP namespace tools. */
+const SWARM_AGENTS_API_CONTENT = `type AgentJsonSchema = Record<string, unknown>;
+
+interface AgentRunOptions {
+  label?: string;
+  model?: string;
+  thinking?: string;
+  fastMode?: boolean | "auto";
+  agentId?: string;
+  schema?: AgentJsonSchema;
+  phase?: string;
+}
+
+interface AgentsApi {
+  run(prompt: string, options?: AgentRunOptions & { schema?: undefined }): Promise<string>;
+  run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
+}
+
+/** Spawn collector agents concurrently. */
+declare const agents: Readonly<AgentsApi>;
+/** Publish a phase heading for this swarm. */
+declare function phase(title: string): void;
+/** Publish a progress note for this swarm. */
+declare function log(message: string): void;
+
+// Fan-out: const reports = await Promise.all(prompts.map((prompt) => agents.run(prompt)));
+// Gate: while (!ready) { ready = await agents.run("Check readiness") === "ready"; }
+// Cycle: for (let pass = 0; pass < 3; pass++) draft = await agents.run("Improve: " + draft);
+// Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
+`;
+
+/** Builds virtual API declaration files for visible guest and MCP namespace tools. */
 export function createCodeModeApiVirtualFiles(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): CodeModeApiVirtualFile[] {
-  const model = createMcpNamespaceModel(catalog);
-  if (!model) {
-    return [];
-  }
-  const rootContent = renderMcpRootFile(model.docs);
   const files: CodeModeApiVirtualFile[] = [
     {
-      path: "mcp/index.d.ts",
-      description: "Root MCP namespace declaration and server list.",
-      content: rootContent,
-      bytes: Buffer.byteLength(rootContent, "utf8"),
+      path: "agents.d.ts",
+      description: "Swarm collector globals and orchestration idioms.",
+      content: SWARM_AGENTS_API_CONTENT,
+      bytes: Buffer.byteLength(SWARM_AGENTS_API_CONTENT, "utf8"),
     },
   ];
+  const model = createMcpNamespaceModel(catalog);
+  if (!model) {
+    return files;
+  }
+  const rootContent = renderMcpRootFile(model.docs);
+  files.push({
+    path: "mcp/index.d.ts",
+    description: "Root MCP namespace declaration and server list.",
+    content: rootContent,
+    bytes: Buffer.byteLength(rootContent, "utf8"),
+  });
   for (const server of model.docs) {
     const content = renderMcpServerHeader(server, server.tools);
     files.push({

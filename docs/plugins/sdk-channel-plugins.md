@@ -116,8 +116,10 @@ dedupes `chat_id:message_id` because debounce merges can re-surface a message
 under a fresh `update_id`), or a longer window than the channel's tombstone
 retention. If your guard key would equal the drain `event_id`, delete the
 guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
-to cover the old guard window instead. Non-dedupe protections (age fences,
-outbound echo caches) are unrelated to this rule and stay.
+to cover the old guard window instead. Non-dedupe protections such as age
+fences are unrelated to this rule. Stable outbound message IDs use the shared
+outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
+channel-local TTL cache.
 
 #### Transport classes and retention
 

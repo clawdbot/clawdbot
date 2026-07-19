@@ -289,7 +289,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: upstream-link registry write/delete for harness-owned session forks.
       // Harvest: mention-pattern schemas and helper exports -3.
       // +1: config-backed main-session resolver for Gateway-hosted plugin services.
-      8197,
+      // +9: outbound echo identity type and record/query helpers across
+      // channel-outbound and its two compatibility barrels.
+      8206,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -338,7 +340,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: shared ingress monitor factory across channel-outbound and compat mirrors.
       // +2: upstream-link registry write/delete for harness-owned session forks.
       // +1: config-backed main-session resolver for Gateway-hosted plugin services.
-      4554,
+      // +6: outbound echo record/query helpers across channel-outbound and mirrors.
+      4560,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -362,7 +365,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
       // +1: AgentThinkingLevel mirrored by deprecated config-types.
       // +1: SwarmConfig mirrored by deprecated config-types.
-      3021,
+      // +2: outbound echo helpers inherited by deprecated channel barrels.
+      3023,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

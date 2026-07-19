@@ -38,28 +38,8 @@ export {
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
-export type { ChannelTurnResult, DispatchedChannelTurnResult } from "./types.js";
+export type { ChannelTurnResult } from "./types.js";
 
-type AssembledChannelTurnWithBotLoopProtection = AssembledChannelTurn & {
-  botLoopProtection: NonNullable<AssembledChannelTurn["botLoopProtection"]>;
-};
-
-type AssembledChannelTurnWithoutBotLoopProtection = Omit<
-  AssembledChannelTurn,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithBotLoopProtection,
-): Promise<ChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithoutBotLoopProtection,
-): Promise<DispatchedChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurn,
-): Promise<ChannelTurnResult>;
 export function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<ChannelTurnResult> {
@@ -68,15 +48,6 @@ export function dispatchAssembledChannelTurn(
 
 export const dispatchChannelInboundReply = dispatchAssembledChannelTurn;
 
-export function dispatchChannelInboundTurn(
-  plan: ChannelTurnPlan & {
-    botLoopProtection: NonNullable<ChannelTurnPlan["botLoopProtection"]>;
-  },
-): Promise<ChannelTurnResult>;
-export function dispatchChannelInboundTurn(
-  plan: Omit<ChannelTurnPlan, "botLoopProtection"> & { botLoopProtection?: undefined },
-): Promise<DispatchedChannelTurnResult>;
-export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<ChannelTurnResult>;
 export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<ChannelTurnResult> {
   return dispatchAssembledChannelTurnImpl(
     assembleResolvedChannelTurn(plan) as AssembledChannelTurn,

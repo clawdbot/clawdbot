@@ -15,7 +15,6 @@ import type {
   ChannelEventDeliveryAdapter,
   ChannelTurnResolved,
   ChannelTurnResult,
-  DispatchedChannelTurnResult,
   PreparedChannelTurn,
 } from "./types.js";
 
@@ -130,30 +129,12 @@ function createObserveOnlyDeliveryAdapter(): ChannelEventDeliveryAdapter {
   };
 }
 
-type AssembledChannelTurnWithBotLoopProtection = AssembledChannelTurn & {
-  botLoopProtection: NonNullable<AssembledChannelTurn["botLoopProtection"]>;
-};
-
-type AssembledChannelTurnWithoutBotLoopProtection = Omit<
-  AssembledChannelTurn,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithBotLoopProtection,
-): Promise<ChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithoutBotLoopProtection,
-): Promise<DispatchedChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurn,
-): Promise<ChannelTurnResult>;
 export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<ChannelTurnResult> {
   const replyPipeline = resolveAssembledReplyPipeline(params);
+  const turnAdoptionLifecycle =
+    params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
   return await runPreparedChannelTurnCore(
@@ -169,8 +150,17 @@ export async function dispatchAssembledChannelTurn(
       history: params.history,
       admission: params.admission,
       botLoopProtection: params.botLoopProtection,
+      outboundEchoSourceId: params.outboundEchoSourceId,
       log: params.log,
       messageId: params.messageId,
+      ...(turnAdoptionLifecycle
+        ? {
+            runDispatchLifecycle: {
+              turnAdoptionLifecycle,
+              onDispatchSkipped: async () => await turnAdoptionLifecycle.onAdopted(),
+            },
+          }
+        : {}),
       runDispatch: async () =>
         await runWithSessionInitConflictRetry(
           () =>

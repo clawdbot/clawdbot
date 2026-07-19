@@ -7,7 +7,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { ChannelType, type Message } from "../internal/discord.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
-import { isRecentlyUnboundThreadWebhookMessage } from "./thread-bindings.js";
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
@@ -134,7 +133,6 @@ export function resolvePreflightMentionRequirement(params: {
 }
 
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
-  accountId?: string;
   threadId?: string;
   webhookId?: string | null;
   threadBinding?: BoundThreadLookupRecordLike;
@@ -157,9 +155,5 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
   if (params.threadBinding) {
     return true;
   }
-  return isRecentlyUnboundThreadWebhookMessage({
-    accountId: params.accountId,
-    threadId,
-    webhookId,
-  });
+  return false;
 }

@@ -229,6 +229,8 @@ export type RegisterSubagentRunParams = {
   collect?: boolean;
   swarmRequesterSessionKey?: string;
   swarmLaunchIdempotencyKey?: string;
+  swarmLaunchReplayKey?: string;
+  swarmLaunchRequestFingerprint?: string;
   groupId?: string;
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SwarmQueuedLaunch;
@@ -838,6 +840,8 @@ export function createSubagentRunManager(params: {
       swarmRunId: registerParams.collect ? runId : undefined,
       schedulerSlotId: registerParams.collect ? runId : undefined,
       swarmLaunchIdempotencyKey: registerParams.swarmLaunchIdempotencyKey,
+      swarmLaunchReplayKey: registerParams.swarmLaunchReplayKey,
+      swarmLaunchRequestFingerprint: registerParams.swarmLaunchRequestFingerprint,
       swarmLaunchPending: registerParams.collect === true,
       groupId: registerParams.groupId,
       outputSchema: registerParams.outputSchema,

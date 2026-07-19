@@ -3,6 +3,10 @@
 import os from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  deriveContinuationDelegateChildRunId,
+  deriveContinuationDelegateChildSessionKey,
+} from "./subagent-continuation-ids.js";
+import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
   installSessionStoreCaptureMock,
@@ -338,6 +342,68 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.extraSystemPrompt).toContain("at most one retry");
     await vi.waitFor(() =>
       expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(result.runId, "run-1"),
+    );
+  });
+
+  it("persists a host-reserved collector launch identity", async () => {
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "collect replay-safe evidence",
+        collect: true,
+        groupId: "swarm:replay",
+        swarmLaunchReplayKey: "cm-restart:bridge:1",
+        swarmLaunchRequestFingerprint: "sha256:request",
+      },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    const otherRequesterResult = await spawnSubagentDirect(
+      {
+        task: "collect replay-safe evidence",
+        collect: true,
+        groupId: "swarm:replay",
+        swarmLaunchReplayKey: "cm-restart:bridge:1",
+        swarmLaunchRequestFingerprint: "sha256:request",
+      },
+      { agentSessionKey: "agent:main:other", requesterRunId: "parent-run" },
+    );
+
+    expect(result).toMatchObject({ status: "accepted" });
+    expect(result.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
+    expect(otherRequesterResult).toMatchObject({ status: "accepted" });
+    expect(otherRequesterResult.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
+    expect(otherRequesterResult.runId).not.toBe(result.runId);
+    expect(firstRegisteredSubagentRun()).toMatchObject({
+      runId: result.runId,
+      swarmLaunchIdempotencyKey: result.runId,
+      swarmLaunchReplayKey: "cm-restart:bridge:1",
+      swarmLaunchRequestFingerprint: "sha256:request",
+    });
+    await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
+    expect(requireRecord(gatewayRequest("agent").params).idempotencyKey).toBe(result.runId);
+  });
+
+  it("preserves continuation flow identity for the child run and session", async () => {
+    const flowId = "flow-after-swarm-merge";
+    const result = await spawnSubagentDirect(
+      {
+        task: "resume the durable continuation",
+        continuationDelegateFlowId: flowId,
+      },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey: deriveContinuationDelegateChildSessionKey("main", flowId),
+    });
+    expect(firstRegisteredSubagentRun()).toMatchObject({
+      runId: result.runId,
+    });
+    await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
+    expect(requireRecord(gatewayRequest("agent").params).idempotencyKey).toBe(
+      deriveContinuationDelegateChildRunId(flowId),
     );
   });
 

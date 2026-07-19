@@ -23,6 +23,12 @@ describe("createSlackPluginBase", () => {
         defaultName: "tts",
       }),
     ).toBe("tts");
+    expect(
+      plugin.commands?.resolveNativeCommandName?.({
+        commandKey: "login",
+        defaultName: "login",
+      }),
+    ).toBe("login");
   });
 
   it("exposes security checks on the setup surface", () => {

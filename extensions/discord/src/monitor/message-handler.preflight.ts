@@ -11,6 +11,7 @@ import {
   recordDroppedChannelInboundHistory,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
@@ -251,6 +252,20 @@ export async function preflightDiscordMessage(
 
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
+  // Shared turn admission cannot undo pending history recorded by channel preflight.
+  // Consult the same generic registry before mention/history drops can admit an echo.
+  if (
+    isRecentOutboundMessageIdentity({
+      channel: "discord",
+      accountId: params.accountId,
+      conversationId: messageChannelId,
+      messageId: message.id,
+      ...(webhookId ? { sourceId: webhookId } : {}),
+    })
+  ) {
+    logVerbose(`discord: drop recent outbound echo message ${message.id}`);
+    return null;
+  }
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
   if (isPreflightAborted(params.abortSignal)) {
@@ -272,7 +287,6 @@ export async function preflightDiscordMessage(
       : undefined;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
-      accountId: params.accountId,
       threadId: messageChannelId,
       webhookId,
       threadBinding: injectedBoundThreadBinding,
@@ -411,7 +425,6 @@ export async function preflightDiscordMessage(
   } = routeState;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
-      accountId: params.accountId,
       threadId: messageChannelId,
       webhookId,
       threadBinding,
