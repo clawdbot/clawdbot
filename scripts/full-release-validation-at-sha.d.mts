@@ -23,3 +23,8 @@ export function resolveRemoteTargetRefSha(
   targetRef: string,
   executeGit?: (args: string[]) => string,
 ): string;
+export function shouldDeleteTemporaryWorkflowRef(params: {
+  dryRun: boolean;
+  keepBranch: boolean;
+  parentRunCompleted: boolean;
+}): boolean;
