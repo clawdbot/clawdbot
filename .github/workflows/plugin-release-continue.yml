@@ -1,0 +1,251 @@
+name: Plugin Release Continue
+run-name: Continue plugin release after npm ${{ inputs.plugin_npm_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_npm_run_id:
+        description: Plugin NPM Release run to await before ClawHub dispatch
+        required: true
+        type: string
+      release_publish_run_id:
+        description: Parent OpenClaw Release Publish run id
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: Parent OpenClaw Release Publish run attempt
+        required: true
+        type: string
+      release_sha:
+        description: Exact release commit SHA
+        required: true
+        type: string
+      parent_workflow_sha:
+        description: Exact trusted workflow SHA used by the parent and plugin npm child
+        required: true
+        type: string
+
+concurrency:
+  group: plugin-release-continue-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  continue_plugin_release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Validate continuation identity
+        id: plugin_npm_identity
+        env:
+          PARENT_WORKFLOW_SHA: ${{ inputs.parent_workflow_sha }}
+          PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "${PARENT_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ && "${GITHUB_SHA}" == "${PARENT_WORKFLOW_SHA}" ]] || {
+            echo "Continuation workflow SHA ${GITHUB_SHA} does not match trusted parent SHA ${PARENT_WORKFLOW_SHA}." >&2
+            exit 1
+          }
+          [[ "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$ ]] || {
+            echo "release_sha must be a full lowercase commit SHA." >&2
+            exit 1
+          }
+          [[ "${PLUGIN_NPM_RUN_ID}" =~ ^[1-9][0-9]*$ && "${RELEASE_PUBLISH_RUN_ID}" =~ ^[1-9][0-9]*$ && "${RELEASE_PUBLISH_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Workflow run ids and attempts must be positive integers." >&2
+            exit 1
+          }
+          plugin_npm_run=""
+          for attempt in {1..12}; do
+            plugin_npm_run="$(gh run view --repo "${GITHUB_REPOSITORY}" "${PLUGIN_NPM_RUN_ID}" --json attempt,event,headSha,workflowName 2>/dev/null || true)"
+            if jq -e '.headSha != null' <<<"${plugin_npm_run}" >/dev/null 2>&1; then
+              break
+            fi
+            [[ "${attempt}" == "12" ]] || sleep 5
+          done
+          jq -e \
+            --arg parent_workflow_sha "${PARENT_WORKFLOW_SHA}" '
+              .attempt > 0 and
+              .event == "workflow_dispatch" and
+              .headSha == $parent_workflow_sha and
+              .workflowName == "Plugin NPM Release"
+            ' <<<"${plugin_npm_run}" >/dev/null || {
+              echo "Plugin npm run ${PLUGIN_NPM_RUN_ID} does not match the expected workflow identity." >&2
+              exit 1
+            }
+          echo "run_attempt=$(jq -er '.attempt' <<<"${plugin_npm_run}")" >> "$GITHUB_OUTPUT"
+
+      - name: Download parent ClawHub release plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-release-clawhub-plan-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/clawhub-plan
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Wait for plugin npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 7200s \
+            gh run watch --repo "${GITHUB_REPOSITORY}" "${PLUGIN_NPM_RUN_ID}" --exit-status
+
+      - name: Download plugin npm release handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: plugin-npm-release-handoff-${{ inputs.plugin_npm_run_id }}-${{ steps.plugin_npm_identity.outputs.run_attempt }}
+          path: ${{ runner.temp }}/plugin-npm-handoff
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.plugin_npm_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Continue ClawHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_SHA: ${{ inputs.parent_workflow_sha }}
+          PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          PLAN_PATH: ${{ runner.temp }}/clawhub-plan/openclaw-release-clawhub-plan.json
+          PLUGIN_NPM_HANDOFF_PATH: ${{ runner.temp }}/plugin-npm-handoff/plugin-npm-release-handoff.json
+          EVIDENCE_PATH: ${{ runner.temp }}/plugin-release-continuation.json
+        run: |
+          set -euo pipefail
+
+          jq -e \
+            --arg parent_run_id "${RELEASE_PUBLISH_RUN_ID}" \
+            --arg plugin_npm_run_id "${PLUGIN_NPM_RUN_ID}" \
+            --arg release_sha "${RELEASE_SHA}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg workflow_sha "${PARENT_WORKFLOW_SHA}" '
+              .schemaVersion == 1 and
+              .kind == "openclaw-plugin-npm-release-handoff" and
+              .repository == $repository and
+              .workflow == "Plugin NPM Release" and
+              .workflowSha == $workflow_sha and
+              .runId == $plugin_npm_run_id and
+              (.runAttempt | test("^[1-9][0-9]*$")) and
+              .releasePublishRunId == $parent_run_id and
+              .sourceSha == $release_sha
+            ' "${PLUGIN_NPM_HANDOFF_PATH}" >/dev/null
+
+          jq -e \
+            --slurpfile handoff "${PLUGIN_NPM_HANDOFF_PATH}" '
+              .pluginNpm.workflow == "plugin-npm-release.yml" and
+              .pluginNpm.inputs == $handoff[0].inputs
+            ' "${PLAN_PATH}" >/dev/null
+
+          jq -e \
+            --arg attempt "${RELEASE_PUBLISH_RUN_ATTEMPT}" \
+            --arg parent_run_id "${RELEASE_PUBLISH_RUN_ID}" \
+            --arg release_sha "${RELEASE_SHA}" '
+              (.normal.shouldDispatch | type == "boolean") and
+              (.bootstrap.shouldDispatch | type == "boolean") and
+              (.clawHubWorkflowRef | type == "string" and length > 0) and
+              (.bootstrapWorkflowSha | test("^[a-f0-9]{40}$")) and
+              (.normal.workflow == "plugin-clawhub-release.yml") and
+              (.bootstrap.workflow == "plugin-clawhub-new.yml") and
+              (.normal.ref == .clawHubWorkflowRef) and
+              ((.normal.shouldDispatch | not) or
+                (.normal.inputs.release_publish_run_id == $parent_run_id)) and
+              ((.bootstrap.shouldDispatch | not) or
+                (.bootstrap.inputs.release_publish_run_id == $parent_run_id and
+                 .bootstrap.inputs.release_publish_run_attempt == $attempt and
+                 .bootstrap.inputs.ref == $release_sha))
+            ' "${PLAN_PATH}" >/dev/null
+
+          dispatch_target() {
+            local target="$1"
+            local expected_sha ref workflow encoded_ref resolved_sha inputs_json dispatch_body response run_id child_sha attempt
+            if [[ "$(jq -r --arg target "${target}" '.[$target].shouldDispatch' "${PLAN_PATH}")" != "true" ]]; then
+              return
+            fi
+            ref="$(jq -er --arg target "${target}" '.[$target].ref' "${PLAN_PATH}")"
+            workflow="$(jq -er --arg target "${target}" '.[$target].workflow' "${PLAN_PATH}")"
+            if [[ "${target}" == "normal" ]]; then
+              expected_sha="${RELEASE_SHA}"
+            else
+              expected_sha="$(jq -er '.bootstrapWorkflowSha' "${PLAN_PATH}")"
+            fi
+            encoded_ref="$(jq -rn --arg value "${ref}" '$value | @uri')"
+            resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"
+            [[ "${resolved_sha}" == "${expected_sha}" ]] || {
+              echo "ClawHub ${target} ref ${ref} resolved to ${resolved_sha}, expected ${expected_sha}." >&2
+              exit 1
+            }
+            inputs_json="$(jq -c --arg target "${target}" '.[$target].inputs' "${PLAN_PATH}")"
+            dispatch_body="$(jq -cn --arg ref "${ref}" --argjson inputs "${inputs_json}" '{ref: $ref, inputs: $inputs, return_run_details: true}')"
+            response="$(printf '%s' "${dispatch_body}" | gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
+              --input -)"
+            run_id="$(printf '%s' "${response}" | jq -er '.workflow_run_id')"
+            child_sha=""
+            for attempt in {1..12}; do
+              child_sha="$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" --json headSha --jq '.headSha' 2>/dev/null || true)"
+              if [[ -n "${child_sha}" ]]; then
+                break
+              fi
+              [[ "${attempt}" == "12" ]] || sleep 5
+            done
+            [[ "${child_sha}" == "${expected_sha}" ]] || {
+              echo "ClawHub ${target} run ${run_id} used ${child_sha}, expected ${expected_sha}." >&2
+              gh run cancel --repo "${GITHUB_REPOSITORY}" "${run_id}" >/dev/null 2>&1 || true
+              exit 1
+            }
+            echo "${run_id}"
+          }
+
+          normal_run_id="$(dispatch_target normal)"
+          bootstrap_run_id="$(dispatch_target bootstrap)"
+          {
+            echo "### Plugin ecosystem continuation"
+            echo
+            echo "- Plugin npm: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PLUGIN_NPM_RUN_ID}"
+            echo "- ClawHub OIDC: ${normal_run_id:-not needed}"
+            echo "- ClawHub bootstrap: ${bootstrap_run_id:-not needed}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for run_id in "${normal_run_id}" "${bootstrap_run_id}"; do
+            if [[ -n "${run_id}" ]]; then
+              timeout --signal=TERM --kill-after=10s 7200s \
+                gh run watch --repo "${GITHUB_REPOSITORY}" "${run_id}" --exit-status
+            fi
+          done
+
+          jq -n \
+            --arg bootstrap_run_id "${bootstrap_run_id}" \
+            --arg normal_run_id "${normal_run_id}" \
+            --arg parent_run_id "${RELEASE_PUBLISH_RUN_ID}" \
+            --arg plugin_npm_run_id "${PLUGIN_NPM_RUN_ID}" \
+            --arg release_sha "${RELEASE_SHA}" '{
+              schemaVersion: 1,
+              status: "ecosystem-converged",
+              releasePublishRunId: $parent_run_id,
+              releaseSha: $release_sha,
+              pluginNpmRunId: $plugin_npm_run_id,
+              clawHubRunId: (if $normal_run_id == "" then null else $normal_run_id end),
+              clawHubBootstrapRunId: (if $bootstrap_run_id == "" then null else $bootstrap_run_id end)
+            }' > "${EVIDENCE_PATH}"
+
+      - name: Upload continuation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-release-continuation-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/plugin-release-continuation.json
+          if-no-files-found: error
+          retention-days: 30
