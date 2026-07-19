@@ -3260,14 +3260,8 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("bounds the workflow sanity tool downloads", () => {
+  it("bounds workflow sanity downloads and keeps ShellCheck out of actionlint", () => {
     const workflow = readWorkflowSanityWorkflow();
-    const shellcheckStep = expectDefined(
-      workflow.jobs.actionlint.steps.find(
-        (step: WorkflowStep) => step.name === "Install ShellCheck",
-      ),
-      "ShellCheck install step",
-    );
     const actionlintStep = expectDefined(
       workflow.jobs.actionlint.steps.find(
         (step: WorkflowStep) => step.name === "Install actionlint",
@@ -3275,8 +3269,15 @@ describe("ci workflow guards", () => {
       "actionlint install step",
     );
 
-    expect(shellcheckStep.run).toContain("curl --connect-timeout 10 --max-time 120");
-    expect(shellcheckStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+    expect(
+      workflow.jobs.actionlint.steps.some(
+        (step: WorkflowStep) => step.name === "Install ShellCheck",
+      ),
+    ).toBe(false);
+    expect(
+      workflow.jobs.actionlint.steps.find((step: WorkflowStep) => step.name === "Lint workflows")
+        ?.run,
+    ).toContain("actionlint -shellcheck=");
     expect(actionlintStep.run).toContain("--connect-timeout 10");
     expect(actionlintStep.run).toContain("--max-time 120");
     expect(actionlintStep.run).toContain("--retry 5");
