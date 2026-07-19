@@ -2490,15 +2490,22 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
-  it("skips announce delivery when completion messages are disabled", async () => {
+  it("persists collector completion and skips announce delivery", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({
       expectsCompletionMessage: false,
       retainAttachmentsOnKeep: true,
+      collect: true,
+      groupId: "swarm:test",
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+      captureSubagentCompletionReply: vi.fn(async () => "raw collector result"),
+    });
 
     await expect(
       controller.completeSubagentRun({
@@ -2518,8 +2525,85 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
     await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.completion?.resultText).toBe("raw collector result");
+    expect(entry.collectorCompletion).toEqual({ status: "done" });
     expect(entry.delivery?.status).toBe("not_required");
     expect(entry.delivery?.announcedAt).toBeUndefined();
+  });
+
+  it("deletes collector session resources while retaining the waitable record", async () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      collect: true,
+      groupId: "swarm:test",
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const notifyContextEngineSubagentEnded = vi.fn(async () => {});
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      notifyContextEngineSubagentEnded,
+      captureSubagentCompletionReply: vi.fn(async () => "raw collector result"),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    await waitForLifecycleState(() =>
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+        method: "sessions.delete",
+        params: {
+          key: entry.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
+        timeoutMs: 10_000,
+      }),
+    );
+    await waitForLifecycleState(() =>
+      expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: entry.childSessionKey,
+        reason: "deleted",
+        agentDir: entry.agentDir,
+        workspaceDir: entry.workspaceDir,
+      }),
+    );
+    expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry);
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(entry.collectorCompletion).toEqual({ status: "done" });
+  });
+
+  it("marks a successful collector with invalid structured output failed", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+      collect: true,
+      outputSchema: { type: "object" },
+    });
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(async () => "raw collector result"),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.collectorCompletion).toEqual({
+      status: "failed",
+      schemaError: "structured_output was not called",
+    });
   });
 
   it("archives delete-mode sessions when completion messages are disabled", async () => {

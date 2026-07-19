@@ -480,7 +480,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .skills: "Skills"
         case .cron: "Cron Jobs"
         case .execApprovals: "Exec Approvals"
-        case .sessions: "Sessions"
+        case .sessions: "Threads"
         case .instances: "Instances"
         case .config: "Config"
         case .debug: "Debug"

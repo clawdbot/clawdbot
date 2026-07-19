@@ -98,6 +98,8 @@ const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js
 
 const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
 
+const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js"));
+
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
 
 const getManagedImageAttachmentsModule = createLazyRuntimeModule(
@@ -191,6 +193,10 @@ function isOpenAiModelsPath(pathname: string): boolean {
 
 function isMcpAppStandalonePath(pathname: string): boolean {
   return pathname === "/__openclaw__/mcp-app" || pathname === "/__openclaw__/mcp-app/view";
+}
+
+function isBoardWidgetPath(pathname: string): boolean {
+  return pathname.startsWith("/__openclaw__/board/");
 }
 
 function isEmbeddingsPath(pathname: string): boolean {
@@ -679,6 +685,15 @@ export function createGatewayHttpServer(opts: {
                 allowRealIpFallback,
                 rateLimiter,
               }),
+            ),
+        });
+      }
+      if (isBoardWidgetPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "board-widget",
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
             ),
         });
       }

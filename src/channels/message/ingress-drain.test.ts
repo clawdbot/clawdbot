@@ -813,7 +813,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("does not steal live peer-drain claims; recovers after dispose", async () => {
+  it("does not steal live peer-drain claims; recovers after owner abort", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<Payload>({
         channelId: "test",
@@ -828,9 +828,11 @@ describe("channel ingress drain", () => {
       });
       const firstDispatches: string[] = [];
       const secondDispatches: string[] = [];
+      const firstAbort = new AbortController();
 
       const first = createChannelIngressDrain<Payload>({
         queue,
+        abortSignal: firstAbort.signal,
         dispatchClaimedEvent: async (event, lifecycle) => {
           firstDispatches.push(event.id);
           await firstHold;
@@ -854,14 +856,17 @@ describe("channel ingress drain", () => {
       await second.drainOnce();
       expect(secondDispatches).toEqual([]);
 
-      first.dispose();
-      // After dispose, second drain can recover the orphan claim.
+      firstAbort.abort();
+      // Aborted owners retire before an uncooperative handler returns, allowing
+      // the replacement drain to recover under the claim-token fence.
       const recovered = await second.recoverStaleClaims();
       expect(recovered).toBeGreaterThanOrEqual(1);
       await second.drainOnce();
       await second.waitForIdle();
       expect(secondDispatches).toEqual(["evt-peer"]);
       releaseFirst();
+      await first.waitForIdle();
+      first.dispose();
       second.dispose();
     });
   });

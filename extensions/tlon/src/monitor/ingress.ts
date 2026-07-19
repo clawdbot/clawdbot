@@ -1,10 +1,9 @@
 // Tlon plugin module owns raw Urbit firehose durable ingress mapping and draining.
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -18,13 +17,7 @@ const TLON_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 // Preserve the retired process-local guard's full 2,000-message key window.
 const TLON_INGRESS_TOMBSTONE_MAX_ENTRIES = 2_000;
 
-export type TlonIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
-};
+export type TlonIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 type TlonIngressSource = "channels" | "chat";
 
@@ -35,16 +28,11 @@ type TlonIngressPayload = {
   rawEvent: string;
 };
 
-type TlonIngressDrain = {
-  drainOnce: (options?: { shouldStop?: () => boolean }) => Promise<{ started: number }>;
-  waitForIdle: () => Promise<void>;
-  dispose: () => void;
-};
+type TlonIngressBody = Omit<TlonIngressPayload, "version">;
 
-type TlonIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+type TlonIngressRaw = { source: TlonIngressSource; event: unknown };
+
+type TlonIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type TlonIngressDispatch = (
   source: TlonIngressSource,
@@ -118,9 +106,11 @@ function inspectTlonIngressEvent(
   return source === "channels" ? inspectChannelsEvent(event) : inspectChatEvent(event);
 }
 
-function parseClaimedEvent(payload: TlonIngressPayload, claimedId: string): unknown {
+function decodeTlonIngressPayload(
+  payload: TlonIngressPayload,
+  claimedId: string,
+): { version: unknown; body: TlonIngressBody } {
   if (
-    payload.version !== TLON_INGRESS_PAYLOAD_VERSION ||
     (payload.source !== "channels" && payload.source !== "chat") ||
     typeof payload.rawEvent !== "string"
   ) {
@@ -129,9 +119,20 @@ function parseClaimedEvent(payload: TlonIngressPayload, claimedId: string): unkn
       `Tlon ingress row ${claimedId} has an invalid payload.`,
     );
   }
+  return {
+    version: payload.version,
+    body: {
+      receivedAt: payload.receivedAt,
+      source: payload.source,
+      rawEvent: payload.rawEvent,
+    },
+  };
+}
+
+function deserializeTlonIngressEvent(body: TlonIngressBody, claimedId: string): TlonIngressRaw {
   let event: unknown;
   try {
-    event = JSON.parse(payload.rawEvent);
+    event = JSON.parse(body.rawEvent);
   } catch (error) {
     throw new TlonIngressPermanentError(
       "invalid-event",
@@ -139,14 +140,7 @@ function parseClaimedEvent(payload: TlonIngressPayload, claimedId: string): unkn
       { cause: error },
     );
   }
-  const facts = inspectTlonIngressEvent(payload.source, event);
-  if (!facts || facts.eventId !== claimedId) {
-    throw new TlonIngressPermanentError(
-      "invalid-event",
-      `Tlon ingress row ${claimedId} has invalid message identity.`,
-    );
-  }
-  return event;
+  return { source: body.source, event };
 }
 
 function resolveTlonIngressNonRetryableFailure(error: unknown) {
@@ -184,183 +178,62 @@ export function createTlonIngressMonitor(options: {
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }): TlonIngressMonitor {
-  let queue = options.queue;
-  let drain: TlonIngressDrain | undefined;
-  let accepting = true;
-  let running = false;
-  let stopped = false;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let lastPrunedAt = 0;
-  let stopPromise: Promise<void> | undefined;
-
-  const getQueue = (): ChannelIngressQueue<TlonIngressPayload> => {
-    queue ??= getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
-      accountId: options.accountId,
-    });
-    return queue;
-  };
-
-  const getDrain = (): TlonIngressDrain => {
-    drain ??= createChannelIngressDrain<TlonIngressPayload>({
-      queue: getQueue(),
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-      retryPolicy: {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
-      resolveNonRetryableFailure: resolveTlonIngressNonRetryableFailure,
-      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-      onLog: (message) => options.runtime.log?.(`tlon ${message}`),
-      dispatchClaimedEvent: async (record, lifecycle) => {
-        if (!running || lifecycle.abortSignal.aborted || options.abortSignal?.aborted) {
-          return { kind: "failed-retryable", error: new TlonIngressShutdownError() };
-        }
-        const event = parseClaimedEvent(record.payload, record.id);
-        try {
-          const result = await options.dispatch(record.payload.source, event, lifecycle);
-          return !running || options.abortSignal?.aborted
-            ? { kind: "failed-retryable", error: new TlonIngressShutdownError() }
-            : result;
-        } catch (error) {
-          if (!running || options.abortSignal?.aborted) {
-            return { kind: "failed-retryable", error };
-          }
-          throw error;
-        }
-      },
-    });
-    return drain;
-  };
-
-  const pruneIfDue = async (): Promise<void> => {
-    const now = Date.now();
-    if (now - lastPrunedAt < TLON_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
+  const monitor = createChannelIngressMonitor<TlonIngressRaw, TlonIngressBody, TlonIngressPayload>({
+    queue:
+      options.queue ??
+      (() =>
+        getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
+          accountId: options.accountId,
+        })),
+    inspect: (raw) => inspectTlonIngressEvent(raw.source, raw.event),
+    payload: {
+      version: TLON_INGRESS_PAYLOAD_VERSION,
+      serialize: (raw, { receivedAt }) => ({
+        receivedAt,
+        source: raw.source,
+        rawEvent: JSON.stringify(raw.event),
+      }),
+      deserialize: (body, { claim }) => deserializeTlonIngressEvent(body, claim.id),
+      encode: ({ body }) => ({ version: TLON_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload, { claim }) => decodeTlonIngressPayload(payload, claim.id),
+      createClaimError: (kind, claim) =>
+        new TlonIngressPermanentError(
+          "invalid-event",
+          kind === "invalid-version"
+            ? `Tlon ingress row ${claim.id} has an invalid payload.`
+            : `Tlon ingress row ${claim.id} has invalid message identity.`,
+        ),
+    },
+    deliver: (raw, lifecycle) => options.dispatch(raw.source, raw.event, lifecycle),
+    pollIntervalMs: options.pollIntervalMs ?? TLON_INGRESS_POLL_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: TLON_INGRESS_PRUNE_INTERVAL_MS,
       completedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
       failedTtlMs: TLON_INGRESS_FAILED_TTL_MS,
       failedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const runPump = async (): Promise<void> => {
-    try {
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        // stop() may race the async prune; never create a live drain afterward.
-        if (!running) {
-          break;
-        }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce({ shouldStop: () => !running });
-        await activeDrain.waitForIdle();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.runtime.error?.(`tlon ingress drain failed: ${formatErrorMessage(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
-    }
-  };
-
-  const requestDrain = (): void => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  // Stream callbacks are awaited, but serialize direct test/caller admissions too.
-  let admissionTail: Promise<void> = Promise.resolve();
-
-  const admitOnce = async (source: TlonIngressSource, event: unknown): Promise<boolean> => {
-    const facts = inspectTlonIngressEvent(source, event);
-    if (!facts) {
-      return false;
-    }
-    const receivedAt = Date.now();
-    await getQueue().enqueue(
-      facts.eventId,
-      {
-        version: TLON_INGRESS_PAYLOAD_VERSION,
-        receivedAt,
-        source,
-        rawEvent: JSON.stringify(event),
-      },
-      { receivedAt, laneKey: facts.laneKey },
-    );
-    requestDrain();
-    return true;
-  };
+    },
+    // The Tlon firehose has always surfaced a failed append to its awaited callback.
+    appendRetryDelaysMs: [0],
+    drain: {
+      resolveNonRetryableFailure: resolveTlonIngressNonRetryableFailure,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      onLog: (message) => options.runtime.log?.(`tlon ${message}`),
+    },
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+    createStoppedError: () => new TlonIngressShutdownError(),
+    onError: (error) =>
+      options.runtime.error?.(`tlon ingress drain failed: ${formatErrorMessage(error)}`),
+  });
 
   return {
     receive: async ({ source, event }) => {
-      if (!accepting) {
-        throw new TlonIngressShutdownError();
-      }
-      let accepted = false;
-      const admission = admissionTail.then(async () => {
-        accepted = await admitOnce(source, event);
-      });
-      admissionTail = admission.catch(() => undefined);
-      await admission;
-      return { kind: accepted ? "accepted" : "ignored" };
+      const result = await monitor.admit({ source, event });
+      return { kind: result.kind === "durable" ? "accepted" : "ignored" };
     },
-    start: () => {
-      if (running || stopped) {
-        return;
-      }
-      running = true;
-      pollTimer = setInterval(
-        requestDrain,
-        options.pollIntervalMs ?? TLON_INGRESS_POLL_INTERVAL_MS,
-      );
-      pollTimer.unref?.();
-      requestDrain();
-    },
-    stop: async () => {
-      if (stopPromise) {
-        await stopPromise;
-        return;
-      }
-      accepting = false;
-      running = false;
-      stopped = true;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = undefined;
-      }
-      stopPromise = (async () => {
-        await admissionTail;
-        drain?.dispose();
-        await pumping;
-        // A pump may have lazily created the drain before observing running=false.
-        drain?.dispose();
-        await drain?.waitForIdle();
-      })();
-      await stopPromise;
-    },
-    waitForIdle: async () => {
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      await drain?.waitForIdle();
-    },
+    start: monitor.start,
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
   };
 }

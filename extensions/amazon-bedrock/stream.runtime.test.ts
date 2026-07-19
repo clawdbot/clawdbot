@@ -6,7 +6,8 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
+import type { BedrockOptions } from "./bedrock-options.js";
+import { streamSimpleBedrock } from "./stream.runtime.js";
 import { streamTesting as testing } from "./test-support.js";
 
 function bedrockModel(overrides: Record<string, unknown>) {
@@ -52,9 +53,17 @@ async function* streamEvents(events: unknown[]) {
   }
 }
 
+function streamBedrockForTest(
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  context: Parameters<typeof streamSimpleBedrock>[1],
+  options: BedrockOptions = {},
+) {
+  return streamSimpleBedrock(model, context, options as never);
+}
+
 async function captureClientRegion(
-  model: Parameters<typeof streamBedrock>[0],
-  options: Parameters<typeof streamBedrock>[2] = {},
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  options: BedrockOptions = {},
 ): Promise<string> {
   const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
     $metadata: { httpStatusCode: 200 },
@@ -64,7 +73,7 @@ async function captureClientRegion(
     ]),
   } as never);
 
-  await streamBedrock(
+  await streamBedrockForTest(
     model,
     { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
     options,
@@ -275,6 +284,7 @@ describe("Bedrock profile endpoint resolution", () => {
   ])(
     "resolves $name to $expectedRegion",
     async ({ modelId, ambientRegion, fallbackRegion, explicitRegion, expectedRegion }) => {
+      vi.stubEnv("AWS_PROFILE", "");
       vi.stubEnv("AWS_REGION", ambientRegion);
       if (fallbackRegion !== undefined) {
         vi.stubEnv("AWS_DEFAULT_REGION", fallbackRegion);
@@ -305,7 +315,7 @@ describe("Bedrock stop reasons", () => {
       ]),
     } as never);
 
-    const result = await streamBedrock(bedrockModel({}), {
+    const result = await streamBedrockForTest(bedrockModel({}), {
       messages: [{ role: "user", content: "Hello", timestamp: 0 }],
     } as never).result();
 
@@ -579,7 +589,7 @@ describe("Bedrock Fable contract", () => {
       ]),
     } as never);
 
-    const stream = streamBedrock(fableModel(), context(), {
+    const stream = streamBedrockForTest(fableModel(), context(), {
       reasoning: "high",
       temperature: 0.2,
       toolChoice: "any",
@@ -614,7 +624,7 @@ describe("Bedrock Fable contract", () => {
       ]),
     } as never);
 
-    const stream = streamBedrock(fableModel(), context(), {
+    const stream = streamBedrockForTest(fableModel(), context(), {
       reasoning: "high",
       toolChoice: "none",
     });

@@ -1309,6 +1309,8 @@ describe("config view", () => {
       },
       onCameraSelect: vi.fn(),
       onCameraRefresh: vi.fn(),
+      composerHoldToRecord: true,
+      setComposerHoldToRecord: vi.fn(),
     });
 
     const shortcutSelect = queryRequired(
@@ -1342,6 +1344,7 @@ describe("config view", () => {
       "System default",
       "Desk Camera",
     ]);
+    expect(container.textContent).toContain("Hold microphone button to dictate");
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

@@ -77,20 +77,29 @@ describe("LabsPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the experimental Code Mode entry without the schema-pending Swarm entry", async () => {
-    const { page } = await mountPage({ tools: { codeMode: { enabled: true } } });
+  it("renders the experimental Code Mode and Swarm entries", async () => {
+    const { page } = await mountPage({
+      tools: { codeMode: { enabled: true }, swarm: { enabled: true } },
+    });
 
     expect(page.querySelector(".settings-page__intro")?.textContent).toContain("experimental");
-    expect(page.querySelectorAll(".settings-row")).toHaveLength(1);
+    expect(page.querySelectorAll(".settings-row")).toHaveLength(2);
     expect(page.textContent).toContain("Code Mode");
-    expect(page.textContent).not.toContain("Swarm");
+    expect(page.textContent).toContain("Swarm");
     expect(page.textContent).not.toContain("restart required");
     expect(codeModeToggle(page).checked).toBe(true);
+    expect([...page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch")]).toEqual([
+      expect.objectContaining({ checked: true }),
+      expect.objectContaining({ checked: true }),
+    ]);
 
-    const docs = page.querySelector<HTMLAnchorElement>(".settings-row__desc a");
-    expect(docs?.href).toBe("https://docs.openclaw.ai/tools/code-mode");
-    expect(docs?.target).toBe("_blank");
-    expect(docs?.rel).toContain("noopener");
+    const docs = [...page.querySelectorAll<HTMLAnchorElement>(".settings-row__desc a")];
+    expect(docs.map((link) => link.href)).toEqual([
+      "https://docs.openclaw.ai/tools/code-mode",
+      "https://docs.openclaw.ai/tools/swarm",
+    ]);
+    expect(docs.every((link) => link.target === "_blank")).toBe(true);
+    expect(docs.every((link) => link.rel.includes("noopener"))).toBe(true);
   });
 
   it("reflects the supported boolean Code Mode shorthand", async () => {

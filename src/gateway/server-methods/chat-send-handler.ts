@@ -191,6 +191,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
       rawMessage,
       ...(restartSafeAdmission ? { restartAdmission: restartSafeAdmission } : {}),
+      ...(client?.authenticatedUserId ? { sender: { id: client.authenticatedUserId } } : {}),
       senderIsOwner: hasGatewayAdminScope(client),
       sessionKey,
       ...(sessionLoadOptions ? { sessionLoadOptions } : {}),

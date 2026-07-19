@@ -31,6 +31,20 @@ vi.mock("../llm/stream.js", () => ({
   completeSimple: hoisted.completeMock,
 }));
 
+vi.mock("./sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: () => {
+    const apiRegistry = {};
+    return {
+      apiRegistry,
+      llmRuntime: {
+        registry: apiRegistry,
+        completeSimple: (...args: unknown[]) => hoisted.completeMock(...args),
+        streamSimple: vi.fn(),
+      },
+    };
+  },
+}));
+
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModel: hoisted.resolveModelMock,
   resolveModelAsync: hoisted.resolveModelAsyncMock,
@@ -880,7 +894,11 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
     });
 
-    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({ model, cfg });
+    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({
+      apiRegistry: expect.anything(),
+      model,
+      cfg,
+    });
     expect(hoisted.completeMock).toHaveBeenCalledWith(
       preparedModel,
       {

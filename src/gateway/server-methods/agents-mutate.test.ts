@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(
     async (params?: { dir?: string }): Promise<{ dir: string; identityPathCreated: boolean }> => ({
       dir: params?.dir
-        ? `/resolved${params.dir.startsWith("/") ? "" : "/"}${params.dir}`
+        ? params.dir.startsWith("/resolved/")
+          ? params.dir
+          : `/resolved${params.dir.startsWith("/") ? "" : "/"}${params.dir}`
         : "/resolved/workspace",
       identityPathCreated: false,
     }),
@@ -101,6 +103,32 @@ vi.mock("../../config/config.js", async () => {
         followUp: { action: "none" },
       };
     },
+    transformConfigFileWithRetry: async (params: {
+      transform: (
+        config: Record<string, unknown>,
+        context: unknown,
+      ) => Promise<{ nextConfig: Record<string, unknown>; result?: unknown }>;
+    }) => {
+      const transformed = await params.transform(structuredClone(mocks.loadConfigReturn), {
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        previousHash: "test-hash",
+        attempt: 0,
+      });
+      await mocks.writeConfigFile(transformed.nextConfig);
+      mocks.loadConfigReturn = transformed.nextConfig;
+      return {
+        path: "/tmp/openclaw/config.json",
+        previousHash: "test-hash",
+        persistedHash: "persisted-hash",
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        nextConfig: transformed.nextConfig,
+        result: transformed.result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+    withConfigMutationExclusive: async (fn: () => Promise<unknown>) => await fn(),
   };
 });
 
@@ -528,7 +556,6 @@ describe("agents.create", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadConfigReturn = {};
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
   });
 
   it("creates a new agent successfully", async () => {
@@ -547,7 +574,20 @@ describe("agents.create", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalled();
   });
 
-  it("ensures workspace is set up before writing config", async () => {
+  it("defaults an omitted workspace", async () => {
+    const { respond, promise } = makeCall("agents.create", { name: "Test Agent" });
+
+    await promise;
+
+    expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "test-agent");
+    expectRespondOk(respond, {
+      ok: true,
+      agentId: "test-agent",
+      workspace: "/resolved/workspace/test-agent",
+    });
+  });
+
+  it("sets up the workspace before publishing agent config", async () => {
     const callOrder: string[] = [];
     mocks.ensureAgentWorkspace.mockImplementation(async () => {
       callOrder.push("ensureAgentWorkspace");
@@ -597,23 +637,6 @@ describe("agents.create", () => {
 
     const { respond, promise } = makeCall("agents.create", {
       name: "Existing",
-      workspace: "/tmp/ws",
-    });
-    await promise;
-
-    expectRespondErrorContaining(respond, "already exists");
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("returns an invalid request when a concurrent create wins the config race", async () => {
-    let findCallCount = 0;
-    mocks.findAgentEntryIndex.mockImplementation(() => {
-      findCallCount += 1;
-      return findCallCount >= 2 ? 0 : -1;
-    });
-
-    const { respond, promise } = makeCall("agents.create", {
-      name: "Race Agent",
       workspace: "/tmp/ws",
     });
     await promise;
@@ -678,7 +701,7 @@ describe("agents.create", () => {
     );
   });
 
-  it("does not persist config when IDENTITY.md write fails with FsSafeError", async () => {
+  it("does not publish config when IDENTITY.md write fails with FsSafeError", async () => {
     mocks.rootWrite.mockRejectedValueOnce(
       new FsSafeError("path-mismatch", "path escapes workspace root"),
     );
@@ -691,67 +714,7 @@ describe("agents.create", () => {
 
     expectRespondErrorContaining(respond, "unsafe workspace file");
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("does not persist config when IDENTITY.md read fails", async () => {
-    agentsTesting.setDepsForTests({
-      root: makeRootForTest({
-        read: async () => {
-          throw createErrnoError("EACCES");
-        },
-      }),
-    });
-    mocks.ensureAgentWorkspace.mockResolvedValueOnce({
-      dir: "/resolved/tmp/ws",
-      identityPathCreated: false,
-    });
-
-    const { promise } = makeCall("agents.create", {
-      name: "Unreadable Identity",
-      workspace: "/tmp/ws",
-    });
-
-    await expect(promise).rejects.toHaveProperty("code", "EACCES");
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.rootWrite).not.toHaveBeenCalled();
-  });
-
-  it("treats unsafe IDENTITY.md reads as invalid create requests", async () => {
-    agentsTesting.setDepsForTests({
-      root: makeRootForTest({
-        read: async () => {
-          throw new FsSafeError("invalid-path", "path is not a regular file under root");
-        },
-      }),
-    });
-
-    const { respond, promise } = makeCall("agents.create", {
-      name: "Unsafe Identity Read",
-      workspace: "/tmp/ws",
-    });
-    await promise;
-
-    expectRespondErrorContaining(respond, 'unsafe workspace file "IDENTITY.md"');
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.rootWrite).not.toHaveBeenCalled();
-  });
-
-  it("uses non-blocking reads for IDENTITY.md during agents.create", async () => {
-    const rootRead = vi.fn(async () => {
-      throw new FsSafeError("not-found", "file not found");
-    });
-    agentsTesting.setDepsForTests({ root: makeRootForTest({ read: rootRead }) });
-
-    const { promise } = makeCall("agents.create", {
-      name: "NB Agent",
-      workspace: "/tmp/ws",
-    });
-    await promise;
-
-    expectRecordFields(mockCallArg(rootRead), {
-      relativePath: "IDENTITY.md",
-      nonBlockingRead: true,
-    });
+    expect(getAgentList(mocks.loadConfigReturn)).toEqual([]);
   });
 
   it("passes model to applyAgentConfig when provided", async () => {

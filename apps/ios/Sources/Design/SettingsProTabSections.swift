@@ -1045,7 +1045,7 @@ extension SettingsProTab {
             }
             .font(OpenClawType.body)
         } footer: {
-            Text("Used for new Chat and Talk sessions.")
+            Text("Used for new Chat threads and Talk sessions.")
                 .font(OpenClawType.footnote)
         }
     }

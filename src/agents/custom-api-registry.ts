@@ -1,7 +1,7 @@
 /**
  * Registers caller-supplied custom API stream functions with the LLM registry.
  */
-import { getApiProvider, registerApiProvider } from "@openclaw/ai/internal/runtime";
+import type { ApiRegistry } from "@openclaw/ai";
 import type {
   Api,
   AssistantMessageEventStreamContract,
@@ -47,12 +47,16 @@ function adaptCustomStream(
 }
 
 /** Registers a custom API stream function when no provider already owns it. */
-export function ensureCustomApiRegistered(api: Api, streamFn: StreamFn): boolean {
-  if (getApiProvider(api)) {
+export function ensureCustomApiRegistered(
+  registry: ApiRegistry,
+  api: Api,
+  streamFn: StreamFn,
+): boolean {
+  if (registry.getApiProvider(api)) {
     return false;
   }
 
-  registerApiProvider(
+  registry.registerApiProvider(
     {
       api,
       stream: (model, context, options) =>

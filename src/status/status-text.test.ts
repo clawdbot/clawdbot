@@ -351,3 +351,46 @@ describe("session status cost line", () => {
     );
   });
 });
+
+describe("buildStatusText thinking facts", () => {
+  it("keeps the prepared thinking level for a discovered Ollama reasoning model", async () => {
+    const text = await buildStatusText({
+      cfg: {},
+      sessionEntry: {
+        sessionId: "wa-ollama-think",
+        updatedAt: 0,
+        thinkingLevel: "high",
+        modelOverride: "glm-5.2:cloud",
+        providerOverride: "ollama",
+      },
+      sessionKey: "agent:main:main",
+      statusChannel: "whatsapp",
+      provider: "ollama",
+      model: "glm-5.2:cloud",
+      thinkingCatalog: [
+        {
+          provider: "ollama",
+          id: "glm-5.2:cloud",
+          reasoning: true,
+        },
+      ],
+      resolvedHarness: "openclaw",
+      resolvedThinkLevel: "high",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "on",
+      resolveDefaultThinkingLevel: async () => "high",
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      pluginHealthLineOverride: "Plugins: test",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+      modelAuthOverride: "local",
+      activeModelAuthOverride: "local",
+      includeTranscriptUsage: false,
+    });
+
+    expect(text).toContain("Think: high");
+    expect(text).not.toMatch(/Think:\s*off\b/);
+  });
+});

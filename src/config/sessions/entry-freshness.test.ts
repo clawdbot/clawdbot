@@ -37,7 +37,7 @@ describe("resolveSessionEntryResetFreshness", () => {
       freshness: undefined,
       resetType: "thread",
       resetPolicy: {
-        mode: "daily",
+        mode: "none",
         atHour: 4,
       },
     });
@@ -59,7 +59,7 @@ describe("resolveSessionEntryResetFreshness", () => {
     const result = resolveSessionEntryResetFreshness({
       sessionKey,
       storePath,
-      sessionCfg: {},
+      sessionCfg: { reset: { mode: "daily" } },
       resetType: "thread",
       now,
     });
@@ -253,7 +253,7 @@ describe("resolveSessionEntryResetFreshness", () => {
     const result = resolveSessionEntryResetFreshness({
       sessionKey,
       storePath,
-      sessionCfg: {},
+      sessionCfg: { reset: { mode: "daily" } },
       resetType: "thread",
       now,
     });

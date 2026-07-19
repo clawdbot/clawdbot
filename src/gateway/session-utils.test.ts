@@ -1580,6 +1580,31 @@ describe("gateway session utils", () => {
     expect(target.storeKeys).toContain("agent:ops:main");
   });
 
+  test("resolveGatewaySessionStoreTarget keeps a fixed configured store authoritative", async () => {
+    await withStateDirEnv("session-utils-fixed-store-", async ({ stateDir }) => {
+      const fixedStorePath = path.join(stateDir, "configured", "sessions.json");
+      const staleStorePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+      await seedSessionEntries(fixedStorePath, {
+        "agent:ops:main": { sessionId: "sess-fixed", updatedAt: 1 },
+      });
+      await seedSessionEntries(staleStorePath, {
+        "agent:ops:main": { sessionId: "sess-stale", updatedAt: 99 },
+      });
+      const cfg = {
+        session: { mainKey: "main", store: fixedStorePath },
+        agents: { list: [{ id: "ops", default: true }] },
+      } as OpenClawConfig;
+
+      const target = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: "agent:ops:main",
+      });
+
+      expect(target.storePath).toBe(path.resolve(fixedStorePath));
+      expect(target.store["agent:ops:main"]?.sessionId).toBe("sess-fixed");
+    });
+  });
+
   test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
     await withStateDirEnv("session-utils-discovered-store-", async ({ stateDir }) => {
       const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
@@ -1600,6 +1625,68 @@ describe("gateway session utils", () => {
       const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:retired-agent:main" });
 
       expect(target.storePath).toBe(path.resolve(retiredStorePath));
+    });
+  });
+
+  test("resolveGatewaySessionStoreTarget keeps discovered contents paired with their path", async () => {
+    await withStateDirEnv("session-utils-discovered-contents-", async ({ stateDir }) => {
+      const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
+      fs.mkdirSync(retiredSessionsDir, { recursive: true });
+      const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+      await seedSessionEntries(retiredStorePath, {
+        "agent:retired-agent:other": { sessionId: "sess-discovered-other", updatedAt: 1 },
+      });
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+      const fallbackStore = {
+        "agent:retired-agent:main": { sessionId: "sess-fallback", updatedAt: 99 },
+      };
+
+      const target = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: "agent:retired-agent:main",
+        store: fallbackStore,
+      });
+
+      expect(target.storePath).toBe(path.resolve(retiredStorePath));
+      expect(target.store).toHaveProperty("agent:retired-agent:other");
+      expect(target.store).not.toHaveProperty("agent:retired-agent:main");
+    });
+  });
+
+  test("resolveGatewaySessionStoreTarget reads a retired legacy store without provisioning SQLite", async () => {
+    await withStateDirEnv("session-utils-retired-legacy-", async ({ stateDir }) => {
+      const retiredSessionsDir = path.join(stateDir, "agents", "retired", "sessions");
+      const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+      fs.mkdirSync(retiredSessionsDir, { recursive: true });
+      fs.writeFileSync(
+        retiredStorePath,
+        JSON.stringify({
+          "agent:retired:main": { sessionId: "sess-retired-legacy", updatedAt: 1 },
+        }),
+        "utf8",
+      );
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const target = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: "agent:retired:main",
+      });
+
+      expect(target.storePath).toBe(retiredStorePath);
+      expect(target.store["agent:retired:main"]?.sessionId).toBe("sess-retired-legacy");
+      expect(fs.readdirSync(retiredSessionsDir)).toEqual(["sessions.json"]);
     });
   });
 

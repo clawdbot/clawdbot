@@ -513,7 +513,8 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:discord:channel:voice-1";
       const staleStartedAt = Date.now() - 2 * 24 * 60 * 60_000;
-      mockConfig(home, store);
+      const cfg = mockConfig(home, store);
+      cfg.session = { ...cfg.session, reset: { mode: "daily" } };
       await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "stale-voice-session",

@@ -426,8 +426,9 @@ img.chat-avatar {
   }
 }
 
-/* Skins .btn/.btn--xs buttons: background and svg sizing stay with the .btn
-   base so these match every other icon button; only the muted color is bespoke. */
+/* In chat these render bare (no .btn chrome) so the ghost footer-button rules
+   above own their look; the muted color also covers .btn hosts like the file
+   preview header. */
 .chat-copy-btn,
 .chat-expand-btn {
   color: var(--muted);

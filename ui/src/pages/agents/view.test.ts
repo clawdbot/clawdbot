@@ -125,6 +125,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     pinnedAgentIds: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
+    onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
     onLoadFiles: () => undefined,
     onSelectFile: () => undefined,

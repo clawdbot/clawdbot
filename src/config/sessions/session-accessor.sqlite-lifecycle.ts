@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
@@ -6,9 +7,11 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import type {
@@ -49,6 +52,44 @@ import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: cleanup, reset, guarded delete, and trusted rollback.
+
+type SessionBoardCleanupDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "board_tabs" | "board_widgets"
+> & {
+  sqlite_schema: {
+    name: string | null;
+    type: string;
+  };
+};
+
+function deleteSessionBoardRows(
+  database: OpenClawAgentDatabase,
+  sessionKeys: readonly string[],
+): void {
+  const keys = [...new Set(sessionKeys)];
+  if (keys.length === 0) {
+    return;
+  }
+  const db = getNodeSqliteKysely<SessionBoardCleanupDatabase>(database.db);
+  const tableRows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("sqlite_schema")
+      .select("name")
+      .where("type", "=", "table")
+      .where("name", "in", ["board_tabs", "board_widgets"]),
+  ).rows;
+  const tables = new Set(tableRows.map((row) => row.name));
+  if (!tables.has("board_tabs") || !tables.has("board_widgets")) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("board_widgets").where("session_key", "in", keys),
+  );
+  executeSqliteQuerySync(database.db, db.deleteFrom("board_tabs").where("session_key", "in", keys));
+}
 
 export async function cleanupSqliteSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactCleanupParams,
@@ -230,6 +271,11 @@ async function deleteSqliteSessionEntryLifecycleInternal(
         return;
       }
       deleteSqliteLifecycleTargetRows(transactionDb, params.target);
+      deleteSessionBoardRows(transactionDb, [
+        params.target.canonicalKey,
+        ...params.target.storeKeys,
+        ...transactionSnapshot.rows.map((row) => row.sessionKey),
+      ]);
       const archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
         transactionDb,
         materializedPlans,
@@ -321,7 +367,12 @@ function shouldDeleteSqliteSessionEntryLifecycle(
   ) {
     return false;
   }
-  if (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) {
+  if (
+    params.expectedSessionId !== undefined &&
+    (params.expectedSessionId === null
+      ? entry.sessionId !== undefined
+      : entry.sessionId !== params.expectedSessionId)
+  ) {
     return false;
   }
   if (

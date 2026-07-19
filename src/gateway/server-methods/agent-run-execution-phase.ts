@@ -189,6 +189,9 @@ export function startAgentRunExecution(params: {
                 text: params.effectiveTranscriptInputText,
                 timestamp: Date.now(),
                 idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
+                ...(params.client?.authenticatedUserId
+                  ? { sender: { id: params.client.authenticatedUserId } }
+                  : {}),
                 ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
               },
               target: () => {
@@ -370,6 +373,8 @@ export function startAgentRunExecution(params: {
             ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
             : params.request.sourceReplyDeliveryMode,
           disableMessageTool: params.request.disableMessageTool,
+          swarmCollector: params.request.swarmCollector,
+          swarmOutputSchema: params.request.swarmOutputSchema,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,

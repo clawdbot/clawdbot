@@ -65,7 +65,8 @@ type ConfigPageSetting =
   | "textScale"
   | "chatSendShortcut"
   | "chatFollowUpMode"
-  | "catalogOpenTarget";
+  | "catalogOpenTarget"
+  | "composerHoldToRecord";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -618,6 +619,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       realtimeTalkVideoDeviceId: next.realtimeTalkVideoDeviceId,
+      composerHoldToRecord: next.composerHoldToRecord,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
     });
@@ -850,6 +852,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         loading: this.microphoneLoading,
         error: this.microphoneError,
       },
+      composerHoldToRecord: this.settings.composerHoldToRecord !== false,
+      setComposerHoldToRecord: (enabled) => this.setSetting("composerHoldToRecord", enabled),
       onMicrophoneRefresh: () => void this.refreshMicrophones(true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       camera: {

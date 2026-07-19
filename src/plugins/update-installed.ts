@@ -30,6 +30,7 @@ import {
   formatClawHubInstallFailure,
   formatGitInstallFailure,
   formatMarketplaceInstallFailure,
+  formatNewerExactPinnedNpmDefaultLineMessage,
   formatNpmInstallFailure,
   readClawHubTrustErrorCode,
   runPluginUpdateAttempt,
@@ -58,6 +59,7 @@ import {
   resolveClawHubUpdateSpecs,
   resolveNpmSpecPackageName,
   resolveNpmUpdateSpecs,
+  resolveNewerExactPinnedNpmDefaultLine,
   resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate,
   resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate,
   shouldBypassTrustedOfficialUnchangedNpmCheck,
@@ -427,6 +429,16 @@ export async function updateNpmInstalledPlugins(params: {
             metadata: metadataResult.metadata,
           })
         ) {
+          const newerExactPinnedDefaultLine =
+            !params.specOverrides?.[pluginId] && !officialNpmSpec
+              ? await resolveNewerExactPinnedNpmDefaultLine({
+                  currentVersion,
+                  effectiveSpec,
+                  probeNpmVersion: metadataResult.metadata.version,
+                  updateChannel: params.updateChannel,
+                  timeoutMs: params.timeoutMs,
+                })
+              : undefined;
           if (params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall) {
             const nextRecordSpec = resolveNpmInstallRecordSpec({
               requestedSpec: recordSpec,
@@ -461,8 +473,16 @@ export async function updateNpmInstalledPlugins(params: {
             pluginId,
             status: "unchanged",
             currentVersion,
-            nextVersion: metadataResult.metadata.version,
-            message: `${pluginId} is up to date (${currentVersion}).`,
+            nextVersion: newerExactPinnedDefaultLine?.version ?? metadataResult.metadata.version,
+            message:
+              newerExactPinnedDefaultLine && effectiveSpec
+                ? formatNewerExactPinnedNpmDefaultLineMessage({
+                    pluginId,
+                    effectiveSpec,
+                    currentVersion,
+                    newer: newerExactPinnedDefaultLine,
+                  })
+                : `${pluginId} is up to date (${currentVersion}).`,
           });
           continue;
         }
@@ -600,6 +620,7 @@ export async function updateNpmInstalledPlugins(params: {
           usedOfficialNpmFallback,
           hasSpecOverride: Boolean(params.specOverrides?.[pluginId]),
           hasOfficialNpmSpec: Boolean(officialNpmSpec),
+          updateChannel: officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel,
           timeoutMs: params.timeoutMs,
           channelFallbackSuffix,
           npmChannelFallback,

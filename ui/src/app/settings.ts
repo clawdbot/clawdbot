@@ -115,6 +115,7 @@ export type UiSettings = {
   catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
+  composerHoldToRecord?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
@@ -358,6 +359,7 @@ export function loadSettings(): UiSettings {
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     pinnedAgentIds: [],
     textScale: 100,
+    composerHoldToRecord: true,
   };
 
   try {
@@ -425,6 +427,10 @@ export function loadSettings(): UiSettings {
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
+      composerHoldToRecord:
+        typeof parsed.composerHoldToRecord === "boolean"
+          ? parsed.composerHoldToRecord
+          : defaults.composerHoldToRecord,
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       splitRatio:
@@ -572,6 +578,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(normalizeOptionalString(next.realtimeTalkVideoDeviceId)
       ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
       : {}),
+    ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
     ...(typeof next.talkCameraAutoEnable === "boolean"
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),

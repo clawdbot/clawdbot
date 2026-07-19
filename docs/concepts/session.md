@@ -91,13 +91,15 @@ and runtime details.
 
 ## Session lifecycle
 
-Sessions are reused until they expire under `session.reset`:
+Sessions are reused until you reset them manually or opt into an automatic reset policy:
 
-- **Daily reset** (default `mode: "daily"`) - new session at a configured local
+- **No automatic reset** (default `mode: "none"`) - sessions keep the same
+  `sessionId`; compaction manages the active context as the conversation grows.
+- **Daily reset** (`mode: "daily"`) - opt into a new session at a configured local
   hour (`session.reset.atHour`, default `4`, 0-23) on the gateway host. Daily
   freshness is based on when the current `sessionId` started, not on later
   metadata writes.
-- **Idle reset** (`mode: "idle"`) - new session after `session.reset.idleMinutes`
+- **Idle reset** (`mode: "idle"`) - opt into a new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
   interaction, so heartbeat, cron, and exec system events do not keep the
   session alive.
@@ -111,11 +113,11 @@ rolls the session, queued system-event notices for the old session are
 discarded so stale background updates are not prepended to the first prompt in
 the new session.
 
-Sessions with an active provider-owned CLI session are not cut by the implicit
-daily default. Use `/reset` or configure `session.reset` explicitly when those
-sessions should expire on a timer.
+Sessions with an active provider-owned CLI session follow the same no-automatic-reset
+default. Use `/reset` or configure `session.reset` explicitly when those sessions
+should expire on a timer.
 
-Override the default per chat type or per channel:
+Opt into automatic resets globally, then override them per chat type or channel:
 
 ```json5
 {

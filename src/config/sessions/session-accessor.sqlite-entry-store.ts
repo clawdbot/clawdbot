@@ -229,6 +229,15 @@ export function readSqliteSessionEntryCount(database: OpenClawAgentDatabase): nu
   return count === undefined || count === null ? 0 : normalizeSqliteNumber(count);
 }
 
+/** Lists persisted session keys without materializing their entry payloads. */
+export function readSqliteSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select("session_key").orderBy("session_key", "asc"),
+  ).rows.map((row) => row.session_key);
+}
+
 export function resolveSqliteLifecyclePrimaryEntry(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },

@@ -200,6 +200,20 @@ export type GatewayTrustedProxyConfig = {
    * trust boundary and direct Gateway access is otherwise locked down.
    */
   allowLoopback?: boolean;
+  /**
+   * Automatically approve new browser device identities after trusted-proxy
+   * authentication. Disabled by default; existing-device upgrades stay manual.
+   */
+  deviceAutoApprove?: {
+    /** Enable automatic approval for new browser devices. @default false */
+    enabled?: boolean;
+    /**
+     * Maximum operator scopes granted by automatic approval. operator.admin
+     * is intentionally forbidden. @default operator.read, operator.write,
+     * operator.approvals
+     */
+    scopes?: string[];
+  };
 };
 
 export type GatewayAuthConfig = {

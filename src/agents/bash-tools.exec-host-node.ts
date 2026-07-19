@@ -224,6 +224,21 @@ export async function executeNodeHostCommand(
     }) ||
     inlineEvalHit !== null ||
     requiresSecurityAuditSuppressionApproval;
+  if (requiresAsk && params.nonInteractiveApproval) {
+    const text = `Exec denied (approval_required): ${params.command}`;
+    return {
+      content: [{ type: "text", text }],
+      details: {
+        status: "failed",
+        exitCode: null,
+        failureKind: "approval_required",
+        durationMs: 0,
+        aggregated: text,
+        timedOut: false,
+        cwd: prepared.cwd,
+      },
+    };
+  }
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",

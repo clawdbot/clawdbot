@@ -47,6 +47,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenApprovals?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
+  private loadGeneration = 0;
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
@@ -101,6 +102,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.idleRefreshTimer = null;
     }
     this.subscriptions.clear();
+    this.loadGeneration += 1;
     this.loadedClient = null;
     super.disconnectedCallback();
   }
@@ -113,6 +115,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.dismissed = loadDismissals(gatewayUrl);
     }
     if (!snapshot.connected || !snapshot.client) {
+      this.loadGeneration += 1;
       this.loadedClient = null;
       this.cronJobs = [];
       this.modelAuthStatus = null;
@@ -122,12 +125,20 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return;
     }
     this.loadedClient = snapshot.client;
-    void this.load(gateway, snapshot.client);
+    // Stale refreshes reuse the same client, so identity alone cannot retire
+    // an older completion once the replacement load starts.
+    const generation = ++this.loadGeneration;
+    void this.load(gateway, snapshot.client, generation);
   }
 
-  private async load(gateway: ApplicationContext["gateway"], client: GatewayBrowserClient) {
+  private async load(
+    gateway: ApplicationContext["gateway"],
+    client: GatewayBrowserClient,
+    generation: number,
+  ) {
     const isCurrent = () =>
       this.isConnected &&
+      this.loadGeneration === generation &&
       this.loadedClient === client &&
       gateway.snapshot.client === client &&
       gateway.snapshot.connected;

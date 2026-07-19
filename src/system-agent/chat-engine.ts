@@ -195,13 +195,14 @@ function wizardStepChatQuestion(step: WizardStep | null): SystemAgentChatQuestio
     return undefined;
   }
   if (step.type === "confirm") {
+    const yesRecommended = step.initialValue !== false;
     return {
       id: step.id,
       header: step.title ?? "Confirm",
       question: step.message ?? "Continue?",
       options: [
-        { label: "Yes", reply: "yes", recommended: true },
-        { label: "No", reply: "no" },
+        { label: "Yes", reply: "yes", ...(yesRecommended ? { recommended: true } : {}) },
+        { label: "No", reply: "no", ...(!yesRecommended ? { recommended: true } : {}) },
       ],
     };
   }
@@ -628,14 +629,14 @@ export class SystemAgentChatEngine {
     const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
       .filter(Boolean)
       .join("\n\n");
-    // The hatch is a ceremony: a fresh-install setup just created the agent,
+    // The hatch is a ceremony: setup or an explicit creation just seeded the agent,
     // so hand the user straight into it instead of parking them here. The
     // seeded BOOTSTRAP runs the birth sequence on the agent's first turn.
     // Only on clean post-write verification: a non-null verify means the
     // written config is suspect, and handing off would bury the warning in an
     // agent session that may not answer — stay in setup to repair it.
     if (
-      operation.kind === "setup" &&
+      (operation.kind === "setup" || operation.kind === "create-agent") &&
       result?.applied &&
       result.bootstrapPending === true &&
       verify === null
@@ -651,6 +652,7 @@ export class SystemAgentChatEngine {
           kind: "open-tui",
           agentDraft: "hatch",
           ...(operation.workspace ? { workspace: operation.workspace } : {}),
+          ...(result.agentId ? { agentId: result.agentId } : {}),
         },
       };
     }

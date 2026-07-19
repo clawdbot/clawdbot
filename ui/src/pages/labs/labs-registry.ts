@@ -18,17 +18,14 @@ export const LAB_FEATURES = [
     configPath: ["tools", "codeMode", "enabled"],
     restartHint: null,
   },
-  // Swarm entry ships once tools.swarm exists in the config schema
-  // (zod-schema.agent-runtime.ts, #110325); rendering it earlier would write an
-  // unknown key and invalidate the operator's config on save.
-  // {
-  //   id: "swarm",
-  //   title: () => t("labsPage.swarm.title"),
-  //   description: () => t("labsPage.swarm.description"),
-  //   docsUrl: "https://docs.openclaw.ai/tools/swarm",
-  //   configPath: ["tools", "swarm", "enabled"],
-  //   restartHint: null,
-  // },
+  {
+    id: "swarm",
+    title: () => t("labsPage.swarm.title"),
+    description: () => t("labsPage.swarm.description"),
+    docsUrl: "https://docs.openclaw.ai/tools/swarm",
+    configPath: ["tools", "swarm", "enabled"],
+    restartHint: null,
+  },
 ] as const satisfies readonly LabFeature[];
 
 function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {

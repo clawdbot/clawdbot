@@ -153,7 +153,23 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 }));
 
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
-  resolveModelAsync: resolveModelAsyncMock,
+  resolveModelAsync: async (...args: unknown[]) => {
+    const result = await resolveModelAsyncMock(...args);
+    const modelRegistry = (result?.modelRegistry ?? {}) as Record<string, unknown>;
+    return {
+      ...result,
+      modelRegistry: {
+        ...modelRegistry,
+        llmRuntime: modelRegistry.llmRuntime ?? { complete: completeMock },
+      },
+    };
+  },
+}));
+
+vi.mock("../agents/sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (owner: { llmRuntime?: unknown }) => ({
+    llmRuntime: owner.llmRuntime ?? { complete: completeMock },
+  }),
 }));
 
 vi.mock("../plugin-sdk/provider-auth.js", () => ({
@@ -1562,7 +1578,9 @@ describe("describeImageWithModel", () => {
     expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toEqual(
       expect.objectContaining({
         authStorage,
-        modelRegistry,
+        modelRegistry: expect.objectContaining({
+          llmRuntime: expect.anything(),
+        }),
         authProfileId: "github-copilot:backup",
       }),
     );

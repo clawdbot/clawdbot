@@ -2427,6 +2427,63 @@ openclaw-chat-page {
   padding-top: 8px;
 }
 
+.chat-send-btn--hold-enabled {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.chat-send-btn--dictating {
+  width: auto;
+  min-width: 76px;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--danger, #ef4444) 24%, transparent);
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.chat-send-btn--dictating .agent-chat__voice-activity-bar {
+  background: color-mix(in srgb, var(--danger, #ef4444) 88%, var(--text));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--danger, #ef4444) 30%, transparent);
+}
+
+.chat-send-btn__dictation-time {
+  min-width: 3ch;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chat__dictation-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger, #ef4444);
+  font-size: 12px;
+}
+
+.agent-chat__dictation-status--finalizing {
+  color: var(--muted);
+}
+
+.agent-chat__dictation-label {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chat__dictation-partial {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-chat__video-preview {
   position: relative;
   align-self: flex-end;

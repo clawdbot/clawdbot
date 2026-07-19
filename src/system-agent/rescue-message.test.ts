@@ -663,7 +663,16 @@ describe("OpenClaw rescue message", () => {
   it("queues and applies agent creation through conversational approval", async () => {
     await withRescueStateDir("agent-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
-      const deps = { runAgentsAdd: vi.fn(async () => {}) };
+      const deps = {
+        createAgent: vi.fn(async () => ({
+          status: "created" as const,
+          agentId: "work",
+          name: "work",
+          workspace: "/tmp/work",
+          agentDir: "/tmp/agent-work",
+          bootstrapPending: true,
+        })),
+      };
 
       await expect(
         runRescue("/openclaw create agent work workspace /tmp/work", cfg, commandContext(), deps),
@@ -674,22 +683,14 @@ describe("OpenClaw rescue message", () => {
         "[openclaw] done: agents.create",
       );
 
-      expect(deps.runAgentsAdd).toHaveBeenCalledTimes(1);
-      const [agentParams, agentRuntime, agentOptions] = requireFirstMockCall(
-        deps.runAgentsAdd,
-        "agents add",
-      ) as unknown as [
-        { name: string; workspace: string; nonInteractive: boolean },
-        object,
-        { hasFlags: boolean },
+      expect(deps.createAgent).toHaveBeenCalledTimes(1);
+      const [agentParams] = requireFirstMockCall(deps.createAgent, "agents add") as unknown as [
+        { name: string; workspace: string },
       ];
       expect(agentParams).toEqual({
         name: "work",
         workspace: "/tmp/work",
-        nonInteractive: true,
       });
-      expect(agentRuntime).toBeTypeOf("object");
-      expect(agentOptions).toEqual({ hasFlags: true });
       const audit = readLastAuditEntry() as {
         operation?: string;
         details?: {

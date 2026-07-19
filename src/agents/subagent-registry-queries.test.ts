@@ -116,6 +116,25 @@ describe("subagent registry query regressions", () => {
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
   });
 
+  it("counts collectors against their stable spawning-session owner", () => {
+    const stableOwner = "agent:main:telegram:default:direct:456";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-routed-collector",
+        childSessionKey: "agent:worker:subagent:routed",
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        collect: true,
+        swarmRequesterSessionKey: stableOwner,
+        createdAt: Date.now(),
+        execution: { status: "queued" },
+      }),
+    ]);
+
+    expect(countActiveRunsForSessionFromRuns(runs, stableOwner)).toBe(1);
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
+  });
+
   it("does not count stale unended descendants as pending work", () => {
     const now = Date.now();
     const parentSessionKey = "agent:main:subagent:parent-stale-desc";

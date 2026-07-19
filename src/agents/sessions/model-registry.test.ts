@@ -3,9 +3,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  defaultApiRegistry,
+  getApiProvider,
+  registerApiProvider,
+  unregisterApiProviders,
+} from "@openclaw/ai/internal/runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
@@ -593,5 +600,60 @@ describe("ModelRegistry OAuth provider ownership", () => {
     expect(
       sessionBAuth.getOAuthProviders().find((provider) => provider.id === "anthropic")?.name,
     ).toBe("Anthropic (Claude Pro/Max)");
+  });
+});
+
+describe("ModelRegistry API provider ownership", () => {
+  it("keeps stream registrations isolated across registry refreshes", () => {
+    const sessionA = ModelRegistry.inMemory(AuthStorage.inMemory());
+    const sessionB = ModelRegistry.inMemory(AuthStorage.inMemory());
+    const streamA = vi.fn(() => ({}) as never);
+    const streamB = vi.fn(() => ({}) as never);
+
+    sessionA.registerProvider("session-a", {
+      api: "test-session-api",
+      streamSimple: streamA,
+    });
+    sessionB.registerProvider("session-b", {
+      api: "test-session-api",
+      streamSimple: streamB,
+    });
+    const runtimeA = getModelRegistryRuntime(sessionA);
+    const runtimeB = getModelRegistryRuntime(sessionB);
+
+    expect(runtimeA.apiRegistry.getApiProvider("test-session-api")?.streamSimple).not.toBe(
+      runtimeB.apiRegistry.getApiProvider("test-session-api")?.streamSimple,
+    );
+    expect(getApiProvider("test-session-api")).toBeUndefined();
+
+    sessionB.unregisterProvider("session-b");
+
+    expect(runtimeA.apiRegistry.getApiProvider("test-session-api")).toBeDefined();
+    expect(runtimeB.apiRegistry.getApiProvider("test-session-api")).toBeUndefined();
+  });
+
+  it("imports published SDK providers without copying request-generated aliases", () => {
+    const publishedSource = "plugin:test-published-api";
+    const requestSource = "custom-api:test-request-api";
+    const stream = vi.fn(() => ({}) as never);
+    registerApiProvider(
+      { api: "test-published-api", stream, streamSimple: stream },
+      publishedSource,
+    );
+    defaultApiRegistry.registerApiProvider(
+      { api: "test-request-api", stream, streamSimple: stream },
+      requestSource,
+    );
+
+    try {
+      const session = ModelRegistry.inMemory(AuthStorage.inMemory());
+      const runtime = getModelRegistryRuntime(session);
+
+      expect(runtime.apiRegistry.getApiProvider("test-published-api")).toBeDefined();
+      expect(runtime.apiRegistry.getApiProvider("test-request-api")).toBeUndefined();
+    } finally {
+      unregisterApiProviders(publishedSource);
+      defaultApiRegistry.unregisterApiProviders(requestSource);
+    }
   });
 });

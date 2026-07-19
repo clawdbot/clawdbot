@@ -914,6 +914,30 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
+  it("accepts strict Swarm config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        swarm: {
+          enabled: true,
+          maxConcurrent: 8,
+          maxChildrenPerGroup: 50,
+          maxTotalPerGroup: 200,
+          waitTimeoutSecondsMax: 600,
+          defaultAgentId: "reviewer",
+        },
+      })?.swarm,
+    ).toEqual({
+      enabled: true,
+      maxConcurrent: 8,
+      maxChildrenPerGroup: 50,
+      maxTotalPerGroup: 200,
+      waitTimeoutSecondsMax: 600,
+      defaultAgentId: "reviewer",
+    });
+    expect(ToolsSchema.safeParse({ swarm: { unknownKey: true } }).success).toBe(false);
+  });
+
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {

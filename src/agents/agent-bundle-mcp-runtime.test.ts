@@ -23,6 +23,7 @@ import {
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
+import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
@@ -2034,6 +2035,13 @@ process.on("SIGINT", shutdown);`,
       cfg: { mcp: { sessionIdleTtlMs: 0 } },
     });
     const release = runtime.acquireLease?.();
+    updateMcpAppModelContext(
+      runtime,
+      {},
+      {
+        content: [{ type: "text", text: "clear on reset" }],
+      },
+    );
 
     await expect(
       retireSessionMcpRuntime({
@@ -2043,10 +2051,69 @@ process.on("SIGINT", shutdown);`,
       }),
     ).resolves.toBe(true);
     expect(testing.getCachedSessionIds()).toContain("session-view-lease");
+    expect(runtime.pendingMcpAppModelContext).toMatchObject({ text: "clear on reset" });
+    expect(() =>
+      updateMcpAppModelContext(
+        runtime,
+        {},
+        {
+          content: [{ type: "text", text: "still live between turns" }],
+        },
+      ),
+    ).not.toThrow();
 
     release?.();
     await completeDeferredSessionMcpRuntimeRetirement(runtime);
     expect(testing.getCachedSessionIds()).not.toContain("session-view-lease");
+  });
+
+  it("revokes App context across reset while a view lease defers retirement", async () => {
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-view-reset",
+      sessionKey: "agent:test:session-view-reset",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { sessionIdleTtlMs: 0 } },
+    });
+    const release = runtime.acquireLease?.();
+    updateMcpAppModelContext(
+      runtime,
+      {},
+      {
+        content: [{ type: "text", text: "clear on reset" }],
+      },
+    );
+
+    await expect(
+      retireSessionMcpRuntime({
+        sessionId: "session-view-reset",
+        reason: "gateway-session-cleanup",
+        preserveActiveLeases: true,
+        retainAcrossReuse: true,
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).toContain("session-view-reset");
+    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
+    expect(() =>
+      updateMcpAppModelContext(
+        runtime,
+        {},
+        {
+          content: [{ type: "text", text: "stale after reset" }],
+        },
+      ),
+    ).toThrow("unavailable for this session");
+    const reused = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-view-reset",
+      sessionKey: "agent:test:session-view-reset",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { sessionIdleTtlMs: 0 } },
+    });
+    expect(reused).toBe(runtime);
+    expect(reused.mcpAppModelContextRevoked).toBe(true);
+
+    release?.();
+    await completeDeferredSessionMcpRuntimeRetirement(runtime);
+    expect(testing.getCachedSessionIds()).not.toContain("session-view-reset");
   });
 
   it("completes deferred retirement when a materialized run releases its lease", async () => {

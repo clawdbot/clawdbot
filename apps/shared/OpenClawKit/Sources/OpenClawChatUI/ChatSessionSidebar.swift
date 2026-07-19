@@ -61,12 +61,12 @@ struct ChatSessionSidebar: View {
         .searchable(
             text: self.$query,
             placement: .sidebar,
-            prompt: String(localized: "Search sessions"))
+            prompt: String(localized: "Search threads"))
         .overlay {
             if sections.isEmpty {
                 ContentUnavailableView(
                     self.query.isEmpty
-                        ? String(localized: "No Sessions")
+                        ? String(localized: "No Threads")
                         : String(localized: "No Results"),
                     systemImage: "bubble.left.and.bubble.right")
             }
@@ -78,15 +78,15 @@ struct ChatSessionSidebar: View {
                     Button {
                         Task { await self.viewModel.startNewSession() }
                     } label: {
-                        chatWindowActionLabel("New Session", systemImage: "square.and.pencil")
+                        chatWindowActionLabel("New Thread", systemImage: "square.and.pencil")
                     }
-                    .help(String(localized: "New session"))
+                    .help(String(localized: "New thread"))
                     Button {
                         self.isPresentingNewSessionOptions = true
                     } label: {
                         Image(systemName: "chevron.down")
                     }
-                    .help(String(localized: "New session options"))
+                    .help(String(localized: "New thread options"))
                     .popover(isPresented: self.$isPresentingNewSessionOptions) {
                         ChatNewSessionOptionsPopover(viewModel: self.viewModel) {
                             self.isPresentingNewSessionOptions = false
@@ -114,10 +114,10 @@ struct ChatSessionSidebar: View {
             ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
         }
         .alert(
-            String(localized: "Rename Session"),
+            String(localized: "Rename Thread"),
             isPresented: self.isPresentingRenameAlert)
         {
-            TextField(String(localized: "Session name"), text: self.$renameText)
+            TextField(String(localized: "Thread name"), text: self.$renameText)
             Button(String(localized: "Rename")) {
                 if let session = self.sessionPendingRename {
                     self.viewModel.renameSession(key: session.key, label: self.renameText)
@@ -129,14 +129,14 @@ struct ChatSessionSidebar: View {
             }
         }
         .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
-                Button(String(localized: "Delete Session"), role: .destructive) {
+                Button(String(localized: "Delete Thread"), role: .destructive) {
                     if let session = self.sessionPendingDeletion {
                         self.viewModel.deleteSession(session.key)
                     }
                     self.sessionPendingDeletion = nil
                 }
             } message: {
-                Text(String(localized: "The session and its transcript are removed from the gateway."))
+                Text(String(localized: "The thread and its transcript are removed from the gateway."))
                     .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
     }
@@ -212,12 +212,12 @@ struct ChatSessionSidebar: View {
         if node.badges.runningCount > 0 {
             ProgressView()
                 .controlSize(.small)
-                .accessibilityLabel(String(localized: "Session running"))
+                .accessibilityLabel(String(localized: "Thread running"))
         }
         if node.badges.failedCount > 0 {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(OpenClawChatTheme.warning)
-                .accessibilityLabel(String(localized: "Session failed"))
+                .accessibilityLabel(String(localized: "Thread failed"))
         }
         let isCurrentSession = self.viewModel.matchesCurrentSessionKey(
             incoming: node.session.key,
@@ -289,7 +289,7 @@ struct ChatSessionSidebar: View {
             Button(role: .destructive) {
                 self.sessionPendingDeletion = session
             } label: {
-                self.actionLabel(String(localized: "Delete Session…"), systemImage: "trash")
+                self.actionLabel(String(localized: "Delete Thread…"), systemImage: "trash")
             }
         }
     }
@@ -343,7 +343,7 @@ struct ChatSessionSidebar: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help(String(localized: "Retry session groups"))
+                .help(String(localized: "Retry thread groups"))
             }
         }
         .padding(.horizontal, 12)

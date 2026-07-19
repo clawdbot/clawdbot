@@ -138,6 +138,7 @@ describe("MCP App gateway bridge", () => {
         standaloneUrl: "/__openclaw__/mcp-app#ticket",
         standaloneExpiresAtMs: 1_800_000_120_000,
         messageSupported: true,
+        updateModelContextSupported: true,
       }),
     );
     expect(mocks.getMcpAppViewLease).toHaveBeenCalledWith("cv_app", expect.any(Object));
@@ -188,7 +189,10 @@ describe("MCP App gateway bridge", () => {
       viewId: "cv_app",
     });
 
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({ messageSupported: false });
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      messageSupported: false,
+      updateModelContextSupported: false,
+    });
   });
 
   it("supports messages for a fresh view with no app-callable tools", async () => {
@@ -198,7 +202,80 @@ describe("MCP App gateway bridge", () => {
       viewId: "cv_app",
     });
 
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({ messageSupported: true });
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      messageSupported: true,
+      updateModelContextSupported: true,
+    });
+  });
+
+  it("stores only the latest bounded text update and clears it with an empty update", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const first = await invoke("mcp.app.updateModelContext", {
+      ...params,
+      content: [{ type: "text", text: "first" }],
+    });
+    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
+    expect(first.mock.calls[0]?.[0]).toBe(true);
+    expect(activeRuntime.pendingMcpAppModelContext).toMatchObject({ text: "first", owner: view });
+
+    const second = await invoke("mcp.app.updateModelContext", {
+      ...params,
+      content: [{ type: "text", text: "second" }],
+    });
+    expect(second.mock.calls[0]?.[0]).toBe(true);
+    expect(activeRuntime.pendingMcpAppModelContext).toMatchObject({ text: "second", owner: view });
+
+    const cleared = await invoke("mcp.app.updateModelContext", params);
+    expect(cleared.mock.calls[0]?.[0]).toBe(true);
+    expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
+  });
+
+  it("rejects unsupported context shapes, oversized UTF-8 text, and read-only views", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    for (const update of [
+      { structuredContent: { secret: true } },
+      {
+        content: [
+          { type: "text", text: "one" },
+          { type: "text", text: "two" },
+        ],
+      },
+      { content: [{ type: "image", data: "AA==", mimeType: "image/png" }] },
+      { content: [{ type: "text", text: "é".repeat(8 * 1024 + 1) }] },
+    ]) {
+      const respond = await invoke("mcp.app.updateModelContext", { ...params, ...update });
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+    }
+
+    view.readOnly = true;
+    const readOnly = await invoke("mcp.app.updateModelContext", {
+      ...params,
+      content: [{ type: "text", text: "blocked" }],
+    });
+    expect(readOnly.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("does not reconstruct expired views for context writes", async () => {
+    mocks.getMcpAppViewLease.mockReturnValue(undefined);
+    const respond = await invoke("mcp.app.updateModelContext", {
+      sessionKey: "agent:main:main",
+      viewId: "expired",
+      content: [{ type: "text", text: "blocked" }],
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(mocks.restoreMcpAppView).not.toHaveBeenCalled();
+  });
+
+  it("rejects context writes without fresh run authority", async () => {
+    view.allowedAppToolNames = undefined;
+    const respond = await invoke("mcp.app.updateModelContext", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+      content: [{ type: "text", text: "blocked" }],
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
+    expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
   });
 
   it("filters model-only tools from app discovery and execution", async () => {
@@ -277,6 +354,7 @@ describe("MCP App gateway bridge", () => {
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       html: "<html>demo</html>",
       messageSupported: false,
+      updateModelContextSupported: false,
     });
   });
 });

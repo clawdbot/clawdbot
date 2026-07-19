@@ -185,7 +185,8 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   }
   const replayContent = (message as { content?: unknown }).content;
   if (typeof replayContent === "string") {
-    return replayContent.trim() ? message : null;
+    const media = message as unknown as { MediaPath?: string; MediaPaths?: string[] };
+    return replayContent.trim() || media.MediaPath || media.MediaPaths?.length ? message : null;
   }
   if (!Array.isArray(replayContent)) {
     return message;

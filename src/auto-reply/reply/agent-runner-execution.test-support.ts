@@ -33,6 +33,7 @@ const state = vi.hoisted(() => ({
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
+  peekSessionMcpRuntimeMock: vi.fn(),
 }));
 
 export const GENERIC_RUN_FAILURE_TEXT =
@@ -52,6 +53,10 @@ export function makeTestModel(id: string, contextTokens: number): ModelDefinitio
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
+}));
+
+vi.mock("../../agents/agent-bundle-mcp-manager-api.js", () => ({
+  peekSessionMcpRuntime: (params: unknown) => state.peekSessionMcpRuntimeMock(params),
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({
@@ -250,6 +255,8 @@ export type FallbackRunnerParams = {
 };
 
 export type EmbeddedAgentParams = {
+  prompt?: string;
+  transcriptPrompt?: string;
   lifecycleGeneration?: string;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
@@ -562,6 +569,8 @@ export function setupAgentRunnerExecutionTestState() {
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.updateSessionStoreMock.mockReset();
     state.resolveCurrentTurnImagesMock.mockReset();
+    state.peekSessionMcpRuntimeMock.mockReset();
+    state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
     state.resolveCurrentTurnImagesMock.mockImplementation(
       async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({
         images: params.images,

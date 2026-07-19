@@ -165,6 +165,13 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(hasStyle(text, "code")).toBe(true);
   });
 
+  it("preserves authored file-style links while wrapping bare file refs as code", () => {
+    const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
+    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+    expect(collectUrls(text)).toEqual(["https://README.md"]);
+    expect(hasStyle(text, "code")).toBe(true);
+  });
+
   it("derives plainText from the block projection", () => {
     const { plainText } = markdownToTelegramRichBlocks("**hello** world");
     expect(plainText).toContain("hello");

@@ -73,6 +73,7 @@ export type ConfigSnapshotForInstallPersist = {
   baseHash: string | undefined;
   writeOptions: Pick<
     ConfigWriteOptions,
+    | "auditOrigin"
     | "assertConfigPathForWrite"
     | "expectedConfigPath"
     | "ownedConfigPathForWrite"
@@ -290,6 +291,7 @@ export function selectInstallMutationWriteOptions(
   // Install work may outlive its config read. Keep only mutation-start ownership
   // and conflict facts; plugin metadata must come from the commit-time read.
   return {
+    auditOrigin: "plugin-install",
     ...(writeOptions.assertConfigPathForWrite
       ? { assertConfigPathForWrite: writeOptions.assertConfigPathForWrite }
       : {}),

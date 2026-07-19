@@ -31,6 +31,35 @@ export type MarkdownLinkSpan = {
   href: string;
 };
 
+// Link provenance is renderer metadata, not part of the public Markdown IR shape.
+// Every span transform must use copyMarkdownLinkSpan so the private fact survives.
+const autoLinkedMarkdownLinks = new WeakSet<MarkdownLinkSpan>();
+
+export function createMarkdownLinkSpan(
+  span: MarkdownLinkSpan,
+  options: { autoLinked?: boolean } = {},
+): MarkdownLinkSpan {
+  const created = { ...span };
+  if (options.autoLinked) {
+    autoLinkedMarkdownLinks.add(created);
+  }
+  return created;
+}
+
+export function copyMarkdownLinkSpan(
+  span: MarkdownLinkSpan,
+  overrides: Partial<MarkdownLinkSpan> = {},
+): MarkdownLinkSpan {
+  return createMarkdownLinkSpan(
+    { ...span, ...overrides },
+    { autoLinked: autoLinkedMarkdownLinks.has(span) },
+  );
+}
+
+export function isAutoLinkedMarkdownLink(span: MarkdownLinkSpan): boolean {
+  return autoLinkedMarkdownLinks.has(span);
+}
+
 export type MarkdownAnnotationSpan = {
   start: number;
   end: number;
@@ -72,7 +101,7 @@ export function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): Ma
     const start = Math.max(0, Math.min(span.start, maxLength));
     const end = Math.max(start, Math.min(span.end, maxLength));
     if (end > start) {
-      clamped.push({ start, end, href: span.href });
+      clamped.push(copyMarkdownLinkSpan(span, { start, end }));
     }
   }
   return clamped;
@@ -183,11 +212,12 @@ export function sliceLinkSpans(
   for (const span of spans) {
     const bounds = resolveSliceBounds(span, start, end);
     if (bounds) {
-      sliced.push({
-        start: bounds.start - start,
-        end: bounds.end - start,
-        href: span.href,
-      });
+      sliced.push(
+        copyMarkdownLinkSpan(span, {
+          start: bounds.start - start,
+          end: bounds.end - start,
+        }),
+      );
     }
   }
   return sliced;

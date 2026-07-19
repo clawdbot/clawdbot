@@ -493,7 +493,7 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-agent-model-rejected-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runAgentsAdd = vi.fn(async () => {});
+    const createAgent = vi.fn();
     expect(
       isPersistentSystemAgentOperation({
         kind: "create-agent",
@@ -512,11 +512,11 @@ describe("parseSystemAgentOperation", () => {
           model: "openai/gpt-5.5",
         },
         runtime,
-        { approved: true, deps: { runAgentsAdd } },
+        { approved: true, deps: { createAgent } },
       ),
     ).rejects.toThrow("Retry without `model`; the new agent inherits");
 
-    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(createAgent).not.toHaveBeenCalled();
     expect(lines.join("\n")).not.toContain("[openclaw] running: agents.create");
     await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
   });
@@ -525,7 +525,7 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-agent-id-reserved-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runAgentsAdd = vi.fn(async () => {});
+    const createAgent = vi.fn();
     const operation = {
       kind: "create-agent" as const,
       agentId: "OpenClaw",
@@ -536,18 +536,18 @@ describe("parseSystemAgentOperation", () => {
     await expect(
       executeSystemAgentOperation(operation, runtime, {
         approved: true,
-        deps: { runAgentsAdd },
+        deps: { createAgent },
       }),
     ).rejects.toThrow('Agent id "openclaw" is reserved');
 
-    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(createAgent).not.toHaveBeenCalled();
     expect(lines.join("\n")).not.toContain("[openclaw] running: agents.create");
     await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
   });
 
   it("keeps the retired agent identity reserved", async () => {
     const { runtime } = createSystemAgentTestRuntime();
-    const runAgentsAdd = vi.fn(async () => {});
+    const createAgent = vi.fn();
     const operation = {
       kind: "create-agent" as const,
       agentId: "crestodian", // reserved retired id
@@ -558,10 +558,10 @@ describe("parseSystemAgentOperation", () => {
     await expect(
       executeSystemAgentOperation(operation, runtime, {
         approved: true,
-        deps: { runAgentsAdd },
+        deps: { createAgent },
       }),
     ).rejects.toThrow('Agent id "crestodian" is reserved'); // reserved retired id
-    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(createAgent).not.toHaveBeenCalled();
   });
 
   it("requires approval before restarting gateway", async () => {

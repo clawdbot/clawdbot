@@ -206,14 +206,14 @@ struct CommandSessionActionsModifier: ViewModifier {
                 }
             }
             .confirmationDialog(
-                "Delete Session?",
+                "Delete Thread?",
                 isPresented: self.$confirmsDelete,
                 titleVisibility: .visible)
             {
                 Button(role: .destructive) {
                     self.actions.delete()
                 } label: {
-                    Text("Delete Session")
+                    Text("Delete Thread")
                         .font(OpenClawType.subheadSemiBold)
                 }
                 Button(role: .cancel) {} label: {
@@ -221,7 +221,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                         .font(OpenClawType.subheadSemiBold)
                 }
             } message: {
-                Text("This permanently deletes the session and its transcript.")
+                Text("This permanently deletes the thread and its transcript.")
                     .font(OpenClawType.caption)
             }
     }
@@ -266,13 +266,13 @@ struct CommandSessionActionsModifier: ViewModifier {
     private var editorTitle: String {
         self.editor == .newGroup
             ? String(localized: "New Group")
-            : String(localized: "Rename Session")
+            : String(localized: "Rename Thread")
     }
 
     private var editorPlaceholder: String {
         self.editor == .newGroup
             ? String(localized: "Group name")
-            : String(localized: "Session name")
+            : String(localized: "Thread name")
     }
 
     private func actionButton(

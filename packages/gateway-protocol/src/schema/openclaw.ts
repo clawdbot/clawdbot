@@ -14,8 +14,10 @@ import { WizardStartResultSchema } from "./wizard.js";
 export const SystemAgentChatParamsSchema = closedObject({
   sessionId: NonEmptyString,
   message: Type.Optional(Type.String()),
-  /** "onboarding" seeds the first-run setup proposal in the greeting. */
-  welcomeVariant: Type.Optional(Type.Union([Type.Literal("onboarding")])),
+  /** Seeds a purpose-specific first greeting for a fresh conversation. */
+  welcomeVariant: Type.Optional(
+    Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
+  ),
   /** Drop any in-flight approval/wizard state and start the session over. */
   reset: Type.Optional(Type.Boolean()),
   /** Host-only regular-agent delegation context. Never model-authored. */
@@ -69,6 +71,8 @@ export const SystemAgentChatResultSchema = closedObject({
   ]),
   /** Optional localized-draft intent for an `open-agent` handoff. */
   agentDraft: Type.Optional(Type.Literal("hatch")),
+  /** Destination agent for a specific `open-agent` handoff. */
+  agentId: Type.Optional(NonEmptyString),
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
   question: Type.Optional(SystemAgentChatQuestionSchema),

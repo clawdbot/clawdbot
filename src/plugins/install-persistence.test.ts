@@ -50,6 +50,21 @@ describe("persistPluginInstall", () => {
     resetPluginsCliTestState();
   });
 
+  it("labels plugin lifecycle config writes", async () => {
+    const { selectInstallMutationWriteOptions } = await import("./install-persistence.js");
+
+    expect(
+      selectInstallMutationWriteOptions({
+        expectedConfigPath: "/tmp/openclaw.json",
+        ownedConfigPathForWrite: "/tmp/openclaw.json",
+      }),
+    ).toMatchObject({
+      auditOrigin: "plugin-install",
+      expectedConfigPath: "/tmp/openclaw.json",
+      ownedConfigPathForWrite: "/tmp/openclaw.json",
+    });
+  });
+
   it("adds installed plugins to restrictive allowlists before enabling", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {

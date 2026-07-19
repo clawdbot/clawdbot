@@ -98,6 +98,7 @@ export function dispatchWidgetPrompt(
 export function buildMcpAppHostCapabilities(
   csp?: McpAppHostSandboxCsp,
   supportsMessage = false,
+  supportsUpdateModelContext = false,
 ): McpAppHostCapabilities {
   return {
     openLinks: {},
@@ -105,6 +106,7 @@ export function buildMcpAppHostCapabilities(
     serverTools: {},
     sandbox: { csp: csp ?? {} },
     ...(supportsMessage ? { message: { text: {} } } : {}),
+    ...(supportsUpdateModelContext ? { updateModelContext: { text: {} } } : {}),
   };
 }
 

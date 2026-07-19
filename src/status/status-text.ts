@@ -326,6 +326,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider,
     model,
     contextTokens,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedFastMode,
     resolvedVerboseLevel,
@@ -671,6 +672,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           provider: selectedLookupProvider,
           model: selectedLookupModel,
           level: requestedThinkLevel,
+          catalog: thinkingCatalog,
           agentRuntime: effectiveHarness,
           // Status uses loaded provider facts unless Codex needs OpenAI's static thinking contract.
           providerPolicySource:

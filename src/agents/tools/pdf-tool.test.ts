@@ -12,20 +12,16 @@ import * as modelDiscovery from "../agent-model-discovery.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
+import {
+  getModelRegistryRuntime,
+  initializeModelRegistryRuntime,
+} from "../sessions/model-registry-runtime.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
 const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../llm/stream.js", async () => {
-  const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
-  return {
-    ...actual,
-    complete: completeMock,
-  };
-});
 
 vi.mock("../provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
@@ -148,7 +144,10 @@ async function stubPdfToolInfra(
             maxTokens: 8192,
             input: params?.input ?? ["text", "document"],
           }) as never;
-  vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({ find } as never);
+  const modelRegistry = { find };
+  initializeModelRegistryRuntime(modelRegistry);
+  getModelRegistryRuntime(modelRegistry).llmRuntime.complete = completeMock;
+  vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue(modelRegistry as never);
 
   vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
     agentDir,
@@ -744,6 +743,7 @@ describe("createPdfTool", () => {
       expect(modelAuth.requireApiKey).not.toHaveBeenCalled();
       expect(setRuntimeApiKey).not.toHaveBeenCalled();
       expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
+        apiRegistry: expect.anything(),
         model: expect.objectContaining({
           provider: "amazon-bedrock",
           api: "bedrock-converse-stream",

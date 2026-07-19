@@ -48,22 +48,89 @@ describe("executeBashWithOperations", () => {
     await rm(result.fullOutputPath!, { force: true });
   });
 
-  it("does not consume a pending CSI at an output chunk boundary", async () => {
+  it("sanitizes ANSI and OSC sequences split across output chunks", async () => {
     const chunks: string[] = [];
     const operations: BashOperations = {
       exec: async (_command, _cwd, options) => {
-        options.onData(Buffer.from("\u001b["));
-        options.onData(Buffer.from("Ksecret"));
+        for (const chunk of [
+          "A\u001B]0;title",
+          "\u0007B",
+          "C\u001B[31",
+          "mD",
+          "E\u009D0;title",
+          "\u001B\\F",
+          "G\u009B31",
+          "mH",
+        ]) {
+          options.onData(Buffer.from(chunk));
+        }
         return { exitCode: 0 };
       },
     };
 
-    const result = await executeBashWithOperations("printf output", "/tmp", operations, {
+    const result = await executeBashWithOperations("printf styled", "/tmp", operations, {
       onChunk: (chunk) => chunks.push(chunk),
     });
 
-    expect(result.output).toBe("\\x1b[Ksecret");
-    expect(chunks.join("")).toBe("\\x1b[Ksecret");
+    expect(chunks.join("")).toBe("ABCDEFGH");
+    expect(result.output).toBe("ABCDEFGH");
+  });
+
+  it("stores sanitized split ANSI output in spilled full output files", async () => {
+    const chunks = ["A\u001B]0;title", "\u0007B\n"];
+    const repeatedChunks = Array.from({ length: 9000 }, (_, index) => chunks[index % 2] ?? "");
+    const expectedOutput = "AB\n".repeat(4500);
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, options) => {
+        for (const chunk of repeatedChunks) {
+          options.onData(Buffer.from(chunk));
+        }
+        return { exitCode: 0 };
+      },
+    };
+
+    const result = await executeBashWithOperations("printf styled", "/tmp", operations);
+
+    expect(result.truncated).toBe(true);
+    expect(result.fullOutputPath).toBeDefined();
+    expect(await readFile(result.fullOutputPath!, "utf8")).toBe(expectedOutput);
+    await rm(result.fullOutputPath!, { force: true });
+  });
+
+  it("sanitizes split compatibility escape grammar sequences", async () => {
+    const chunks: string[] = [];
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, options) => {
+        options.onData(Buffer.from("A\u001B("));
+        options.onData(Buffer.from("BB"));
+        return { exitCode: 0 };
+      },
+    };
+
+    const result = await executeBashWithOperations("printf styled", "/tmp", operations, {
+      onChunk: (chunk) => chunks.push(chunk),
+    });
+
+    expect(chunks.join("")).toBe("AB");
+    expect(result.output).toBe("AB");
+  });
+
+  it("does not retain unterminated OSC payload outside accumulator limits", async () => {
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, options) => {
+        options.onData(Buffer.from("safe\n\u001B]0;"));
+        options.onData(Buffer.from("x".repeat(DEFAULT_MAX_BYTES * 3)));
+        return { exitCode: 0 };
+      },
+    };
+
+    const result = await executeBashWithOperations("printf styled", "/tmp", operations);
+
+    expect(result.output).toBe("safe\n");
+    expect(result.truncated).toBe(false);
+    expect(result.fullOutputPath).toBeDefined();
+    expect(await readFile(result.fullOutputPath!, "utf8")).toBe("safe\n");
+    await rm(result.fullOutputPath!, { force: true });
   });
 
   it.each([

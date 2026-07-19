@@ -3,6 +3,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   isAutoLinkedFileRef,
   markdownToIRWithMeta,
+  renderMarkdownWithMarkers,
   sliceMarkdownIR,
   type MarkdownIR,
   type MarkdownLinkSpan,
@@ -83,13 +84,14 @@ type TelegramLinkAction =
 function resolveTelegramLinkAction(
   link: MarkdownLinkSpan,
   source: string,
+  context: { origin: "authored" | "linkify" },
 ): TelegramLinkAction | null {
   const href = link.href.trim();
   if (!href || link.start === link.end) {
     return null;
   }
   const label = source.slice(link.start, link.end);
-  if (isAutoLinkedFileRef(href, label)) {
+  if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
     // Bare file refs (README.md, openclaw.json) must render as code, not links:
     // Telegram's server-side entity detection would otherwise re-linkify them
     // and show spurious domain previews for TLD-like extensions.
@@ -103,6 +105,24 @@ function resolveTelegramLinkAction(
     return null;
   }
   return { kind: "url", href };
+}
+
+function collectTelegramLinkActions(
+  ir: MarkdownIR,
+): Array<{ start: number; end: number; action: TelegramLinkAction }> {
+  const links: Array<{ start: number; end: number; action: TelegramLinkAction }> = [];
+  renderMarkdownWithMarkers(ir, {
+    styleMarkers: {},
+    escapeText: (text) => text,
+    buildLink: (link, source, context) => {
+      const action = resolveTelegramLinkAction(link, source, context);
+      if (action) {
+        links.push({ start: link.start, end: link.end, action });
+      }
+      return null;
+    },
+  });
+  return links;
 }
 
 /**
@@ -132,12 +152,11 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   const annotationSpans = (slice.annotations ?? []).filter(
     (span) => span.type === "assistant_transcript_role",
   );
-  const links = slice.links
-    .filter((link) => !suppressed(link.start, link.end))
-    .flatMap((link) => {
-      const action = resolveTelegramLinkAction(link, text);
-      return action ? [{ start: link.start, end: link.end, action }] : [];
-    });
+  const links = collectTelegramLinkActions({
+    text,
+    styles: [],
+    links: slice.links.filter((link) => !suppressed(link.start, link.end)),
+  });
 
   const boundaries = new Set<number>([0, text.length]);
   for (const span of styleSpans) {

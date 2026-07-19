@@ -2,8 +2,13 @@
  * Core tool catalog and profile defaults.
  * Drives built-in profile allowlists, group expansion, and UI section metadata
  * for OpenClaw-owned tools.
+ *
+ * This module is bundled into the Control UI via tool-policy-shared. Keep it
+ * pure data + tiny pure functions: a value import of server config/runtime
+ * modules here drags the whole gateway graph into the ui build and breaks it.
  */
 import {
+  AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
   ASK_USER_TOOL_DISPLAY_SUMMARY,
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
@@ -225,6 +230,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "agents_wait",
+    label: "agents_wait",
+    description: AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_yield",
     label: "sessions_yield",
     description: "End turn to receive sub-agent results",
@@ -276,6 +289,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "screen",
     label: "screen",
     description: "Drive operator web UI",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "dashboard",
+    label: "dashboard",
+    description: "Read and arrange the session dashboard",
     sectionId: "ui",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -522,11 +543,16 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 }
 
 /** Lists core tools grouped into UI sections. */
-export function listCoreToolSections(): CoreToolSection[] {
+export function listCoreToolSections(params?: { swarmEnabled?: boolean }): CoreToolSection[] {
+  // Callers resolve the swarm gate and pass the fact in; resolving config here
+  // would couple this ui-shared module to the server graph.
+  const swarmEnabled = params?.swarmEnabled === true;
   return CORE_TOOL_SECTION_ORDER.map((section) => ({
     id: section.id,
     label: section.label,
-    tools: CORE_TOOL_DEFINITIONS.filter((tool) => tool.sectionId === section.id).map((tool) => ({
+    tools: CORE_TOOL_DEFINITIONS.filter(
+      (tool) => tool.sectionId === section.id && (tool.id !== "agents_wait" || swarmEnabled),
+    ).map((tool) => ({
       id: tool.id,
       label: tool.label,
       description: tool.description,

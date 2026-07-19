@@ -2196,7 +2196,7 @@ function renderExpandButton(
   return html`
     <openclaw-tooltip .content=${t("chat.messages.openInCanvas")}>
       <button
-        class="btn btn--xs chat-expand-btn"
+        class="chat-expand-btn"
         type="button"
         aria-label=${t("chat.messages.openInCanvas")}
         @click=${() =>

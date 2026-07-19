@@ -4,12 +4,18 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
+import { createHttp1ProxyAgent } from "../undici-runtime.js";
 import { runProxyValidation } from "./proxy-validation.js";
+
+vi.mock("../runtime-fetch.js", () => ({ fetchWithRuntimeDispatcher: vi.fn() }));
+vi.mock("../undici-runtime.js", () => ({ createHttp1ProxyAgent: vi.fn() }));
 
 describe("proxy validation", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
+    vi.clearAllMocks();
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -89,6 +95,56 @@ describe("proxy validation", () => {
 
     expect(result.ok).toBe(true);
     expect(fetchCheck).toHaveBeenCalled();
+  });
+
+  it("preserves the validated response when discarded body cancellation rejects", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("proxy response cancellation failed");
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("validated"));
+      },
+      cancel,
+    });
+    const close = vi.fn(async () => undefined);
+    vi.mocked(createHttp1ProxyAgent).mockReturnValue({ close } as unknown as ReturnType<
+      typeof createHttp1ProxyAgent
+    >);
+    vi.mocked(fetchWithRuntimeDispatcher).mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers: { "x-proxy-result": "validated" },
+      }),
+    );
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const result = await runProxyValidation({
+        proxyUrlOverride: "http://proxy.example:3128",
+        allowedUrls: ["https://example.com/"],
+        deniedUrls: [],
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        checks: [{ kind: "allowed", ok: true, status: 200 }],
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
   });
 
   it("prefers the configured proxy URL over OPENCLAW_PROXY_URL", async () => {

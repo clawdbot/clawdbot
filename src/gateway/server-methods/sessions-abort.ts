@@ -10,6 +10,10 @@ import {
   validateSessionsAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  isConfiguredSessionStoreAgentId,
+  resolveExistingAgentSessionStoreTargetsSync,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
@@ -195,7 +199,36 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedGlobalAgentId = requestedGlobalAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedGlobalAgentId });
+    const targetAgentId =
+      requestedGlobalAgentId ??
+      resolveSessionStoreAgentId(cfg, resolveSessionStoreKey({ cfg, sessionKey: key }));
+    const configuredTarget = isConfiguredSessionStoreAgentId(cfg, targetAgentId);
+    const existingTargets = configuredTarget
+      ? []
+      : resolveExistingAgentSessionStoreTargetsSync(cfg, targetAgentId);
+    const hasExactActiveRun = requestedRunId
+      ? scopedActiveRunSessionKey === key
+      : [...context.chatAbortControllers.values()].some(
+          (entry) => entry.controlUiVisible !== false && entry.sessionKey === key,
+        );
+    if (!configuredTarget && existingTargets.length === 0 && !hasExactActiveRun) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `agent "${targetAgentId}" not found`),
+      );
+      return;
+    }
+    // An exact live controller is already authoritative. Avoid opening the fallback store when
+    // neither config nor persistence owns it; that edge is the only one that could create state.
+    const canonicalKey =
+      configuredTarget || existingTargets.length > 0
+        ? loadSessionEntry(key, { agentId: requestedGlobalAgentId }).canonicalKey
+        : resolveSessionStoreKey({
+            cfg,
+            sessionKey: key,
+            ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
+          });
     const requestedKeyAliases =
       requestedKey &&
       requestedKey !== key &&

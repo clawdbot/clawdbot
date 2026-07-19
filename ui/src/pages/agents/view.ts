@@ -110,6 +110,7 @@ type AgentsProps = {
   onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
+  onCreateAgent: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
   onSelectFile: (name: string) => void;
@@ -175,6 +176,7 @@ export function renderAgents(props: AgentsProps) {
               .authToken=${props.authToken}
               .disabled=${props.loading}
               .onSelect=${props.onSelectAgent}
+              .onCreateAgent=${props.onCreateAgent}
             ></openclaw-agent-select>
           </div>
           <div class="agents-toolbar-actions">

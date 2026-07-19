@@ -132,7 +132,7 @@ internal enum class Tab(
   Overview(key = "overview", label = nativeText("Home"), icon = Icons.Default.Home),
   Chat(key = "chat", label = nativeText("Chat"), icon = Icons.Outlined.ChatBubbleOutline),
   Voice(key = "voice", label = nativeText("Voice"), icon = Icons.Outlined.MicNone),
-  Sessions(key = "sessions", label = nativeText("Sessions"), icon = Icons.Outlined.AccessTime),
+  Sessions(key = "sessions", label = nativeText("Threads"), icon = Icons.Outlined.AccessTime),
   Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
   ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
   Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
@@ -552,7 +552,7 @@ private fun OverviewScreen(
         if (visibleRecentRows.isEmpty()) {
           item {
             ClawEmptyState(
-              title = nativeString("No recent sessions"),
+              title = nativeString("No recent threads"),
               body = nativeString("Start a chat and your active OpenClaw conversations will appear here."),
               action = { ClawPrimaryButton(text = nativeString("Start Chat"), onClick = { onSelectTab(Tab.Chat) }) },
             )
@@ -674,7 +674,7 @@ private fun OverviewPrimaryPanel(
       }
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         OverviewStateChip(label = nativeString("Runs"), value = if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"), modifier = Modifier.weight(1f))
-        OverviewStateChip(label = nativeString("Sessions"), value = if (sessionCount == 0) nativeString("None") else nativeString("\$sessionCount recent", sessionCount), modifier = Modifier.weight(1f))
+        OverviewStateChip(label = nativeString("Threads"), value = if (sessionCount == 0) nativeString("None") else nativeString("\$sessionCount recent", sessionCount), modifier = Modifier.weight(1f))
         OverviewStateChip(label = nativeString("Cron"), value = cronJobsSummary(cronJobCount), modifier = Modifier.weight(1f))
       }
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -924,7 +924,7 @@ private fun TalkEntryPanel(
 @Composable
 private fun RecentSessionsHeader(onOpenSessions: () -> Unit) {
   SectionLabel(
-    title = nativeString("Recent Sessions"),
+    title = nativeString("Recent Threads"),
     action = {
       Surface(
         onClick = onOpenSessions,
@@ -1106,9 +1106,9 @@ internal fun overviewMetricCardSpecs(
       settingsRoute = SettingsRoute.Approvals,
     ),
     OverviewMetricCardSpec(
-      title = nativeString("Sessions"),
+      title = nativeString("Threads"),
       value = sessionCount.toString(),
-      subtitle = if (sessionCount == 0) nativeString("No recent sessions") else nativeString("Recent conversations"),
+      subtitle = if (sessionCount == 0) nativeString("No recent threads") else nativeString("Recent conversations"),
       icon = Icons.Default.Groups,
       status = if (sessionCount > 0) ClawStatus.Success else ClawStatus.Neutral,
       tab = Tab.Sessions,
@@ -1180,8 +1180,8 @@ internal fun overviewAgentActivityText(
     }
   }
   return when {
-    sessionCount == 1 -> nativeString("Monitoring · 1 session")
-    sessionCount > 1 -> nativeString("Monitoring · \$sessionCount sessions", sessionCount)
+    sessionCount == 1 -> nativeString("Monitoring · 1 thread")
+    sessionCount > 1 -> nativeString("Monitoring · \$sessionCount threads", sessionCount)
     cronJobCount == 1 -> nativeString("Monitoring · 1 scheduled job")
     cronJobCount > 1 -> nativeString("Monitoring · \$cronJobCount scheduled jobs", cronJobCount)
     else -> statusText
@@ -1484,7 +1484,7 @@ private fun RecentSessionRowContent(
       Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = nativeString("Open session"),
+        contentDescription = nativeString("Open thread"),
         modifier = Modifier.size(14.dp),
         tint = ClawTheme.colors.textMuted,
       )
@@ -2052,7 +2052,7 @@ private fun overviewRelativeSessionTime(
   return nativeString("\${days}d", days)
 }
 
-private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")
+private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
 
 internal fun gatewaySummary(
   statusText: String,

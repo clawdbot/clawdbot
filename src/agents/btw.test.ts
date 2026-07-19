@@ -20,6 +20,7 @@ const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
+const getModelRegistryRuntimeMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
 const ensureAuthProfileStoreMock = vi.fn();
 const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
@@ -80,6 +81,10 @@ vi.mock("./models-config.js", () => ({
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
   discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
+}));
+
+vi.mock("./sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
@@ -532,6 +537,11 @@ describe("runBtwSideQuestion", () => {
     ensureOpenClawModelsJsonMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
+    getModelRegistryRuntimeMock.mockReset();
+    getModelRegistryRuntimeMock.mockReturnValue({
+      apiRegistry: {},
+      llmRuntime: { streamSimple: streamSimpleMock },
+    });
     resolveModelAsyncMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();

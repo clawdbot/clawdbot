@@ -96,6 +96,7 @@ export async function resolveDirectStatusReplyForSession(
     agentCfg,
     resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
   });
+  const thinkingCatalog = await modelState.resolveThinkingCatalog();
   let resolvedReasoningLevel = currentReasoningLevel;
   const hasAgentReasoningDefault =
     (agentEntry?.reasoningDefault !== undefined && agentEntry.reasoningDefault !== null) ||
@@ -135,6 +136,7 @@ export async function resolveDirectStatusReplyForSession(
     provider: selectedProvider,
     model: selectedModel,
     contextTokens: statusEntry?.contextTokens ?? 0,
+    thinkingCatalog,
     resolvedThinkLevel: currentThinkLevel,
     resolvedFastMode: currentFastMode,
     resolvedVerboseLevel: currentVerboseLevel ?? "off",

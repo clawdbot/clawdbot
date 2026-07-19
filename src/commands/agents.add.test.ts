@@ -18,6 +18,7 @@ const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined
 const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
 );
+const createAgentMock = vi.hoisted(() => vi.fn());
 const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
     await writeConfigFileMock(params.nextConfig);
@@ -86,6 +87,8 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
+vi.mock("../agents/agent-create.js", () => ({ createAgent: createAgentMock }));
+
 vi.mock("../plugins/install-record-commit.js", async () => ({
   ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
     "../plugins/install-record-commit.js",
@@ -136,6 +139,41 @@ describe("agents add command", () => {
     replaceConfigFileMock.mockClear();
     commitConfigWithPendingPluginInstallsMock.mockClear();
     transformConfigWithPendingPluginInstallsMock.mockClear();
+    createAgentMock.mockReset();
+    createAgentMock.mockImplementation(
+      async (params: { name: string; workspace: string; bindingSpecs?: string[] }) => {
+        const agentId = params.name.toLowerCase();
+        if (agentId === "openclaw" || agentId === "crestodian") {
+          return { status: "error", reason: "reserved-id", agentId };
+        }
+        const binding = params.bindingSpecs?.[0]
+          ? {
+              type: "route",
+              agentId,
+              match: { channel: params.bindingSpecs[0].split(":")[0] },
+            }
+          : undefined;
+        return {
+          status: "created" as const,
+          agentId,
+          name: params.name,
+          workspace: params.workspace,
+          agentDir: `/tmp/agent-${agentId}`,
+          bootstrapPending: true,
+          ...(binding
+            ? {
+                bindingResult: {
+                  config: {},
+                  added: [],
+                  updated: [],
+                  skipped: [],
+                  conflicts: [{ binding, existingAgentId: "other-agent" }],
+                },
+              }
+            : {}),
+        };
+      },
+    );
     wizardMocks.createClackPrompter.mockClear();
     authChoiceMocks.applyAuthChoice.mockClear();
     authChoiceMocks.warnIfModelConfigLooksOff.mockClear();
@@ -424,54 +462,39 @@ describe("agents add command", () => {
   });
 
   describe("non-interactive config mutation", () => {
-    it("rebases agent creation on the latest config snapshot", async () => {
-      readConfigFileSnapshotMock
-        .mockResolvedValueOnce({
-          ...baseConfigSnapshot,
-          hash: "hash-1",
-          config: { agents: { list: [] } },
-          sourceConfig: { agents: { list: [] } },
-        })
-        .mockResolvedValueOnce({
-          ...baseConfigSnapshot,
-          hash: "hash-2",
-          config: { agents: { list: [{ id: "other-agent" }] } },
-          sourceConfig: { agents: { list: [{ id: "other-agent" }] } },
-        });
+    it("delegates creation to the canonical service", async () => {
+      readConfigFileSnapshotMock.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: { agents: { list: [] } },
+        sourceConfig: { agents: { list: [] } },
+      });
 
       await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
         hasFlags: true,
       });
 
-      expect(transformConfigWithPendingPluginInstallsMock).toHaveBeenCalledOnce();
-      expect(writeConfigFileMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agents: {
-            list: [
-              { id: "other-agent" },
-              expect.objectContaining({ id: "work", workspace: "/tmp/work" }),
-            ],
-          },
-        }),
-      );
+      expect(createAgentMock).toHaveBeenCalledWith({
+        name: "Work",
+        workspace: "/tmp/work",
+        transformConfig: transformConfigWithPendingPluginInstallsMock,
+      });
+      expect(transformConfigWithPendingPluginInstallsMock).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();
     });
 
-    it("fails instead of overwriting when the same agent appears before commit", async () => {
-      readConfigFileSnapshotMock
-        .mockResolvedValueOnce({
-          ...baseConfigSnapshot,
-          hash: "hash-1",
-          config: { agents: { list: [] } },
-          sourceConfig: { agents: { list: [] } },
-        })
-        .mockResolvedValueOnce({
-          ...baseConfigSnapshot,
-          hash: "hash-2",
-          config: { agents: { list: [{ id: "work", workspace: "/tmp/other" }] } },
-          sourceConfig: { agents: { list: [{ id: "work", workspace: "/tmp/other" }] } },
-        });
+    it("reports a duplicate rejected by the canonical service", async () => {
+      readConfigFileSnapshotMock.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: { agents: { list: [] } },
+        sourceConfig: { agents: { list: [] } },
+      });
+      createAgentMock.mockResolvedValueOnce({
+        status: "error",
+        reason: "already-exists",
+        agentId: "work",
+        message: 'agent "work" already exists',
+      });
 
       await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
         hasFlags: true,

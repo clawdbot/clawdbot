@@ -220,7 +220,7 @@ struct ChatProTab: View {
             ContentUnavailableView(
                 "Preparing Chat",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("The session attaches once the gateway is ready.")
+                description: Text("The thread attaches once the gateway is ready.")
                     .font(OpenClawType.body))
         }
     }
@@ -568,7 +568,7 @@ struct ChatProTab: View {
                 self.showsSessions = true
             } label: {
                 Label {
-                    Text(String(localized: "Sessions…"))
+                    Text(String(localized: "Threads…"))
                         .font(OpenClawType.body)
                 } icon: {
                     Image(systemName: "rectangle.stack")

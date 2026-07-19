@@ -6,6 +6,8 @@ import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
 import "./channels-page.ts";
 
+const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+
 type ChannelsPageTestElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
@@ -17,6 +19,7 @@ type NostrTestPage = ChannelsPageTestElement & {
     values: NostrProfile;
     saving: boolean;
     importing: boolean;
+    error: string | null;
   } | null;
   nostrProfileAccountId: string | null;
   editNostrProfile: (accountId: string, profile: NostrProfile | null) => void;
@@ -37,6 +40,21 @@ function createDeferred<T>() {
     throw new Error("Expected deferred callback to be initialized");
   }
   return { promise, resolve };
+}
+
+function stubHangingFetch() {
+  const fetchMock = vi.fn<typeof fetch>(
+    async (_input, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Expected Nostr profile request to carry an AbortSignal");
+        }
+        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 function createGateway(): TestGateway {
@@ -96,6 +114,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("ChannelsPage lifecycle", () => {
@@ -219,6 +238,54 @@ describe("ChannelsPage lifecycle", () => {
     expect(page.nostrProfileAccountId).toBe("new-account");
     expect(page.nostrProfileFormState?.values.name).toBe("fresh");
     expect(refresh).not.toHaveBeenCalled();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("clears profile saving when the gateway response times out", async () => {
+    vi.useFakeTimers();
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    const fetchMock = stubHangingFetch();
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("default", { name: "Alice" });
+
+    const save = page.saveNostrProfile();
+    await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS);
+    await save;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(page.nostrProfileFormState?.saving).toBe(false);
+    expect(page.nostrProfileFormState?.error).toBe(
+      "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
+    );
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("clears profile importing when the gateway response times out", async () => {
+    vi.useFakeTimers();
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    const fetchMock = stubHangingFetch();
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("default", { name: "Alice" });
+
+    const load = page.importNostrProfile();
+    await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS);
+    await load;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(page.nostrProfileFormState?.importing).toBe(false);
+    expect(page.nostrProfileFormState?.error).toBe(
+      "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
+    );
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });

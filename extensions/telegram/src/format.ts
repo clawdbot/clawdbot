@@ -49,7 +49,11 @@ function isTelegramRichLinkHref(href: string): boolean {
  *
  * Excluded: .ai, .io, .tv, .fm (popular domain TLDs like x.ai, vercel.io, github.io)
  */
-function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
+function buildTelegramLink(
+  link: MarkdownLinkSpan,
+  text: string,
+  context: { origin: "authored" | "linkify" },
+) {
   const href = link.href.trim();
   if (!href) {
     return null;
@@ -64,7 +68,7 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
   const label = text.slice(link.start, link.end);
-  if (isAutoLinkedFileRef(href, label)) {
+  if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
     return null;
   }
   const safeHref = escapeHtmlAttr(href);
@@ -178,7 +182,6 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
 const ESCAPED_HTML_TAG_PATTERN = /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(.*?)&gt;/g;
 const TELEGRAM_HTML_ANCHOR_PATTERN =
@@ -499,15 +502,6 @@ function wrapSegmentFileRefs(
 }
 
 export function wrapFileReferencesInHtml(html: string): string {
-  // Safety-net: de-linkify auto-generated anchors where href="http://<label>" (defense in depth for textMode: "html")
-  AUTO_LINKED_ANCHOR_PATTERN.lastIndex = 0;
-  const deLinkified = html.replace(AUTO_LINKED_ANCHOR_PATTERN, (_match, label: string) => {
-    if (!isAutoLinkedFileRef(`http://${label}`, label)) {
-      return _match;
-    }
-    return `<code>${escapeHtml(label)}</code>`;
-  });
-
   // Track nesting depth for tags that should not be modified
   let codeDepth = 0;
   let preDepth = 0;
@@ -516,14 +510,14 @@ export function wrapFileReferencesInHtml(html: string): string {
   let lastIndex = 0;
 
   // Process tags token-by-token so we can skip protected regions while wrapping plain text.
-  for (const tag of tokenizeHtmlTags(deLinkified)) {
+  for (const tag of tokenizeHtmlTags(html)) {
     const tagStart = tag.start;
     const tagEnd = tag.end;
     const isClosing = tag.closing;
     const tagName = tag.name;
 
     // Process text before this tag
-    const textBefore = deLinkified.slice(lastIndex, tagStart);
+    const textBefore = html.slice(lastIndex, tagStart);
     result += wrapSegmentFileRefs(textBefore, codeDepth, preDepth, anchorDepth);
 
     // Update tag depth (clamp at 0 for malformed HTML with stray closing tags)
@@ -536,12 +530,12 @@ export function wrapFileReferencesInHtml(html: string): string {
     }
 
     // Add the tag itself
-    result += deLinkified.slice(tagStart, tagEnd);
+    result += html.slice(tagStart, tagEnd);
     lastIndex = tagEnd;
   }
 
   // Process remaining text
-  const remainingText = deLinkified.slice(lastIndex);
+  const remainingText = html.slice(lastIndex);
   result += wrapSegmentFileRefs(remainingText, codeDepth, preDepth, anchorDepth);
 
   return result;

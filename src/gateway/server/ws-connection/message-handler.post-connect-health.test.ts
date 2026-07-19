@@ -187,6 +187,7 @@ function attachGatewayHarness(options: {
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
   requestOrigin?: string;
   requestHost?: string;
+  headers?: Record<string, string>;
   remoteAddr?: string;
   localAddr?: string;
   resolvedAuth?: ResolvedGatewayAuth;
@@ -220,12 +221,14 @@ function attachGatewayHarness(options: {
     allowTailscale: false,
   };
   const advanceHandshakePhase = vi.fn();
+  const logWsControl = createLogger();
   attachGatewayWsMessageHandler({
     socket,
     upgradeReq: {
       headers: {
         host: requestHost,
         ...(options.requestOrigin ? { origin: options.requestOrigin } : {}),
+        ...options.headers,
       },
       socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
@@ -259,7 +262,7 @@ function attachGatewayHarness(options: {
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
     logGateway: createLogger() as never,
     logHealth: createLogger() as never,
-    logWsControl: createLogger() as never,
+    logWsControl: logWsControl as never,
   });
   if (onMessage === undefined) {
     throw new Error("expected websocket message handler");
@@ -267,6 +270,7 @@ function attachGatewayHarness(options: {
   const sendMessage = onMessage;
   return {
     advanceHandshakePhase,
+    logWsControl,
     send,
     socketSend,
     sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
@@ -527,6 +531,131 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
+  });
+
+  it("projects trusted-proxy identity into presence and the connected client", async () => {
+    loadConfigMock.mockImplementationOnce(() => ({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+          },
+        },
+        trustedProxies: ["10.0.0.1"],
+        controlUi: {
+          allowedOrigins: ["http://127.0.0.1:19001"],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    }));
+    const harness = attachGatewayHarness({
+      connId: "conn-trusted-proxy-user",
+      connectNonce: "nonce-trusted-proxy-user",
+      requestHost: "gateway.example.com:18789",
+      requestOrigin: "http://127.0.0.1:19001",
+      remoteAddr: "10.0.0.1",
+      resolvedAuth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+        },
+      },
+      headers: {
+        "x-forwarded-user": "alice@example.com",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    harness.sendConnect("connect-trusted-proxy-user", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-control-ui",
+        version: "dev",
+        platform: "test",
+        mode: "ui",
+      },
+      role: "operator",
+      caps: [],
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend.mock.calls.length + harness.send.mock.calls.length).toBeGreaterThan(
+        0,
+      );
+    });
+    const trustedProxyHello = harness.socketSend.mock.calls.at(0)?.[0];
+    expect(
+      typeof trustedProxyHello === "string"
+        ? JSON.parse(trustedProxyHello)
+        : harness.send.mock.calls.at(0)?.[0],
+    ).toMatchObject({
+      ok: true,
+    });
+    await waitForFast(() => {
+      expect(upsertPresenceMock).toHaveBeenCalledWith(
+        "conn-trusted-proxy-user",
+        expect.objectContaining({
+          user: { id: "alice@example.com", email: "alice@example.com" },
+        }),
+      );
+    });
+    expect(harness.client).toMatchObject({ authenticatedUserId: "alice@example.com" });
+    expect(harness.logWsControl.info).toHaveBeenCalledWith(
+      "authenticated user connected conn=conn-trusted-proxy-user user=alice@example.com",
+    );
+  });
+
+  it("keeps token-authenticated presence free of user identity", async () => {
+    const harness = attachGatewayHarness({
+      connId: "conn-token-userless",
+      connectNonce: "nonce-token-userless",
+      requestHost: "gateway.example.com:18789",
+      requestOrigin: "http://127.0.0.1:19001",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+    });
+
+    harness.sendConnect("connect-token-userless", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-control-ui",
+        version: "dev",
+        platform: "test",
+        mode: "ui",
+      },
+      role: "operator",
+      caps: [],
+      auth: { token: "gateway-token" },
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend.mock.calls.length + harness.send.mock.calls.length).toBeGreaterThan(
+        0,
+      );
+    });
+    const tokenHello = harness.socketSend.mock.calls.at(0)?.[0];
+    expect(
+      typeof tokenHello === "string" ? JSON.parse(tokenHello) : harness.send.mock.calls.at(0)?.[0],
+    ).toMatchObject({
+      ok: true,
+    });
+    await waitForFast(() => {
+      expect(upsertPresenceMock).toHaveBeenCalledWith(
+        "conn-token-userless",
+        expect.not.objectContaining({ user: expect.anything() }),
+      );
+    });
+    expect(harness.client).not.toMatchObject({ authenticatedUserId: expect.anything() });
   });
 
   it("emits a security event for rejected gateway auth", async () => {

@@ -5,7 +5,7 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawTypographyTests {
-    @Test func `session controls use branded typography`() throws {
+    @Test func `thread controls use branded typography`() throws {
         let support = try String(
             contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
             encoding: .utf8)
@@ -222,7 +222,7 @@ struct OpenClawTypographyTests {
         #expect(proComponents.contains("secondaryActionTitle.text"))
 
         #expect(chatTab.contains("Text(\"Export Transcript\")"))
-        #expect(chatTab.contains("Text(String(localized: \"Sessions…\"))"))
+        #expect(chatTab.contains("Text(String(localized: \"Threads…\"))"))
         #expect(chatTab.contains("Text(String(localized: \"Show reasoning & tool activity\"))"))
         #expect(chatTab.contains(".font(OpenClawType.body)"))
         #expect(!chatTab.contains("Button(\"Export Transcript\")"))

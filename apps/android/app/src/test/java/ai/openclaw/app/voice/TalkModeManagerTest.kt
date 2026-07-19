@@ -11,8 +11,11 @@ import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
+import android.os.Bundle
 import android.os.SystemClock
+import android.speech.RecognitionListener
 import android.speech.RecognitionService
+import android.speech.SpeechRecognizer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +29,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.resetMain
@@ -275,6 +279,147 @@ class TalkModeManagerTest {
         assertEquals("new partial transcript", readPrivateField(manager, "lastTranscript"))
         assertFalse(completion.isCompleted)
       } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun segmentDuringPushToTalkReleaseWaitsForEndOfSegmentedSession() {
+    val manager = createManager()
+    val releaseCompletion = CompletableDeferred<Unit>()
+    setPrivateField(manager, "activePttCaptureId", "capture-1")
+    setPrivateField(manager, "pttReleaseCompletion", releaseCompletion)
+    val listener = recognitionListener(manager, "capture-1")
+    val segment =
+      Bundle().apply {
+        putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf("first segment"))
+      }
+
+    listener.onSegmentResults(segment)
+
+    assertFalse(releaseCompletion.isCompleted)
+    assertEquals(listOf("first segment"), readPrivateField(manager, "pttFinalSegments"))
+
+    listener.onEndOfSegmentedSession()
+
+    assertTrue(releaseCompletion.isCompleted)
+  }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun releaseKeepsWaitingPastOldGraceForLateTerminalSegment() =
+    runTest {
+      val manager = createManager(isConnected = { false })
+      val releaseCompletion = CompletableDeferred<Unit>()
+      setPrivateField(manager, "activePttCaptureId", "capture-1")
+      setPrivateField(manager, "pttReleaseCompletion", releaseCompletion)
+      setPrivateField(manager, "pttRecognitionRung", silenceSegmentedRung())
+      @Suppress("UNCHECKED_CAST")
+      (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "early segment"
+      val listener = recognitionListener(manager, "capture-1")
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val ending = async { manager.endPushToTalk("capture-1") }
+        runCurrent()
+
+        advanceTimeBy(1_200)
+        listener.onSegmentResults(
+          Bundle().apply {
+            putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf("late segment"))
+          },
+        )
+        assertFalse(ending.isCompleted)
+
+        listener.onEndOfSegmentedSession()
+        advanceUntilIdle()
+
+        assertEquals("early segment. late segment", ending.await().transcript)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun cancelledEndPushToTalkClearsPendingReleaseBeforeNextBegin() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val packageManager = shadowOf(app.packageManager)
+      val speechService = ComponentName(app, "TestSpeechRecognitionService")
+      packageManager.addServiceIfNotPresent(speechService)
+      packageManager.addIntentFilterForService(speechService, IntentFilter(RecognitionService.SERVICE_INTERFACE))
+      val manager = createManager()
+      setPrivateField(manager, "activePttCaptureId", "capture-a")
+      setPrivateField(manager, "pttReleaseCompletion", CompletableDeferred<Unit>())
+      setPrivateField(manager, "pttRecognitionRung", silenceSegmentedRung())
+      @Suppress("UNCHECKED_CAST")
+      (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "capture a"
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val ending = async { manager.endPushToTalk("capture-a") }
+        runCurrent()
+        ending.cancel()
+        runCurrent()
+        ending.join()
+
+        assertTrue(ending.isCancelled)
+        assertNull(readPrivateField(manager, "activePttCaptureId"))
+        assertNull(readPrivateField(manager, "pttReleaseCompletion"))
+        assertEquals(emptyList<String>(), readPrivateField(manager, "pttFinalSegments"))
+
+        val started = manager.beginPushToTalk(allowNewCapture = true)
+
+        assertEquals(started.captureId, readPrivateField(manager, "activePttCaptureId"))
+        assertEquals(emptyList<String>(), readPrivateField(manager, "pttFinalSegments"))
+      } finally {
+        manager.stopAllCapture()
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun replacementBeginDrainsPendingReleaseBeforeStartingNewCapture() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val packageManager = shadowOf(app.packageManager)
+      val speechService = ComponentName(app, "TestSpeechRecognitionService")
+      packageManager.addServiceIfNotPresent(speechService)
+      packageManager.addIntentFilterForService(speechService, IntentFilter(RecognitionService.SERVICE_INTERFACE))
+      var connectionChecks = 0
+      val manager =
+        createManager(
+          isConnected = {
+            connectionChecks += 1
+            connectionChecks != 2
+          },
+        )
+      val releaseCompletion = CompletableDeferred<Unit>()
+      setPrivateField(manager, "activePttCaptureId", "capture-a")
+      setPrivateField(manager, "pttReleaseCompletion", releaseCompletion)
+      setPrivateField(manager, "pttRecognitionRung", silenceSegmentedRung())
+      @Suppress("UNCHECKED_CAST")
+      (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "first segment"
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val ending = async { manager.endPushToTalk("capture-a") }
+        runCurrent()
+        val starting = async { manager.beginPushToTalk(allowNewCapture = true) }
+        runCurrent()
+
+        releaseCompletion.complete(Unit)
+        advanceUntilIdle()
+
+        val ended = ending.await()
+        val started = starting.await()
+        assertEquals("offline", ended.status)
+        assertEquals("first segment", ended.transcript)
+        assertEquals(started.captureId, readPrivateField(manager, "activePttCaptureId"))
+        assertEquals(emptyList<String>(), readPrivateField(manager, "pttFinalSegments"))
+      } finally {
+        manager.stopAllCapture()
         Dispatchers.resetMain()
       }
     }
@@ -1123,6 +1268,20 @@ class TalkModeManagerTest {
       )
     method.isAccessible = true
     return method.invoke(manager, length) as Boolean
+  }
+
+  private fun recognitionListener(
+    manager: TalkModeManager,
+    captureId: String,
+  ): RecognitionListener {
+    val method = manager.javaClass.getDeclaredMethod("recognitionListener", String::class.java)
+    method.isAccessible = true
+    return method.invoke(manager, captureId) as RecognitionListener
+  }
+
+  private fun silenceSegmentedRung(): Any {
+    val clazz = Class.forName("ai.openclaw.app.voice.PushToTalkRecognitionRung\$SilenceSegmented")
+    return requireNotNull(clazz.getField("INSTANCE").get(null))
   }
 
   private fun chatFinalPayload(

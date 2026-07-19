@@ -639,6 +639,28 @@ describe("loadSettings default gateway URL derivation", () => {
     );
   });
 
+  it("defaults composer hold-to-record on and persists only the opt-out", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().composerHoldToRecord).toBe(true);
+
+    saveSettings({ ...loadSettings(), composerHoldToRecord: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").composerHoldToRecord).toBe(false);
+    expect(loadSettings().composerHoldToRecord).toBe(false);
+
+    saveSettings({ ...loadSettings(), composerHoldToRecord: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "composerHoldToRecord",
+    );
+    expect(loadSettings().composerHoldToRecord).toBe(true);
+  });
+
   it("normalizes and persists the device-local talk camera preference", () => {
     setTestLocation({
       protocol: "https:",

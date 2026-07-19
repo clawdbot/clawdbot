@@ -58,7 +58,7 @@ struct IPadActivityScreen: View {
                 color: OpenClawBrand.accentForeground),
             ProMetric(
                 icon: "bubble.left.and.text.bubble.right",
-                title: "Sessions",
+                title: "Threads",
                 value: self.isLoading ? "..." : "\(self.sessionRows.count)",
                 color: OpenClawBrand.accentHotForeground),
         ]
@@ -112,7 +112,7 @@ struct IPadActivityScreen: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: "hourglass",
-                        title: "Loading sessions",
+                        title: "Loading threads",
                         detail: "Fetching recent activity from the gateway.",
                         value: "loading",
                         color: OpenClawBrand.accentForeground,
@@ -122,7 +122,7 @@ struct IPadActivityScreen: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: "exclamationmark.triangle.fill",
-                        title: "Sessions unavailable",
+                        title: "Threads unavailable",
                         detail: .verbatim(loadErrorText),
                         value: "error",
                         color: OpenClawBrand.warn,
@@ -132,7 +132,7 @@ struct IPadActivityScreen: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: "bubble.left.and.text.bubble.right",
-                        title: self.sessionsAvailable ? "No recent sessions" : "Session activity offline",
+                        title: self.sessionsAvailable ? "No recent threads" : "Thread activity offline",
                         detail: self.sessionsAvailable
                             ? "Start a chat and it will appear here."
                             : "Connect to the gateway to load recent chat activity.",

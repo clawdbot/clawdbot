@@ -27,6 +27,7 @@ export {
 } from "../utils/delivery-context.shared.js";
 export { resolveAgentConfig } from "./agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "./lanes.js";
+export { loadModelCatalog } from "./model-catalog.js";
 export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";

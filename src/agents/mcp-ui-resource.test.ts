@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
   buildMcpAppContentSecurityPolicy,
   buildMcpAppSandboxPath,
@@ -238,11 +239,17 @@ describe("MCP App UI resources", () => {
       toolInput: { token: "secret" },
       toolResult: { content: [] },
     });
-    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toBeDefined();
+    const view = getMcpAppViewLease(result?.viewId ?? "", sessionRuntime);
+    expect(view).toBeDefined();
+    updateMcpAppModelContext(sessionRuntime, view!, {
+      content: [{ type: "text", text: "ephemeral context" }],
+    });
+    expect(sessionRuntime.pendingMcpAppModelContext).toBeDefined();
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toBeUndefined();
+    expect(sessionRuntime.pendingMcpAppModelContext).toBeUndefined();
     expect(sessionRuntime.acquireLease).toHaveBeenCalledOnce();
     const release = vi.mocked(sessionRuntime.acquireLease!).mock.results[0]?.value;
     expect(release).toHaveBeenCalledOnce();

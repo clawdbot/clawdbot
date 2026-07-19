@@ -4,10 +4,19 @@ import { isVerbose } from "../global-state.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import {
+  configSnapshotAuditRecordMatchesPath,
+  fingerprintConfigSnapshotAuthoredConfig,
+  readLatestConfigSnapshotAuditRecord,
+  restoreConfigSnapshotAuditRecord,
+  upsertConfigSnapshotAuditRecord,
+} from "./config-journal-snapshot.js";
 import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
+  capConfigAuditIssues,
+  capConfigAuditPaths,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
@@ -53,6 +62,7 @@ import {
   stampConfigVersion,
   tightenStateDirPermissionsIfNeeded,
 } from "./io.write-safety.js";
+import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
@@ -82,7 +92,14 @@ export async function writeConfigFileFromContext(
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
   let envRefMap: Map<string, string> | null = null;
-  let changedPaths: Set<string> | null = null;
+  const changedPaths = new Set<string>();
+  collectChangedPaths(snapshot.config, cfg, "", changedPaths);
+  for (const changedPath of [...(options.explicitSetPaths ?? []), ...(options.unsetPaths ?? [])]) {
+    const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
+    if (normalizedPath) {
+      changedPaths.add(normalizedPath);
+    }
+  }
   const identityRestoredPaths = new Set<string>();
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
   const hasResolvedAuthoredIncludes =
@@ -130,8 +147,6 @@ export async function writeConfigFileFromContext(
       collectEnvRefPaths(resolvedIncludes, "", collected);
       if (collected.size > 0) {
         envRefMap = collected;
-        changedPaths = new Set<string>();
-        collectChangedPaths(snapshot.config, cfg, "", changedPaths);
       }
     } catch {
       envRefMap = null;
@@ -158,6 +173,11 @@ export async function writeConfigFileFromContext(
     );
   }
   const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
+  // Capture before commit so rollback cannot restore a watcher-updated slot.
+  const priorSnapshotAuditRecord = readLatestConfigSnapshotAuditRecord({
+    env: deps.env,
+    homedir: deps.homedir,
+  });
 
   let cfgToWrite = persistCandidate as OpenClawConfig;
   try {
@@ -184,16 +204,15 @@ export async function writeConfigFileFromContext(
     homedir: deps.homedir,
     fsModule: deps.fs,
   });
-  const outputConfigBase =
-    envRefMap && changedPaths
-      ? (restoreEnvRefsFromMap(
-          cfgToWrite,
-          "",
-          envRefMap,
-          changedPaths,
-          identityRestoredPaths,
-        ) as OpenClawConfig)
-      : cfgToWrite;
+  const outputConfigBase = envRefMap
+    ? (restoreEnvRefsFromMap(
+        cfgToWrite,
+        "",
+        envRefMap,
+        changedPaths,
+        identityRestoredPaths,
+      ) as OpenClawConfig)
+    : cfgToWrite;
   const tildeRestoredOutputConfig = restoreAuthoredTildePathsForWrite(
     outputConfigBase,
     snapshot.parsed,
@@ -209,7 +228,7 @@ export async function writeConfigFileFromContext(
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = resolveConfigSnapshotHash(snapshot);
-  const changedPathCount = changedPaths?.size;
+  const changedPathCount = changedPaths.size;
   const previousBytes =
     typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
   const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
@@ -286,6 +305,8 @@ export async function writeConfigFileFromContext(
     nextBytes,
     previousMetadata: resolveConfigStatMetadata(previousStat),
     changedPathCount,
+    changedPaths: [...changedPaths],
+    origin: options.auditOrigin,
     hasMetaBefore,
     hasMetaAfter,
     gatewayModeBefore,
@@ -339,7 +360,8 @@ export async function writeConfigFileFromContext(
           ),
       });
     });
-  await preCommitRuntimePreflight(context.resolveRuntimePreflightSourceConfig(stampedOutputConfig));
+  const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
+  await preCommitRuntimePreflight(sourceConfigForPreflight);
 
   const pluginMigration = context.ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
   let configCommitted = false;
@@ -402,28 +424,76 @@ export async function writeConfigFileFromContext(
       undefined,
       await deps.fs.promises.stat(configPath).catch(() => null),
     );
+    if (
+      configSnapshotAuditRecordMatchesPath(priorSnapshotAuditRecord, configPath) &&
+      priorSnapshotAuditRecord.rawHash !== previousHash
+    ) {
+      const offlineChangedPaths = new Set<string>();
+      collectChangedPaths(
+        priorSnapshotAuditRecord.fingerprintedAuthoredConfig,
+        fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, {
+          env: deps.env,
+          homedir: deps.homedir,
+        }),
+        "",
+        offlineChangedPaths,
+      );
+      await appendConfigAuditRecord({
+        env: deps.env,
+        homedir: deps.homedir,
+        record: {
+          ts: new Date().toISOString(),
+          source: "config-io",
+          event: "config.external",
+          detectedBy: "write",
+          configPath,
+          previousHash: priorSnapshotAuditRecord.rawHash,
+          nextHash: previousHash ?? null,
+          valid: snapshot.valid,
+          ...(snapshot.valid
+            ? offlineChangedPaths.size > 0
+              ? { changedPaths: capConfigAuditPaths([...offlineChangedPaths]) }
+              : { opaqueChange: true }
+            : {
+                issues: capConfigAuditIssues(
+                  formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }),
+                ),
+              }),
+        },
+      });
+    }
+    const writtenSnapshotAuditRecord = upsertConfigSnapshotAuditRecord({
+      env: deps.env,
+      homedir: deps.homedir,
+      configPath,
+      rawHash: nextHash,
+      authoredConfig: stampedOutputConfig,
+      expectedSnapshot: priorSnapshotAuditRecord,
+    });
     if (!options.skipPluginValidation) {
       logConfigWarningsOnce({ configPath, warnings: validated.warnings, logger: deps.logger });
     }
     return {
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
-      ...(pluginMigration.migrated || !options.skipPluginValidation
-        ? {
-            [configWritePostCommitRollback]: () => {
-              context.rollbackShippedPluginInstallConfigWriteMigration(pluginMigration);
-              if (previousWarningFingerprint === undefined) {
-                loggedConfigWarningFingerprints.delete(configPath);
-              } else {
-                setBoundedConfigIoWarningEntry(
-                  loggedConfigWarningFingerprints,
-                  configPath,
-                  previousWarningFingerprint,
-                );
-              }
-            },
-          }
-        : {}),
+      [configWritePostCommitRollback]: () => {
+        restoreConfigSnapshotAuditRecord({
+          env: deps.env,
+          homedir: deps.homedir,
+          snapshot: priorSnapshotAuditRecord,
+          expectedSnapshot: writtenSnapshotAuditRecord,
+        });
+        context.rollbackShippedPluginInstallConfigWriteMigration(pluginMigration);
+        if (previousWarningFingerprint === undefined) {
+          loggedConfigWarningFingerprints.delete(configPath);
+        } else {
+          setBoundedConfigIoWarningEntry(
+            loggedConfigWarningFingerprints,
+            configPath,
+            previousWarningFingerprint,
+          );
+        }
+      },
     };
   } catch (error) {
     if (!configCommitted) {

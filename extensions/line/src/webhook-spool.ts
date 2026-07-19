@@ -2,7 +2,7 @@
 import type { webhook } from "@line/bot-sdk";
 import {
   bindIngressLifecycleToReplyOptions,
-  createChannelIngressDrain,
+  createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
@@ -21,6 +21,16 @@ const LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES = 4096;
 
 type LineWebhookSpoolPayload = {
   version: number;
+  rawEvent: string;
+  destination: string;
+};
+
+type LineWebhookIngressEvent = {
+  event: webhook.Event;
+  destination: string;
+};
+
+type LineWebhookSpoolBody = {
   rawEvent: string;
   destination: string;
 };
@@ -115,22 +125,12 @@ function laneKeyFor(event: unknown, eventId: string): string {
   return eventId;
 }
 
-function parseClaimedEvent(payload: LineWebhookSpoolPayload, claimedId: string): webhook.Event {
-  if (
-    payload.version !== LINE_WEBHOOK_SPOOL_VERSION ||
-    typeof payload.rawEvent !== "string" ||
-    typeof payload.destination !== "string"
-  ) {
-    throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
-  }
+function parseStoredEvent(rawEvent: string): webhook.Event {
   let event: unknown;
   try {
-    event = JSON.parse(payload.rawEvent);
+    event = JSON.parse(rawEvent);
   } catch (error) {
     throw new LineWebhookPayloadError("LINE webhook event JSON is invalid.", { cause: error });
-  }
-  if (eventIdFor(event) !== claimedId) {
-    throw new LineWebhookPayloadError("LINE webhook event id changed after durable admission.");
   }
   return event as webhook.Event;
 }
@@ -173,40 +173,55 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     getLineRuntime().state.openChannelIngressQueue<LineWebhookSpoolPayload>({
       accountId: options.accountId,
     });
-  const shutdown = new AbortController();
-  // Match the predecessor worker's per-spool cap across repeated drain pumps.
   const activeDeliveries = new Set<Promise<void>>();
   const deferredClaims = new Map<string, Promise<void>>();
   let acceptsDeferredClaims = true;
-  const drain = createChannelIngressDrain<LineWebhookSpoolPayload>({
+  const monitor = createChannelIngressMonitor<
+    LineWebhookIngressEvent,
+    LineWebhookSpoolBody,
+    LineWebhookSpoolPayload
+  >({
     queue,
-    abortSignal: shutdown.signal,
-    adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
-    orderBy: "received",
-    scanLimit: LINE_WEBHOOK_DRAIN_SCAN_LIMIT,
-    startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
-    retryPolicy: {
-      maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      // LINE previously dead-lettered on attempt eight. The generic 24-hour floor
-      // would let one poison event block its user/group lane for a full day.
-      deadLetterMinAgeMs: 0,
+    inspect: ({ event }) => {
+      const eventId = eventIdFor(event);
+      return { eventId, laneKey: laneKeyFor(event, eventId) };
     },
-    resolveNonRetryableFailure: (error) => {
-      if (error instanceof LineWebhookPayloadError) {
-        return { reason: "invalid-event", message: error.message };
-      }
-      if (error instanceof LineWebhookTerminalDeliveryError) {
-        return { reason: error.reason, message: error.message };
-      }
-      if (isLineAuthenticationFailure(error)) {
-        return { reason: "authentication-failed", message: errorText(error) };
-      }
-      return null;
+    payload: {
+      version: LINE_WEBHOOK_SPOOL_VERSION,
+      serialize: ({ event, destination }) => ({
+        rawEvent: JSON.stringify(event),
+        destination,
+      }),
+      deserialize: ({ rawEvent, destination }) => ({
+        event: parseStoredEvent(rawEvent),
+        destination,
+      }),
+      encode: ({ version, body }) => ({
+        version,
+        rawEvent: body.rawEvent,
+        destination: body.destination,
+      }),
+      decode: (payload) => {
+        if (typeof payload.rawEvent !== "string" || typeof payload.destination !== "string") {
+          throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
+        }
+        return {
+          version: payload.version,
+          body: { rawEvent: payload.rawEvent, destination: payload.destination },
+        };
+      },
+      createClaimError: (kind) =>
+        new LineWebhookPayloadError(
+          kind === "invalid-version"
+            ? "LINE webhook spool payload is invalid."
+            : "LINE webhook event identity changed after durable admission.",
+        ),
     },
-    onLog: (message) => options.runtime.error?.(danger(`line: ${message}`)),
-    dispatchClaimedEvent: async (claimed, lifecycle) => {
-      const event = parseClaimedEvent(claimed.payload, claimed.id);
+    deliver: async ({ event, destination }, lifecycle, claim) => {
+      // Reply options intentionally omit the drain-only onAdoptionFinalizing callback;
+      // the monitor wrapper already tracks that callback as a handoff before invoking us.
       const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
+      let handedOff = false;
       let resolveDeferredClaim!: () => void;
       const deferredClaim = new Promise<void>((resolve) => {
         resolveDeferredClaim = resolve;
@@ -218,15 +233,16 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         }
         deferredClaimSettled = true;
         // Delete only this dispatch's entry; a later retry may reuse the claim id.
-        if (deferredClaims.get(claimed.id) === deferredClaim) {
-          deferredClaims.delete(claimed.id);
+        if (deferredClaims.get(claim.id) === deferredClaim) {
+          deferredClaims.delete(claim.id);
         }
         resolveDeferredClaim();
       };
-      const delivery = options.deliver(event, claimed.payload.destination, {
+      const delivery = options.deliver(event, destination, {
         turnAdoptionLifecycle: {
           ...boundLifecycle,
           onAdopted: async () => {
+            handedOff = true;
             try {
               await boundLifecycle.onAdopted();
             } finally {
@@ -234,6 +250,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
             }
           },
           onDeferred: () => {
+            handedOff = true;
             if (!acceptsDeferredClaims) {
               settleDeferredClaim();
               void Promise.resolve()
@@ -246,11 +263,12 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
               return;
             }
             if (!deferredClaimSettled) {
-              deferredClaims.set(claimed.id, deferredClaim);
+              deferredClaims.set(claim.id, deferredClaim);
             }
             boundLifecycle.onDeferred();
           },
           onAbandoned: async () => {
+            handedOff = true;
             try {
               await boundLifecycle.onAbandoned();
             } finally {
@@ -265,47 +283,58 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       } finally {
         activeDeliveries.delete(delivery);
       }
-    },
-  });
-  let running = false;
-  let drainRequested = false;
-  let drainTask: Promise<void> | undefined;
-  let drainTimer: ReturnType<typeof setInterval> | undefined;
-
-  const requestDrain = (): void => {
-    if (!running || shutdown.signal.aborted) {
-      return;
-    }
-    drainRequested = true;
-    if (drainTask) {
-      return;
-    }
-    drainTask = runDetachedWebhookWork(async () => {
-      while (drainRequested && !shutdown.signal.aborted) {
-        if (!running) {
-          break;
-        }
-        drainRequested = false;
-        await drain.drainOnce({
-          // startLimit caps one pump. Keep later timer pumps from exceeding this
-          // spool's delivery cap after an early turn adoption frees the core lane.
-          shouldStop: () =>
-            !running ||
-            shutdown.signal.aborted ||
-            activeDeliveries.size >= LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
-        });
+      if (stopTask && !handedOff) {
+        return {
+          kind: "failed-retryable" as const,
+          error: new Error("LINE webhook spool stopped before delivery handoff."),
+        };
       }
-    })
-      .catch((error: unknown) => {
-        options.runtime.error?.(danger(`line: webhook spool drain failed: ${errorText(error)}`));
-      })
-      .finally(() => {
-        drainTask = undefined;
-        if (running && drainRequested && !shutdown.signal.aborted) {
-          requestDrain();
+      return undefined;
+    },
+    pollIntervalMs: LINE_WEBHOOK_DRAIN_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: 0,
+      completedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
+      completedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
+      failedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
+      failedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
+    },
+    appendRetryDelaysMs: [0],
+    // The monitor carries active deliveries across pumps and applies startLimit before each claim.
+    waitForDeliveryIdleBeforeRepump: false,
+    waitForDeliveryIdleOnStop: false,
+    runPumpTask: runDetachedWebhookWork,
+    admissionMode: "durable-after-stop",
+    drain: {
+      adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
+      orderBy: "received",
+      scanLimit: LINE_WEBHOOK_DRAIN_SCAN_LIMIT,
+      startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
+      retryPolicy: {
+        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+        // LINE previously dead-lettered on attempt eight. The generic 24-hour floor
+        // would let one poison event block its user/group lane for a full day.
+        deadLetterMinAgeMs: 0,
+      },
+      resolveNonRetryableFailure: (error) => {
+        if (error instanceof LineWebhookPayloadError) {
+          return { reason: "invalid-event", message: error.message };
         }
-      });
-  };
+        if (error instanceof LineWebhookTerminalDeliveryError) {
+          return { reason: error.reason, message: error.message };
+        }
+        if (isLineAuthenticationFailure(error)) {
+          return { reason: "authentication-failed", message: errorText(error) };
+        }
+        return null;
+      },
+      onLog: (message) => options.runtime.error?.(danger(`line: ${message}`)),
+    },
+    createStoppedError: () => new Error("LINE webhook spool is stopped."),
+    onError: (error) =>
+      options.runtime.error?.(danger(`line: webhook spool drain failed: ${errorText(error)}`)),
+  });
+  let stopTask: Promise<void> | undefined;
 
   return {
     accept: async (body) => {
@@ -313,73 +342,50 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       if (events.length === 0) {
         return;
       }
-      await queue.prune({
-        completedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-        completedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
-        failedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-        failedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
-      });
-      const receivedAt = Date.now();
-      for (const event of events) {
-        const eventId = eventIdFor(event);
-        await queue.enqueue(
-          eventId,
-          {
-            version: LINE_WEBHOOK_SPOOL_VERSION,
-            rawEvent: JSON.stringify(event),
-            destination: body.destination ?? "",
-          },
-          { receivedAt, laneKey: laneKeyFor(event, eventId) },
-        );
-      }
-      requestDrain();
+      await monitor.admitBatch(
+        events.map((event) => ({ event, destination: body.destination ?? "" })),
+        { receivedAt: Date.now() },
+      );
     },
     start: () => {
-      if (running) {
-        return;
+      if (!stopTask) {
+        monitor.start();
       }
-      running = true;
-      requestDrain();
-      drainTimer = setInterval(requestDrain, LINE_WEBHOOK_DRAIN_INTERVAL_MS);
-      drainTimer.unref?.();
     },
-    stop: async () => {
-      if (!running && shutdown.signal.aborted) {
-        return;
-      }
-      running = false;
-      if (drainTimer) {
-        clearInterval(drainTimer);
-        drainTimer = undefined;
-      }
-      shutdown.abort();
-      await drainTask;
-      try {
-        // Bound restart even though a delivery may finish after its row is recovered;
-        // that duplicate-side-effect window is the accepted at-least-once tradeoff.
-        const deliveriesSettled = await waitForActiveDeliveriesBeforeDispose(activeDeliveries);
-        if (!deliveriesSettled) {
-          options.runtime.log(
-            warn(
-              `line: timed out after ${LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS}ms waiting for active webhook deliveries; releasing drain ownership`,
-            ),
-          );
+    stop: () => {
+      stopTask ??= (async () => {
+        const pauseTask = monitor.pause();
+        await pauseTask;
+        try {
+          // LINE keeps a bounded active-delivery grace but waits deferred agent runs without a
+          // deadline; that asymmetric ownership cannot be expressed by the generic stop policy.
+          // Bound restart even though a delivery may finish after its row is recovered;
+          // that duplicate-side-effect window is the accepted at-least-once tradeoff.
+          const deliveriesSettled = await waitForActiveDeliveriesBeforeDispose(activeDeliveries);
+          if (!deliveriesSettled) {
+            options.runtime.log(
+              warn(
+                `line: timed out after ${LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS}ms waiting for active webhook deliveries; releasing drain ownership`,
+              ),
+            );
+          }
+          // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
+          // A deadline would allow duplicate side effects after replacement recovery;
+          // remove this wait only when core can cancel or abandon the run before release.
+          while (deferredClaims.size > 0) {
+            await Promise.allSettled(deferredClaims.values());
+          }
+          // Close registration only after the live map drains. Later deferrals
+          // are rejected through onAbandoned so disposal cannot orphan a run.
+          acceptsDeferredClaims = false;
+          if (deliveriesSettled) {
+            await monitor.waitForIdle();
+          }
+        } finally {
+          await monitor.stop();
         }
-        // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
-        // A deadline would allow duplicate side effects after replacement recovery;
-        // remove this wait only when core can cancel or abandon the run before release.
-        while (deferredClaims.size > 0) {
-          await Promise.allSettled(deferredClaims.values());
-        }
-        // Close registration only after the live map drains. Later deferrals
-        // are rejected through onAbandoned so disposal cannot orphan a run.
-        acceptsDeferredClaims = false;
-        if (deliveriesSettled) {
-          await drain.waitForIdle();
-        }
-      } finally {
-        drain.dispose();
-      }
+      })();
+      return stopTask;
     },
   };
 }

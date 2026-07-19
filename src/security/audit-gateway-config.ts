@@ -374,6 +374,18 @@ export function collectGatewayConfigFindings(
       });
     }
 
+    if (trustedProxyConfig?.deviceAutoApprove?.enabled === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_device_auto_approve",
+        severity: "warn",
+        title: "Trusted-proxy browser device auto-approval enabled",
+        detail:
+          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new Control UI and WebChat device pairing entirely to the reverse-proxy identity.",
+        remediation:
+          "Enable this only when the proxy is the exclusive Gateway ingress, strongly authenticates users, overwrites identity headers, and restricts access with allowUsers.",
+      });
+    }
+
     const allowUsers = trustedProxyConfig?.allowUsers ?? [];
     if (allowUsers.length === 0) {
       findings.push({

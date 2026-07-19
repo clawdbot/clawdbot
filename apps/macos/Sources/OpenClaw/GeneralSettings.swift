@@ -106,7 +106,7 @@ struct GeneralSettings: View {
 
                 SettingsCardRow(
                     title: "Quick Chat shortcut",
-                    subtitle: "Global shortcut that opens a floating chat bar for the main session.",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main thread.",
                     showsDivider: false)
                 {
                     KeyboardShortcuts.Recorder(for: .toggleQuickChat)

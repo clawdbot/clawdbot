@@ -237,8 +237,9 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   currentVersion: string | undefined;
   effectiveSpec: string | undefined;
   probeNpmVersion: string | undefined;
+  updateChannel?: UpdateChannel;
   timeoutMs?: number;
-}): Promise<{ packageName: string; version: string } | undefined> {
+}): Promise<{ packageName: string; registryLine: "beta" | "latest"; version: string } | undefined> {
   if (!params.currentVersion || !params.probeNpmVersion || !params.effectiveSpec) {
     return undefined;
   }
@@ -249,10 +250,16 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
     return undefined;
   }
 
-  const metadataResult = await resolveNpmSpecMetadata({
-    spec: packageName,
-    timeoutMs: params.timeoutMs,
-  }).catch(() => undefined);
+  const resolveMetadata = async (spec: string) =>
+    await resolveNpmSpecMetadata({ spec, timeoutMs: params.timeoutMs }).catch(() => undefined);
+  let registryLine: "beta" | "latest" = params.updateChannel === "beta" ? "beta" : "latest";
+  let metadataResult = await resolveMetadata(
+    registryLine === "beta" ? `${packageName}@beta` : packageName,
+  );
+  if (registryLine === "beta" && !metadataResult?.ok) {
+    registryLine = "latest";
+    metadataResult = await resolveMetadata(packageName);
+  }
   if (
     !metadataResult?.ok ||
     metadataResult.metadata.name !== packageName ||
@@ -261,7 +268,7 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
     return undefined;
   }
   return compareNpmSemverForUpdate(metadataResult.metadata.version, params.currentVersion) > 0
-    ? { packageName, version: metadataResult.metadata.version }
+    ? { packageName, registryLine, version: metadataResult.metadata.version }
     : undefined;
 }
 
@@ -684,14 +691,6 @@ export function resolveNpmUpdateSpecs(params: {
       : (params.officialSpecOverride ?? params.record.spec));
   if (!recordSpec) {
     return {};
-  }
-  if (params.specOverride) {
-    return resolveNpmInstallSpecsForUpdateChannel({
-      spec: recordSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.officialPackageName,
-      coreVersion: params.coreVersion,
-    });
   }
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: recordSpec,

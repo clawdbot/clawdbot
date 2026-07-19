@@ -119,6 +119,7 @@ export type AuthenticatedGatewayConnect = {
   usesLegacyNodeProtocol: boolean;
   role: GatewayRole;
   scopes: string[];
+  hasRequestedScopes: boolean;
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;

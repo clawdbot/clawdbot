@@ -18,6 +18,8 @@ import {
   clampAnnotationSpans,
   clampLinkSpans,
   clampStyleSpans,
+  copyMarkdownLinkSpan,
+  createMarkdownLinkSpan,
   createStyleSpan,
   mergeAnnotationSpans,
   mergeStyleSpans,
@@ -42,6 +44,7 @@ type ListState = {
 type LinkState = {
   href: string;
   labelStart: number;
+  autoLinked: boolean;
 };
 
 const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
@@ -63,6 +66,7 @@ type MarkdownToken = {
   hidden?: boolean;
   level?: number;
   map?: [number, number] | null;
+  markup?: string;
   meta?: unknown;
 };
 
@@ -450,11 +454,8 @@ function handleLinkClose(state: RenderState) {
   }
   const start = link.labelStart;
   const end = target.text.length;
-  if (end <= start) {
-    target.links.push({ start, end, href });
-    return;
-  }
-  target.links.push({ start, end, href });
+  const span = createMarkdownLinkSpan({ start, end, href }, { autoLinked: link.autoLinked });
+  target.links.push(span);
 }
 
 function headingStyleFromToken(token: MarkdownToken): MarkdownStyle | null {
@@ -536,7 +537,7 @@ function trimCell(cell: TableCell): TableCell {
     const sliceStart = Math.max(0, span.start - start);
     const sliceEnd = Math.min(trimmedLength, span.end - start);
     if (sliceEnd > sliceStart) {
-      trimmedLinks.push({ start: sliceStart, end: sliceEnd, href: span.href });
+      trimmedLinks.push(copyMarkdownLinkSpan(span, { start: sliceStart, end: sliceEnd }));
     }
   }
   const trimmedAnnotations = sliceAnnotationSpans(cell.annotations ?? [], start, end);
@@ -562,11 +563,12 @@ function appendCell(state: RenderState, cell: TableCell) {
     });
   }
   for (const link of cell.links) {
-    state.links.push({
-      start: start + link.start,
-      end: start + link.end,
-      href: link.href,
-    });
+    state.links.push(
+      copyMarkdownLinkSpan(link, {
+        start: start + link.start,
+        end: start + link.end,
+      }),
+    );
   }
   for (const annotation of cell.annotations ?? []) {
     state.annotations.push({
@@ -814,7 +816,11 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "link_open": {
         const target = resolveRenderTarget(state);
         const href = isInsideMarkdownHtmlTag(target.text) ? "" : (getAttr(token, "href") ?? "");
-        target.linkStack.push({ href, labelStart: target.text.length });
+        target.linkStack.push({
+          href,
+          labelStart: target.text.length,
+          autoLinked: token.markup === "linkify",
+        });
         break;
       }
       case "link_close":

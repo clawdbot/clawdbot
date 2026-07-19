@@ -236,12 +236,7 @@ export function prepareChatSendUserTurn(params: {
   userTurn.setInputPromise(
     preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia).then((media) => ({
       ...userTurn.baseInput,
-      ...(media.length > 0
-        ? {
-            media,
-            mediaOnlyText: "[User sent media without caption]",
-          }
-        : {}),
+      ...(media.length > 0 ? { media } : {}),
     })),
   );
   const pluginBoundMediaFieldsPromise =

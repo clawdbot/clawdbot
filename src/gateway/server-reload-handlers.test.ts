@@ -108,13 +108,29 @@ function createGatewayReloadHandlers(
 }
 
 function startManagedGatewayConfigReloader(
-  params: Omit<ManagedReloaderParams, "cronReconciliation" | "prepareTerminalConfig"> & {
+  params: Omit<
+    ManagedReloaderParams,
+    | "cronReconciliation"
+    | "prepareTerminalConfig"
+    | "initialSnapshotRawHash"
+    | "initialAuthoredConfig"
+    | "initialSnapshotValid"
+    | "initialSnapshotIssues"
+  > & {
     cronReconciliation?: ManagedReloaderParams["cronReconciliation"];
     prepareTerminalConfig?: ManagedReloaderParams["prepareTerminalConfig"];
+    initialSnapshotRawHash?: string | null;
+    initialAuthoredConfig?: unknown;
+    initialSnapshotValid?: boolean;
+    initialSnapshotIssues?: ManagedReloaderParams["initialSnapshotIssues"];
   },
 ) {
   return startManagedGatewayConfigReloaderImpl({
     ...params,
+    initialSnapshotRawHash: params.initialSnapshotRawHash ?? null,
+    initialAuthoredConfig: params.initialAuthoredConfig ?? {},
+    initialSnapshotValid: params.initialSnapshotValid ?? true,
+    initialSnapshotIssues: params.initialSnapshotIssues ?? [],
     cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
     prepareTerminalConfig: params.prepareTerminalConfig ?? vi.fn(),
     requestRecoveryRestart:

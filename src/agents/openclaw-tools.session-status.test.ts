@@ -22,6 +22,23 @@ const callGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
 );
+const loadModelCatalogMock = vi.hoisted(() =>
+  vi.fn(async () => [
+    {
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      contextWindow: 200000,
+    },
+    {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      reasoning: true,
+      contextWindow: 400000,
+    },
+  ]),
+);
 const resolveQueueSettingsMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => ({ mode: "interrupt" })),
 );
@@ -198,21 +215,7 @@ function createConfigModuleMock() {
 
 function createModelCatalogModuleMock() {
   return {
-    loadModelCatalog: async () => [
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        contextWindow: 200000,
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: true,
-        contextWindow: 400000,
-      },
-    ],
+    loadModelCatalog: loadModelCatalogMock,
   };
 }
 
@@ -267,6 +270,7 @@ function createCommandsStatusRuntimeModuleMock() {
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
       resolveDefaultThinkingLevel?: () => unknown;
+      thinkingCatalog?: Array<{ provider: string; id: string; reasoning?: boolean }>;
     }) => {
       resolveQueueSettingsMock({
         channel: params.statusChannel,
@@ -304,6 +308,7 @@ function createCommandsStatusRuntimeModuleMock() {
         modelAuth,
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
+        thinkingCatalog: params.thinkingCatalog,
       });
       return formatStatusLines(primary, params.taskLineOverride);
     },
@@ -529,6 +534,7 @@ function getSessionStatusTool(
 describe("session_status tool", () => {
   beforeEach(() => {
     buildStatusMessageMock.mockClear();
+    loadModelCatalogMock.mockClear();
     clearInternalHooks();
   });
 
@@ -548,6 +554,12 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+    expect(loadModelCatalogMock).toHaveBeenCalledWith({ config: mockConfig, readOnly: true });
+    expectRecordFields(mockCallArg(buildStatusMessageMock), {
+      thinkingCatalog: expect.arrayContaining([
+        expect.objectContaining({ provider: "openai", id: "gpt-5.4", reasoning: true }),
+      ]),
+    });
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(

@@ -46,7 +46,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "approvals",
-    description: "Manage exec approvals (gateway or node host)",
+    description: "Manage approval policy and pending requests",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },

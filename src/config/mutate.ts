@@ -314,6 +314,14 @@ async function withConfigMutationSnapshotLock<T>(
   });
 }
 
+/**
+ * Run a multi-phase operation under the canonical cross-process write lock.
+ * Nested mutation helpers are reentrant through activeConfigMutationLocks.
+ */
+export async function withConfigMutationExclusive<T>(fn: () => Promise<T>): Promise<T> {
+  return await withConfigMutationSnapshotLock({}, async () => await fn());
+}
+
 function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {
   if (!isRecord(base) || !isRecord(next)) {
     return isDeepStrictEqual(base, next) ? [] : ["<root>"];

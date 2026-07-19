@@ -854,7 +854,7 @@ export type DeleteSessionEntryLifecycleParams = {
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
   /** Optional provider-run identity guard checked under the storage writer lock. */
-  expectedSessionId?: string;
+  expectedSessionId?: string | null;
   /** Optional owner revision guard checked under the storage writer lock. */
   expectedLifecycleRevision?: string;
   /** Optional persisted revision guard checked under the storage writer lock. */

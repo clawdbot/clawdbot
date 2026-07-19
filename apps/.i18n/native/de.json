@@ -1409,9 +1409,9 @@
       "translated": "Mit OpenClaw sprechen oder diktieren"
     },
     {
-      "id": "native.android.5876e15e5e92fd45",
-      "source": "Browse Sessions",
-      "translated": "Sitzungen durchsuchen"
+      "id": "native.android.e2cf5a38587382cb",
+      "source": "Browse Threads",
+      "translated": "Threads durchsuchen"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -1464,24 +1464,24 @@
       "translated": "Keine Aktionen gefunden"
     },
     {
-      "id": "native.android.48ad0ae0e930e02b",
-      "source": "Try Chat, Voice, Sessions, Providers, or Settings.",
-      "translated": "Probieren Sie Chat, Voice, Sessions, Providers oder Settings aus."
+      "id": "native.android.bc70a4ac965b82ba",
+      "source": "Try Chat, Voice, Threads, Providers, or Settings.",
+      "translated": "Probiere Chat, Sprache, Threads, Anbieter oder Einstellungen aus."
     },
     {
-      "id": "native.android.d4fbd1ee4f55a5db",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.android.670121e54dbe286f",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
-      "id": "native.android.207c2170504e99e6",
-      "source": "Connect the Gateway to search sessions.",
-      "translated": "Verbinde die Gateway, um Sitzungen zu suchen."
+      "id": "native.android.d38be650b1bce4a0",
+      "source": "Connect the Gateway to search threads.",
+      "translated": "Verbinde das Gateway, um Threads zu durchsuchen."
     },
     {
-      "id": "native.android.25d2c2d792c952fe",
-      "source": "No matching sessions yet.",
-      "translated": "Noch keine passenden Sitzungen."
+      "id": "native.android.3d7754721f776ef8",
+      "source": "No matching threads yet.",
+      "translated": "Noch keine passenden Threads."
     },
     {
       "id": "native.android.1d009aa9b54d689d",
@@ -1489,14 +1489,14 @@
       "translated": "Assistent arbeitet"
     },
     {
-      "id": "native.android.8f8384286317f5c9",
-      "source": "OpenClaw session",
-      "translated": "OpenClaw-Sitzung"
+      "id": "native.android.9a839f6e3e05a744",
+      "source": "OpenClaw thread",
+      "translated": "OpenClaw-Thread"
     },
     {
-      "id": "native.android.15799e57704b20c6",
-      "source": "Open session",
-      "translated": "Sitzung öffnen"
+      "id": "native.android.d83f82a1e4a5ed99",
+      "source": "Open thread",
+      "translated": "Thread öffnen"
     },
     {
       "id": "native.android.42fd88c3d0418a4a",
@@ -1519,9 +1519,9 @@
       "translated": "Keine Anbieter bereit"
     },
     {
-      "id": "native.android.73e6ab1a168fd381",
-      "source": "Main session",
-      "translated": "Hauptsitzung"
+      "id": "native.android.8a1c5365c0538908",
+      "source": "Main thread",
+      "translated": "Haupt-Thread"
     },
     {
       "id": "native.android.5f06e4d6a59f7a59",
@@ -3539,14 +3539,14 @@
       "translated": "${tokens / 1_000}k"
     },
     {
-      "id": "native.android.0e3157c15c56944f",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.android.a5845742daecb4ba",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
-      "id": "native.android.70f5d0507d34b5c8",
-      "source": "Focus session search",
-      "translated": "Sitzungssuche fokussieren"
+      "id": "native.android.439b324280869527",
+      "source": "Focus thread search",
+      "translated": "Thread-Suche fokussieren"
     },
     {
       "id": "native.android.e0f10db479f627eb",
@@ -3559,14 +3559,14 @@
       "translated": "Archiviert"
     },
     {
-      "id": "native.android.b9cf34c137e4cf03",
-      "source": "Search sessions",
-      "translated": "Sitzungen suchen"
+      "id": "native.android.03981341841b04ac",
+      "source": "Search threads",
+      "translated": "Threads durchsuchen"
     },
     {
-      "id": "native.android.10cb26723e9990fc",
-      "source": "Clear session search",
-      "translated": "Sitzungssuche löschen"
+      "id": "native.android.99570c528a41fa72",
+      "source": "Clear thread search",
+      "translated": "Thread-Suche löschen"
     },
     {
       "id": "native.android.784ecdd6ea2ec5f0",
@@ -3584,9 +3584,9 @@
       "translated": "Älteste zuerst"
     },
     {
-      "id": "native.android.c6bf8751e2a7f5c7",
-      "source": "Toggle session layout",
-      "translated": "Sitzungslayout umschalten"
+      "id": "native.android.fd67be543e321cc9",
+      "source": "Toggle thread layout",
+      "translated": "Thread-Layout umschalten"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3599,14 +3599,14 @@
       "translated": "Layout: Detailliert"
     },
     {
-      "id": "native.android.69b79a3c2c987cd4",
-      "source": "Searching sessions",
-      "translated": "Sitzungen werden durchsucht"
+      "id": "native.android.ebd17565e0ffd8eb",
+      "source": "Searching threads",
+      "translated": "Threads werden durchsucht"
     },
     {
-      "id": "native.android.dd587d341af44212",
-      "source": "No matching sessions",
-      "translated": "Keine passenden Sitzungen"
+      "id": "native.android.472d46ae8669f860",
+      "source": "No matching threads",
+      "translated": "Keine passenden Threads"
     },
     {
       "id": "native.android.11c1a8c944bea0ae",
@@ -3624,19 +3624,19 @@
       "translated": "Chat starten"
     },
     {
-      "id": "native.android.f10d4df7cbc6df4f",
-      "source": "Current session",
-      "translated": "Aktuelle Sitzung"
+      "id": "native.android.ff81ad1bee00d384",
+      "source": "Current thread",
+      "translated": "Aktueller Thread"
     },
     {
-      "id": "native.android.8f0482425838ae64",
-      "source": "OpenClaw session",
-      "translated": "OpenClaw-Sitzung"
+      "id": "native.android.fc145645b9620e57",
+      "source": "OpenClaw thread",
+      "translated": "OpenClaw-Thread"
     },
     {
-      "id": "native.android.786774c8a76e50d7",
-      "source": "Rename session",
-      "translated": "Sitzung umbenennen"
+      "id": "native.android.71cbb8dde8bf138b",
+      "source": "Rename thread",
+      "translated": "Thread umbenennen"
     },
     {
       "id": "native.android.fa420bc51ff675a1",
@@ -3664,19 +3664,19 @@
       "translated": "Gruppe löschen?"
     },
     {
-      "id": "native.android.3455fc2f77d564e3",
-      "source": "Sessions in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "Sitzungen in \"$group\" bleiben erhalten und werden zurück in „Nicht gruppiert“ verschoben."
+      "id": "native.android.691e92cfe5cf106e",
+      "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
+      "translated": "Threads in \"$group\" bleiben erhalten und werden zurück nach „Nicht gruppiert“ verschoben."
     },
     {
-      "id": "native.android.4805fb9d6623e8c0",
-      "source": "Delete session?",
-      "translated": "Sitzung löschen?"
+      "id": "native.android.d87a8217ab56999b",
+      "source": "Delete thread?",
+      "translated": "Thread löschen?"
     },
     {
-      "id": "native.android.0c3283a2b2445eae",
-      "source": "This permanently deletes the session and its transcript.",
-      "translated": "Dadurch werden die Sitzung und ihr Transkript dauerhaft gelöscht."
+      "id": "native.android.930de97ff47113a8",
+      "source": "This permanently deletes the thread and its transcript.",
+      "translated": "Dadurch werden der Thread und sein Transkript dauerhaft gelöscht."
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3799,19 +3799,19 @@
       "translated": "Nicht gruppiert"
     },
     {
-      "id": "native.android.db243d71d056afa4",
-      "source": "No sessions yet",
-      "translated": "Noch keine Sitzungen"
+      "id": "native.android.8e21a70428def6e0",
+      "source": "No threads yet",
+      "translated": "Noch keine Threads"
     },
     {
-      "id": "native.android.5b4eee6a8092925e",
-      "source": "No current session",
-      "translated": "Keine aktuelle Sitzung"
+      "id": "native.android.cda4c5ad8b17e394",
+      "source": "No current thread",
+      "translated": "Kein aktueller Thread"
     },
     {
-      "id": "native.android.acbcc9c9ea53d8c0",
-      "source": "No archived sessions",
-      "translated": "Keine archivierten Sitzungen"
+      "id": "native.android.be84f061047aa2da",
+      "source": "No archived threads",
+      "translated": "Keine archivierten Threads"
     },
     {
       "id": "native.android.0a38a1167c6b6941",
@@ -3819,14 +3819,14 @@
       "translated": "Starten Sie eine neue Unterhaltung; sie wird dann hier angezeigt."
     },
     {
-      "id": "native.android.56fcd605dc7be3c0",
-      "source": "Open Chat to start or resume the current session.",
-      "translated": "Öffnen Sie den Chat, um die aktuelle Sitzung zu starten oder fortzusetzen."
+      "id": "native.android.f289d03e1d3eee98",
+      "source": "Open Chat to start or resume the current thread.",
+      "translated": "Öffne den Chat, um den aktuellen Thread zu starten oder fortzusetzen."
     },
     {
-      "id": "native.android.085515989f8a2022",
-      "source": "Archived sessions will show up here.",
-      "translated": "Archivierte Sitzungen werden hier angezeigt."
+      "id": "native.android.504b71386e76c6ae",
+      "source": "Archived threads will show up here.",
+      "translated": "Archivierte Threads werden hier angezeigt."
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -3849,9 +3849,9 @@
       "translated": "${days} T."
     },
     {
-      "id": "native.android.3d4fa07acbc015c5",
-      "source": "Main session",
-      "translated": "Hauptsitzung"
+      "id": "native.android.ee4c727cdafbe963",
+      "source": "Main thread",
+      "translated": "Haupt-Thread"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -3989,9 +3989,9 @@
       "translated": "Gateway ausstehend"
     },
     {
-      "id": "native.android.2d8d049afe99f751",
-      "source": "Session Activity",
-      "translated": "Sitzungsaktivität"
+      "id": "native.android.da78209effb11cfd",
+      "source": "Thread Activity",
+      "translated": "Thread-Aktivität"
     },
     {
       "id": "native.android.5d53e328e4deb444",
@@ -4034,14 +4034,14 @@
       "translated": "Exec-Genehmigungsanfragen werden hier angezeigt, während dieses Telefon verbunden ist."
     },
     {
-      "id": "native.android.dc3e7ca5a491103a",
-      "source": "Session activity",
-      "translated": "Sitzungsaktivität"
+      "id": "native.android.f615712dfb56319a",
+      "source": "Thread activity",
+      "translated": "Thread-Aktivität"
     },
     {
-      "id": "native.android.8551e02b060bd7d8",
-      "source": "Chat tool calls waiting in the active session remain visible here.",
-      "translated": "Chat-Tool-Aufrufe, die in der aktiven Sitzung warten, bleiben hier sichtbar."
+      "id": "native.android.6c93973c13db43ae",
+      "source": "Chat tool calls waiting in the active thread remain visible here.",
+      "translated": "Aufrufe von Chat-Tools, die im aktiven Thread ausstehen, bleiben hier sichtbar."
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4999,9 +4999,9 @@
       "translated": "Prüfen"
     },
     {
-      "id": "native.android.5a540761383fa474",
-      "source": "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.",
-      "translated": "OpenClaw macht dieses Smartphone zu einer übersichtlichen mobilen Steuerungsoberfläche für Sitzungen, Sprache, Anbieter und Gateway."
+      "id": "native.android.c971506716c96e91",
+      "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
+      "translated": "OpenClaw macht dieses Smartphone zu einer übersichtlichen mobilen Steuerungsoberfläche für Threads, Sprache, Anbieter und Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5529,9 +5529,9 @@
       "translated": "Talk-Einstellungen"
     },
     {
-      "id": "native.android.73f07a5d54915259",
-      "source": "Recent Sessions",
-      "translated": "Aktuelle Sitzungen"
+      "id": "native.android.36f78c8c85dc283f",
+      "source": "Recent Threads",
+      "translated": "Kürzlich verwendete Threads"
     },
     {
       "id": "native.android.e7e2862bffbd0706",
@@ -5589,14 +5589,14 @@
       "translated": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)} % online"
     },
     {
-      "id": "native.android.16c3425d3a594481",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.android.57177017a6a93826",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
-      "id": "native.android.a5c0f8b3112aa58c",
-      "source": "No recent sessions",
-      "translated": "Keine aktuellen Sitzungen"
+      "id": "native.android.43320b54a68b00a1",
+      "source": "No recent threads",
+      "translated": "Keine kürzlich verwendeten Threads"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -5634,14 +5634,14 @@
       "translated": "In Bearbeitung · $pendingRunCount aktive Läufe"
     },
     {
-      "id": "native.android.2c89da708b12a522",
-      "source": "Monitoring · 1 session",
-      "translated": "Überwachung · 1 Sitzung"
+      "id": "native.android.e24db059480f1e6a",
+      "source": "Monitoring · 1 thread",
+      "translated": "Überwachung · 1 Thread"
     },
     {
-      "id": "native.android.8b6ee382dcb64e1f",
-      "source": "Monitoring · $sessionCount sessions",
-      "translated": "Überwachung · $sessionCount Sitzungen"
+      "id": "native.android.5a475f37d80e02bc",
+      "source": "Monitoring · $sessionCount threads",
+      "translated": "Überwachung · $sessionCount Threads"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -5674,9 +5674,9 @@
       "translated": "Anbieter"
     },
     {
-      "id": "native.android.a65477861c7203aa",
-      "source": "Open session",
-      "translated": "Sitzung öffnen"
+      "id": "native.android.358c5e0e838d5423",
+      "source": "Open thread",
+      "translated": "Thread öffnen"
     },
     {
       "id": "native.android.ede6f2717ca8e267",
@@ -6099,9 +6099,9 @@
       "translated": "${days} T."
     },
     {
-      "id": "native.android.22d755834386db07",
-      "source": "Main session",
-      "translated": "Hauptsitzung"
+      "id": "native.android.28a1a1acc5a0959f",
+      "source": "Main thread",
+      "translated": "Haupt-Thread"
     },
     {
       "id": "native.android.b1f9c790e2dbac1b",
@@ -7599,9 +7599,9 @@
       "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
     },
     {
-      "id": "native.android.882cc14a58e7e105",
-      "source": "Loading session",
-      "translated": "Sitzung wird geladen"
+      "id": "native.android.0c74bc30a994dd33",
+      "source": "Loading thread",
+      "translated": "Thread wird geladen"
     },
     {
       "id": "native.android.2c1106e1687ab258",
@@ -7644,14 +7644,14 @@
       "translated": "Auf den neuesten Stand bringen"
     },
     {
-      "id": "native.android.1e5add56e48c99f9",
-      "source": "Summarize recent sessions and next steps.",
-      "translated": "Fasse die letzten Sitzungen und nächsten Schritte zusammen."
+      "id": "native.android.cf40df9739f78f27",
+      "source": "Summarize recent threads and next steps.",
+      "translated": "Fasse die letzten Threads und die nächsten Schritte zusammen."
     },
     {
-      "id": "native.android.06d515351bb79576",
-      "source": "Catch me up on my recent OpenClaw sessions and suggest next steps.",
-      "translated": "Bringe mich über meine letzten OpenClaw-Sitzungen auf den neuesten Stand und schlage nächste Schritte vor."
+      "id": "native.android.ebe49a8b8df80bd3",
+      "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
+      "translated": "Bring mich bei meinen neuesten OpenClaw-Threads auf den aktuellen Stand und schlage nächste Schritte vor."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -7702,11 +7702,6 @@
       "id": "native.android.25d8575c0063aee5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
-    },
-    {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "Anhang"
     },
     {
       "id": "native.android.5aafbef3744d86f3",
@@ -7812,6 +7807,11 @@
       "id": "native.android.623e434c83e3c020",
       "source": "Attach image",
       "translated": "Bild anhängen"
+    },
+    {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "Anhang"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
@@ -7989,9 +7989,9 @@
       "translated": "Verbunden"
     },
     {
-      "id": "native.android.81931886b9caf3ab",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.android.6cf5d6fa8a4186d5",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -8159,11 +8159,6 @@
       "translated": "Spracherkennung nicht verfügbar"
     },
     {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "Hört zu (PTT)"
-    },
-    {
       "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "Bereit"
@@ -8237,6 +8232,11 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "Spricht…"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "Hört zu (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -10654,9 +10654,9 @@
       "translated": "Woran möchten Sie arbeiten?"
     },
     {
-      "id": "native.apple.32179ce0b6d4543f",
-      "source": "The session attaches once the gateway is ready.",
-      "translated": "Die Sitzung wird angehängt, sobald die Gateway bereit ist."
+      "id": "native.apple.4da775013ac9b123",
+      "source": "The thread attaches once the gateway is ready.",
+      "translated": "Der Thread wird angehängt, sobald das Gateway bereit ist."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10699,9 +10699,9 @@
       "translated": "Neuer Chat im Worktree"
     },
     {
-      "id": "native.apple.a1b0d289758e2213",
-      "source": "Sessions…",
-      "translated": "Sitzungen…"
+      "id": "native.apple.003b25ddafeb18e9",
+      "source": "Threads…",
+      "translated": "Threads…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -10864,14 +10864,14 @@
       "translated": "Erstellen"
     },
     {
-      "id": "native.apple.f488b9caf6e51ac3",
-      "source": "Delete Session?",
-      "translated": "Sitzung löschen?"
+      "id": "native.apple.31d5c7287cfb3abe",
+      "source": "Delete Thread?",
+      "translated": "Thread löschen?"
     },
     {
-      "id": "native.apple.8634b17be9b111bc",
-      "source": "Delete Session",
-      "translated": "Sitzung löschen"
+      "id": "native.apple.d3395564809f1120",
+      "source": "Delete Thread",
+      "translated": "Thread löschen"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -10879,9 +10879,9 @@
       "translated": "Abbrechen"
     },
     {
-      "id": "native.apple.4a9568ac9b18d8d3",
-      "source": "This permanently deletes the session and its transcript.",
-      "translated": "Dadurch werden die Sitzung und ihr Transkript dauerhaft gelöscht."
+      "id": "native.apple.092659256d26cb03",
+      "source": "This permanently deletes the thread and its transcript.",
+      "translated": "Dadurch werden der Thread und sein Transkript dauerhaft gelöscht."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -10909,9 +10909,9 @@
       "translated": "Neue Gruppe"
     },
     {
-      "id": "native.apple.5bccdc23a1640895",
-      "source": "Rename Session",
-      "translated": "Sitzung umbenennen"
+      "id": "native.apple.683032464c497bbd",
+      "source": "Rename Thread",
+      "translated": "Thread umbenennen"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -10919,9 +10919,9 @@
       "translated": "Gruppenname"
     },
     {
-      "id": "native.apple.af789b2d2fda0f67",
-      "source": "Session name",
-      "translated": "Sitzungsname"
+      "id": "native.apple.f887aa956588f237",
+      "source": "Thread name",
+      "translated": "Threadname"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
@@ -10959,14 +10959,14 @@
       "translated": "Agents"
     },
     {
-      "id": "native.apple.a3bde8045fe9224a",
-      "source": "Agent session",
-      "translated": "Agent-Sitzung"
+      "id": "native.apple.7c8231b7b1ca480f",
+      "source": "Agent thread",
+      "translated": "Agenten-Thread"
     },
     {
-      "id": "native.apple.27f775de30b37ff8",
-      "source": "Recent sessions",
-      "translated": "Letzte Sitzungen"
+      "id": "native.apple.b3c553614f762a58",
+      "source": "Recent threads",
+      "translated": "Neueste Threads"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -10974,9 +10974,9 @@
       "translated": "Gateway offline"
     },
     {
-      "id": "native.apple.28c97cf23665ee01",
-      "source": "No recent sessions",
-      "translated": "Keine letzten Sitzungen"
+      "id": "native.apple.5aa32afda85064ea",
+      "source": "No recent threads",
+      "translated": "Keine neuen Threads"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11074,14 +11074,14 @@
       "translated": "Abbrechen"
     },
     {
-      "id": "native.apple.9f2fd65953013b7c",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.apple.b6855cf19a50f477",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
-      "id": "native.apple.0422818cc95d5071",
-      "source": "Archived sessions",
-      "translated": "Archivierte Sitzungen"
+      "id": "native.apple.9b1d0ef27a1333b0",
+      "source": "Archived threads",
+      "translated": "Archivierte Threads"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11089,34 +11089,34 @@
       "translated": "Archivierte anzeigen"
     },
     {
-      "id": "native.apple.b272115c83f7ef58",
-      "source": "Sessions unavailable",
-      "translated": "Sitzungen nicht verfügbar"
+      "id": "native.apple.98167401c7267735",
+      "source": "Threads unavailable",
+      "translated": "Threads nicht verfügbar"
     },
     {
-      "id": "native.apple.54f8260c9b863087",
-      "source": "Loading archived sessions",
-      "translated": "Archivierte Sitzungen werden geladen"
+      "id": "native.apple.4d28a7def2337b9f",
+      "source": "Loading archived threads",
+      "translated": "Archivierte Threads werden geladen"
     },
     {
-      "id": "native.apple.9b305868873dade2",
-      "source": "Loading recent sessions",
-      "translated": "Letzte Sitzungen werden geladen"
+      "id": "native.apple.777d7b706933bd7b",
+      "source": "Loading recent threads",
+      "translated": "Neueste Threads werden geladen"
     },
     {
-      "id": "native.apple.207dad20d09f3160",
-      "source": "^[\\(count) session](inflect: true)",
-      "translated": "^[\\(count) Sitzung](inflect: true)"
+      "id": "native.apple.22f81ea94bef8410",
+      "source": "^[\\(count) thread](inflect: true)",
+      "translated": "^[\\(count) Thread](inflect: true)"
     },
     {
-      "id": "native.apple.1f4501a6bf2bae4c",
-      "source": "No archived sessions",
-      "translated": "Keine archivierten Sitzungen"
+      "id": "native.apple.1cad51e14db59bf9",
+      "source": "No archived threads",
+      "translated": "Keine archivierten Threads"
     },
     {
-      "id": "native.apple.2a1ba7a5e1979c9e",
-      "source": "Archived sessions will appear here.",
-      "translated": "Archivierte Sitzungen werden hier angezeigt."
+      "id": "native.apple.18ef832d3a7ddcf8",
+      "source": "Archived threads will appear here.",
+      "translated": "Archivierte Threads werden hier angezeigt."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11199,9 +11199,9 @@
       "translated": "Eingang teilen"
     },
     {
-      "id": "native.apple.2360d25fe6ae9946",
-      "source": "Loading sessions",
-      "translated": "Sitzungen werden geladen"
+      "id": "native.apple.21d9208d86a4d1fe",
+      "source": "Loading threads",
+      "translated": "Threads werden geladen"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11209,19 +11209,19 @@
       "translated": "Letzte Aktivität wird vom Gateway abgerufen."
     },
     {
-      "id": "native.apple.c334f2e86702a7b8",
-      "source": "Sessions unavailable",
-      "translated": "Sitzungen nicht verfügbar"
+      "id": "native.apple.4be1f79aa2b230ff",
+      "source": "Threads unavailable",
+      "translated": "Threads nicht verfügbar"
     },
     {
-      "id": "native.apple.6cc6efb7a03960b6",
-      "source": "No recent sessions",
-      "translated": "Keine aktuellen Sitzungen"
+      "id": "native.apple.98b348873556bc46",
+      "source": "No recent threads",
+      "translated": "Keine aktuellen Threads"
     },
     {
-      "id": "native.apple.08483af2d043bee6",
-      "source": "Session activity offline",
-      "translated": "Sitzungsaktivität offline"
+      "id": "native.apple.7396d205574d279f",
+      "source": "Thread activity offline",
+      "translated": "Thread-Aktivität offline"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11679,9 +11679,9 @@
       "translated": "Karte"
     },
     {
-      "id": "native.apple.93eeaedb2ff61043",
-      "source": "Open Session",
-      "translated": "Sitzung öffnen"
+      "id": "native.apple.c9ec1b0e18074d8a",
+      "source": "Open Thread",
+      "translated": "Thread öffnen"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -13169,9 +13169,9 @@
       "translated": "Standard"
     },
     {
-      "id": "native.apple.3de045f17ea3c6d0",
-      "source": "Used for new Chat and Talk sessions.",
-      "translated": "Wird für neue Chat- und Talk-Sitzungen verwendet."
+      "id": "native.apple.f4ae5664c3eda95d",
+      "source": "Used for new Chat threads and Talk sessions.",
+      "translated": "Wird für neue Chat-Threads und Gesprächssitzungen verwendet."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15574,9 +15574,9 @@
       "translated": "Instanzen"
     },
     {
-      "id": "native.apple.3579cf2750470a22",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.apple.11fe8b9941954dfb",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -18884,9 +18884,9 @@
       "translated": "Tastenkürzel für Quick Chat"
     },
     {
-      "id": "native.apple.6ae77665b5f4490f",
-      "source": "Global shortcut that opens a floating chat bar for the main session.",
-      "translated": "Globales Tastenkürzel, das eine schwebende Chatleiste für die Hauptsitzung öffnet."
+      "id": "native.apple.94dd793cd7d7d555",
+      "source": "Global shortcut that opens a floating chat bar for the main thread.",
+      "translated": "Globales Tastenkürzel, das eine schwebende Chatleiste für den Haupt-Thread öffnet."
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -19464,9 +19464,9 @@
       "translated": "Kritisch"
     },
     {
-      "id": "native.apple.75102378a6775180",
-      "source": "New Session",
-      "translated": "Neue Sitzung"
+      "id": "native.apple.13f96467014cf344",
+      "source": "New Thread",
+      "translated": "Neuer Thread"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21754,9 +21754,9 @@
       "translated": "Keine aktuellen Nachrichten"
     },
     {
-      "id": "native.apple.1ff8aec0044934c3",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.apple.3ec2afcbc298c673",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -21764,9 +21764,9 @@
       "translated": "Einblick in die gespeicherten Konversations-Buckets, die die CLI für Kontext und Ratenbegrenzungen wiederverwendet."
     },
     {
-      "id": "native.apple.bab897f3252b134c",
-      "source": "No sessions yet. They appear after the first inbound message or heartbeat.",
-      "translated": "Noch keine Sitzungen. Sie erscheinen nach der ersten eingehenden Nachricht oder dem ersten Heartbeat."
+      "id": "native.apple.14ccb32cd8ed1c81",
+      "source": "No threads yet. They appear after the first inbound message or heartbeat.",
+      "translated": "Noch keine Threads. Sie werden nach der ersten eingehenden Nachricht oder dem ersten Heartbeat angezeigt."
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -21849,9 +21849,9 @@
       "translated": "Ausführungsgenehmigungen"
     },
     {
-      "id": "native.apple.64a6dc7d49e8fb57",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.apple.52e37e3a44ae516c",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -22854,9 +22854,9 @@
       "translated": "Bring mich auf den neuesten Stand"
     },
     {
-      "id": "native.apple.234ec45f4231edc4",
-      "source": "Summarize what happened in my sessions since yesterday.",
-      "translated": "Fasse zusammen, was seit gestern in meinen Sitzungen passiert ist."
+      "id": "native.apple.fc4ce810900ec0b6",
+      "source": "Summarize what happened in my threads since yesterday.",
+      "translated": "Fasse zusammen, was seit gestern in meinen Threads passiert ist."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -22989,9 +22989,9 @@
       "translated": "Modell lösen"
     },
     {
-      "id": "native.apple.5dfc0700d8dff8de",
-      "source": "Session",
-      "translated": "Sitzung"
+      "id": "native.apple.4edb66657f5aca1f",
+      "source": "Thread",
+      "translated": "Thread"
     },
     {
       "id": "native.apple.284b2b94c272591d",
@@ -23179,6 +23179,51 @@
       "translated": "Widget nicht verfügbar"
     },
     {
+      "id": "native.apple.d640691fd196f338",
+      "source": "Widget export failed",
+      "translated": "Widget-Export fehlgeschlagen"
+    },
+    {
+      "id": "native.apple.533c6e22a11e88de",
+      "source": "OK",
+      "translated": "OK"
+    },
+    {
+      "id": "native.apple.e1fb28a2a9756402",
+      "source": "Copy image",
+      "translated": "Bild kopieren"
+    },
+    {
+      "id": "native.apple.ebd7bc92e1b12235",
+      "source": "Save image…",
+      "translated": "Bild speichern…"
+    },
+    {
+      "id": "native.apple.742c46d4cf2db134",
+      "source": "Save image",
+      "translated": "Bild speichern"
+    },
+    {
+      "id": "native.apple.0589cce608418f90",
+      "source": "The widget image could not be captured.",
+      "translated": "Das Widget-Bild konnte nicht erfasst werden."
+    },
+    {
+      "id": "native.apple.dfe24e827fdbe9c5",
+      "source": "The widget image could not be copied.",
+      "translated": "Das Widget-Bild konnte nicht kopiert werden."
+    },
+    {
+      "id": "native.apple.9e611e3a80e71408",
+      "source": "The widget image could not be encoded as PNG.",
+      "translated": "Das Widget-Bild konnte nicht als PNG codiert werden."
+    },
+    {
+      "id": "native.apple.9a6e8afbe24a262b",
+      "source": "The widget image could not be saved.",
+      "translated": "Das Widget-Bild konnte nicht gespeichert werden."
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -23319,19 +23364,19 @@
       "translated": "Benutzer"
     },
     {
-      "id": "native.apple.b1cdcb906a43d5d6",
-      "source": "This session cannot be archived while it is active or running.",
-      "translated": "Diese Sitzung kann nicht archiviert werden, solange sie aktiv ist oder ausgeführt wird."
+      "id": "native.apple.9d0cba09d92ee669",
+      "source": "This thread cannot be archived while it is active or running.",
+      "translated": "Dieser Thread kann nicht archiviert werden, solange er aktiv ist oder ausgeführt wird."
     },
     {
-      "id": "native.apple.5817e3f3dab1ee19",
-      "source": "The main session cannot be deleted.",
-      "translated": "Die Hauptsitzung kann nicht gelöscht werden."
+      "id": "native.apple.8952a111a1075051",
+      "source": "The main thread cannot be deleted.",
+      "translated": "Der Haupt-Thread kann nicht gelöscht werden."
     },
     {
-      "id": "native.apple.a6b8df3f18171c91",
-      "source": "Remove attachments or wait for delivery before archiving or deleting this session.",
-      "translated": "Entfernen Sie Anhänge oder warten Sie auf deren Zustellung, bevor Sie diese Sitzung archivieren oder löschen."
+      "id": "native.apple.90d0ccf80ca28717",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
+      "translated": "Entferne Anhänge oder warte auf die Zustellung, bevor du diesen Thread archivierst oder löschst."
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23469,9 +23514,9 @@
       "translated": "Ausführung beendet"
     },
     {
-      "id": "native.apple.cd7c3095a22f80a9",
-      "source": "Session Info",
-      "translated": "Sitzungsinformationen"
+      "id": "native.apple.bbccb4c8db5cac12",
+      "source": "Thread Info",
+      "translated": "Thread-Informationen"
     },
     {
       "id": "native.apple.e308b012d84b3b3e",
@@ -23504,9 +23549,9 @@
       "translated": "Gruppe hinzufügen"
     },
     {
-      "id": "native.apple.23d628606fe0734f",
-      "source": "Session Groups",
-      "translated": "Sitzungsgruppen"
+      "id": "native.apple.7b641fed5bace855",
+      "source": "Thread Groups",
+      "translated": "Thread-Gruppen"
     },
     {
       "id": "native.apple.7777b2d2ec43ed59",
@@ -23549,9 +23594,9 @@
       "translated": "Gruppe löschen"
     },
     {
-      "id": "native.apple.b049c8a4d2805e08",
-      "source": "Sessions in this group become ungrouped.",
-      "translated": "Sitzungen in dieser Gruppe werden aus der Gruppe entfernt."
+      "id": "native.apple.56401c79410a310d",
+      "source": "Threads in this group become ungrouped.",
+      "translated": "Threads in dieser Gruppe werden aus der Gruppe entfernt."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23564,9 +23609,9 @@
       "translated": "Auf diesem Gateway sind keine Agenten verfügbar."
     },
     {
-      "id": "native.apple.6c89f35d53506406",
-      "source": "New Session Options",
-      "translated": "Optionen für neue Sitzungen"
+      "id": "native.apple.2d96aa7d3d12f85b",
+      "source": "New Thread Options",
+      "translated": "Optionen für neuen Thread"
     },
     {
       "id": "native.apple.5b0cde807ccb4241",
@@ -23594,19 +23639,19 @@
       "translated": "Erstellen"
     },
     {
-      "id": "native.apple.795ba37f6782cf28",
-      "source": "The session could not be created.",
-      "translated": "Die Sitzung konnte nicht erstellt werden."
+      "id": "native.apple.87ef57319d1ddc85",
+      "source": "The thread could not be created.",
+      "translated": "Der Thread konnte nicht erstellt werden."
     },
     {
-      "id": "native.apple.8ec708a3605a2cc3",
-      "source": "Search sessions",
-      "translated": "Sitzungen durchsuchen"
+      "id": "native.apple.6bd91c435b69d638",
+      "source": "Search threads",
+      "translated": "Threads durchsuchen"
     },
     {
-      "id": "native.apple.23b069b4e7f97039",
-      "source": "No Sessions",
-      "translated": "Keine Sitzungen"
+      "id": "native.apple.6fde4bdf9d5b9191",
+      "source": "No Threads",
+      "translated": "Keine Threads"
     },
     {
       "id": "native.apple.2d4ee298bdd1c05d",
@@ -23614,29 +23659,29 @@
       "translated": "Keine Ergebnisse"
     },
     {
-      "id": "native.apple.0058923f2ce8a3ec",
-      "source": "New Session",
-      "translated": "Neue Sitzung"
+      "id": "native.apple.a02fd99740d29bd3",
+      "source": "New Thread",
+      "translated": "Neuer Thread"
     },
     {
-      "id": "native.apple.66ba42960eb4135b",
-      "source": "New session",
-      "translated": "Neue Sitzung"
+      "id": "native.apple.b625801dd04b09f2",
+      "source": "New thread",
+      "translated": "Neuer Thread"
     },
     {
-      "id": "native.apple.2ef0e34db02ad255",
-      "source": "New session options",
-      "translated": "Optionen für neue Sitzungen"
+      "id": "native.apple.851be81fcc933608",
+      "source": "New thread options",
+      "translated": "Optionen für neuen Thread"
     },
     {
-      "id": "native.apple.36753ef2f1ed4264",
-      "source": "Rename Session",
-      "translated": "Sitzung umbenennen"
+      "id": "native.apple.9ce8a4aba7b444b2",
+      "source": "Rename Thread",
+      "translated": "Thread umbenennen"
     },
     {
-      "id": "native.apple.c9de0a1510ef475f",
-      "source": "Session name",
-      "translated": "Sitzungsname"
+      "id": "native.apple.1dd067c44511c7f0",
+      "source": "Thread name",
+      "translated": "Thread-Name"
     },
     {
       "id": "native.apple.6ec5a13c0e6c20d9",
@@ -23649,14 +23694,14 @@
       "translated": "Abbrechen"
     },
     {
-      "id": "native.apple.afb4e6c99c63a28d",
-      "source": "Delete Session",
-      "translated": "Sitzung löschen"
+      "id": "native.apple.618073d6ab3f2721",
+      "source": "Delete Thread",
+      "translated": "Thread löschen"
     },
     {
-      "id": "native.apple.3d4ef32e42f136a4",
-      "source": "The session and its transcript are removed from the gateway.",
-      "translated": "Die Sitzung und ihr Transkript werden vom Gateway entfernt."
+      "id": "native.apple.10a5e72bba3cbccc",
+      "source": "The thread and its transcript are removed from the gateway.",
+      "translated": "Der Thread und sein Transkript werden vom Gateway entfernt."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23664,14 +23709,14 @@
       "translated": "„%@“ löschen?"
     },
     {
-      "id": "native.apple.9a7dca238fba628d",
-      "source": "Session running",
-      "translated": "Sitzung wird ausgeführt"
+      "id": "native.apple.ac71e3b2aa496a2c",
+      "source": "Thread running",
+      "translated": "Thread wird ausgeführt"
     },
     {
-      "id": "native.apple.fcfbfe5e97a95e9c",
-      "source": "Session failed",
-      "translated": "Sitzung fehlgeschlagen"
+      "id": "native.apple.c775e87f997278b2",
+      "source": "Thread failed",
+      "translated": "Thread fehlgeschlagen"
     },
     {
       "id": "native.apple.ac85292b16a7465f",
@@ -23729,9 +23774,9 @@
       "translated": "Sitzungsschlüssel kopieren"
     },
     {
-      "id": "native.apple.4aeb7c14c26dabac",
-      "source": "Delete Session…",
-      "translated": "Sitzung löschen…"
+      "id": "native.apple.f4998cfb572f23ff",
+      "source": "Delete Thread…",
+      "translated": "Thread löschen…"
     },
     {
       "id": "native.apple.6a3425ea2811ff88",
@@ -23744,9 +23789,9 @@
       "translated": "Verbindung wird hergestellt…"
     },
     {
-      "id": "native.apple.79f708b3bc1d3a6c",
-      "source": "Retry session groups",
-      "translated": "Sitzungsgruppen erneut laden"
+      "id": "native.apple.8802e9576ffd0f65",
+      "source": "Retry thread groups",
+      "translated": "Thread-Gruppen erneut laden"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -23769,24 +23814,24 @@
       "translated": "Umfang"
     },
     {
-      "id": "native.apple.2c37581c7b88f741",
-      "source": "Search sessions",
-      "translated": "Sitzungen suchen"
+      "id": "native.apple.b313b80def4bda52",
+      "source": "Search threads",
+      "translated": "Threads durchsuchen"
     },
     {
-      "id": "native.apple.43be8a2336e42faf",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.apple.c0cc6acc36f413ce",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
-      "id": "native.apple.0b379cdfcbd3247f",
-      "source": "Rename Session",
-      "translated": "Sitzung umbenennen"
+      "id": "native.apple.854d3928fe5a557c",
+      "source": "Rename Thread",
+      "translated": "Thread umbenennen"
     },
     {
-      "id": "native.apple.54b6fbd9e41db009",
-      "source": "Session name",
-      "translated": "Sitzungsname"
+      "id": "native.apple.9d0d3f20096cc4da",
+      "source": "Thread name",
+      "translated": "Thread-Name"
     },
     {
       "id": "native.apple.833fe2915430c89d",
@@ -23794,19 +23839,19 @@
       "translated": "Abbrechen"
     },
     {
-      "id": "native.apple.751e0f6b81cd374a",
-      "source": "Delete selected sessions?",
-      "translated": "Ausgewählte Sitzungen löschen?"
+      "id": "native.apple.dc00eb94f33bae15",
+      "source": "Delete selected threads?",
+      "translated": "Ausgewählte Threads löschen?"
     },
     {
-      "id": "native.apple.aa679276581b0058",
-      "source": "Delete Sessions",
-      "translated": "Sitzungen löschen"
+      "id": "native.apple.2053fc9f74dc3158",
+      "source": "Delete Threads",
+      "translated": "Threads löschen"
     },
     {
-      "id": "native.apple.f837129cbee23297",
-      "source": "Each selected session and its transcript will be removed from the gateway.",
-      "translated": "Alle ausgewählten Sitzungen und ihre Transkripte werden aus dem Gateway entfernt."
+      "id": "native.apple.0970247871a834a0",
+      "source": "Each selected thread and its transcript will be removed from the gateway.",
+      "translated": "Jeder ausgewählte Thread und sein Transkript werden vom Gateway entfernt."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -23814,9 +23859,9 @@
       "translated": "Gruppen"
     },
     {
-      "id": "native.apple.64013cfee5e25305",
-      "source": "Manage session groups",
-      "translated": "Sitzungsgruppen verwalten"
+      "id": "native.apple.6f8acab2256728b5",
+      "source": "Manage thread groups",
+      "translated": "Thread-Gruppen verwalten"
     },
     {
       "id": "native.apple.185f4688f98e244e",
@@ -23829,14 +23874,14 @@
       "translated": "Auswählen"
     },
     {
-      "id": "native.apple.b67eaecec1b423ac",
-      "source": "No archived sessions",
-      "translated": "Keine archivierten Sitzungen"
+      "id": "native.apple.692972314d04b184",
+      "source": "No archived threads",
+      "translated": "Keine archivierten Threads"
     },
     {
-      "id": "native.apple.b2435a79abf0c794",
-      "source": "No sessions found",
-      "translated": "Keine Sitzungen gefunden"
+      "id": "native.apple.d6a4b5711dcd26e7",
+      "source": "No threads found",
+      "translated": "Keine Threads gefunden"
     },
     {
       "id": "native.apple.f0e9d8f69c1d9190",
@@ -24094,9 +24139,9 @@
       "translated": "Entferne Anhänge oder warte, bis die Zustellung abgeschlossen ist, bevor du einen neuen Chat startest."
     },
     {
-      "id": "native.apple.980f552bb0f96c0f",
-      "source": "Gateway changed before the session operation started.",
-      "translated": "Das Gateway wurde geändert, bevor der Sitzungsvorgang gestartet wurde."
+      "id": "native.apple.e0f045151c8d3137",
+      "source": "Gateway changed before the thread operation started.",
+      "translated": "Das Gateway wurde geändert, bevor der Thread-Vorgang gestartet wurde."
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24104,9 +24149,9 @@
       "translated": "Entfernen Sie Anhänge oder warten Sie auf die Zustellung, bevor Sie den Chat wechseln."
     },
     {
-      "id": "native.apple.87ba543b42696b92",
-      "source": "Clear this session's history?",
-      "translated": "Verlauf dieser Sitzung löschen?"
+      "id": "native.apple.0a5c4e15466c3acc",
+      "source": "Clear this thread's history?",
+      "translated": "Verlauf dieses Threads löschen?"
     },
     {
       "id": "native.apple.6192578088f1b100",
@@ -24119,14 +24164,14 @@
       "translated": "Dadurch wird die Unterhaltung für %@ zurückgesetzt. Der Sitzungsschlüssel bleibt unverändert."
     },
     {
-      "id": "native.apple.a92e96bed98bd553",
-      "source": "Rename Session",
-      "translated": "Sitzung umbenennen"
+      "id": "native.apple.67ac221dbe7179f0",
+      "source": "Rename Thread",
+      "translated": "Thread umbenennen"
     },
     {
-      "id": "native.apple.848e2388f3466f40",
-      "source": "Session name",
-      "translated": "Sitzungsname"
+      "id": "native.apple.cf0f7e049603f518",
+      "source": "Thread name",
+      "translated": "Thread-Name"
     },
     {
       "id": "native.apple.8d636ca6b4764418",
@@ -24144,9 +24189,9 @@
       "translated": "Transkript exportieren"
     },
     {
-      "id": "native.apple.4af0f566d39d7041",
-      "source": "Sessions",
-      "translated": "Sitzungen"
+      "id": "native.apple.c0ada47504425f23",
+      "source": "Threads",
+      "translated": "Threads"
     },
     {
       "id": "native.apple.c13dbe6b5c01e9bd",
@@ -24219,14 +24264,14 @@
       "translated": "Standard"
     },
     {
-      "id": "native.apple.eb58552e43c8dde2",
-      "source": "New Session",
-      "translated": "Neue Sitzung"
+      "id": "native.apple.1a765291943599e5",
+      "source": "New Thread",
+      "translated": "Neuer Thread"
     },
     {
-      "id": "native.apple.a7119fbf9d25df5e",
-      "source": "New Session Options…",
-      "translated": "Optionen für neue Sitzung…"
+      "id": "native.apple.c7a3a6d5e43dd98f",
+      "source": "New Thread Options…",
+      "translated": "Optionen für neuen Thread…"
     },
     {
       "id": "native.apple.5361129a24118af6",
@@ -24234,19 +24279,19 @@
       "translated": "Aktualisieren"
     },
     {
-      "id": "native.apple.2bcff4a8fa503739",
-      "source": "Sessions…",
-      "translated": "Sitzungen…"
+      "id": "native.apple.0e710b81808e5dcf",
+      "source": "Threads…",
+      "translated": "Threads…"
     },
     {
-      "id": "native.apple.c36e008b051adb38",
-      "source": "Rename Session…",
-      "translated": "Sitzung umbenennen…"
+      "id": "native.apple.faad8f92b6bef166",
+      "source": "Rename Thread…",
+      "translated": "Thread umbenennen…"
     },
     {
-      "id": "native.apple.ea0ef95a159bffe0",
-      "source": "Fork Session",
-      "translated": "Sitzung abzweigen"
+      "id": "native.apple.23b61d6cd26ac112",
+      "source": "Fork",
+      "translated": "Abzweigen"
     },
     {
       "id": "native.apple.8768f9ed198edc54",
@@ -24304,24 +24349,24 @@
       "translated": "Verlauf löschen…"
     },
     {
-      "id": "native.apple.920fe8a7a33f9e92",
-      "source": "Session",
-      "translated": "Sitzung"
+      "id": "native.apple.8b4f1c5107ea8a0e",
+      "source": "Thread",
+      "translated": "Thread"
     },
     {
-      "id": "native.apple.185a401f78328b0f",
-      "source": "Session actions",
-      "translated": "Sitzungsaktionen"
+      "id": "native.apple.4d7750c9bf699469",
+      "source": "Thread actions",
+      "translated": "Thread-Aktionen"
     },
     {
-      "id": "native.apple.9f9dedf599b2619b",
-      "source": "Session cost %@",
-      "translated": "Sitzungskosten: %@"
+      "id": "native.apple.bb2f22cc43c97f8e",
+      "source": "Thread cost %@",
+      "translated": "Thread-Kosten %@"
     },
     {
-      "id": "native.apple.f0a4720df5f5f403",
-      "source": "Compact Session",
-      "translated": "Sitzung komprimieren"
+      "id": "native.apple.6239ced0b86e86f8",
+      "source": "Compact Thread",
+      "translated": "Thread komprimieren"
     },
     {
       "id": "native.apple.fa10740f9e272e83",

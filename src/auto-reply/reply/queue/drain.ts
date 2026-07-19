@@ -399,12 +399,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
       ...(timestamp === undefined ? {} : { timestamp }),
-      ...(media.length === 0
-        ? {}
-        : {
-            media,
-            mediaOnlyText: "[User sent media without caption]",
-          }),
+      ...(media.length === 0 ? {} : { media }),
     };
   };
   const initialTranscriptPrompt = buildCollectTranscriptPrompt(transcriptSources);

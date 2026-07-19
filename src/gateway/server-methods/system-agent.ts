@@ -22,6 +22,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
+import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { formatSystemAgentStartupMessage } from "../../system-agent/overview.js";
@@ -488,6 +489,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const onboardingWelcome = await buildOnboardingWelcome({ engine });
               welcome = onboardingWelcome.text;
               welcomeQuestion = onboardingWelcome.question;
+            } else if (params.welcomeVariant === "new-agent") {
+              welcome = buildNewAgentWelcome({ engine });
             } else {
               welcome = formatSystemAgentStartupMessage(await engine.loadOverview());
               engine.noteAssistantMessage(welcome);
@@ -593,6 +596,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             action,
             ...(action === "open-agent" && reply.agentDraft
               ? { agentDraft: reply.agentDraft }
+              : {}),
+            ...(action === "open-agent" &&
+            reply.handoff?.kind === "open-tui" &&
+            reply.handoff.agentId
+              ? { agentId: reply.handoff.agentId }
               : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
             ...(reply.question ? { question: reply.question } : {}),

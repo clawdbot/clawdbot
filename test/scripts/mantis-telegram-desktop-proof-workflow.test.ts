@@ -333,6 +333,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_PROOF_CMD");
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
     expect(prompt).toContain("Let `start` return or fail on its\n   own");
+    expect(prompt).toContain("`--mcp-app-fixture` option");
+    expect(prompt).toContain("mcp app conformance qa check");
+    expect(prompt).toContain("`companion-called` and\n   `resource-ok`");
+    expect(prompt).toContain("Reopen that same Telegram button after its ticket expires");
     expect(prompt).toContain(
       "Use a long\n   command timeout for `start`, `send`, `view`, and `finish`",
     );

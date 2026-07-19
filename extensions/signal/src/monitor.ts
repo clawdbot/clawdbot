@@ -689,9 +689,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       accountId: accountInfo.accountId,
       dispatch: handleEvent,
       runtime,
-      runTrackedTask: (task) => {
-        void monitorTaskRunner.runTask(task);
-      },
     });
 
     await runSignalSseLoop({

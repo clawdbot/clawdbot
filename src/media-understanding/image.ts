@@ -435,6 +435,8 @@ async function describeImagesWithModelInternal(
     });
   }
 
+  // Resolved models carry their lifecycle runtime, so registration targets that
+  // registry before the built-in fallback reaches complete().
   const providerStreamFn = registerProviderStreamForModel({
     model,
     cfg: params.cfg,

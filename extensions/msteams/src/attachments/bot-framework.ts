@@ -113,7 +113,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     return undefined;
   }
   if (!response.ok) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentInfo non-ok", {
       status: response.status,
     });
@@ -173,7 +173,7 @@ async function saveBotFrameworkAttachmentView(params: {
     return undefined;
   }
   if (!response.ok) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentView non-ok", {
       status: response.status,
     });
@@ -183,14 +183,14 @@ async function saveBotFrameworkAttachmentView(params: {
   try {
     contentLength = parseMediaContentLength(response.headers.get("content-length"));
   } catch (err) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentView invalid content-length", {
       error: err instanceof Error ? err.message : String(err),
     });
     return undefined;
   }
   if (contentLength !== null && contentLength > params.maxBytes) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     return undefined;
   }
   try {

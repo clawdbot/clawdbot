@@ -64,6 +64,65 @@ afterEach(() => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
+  it("does not start draining when migration completes after stop begins", async () => {
+    await withQueue(async (queue) => {
+      let releaseEntries: (() => void) | undefined;
+      const entries = vi.fn(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseEntries = () => resolve([]);
+          }),
+      );
+      const prune = vi.spyOn(queue, "prune");
+      const spool = createNextcloudTalkWebhookSpool({
+        accountId: "default",
+        queue,
+        deliver: vi.fn(),
+        runtime: { error: vi.fn(), log: vi.fn() },
+        pollIntervalMs: 60_000,
+        legacyReplayStore: { entries, clear: vi.fn(async () => {}) },
+      });
+
+      const stopping = spool.stop();
+      await vi.waitFor(() => expect(entries).toHaveBeenCalledTimes(1));
+      releaseEntries?.();
+      await stopping;
+
+      expect(prune).not.toHaveBeenCalled();
+    });
+  });
+
+  it("finishes durable admission for a receive that began before migration-time stop", async () => {
+    await withQueue(async (queue) => {
+      let releaseEntries: (() => void) | undefined;
+      const entries = vi.fn(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseEntries = () => resolve([]);
+          }),
+      );
+      const deliver = vi.fn();
+      const spool = createNextcloudTalkWebhookSpool({
+        accountId: "default",
+        queue,
+        deliver,
+        runtime: { error: vi.fn(), log: vi.fn() },
+        pollIntervalMs: 60_000,
+        legacyReplayStore: { entries, clear: vi.fn(async () => {}) },
+      });
+
+      const receiving = spool.receive(createRawEvent({ messageId: "msg-before-stop" }));
+      const stopping = spool.stop();
+      await vi.waitFor(() => expect(entries).toHaveBeenCalledTimes(1));
+      releaseEntries?.();
+
+      await expect(receiving).resolves.toBe("accepted");
+      await stopping;
+      expect(deliver).not.toHaveBeenCalled();
+      expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
+    });
+  });
+
   it("migrates the shipped replay guard window into completion tombstones", async () => {
     await withQueue(async (queue) => {
       const seenAt = Date.now();

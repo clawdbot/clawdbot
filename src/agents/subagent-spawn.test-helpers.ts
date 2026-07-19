@@ -135,6 +135,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
+  loadModelCatalogMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionEntryFromParentMock?: MockFn;
@@ -142,6 +143,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
   registerSubagentRunMock?: MockFn;
+  startQueuedSubagentRunMock?: MockFn;
+  settleFailedQueuedSubagentLaunchMock?: MockFn;
+  completeCollectorLaunchCleanupMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
@@ -149,6 +153,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveSubagentSpawnModelSelection?: () => string | undefined;
   getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
   countActiveRunsForSession?: (sessionKey: string) => number;
+  listSwarmRunsForGroup?: (groupId: string) => unknown[];
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
@@ -263,6 +268,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    loadModelCatalog: (...args: unknown[]) => params.loadModelCatalogMock?.(...args) ?? [],
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
@@ -387,16 +393,18 @@ export async function loadSubagentSpawnModuleForTest(params: {
     params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined);
 
   vi.doMock("./subagent-registry.js", () => ({
+    completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: countActiveRunsForSessionImpl,
+    listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun: registerSubagentRunImpl,
     resetSubagentRegistryForTests,
+    settleFailedQueuedSubagentLaunch:
+      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
+    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
   }));
 
-  // Refactor moved the spawn-runtime entry points out of
-  // subagent-registry.js into a leaf module to break a types <-> targeting
-  // import cycle. subagent-spawn.ts now imports countActiveRunsForSession +
-  // registerSubagentRun from here, so the test mock must follow the new path
-  // or the registry gate and register hooks silently no-op.
+  // Spawn pipeline owns count/register through this leaf seam; Swarm lifecycle
+  // functions remain owned by subagent-registry.js.
   vi.doMock("./subagent-registry-spawn-runtime.js", () => ({
     countActiveRunsForSession: countActiveRunsForSessionImpl,
     registerSubagentRun: registerSubagentRunImpl,
@@ -404,12 +412,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   const subagentSpawnModule = await import("./subagent-spawn.js");
-  // Re-import traceparent-handoff module AFTER vi.resetModules() so the
-  // returned consume/reset functions reference the same module instance the
-  // SUT writes to (registerSubagentTraceparentHandoff in subagent-spawn.ts).
-  // The test-file's file-top import is stale post-reset and would consume from
-  // a different in-memory Map than the SUT registers into — returning
-  // undefined and silently failing the traceparent-handoff test.
+  // resetModules gives the SUT a fresh handoff map; return functions from that
+  // same module instance so tests consume the handoff the spawn path registered.
   const traceparentHandoffModule = await import("./subagent-traceparent-handoff.js");
   return {
     ...subagentSpawnModule,

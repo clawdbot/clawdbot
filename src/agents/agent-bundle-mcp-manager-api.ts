@@ -15,6 +15,13 @@ function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
   return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, createSessionMcpRuntimeManager);
 }
 
+function peekSessionMcpRuntimeManager(): SessionMcpRuntimeManager | undefined {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  return Object.hasOwn(globalStore, SESSION_MCP_RUNTIME_MANAGER_KEY)
+    ? (globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] as SessionMcpRuntimeManager)
+    : undefined;
+}
+
 export async function getOrCreateSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
@@ -65,7 +72,7 @@ export function peekSessionMcpRuntime(params: {
 }): SessionMcpRuntime | undefined {
   const sessionId = normalizeOptionalString(params.sessionId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
-  return getSessionMcpRuntimeManager().peekSession({
+  return peekSessionMcpRuntimeManager()?.peekSession({
     ...(sessionId ? { sessionId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   });

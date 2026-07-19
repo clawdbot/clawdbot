@@ -19,7 +19,7 @@ import {
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigAppliedHash,
 } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -403,6 +403,10 @@ type ManagedGatewayConfigReloaderParams = Omit<
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
+  initialSnapshotRawHash: string | null;
+  initialAuthoredConfig: unknown;
+  initialSnapshotValid: boolean;
+  initialSnapshotIssues: ConfigFileSnapshot["issues"];
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/io.js").readConfigFileSnapshotForRuntimeTransaction;
@@ -1907,6 +1911,10 @@ export function startManagedGatewayConfigReloader(
   const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
+    initialSnapshotRawHash: params.initialSnapshotRawHash,
+    initialAuthoredConfig: params.initialAuthoredConfig,
+    initialSnapshotValid: params.initialSnapshotValid,
+    initialSnapshotIssues: params.initialSnapshotIssues,
     // Single notification point for every persisted config change — gateway
     // RPC writes, agent/CLI config_set, doctor, and hand edits all land here
     // once the candidate is accepted. Hash-only; clients refresh via config.get.

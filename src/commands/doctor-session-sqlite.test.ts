@@ -229,7 +229,7 @@ describe("runDoctorSessionSqlite", () => {
 
   it("keeps mismatched older agent schema versions blocking during all-agent import", async () => {
     const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
-    const stateDir = path.join(tempDir, "state");
+    const stateDir = path.join(tempDir, "token=supersecret", "state");
     const sessionsDir = path.join(stateDir, "agents", "drifted", "sessions");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     fs.mkdirSync(sessionsDir, { recursive: true });
@@ -261,6 +261,17 @@ describe("runDoctorSessionSqlite", () => {
         message: expect.stringMatching(/uses schema version 1/iu),
       }),
     ]);
+    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+    expect(manifest.failedAt).toBeTruthy();
+    expect(manifest.failureReports).toBeDefined();
+    const failureReportPath = expectDefined(
+      report.migrationRun?.failureReportMarkdownPath,
+      "blocking migration failure report path",
+    );
+    const failureReport = fs.readFileSync(failureReportPath, "utf-8");
+    expect(failureReport).toContain("sqlite_compact_failed");
+    expect(failureReport).toContain("openclaw doctor --session-sqlite recover --github-issue");
+    expect(failureReport).not.toContain("supersecret");
     const after = new sqlite.DatabaseSync(sqlitePath);
     try {
       expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
@@ -481,6 +492,57 @@ describe("runDoctorSessionSqlite", () => {
         storePath: store.storePath,
       }),
     ).toHaveLength(2);
+  });
+
+  it("archives legacy stores with valid sessions and invalid cron stubs without failing", async () => {
+    const store = createLegacyStore();
+    const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    const cronStubKey = "agent:main:cron:legacy-stub";
+    legacyStore[cronStubKey] = { updatedAt: 1500 };
+    fs.writeFileSync(store.storePath, `${JSON.stringify(legacyStore, null, 2)}\n`, { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      archivedLegacyStoreFiles: 1,
+      importedEntries: 1,
+      importedTranscriptEvents: 2,
+      issues: 1,
+      sqliteEntries: 1,
+    });
+    expect(report.targets[0]?.issues).toEqual([
+      {
+        code: "entry_invalid",
+        message: "Session entry is missing a valid sessionId.",
+        sessionKey: cronStubKey,
+      },
+    ]);
+    const archivedStorePath = expectDefined(
+      report.targets[0]?.archivedLegacyStoreFiles?.[0],
+      "archived legacy store path",
+    );
+    expect(fs.existsSync(store.storePath)).toBe(false);
+    expect(fs.existsSync(archivedStorePath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(archivedStorePath, "utf-8"))).toMatchObject({
+      [cronStubKey]: { updatedAt: 1500 },
+    });
+
+    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+    expect(manifest.failedAt).toBeUndefined();
+    expect(manifest.failureReports).toBeUndefined();
+    expect(manifest.targets[0]).toMatchObject({
+      issues: [expect.objectContaining({ code: "entry_invalid", sessionKey: cronStubKey })],
+      validationBeforeArchive: "passed",
+    });
+    expect(report.migrationRun?.failureReportJsonPath).toBeUndefined();
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
   });
 
   it("compacts migrated agent SQLite databases and reports reclaimed pages", async () => {
@@ -2461,14 +2523,9 @@ describe("runDoctorSessionSqlite", () => {
     expect(
       manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
     ).toBe(true);
-    expect(report.migrationRun?.failureReportMarkdownPath).toBeTruthy();
-    const failureReport = fs.readFileSync(
-      report.migrationRun?.failureReportMarkdownPath ?? "",
-      "utf-8",
-    );
-    expect(failureReport).toContain("transcript_malformed");
-    expect(failureReport).toContain("openclaw doctor --session-sqlite recover --github-issue");
-    expect(failureReport).not.toContain("supersecret");
+    expect(manifest.failedAt).toBeUndefined();
+    expect(manifest.failureReports).toBeUndefined();
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
   });
 
   it("reports malformed selected legacy transcripts during validation", async () => {

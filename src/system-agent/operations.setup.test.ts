@@ -525,7 +525,10 @@ describe("parseSystemAgentOperation", () => {
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        writeOptions: { preCommitRuntimePreflight: expect.any(Function) },
+        writeOptions: {
+          auditOrigin: "system-agent",
+          preCommitRuntimePreflight: expect.any(Function),
+        },
       }),
     );
     const persisted = mockConfig.currentConfig();

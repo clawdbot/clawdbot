@@ -412,7 +412,7 @@ export async function applySystemAgentSetup(
     async () =>
       await transformConfigWithPendingPluginInstalls({
         afterWrite: { mode: "auto" },
-        writeOptions: { allowConfigSizeDrop: false },
+        writeOptions: { auditOrigin: "system-agent", allowConfigSizeDrop: false },
         transform: async (currentConfig, context) => {
           const currentSnapshot = requireValidSystemAgentSetupSnapshot(context.snapshot);
           if (hasExpectedConfigHash && context.previousHash !== expectedConfigHash) {

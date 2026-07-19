@@ -870,7 +870,7 @@ describe("openclaw.chat", () => {
       text: "Your agent is hatching.",
       action: "open-tui",
       agentDraft: "hatch",
-      handoff: { kind: "open-tui" },
+      handoff: { kind: "open-tui", agentId: "researcher" },
     });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
 
@@ -879,7 +879,11 @@ describe("openclaw.chat", () => {
       message: "yes",
     });
 
-    expect(call.payload).toMatchObject({ action: "open-agent", agentDraft: "hatch" });
+    expect(call.payload).toMatchObject({
+      action: "open-agent",
+      agentDraft: "hatch",
+      agentId: "researcher",
+    });
   });
 
   it("resets a session on request", async () => {

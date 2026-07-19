@@ -3174,6 +3174,12 @@ td.data-table-key-col {
   font-size: 13px;
 }
 
+.agent-select__separator {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
 .agent-select__option-label {
   flex: 1;
   min-width: 0;

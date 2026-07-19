@@ -103,7 +103,7 @@ struct OpenClawApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Session") {
+                Button("New Thread") {
                     DashboardManager.shared.dispatchNativeCommand(.newSession)
                 }
                 .keyboardShortcut("n", modifiers: .command)

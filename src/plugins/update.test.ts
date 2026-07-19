@@ -1397,6 +1397,151 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "latest",
+      updateChannel: undefined,
+      registrySpec: "@acme/demo",
+      registryVersion: "1.2.4",
+      overrideSpec: "@acme/demo@latest",
+    },
+    {
+      name: "beta",
+      updateChannel: "beta" as const,
+      registrySpec: "@acme/demo@beta",
+      registryVersion: "1.3.0-beta.1",
+      overrideSpec: "@acme/demo@beta",
+    },
+  ])(
+    "reports newer $name releases for exact-pinned installed records instead of claiming up to date",
+    async ({ updateChannel, registrySpec, registryVersion, overrideSpec }) => {
+      const installPath = createInstalledPackageDir({
+        name: "@acme/demo",
+        version: "1.2.3",
+      });
+      mockNpmViewMetadata({
+        name: "@acme/demo",
+        version: "1.2.3",
+        integrity: "sha512-same",
+        shasum: "same",
+      });
+      mockNpmViewMetadata({
+        name: "@acme/demo",
+        version: registryVersion,
+      });
+      installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+      const config = createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+        resolvedName: "@acme/demo",
+        resolvedSpec: "@acme/demo@1.2.3",
+        resolvedVersion: "1.2.3",
+        integrity: "sha512-same",
+        shasum: "same",
+        installedAt: "2026-07-01T00:00:00.000Z",
+        resolvedAt: "2026-07-01T00:00:01.000Z",
+      });
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        pluginIds: ["demo"],
+        ...(updateChannel ? { updateChannel } : {}),
+      });
+
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(2);
+      expect(runCommandWithTimeoutMock.mock.calls[1]?.[0]).toEqual([
+        "npm",
+        "view",
+        registrySpec,
+        "name",
+        "version",
+        "dist.integrity",
+        "dist.shasum",
+        "openclaw",
+        "--json",
+      ]);
+      expect(result.changed).toBe(false);
+      expect(result.config).toBe(config);
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "demo",
+          status: "unchanged",
+          currentVersion: "1.2.3",
+          nextVersion: registryVersion,
+          message:
+            `demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); ` +
+            `registry ${updateChannel === "beta" ? "beta" : "latest"} resolves to ${registryVersion}. ` +
+            `Pass \`openclaw plugins update ${overrideSpec}\` to follow that registry line.`,
+        },
+      ]);
+    },
+  );
+
+  it("reports a newer latest release when the beta line for an exact pin is unavailable", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    mockNpmViewMetadata({
+      name: "@acme/demo",
+      version: "1.2.3",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "npm error code E404",
+    });
+    mockNpmViewMetadata({
+      name: "@acme/demo",
+      version: "1.2.4",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+        resolvedName: "@acme/demo",
+        resolvedSpec: "@acme/demo@1.2.3",
+        resolvedVersion: "1.2.3",
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: ["demo"],
+      updateChannel: "beta",
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(3);
+    expect(runCommandWithTimeoutMock.mock.calls[2]?.[0]).toEqual([
+      "npm",
+      "view",
+      "@acme/demo",
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "openclaw",
+      "--json",
+    ]);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "unchanged",
+        currentVersion: "1.2.3",
+        nextVersion: "1.2.4",
+        message:
+          "demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); registry latest resolves to 1.2.4. " +
+          "Pass `openclaw plugins update @acme/demo@latest` to follow that registry line.",
+      },
+    ]);
+  });
+
   it("does not skip unchanged npm plugins when package metadata requires a newer plugin API", async () => {
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
     const installPath = createInstalledPackageDir({
@@ -2760,8 +2905,8 @@ describe("updateNpmInstalledPlugins", () => {
         pluginId: "demo",
         status: "unchanged",
         currentVersion: "1.2.3",
-        nextVersion: "1.2.3",
-        message: `demo is pinned to ${spec} (installed 1.2.3); registry default resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow the registry default line.`,
+        nextVersion: "1.2.4",
+        message: `demo is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow that registry line.`,
       });
     },
   );

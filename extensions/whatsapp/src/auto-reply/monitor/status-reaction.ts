@@ -6,13 +6,13 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
+import { resolveReactionParticipant } from "./reaction-participant.js";
 
 export type { StatusReactionController };
 
@@ -84,11 +84,11 @@ export async function createWhatsAppStatusReactionController(
     return null;
   }
 
-  const sender = getSenderIdentity(params.msg);
+  const participant = resolveReactionParticipant(params.msg);
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(participant ? { participant } : {}),
     accountId,
     cfg: params.cfg,
   };

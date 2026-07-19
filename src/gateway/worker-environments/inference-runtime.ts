@@ -54,14 +54,13 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import { streamSimple } from "../../llm/stream.js";
+import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
   Model,
   SimpleStreamOptions,
-  StreamFn,
   Tool,
   Usage,
 } from "../../llm/types.js";
@@ -110,7 +109,6 @@ type WorkerInferenceRuntimeDependencies = {
   resolveProviderStream: typeof registerProviderStreamForModel;
   resolveStream: typeof resolveEmbeddedAgentStreamFn;
   applyStreamPolicy: typeof applyExtraParamsToAgent;
-  stream: StreamFn;
   wrapStream: typeof wrapStreamFnWithDiagnosticModelCallEvents;
   createTrace: typeof createDiagnosticTraceContextFromActiveScope;
   recordUsage: (params: WorkerInferenceUsageParams) => void;
@@ -391,7 +389,6 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   resolveProviderStream: registerProviderStreamForModel,
   resolveStream: resolveEmbeddedAgentStreamFn,
   applyStreamPolicy: applyExtraParamsToAgent,
-  stream: streamSimple as StreamFn,
   wrapStream: wrapStreamFnWithDiagnosticModelCallEvents,
   createTrace: createDiagnosticTraceContextFromActiveScope,
   recordUsage: emitWorkerInferenceUsage,
@@ -635,6 +632,10 @@ export function createWorkerInferenceExecutor(
       model: approved.model,
     };
     const logicalModel = approved.prepared.model;
+    const llmRuntime = getModelLlmRuntime(logicalModel);
+    if (!llmRuntime) {
+      throw new Error("Prepared worker model has no lifecycle runtime owner");
+    }
     const providerModel =
       logicalModel.provider === "openai" && logicalModel.api === "openai-chatgpt-responses"
         ? {
@@ -647,12 +648,12 @@ export function createWorkerInferenceExecutor(
       cfg: config,
       agentDir: approved.agentDir,
       workspaceDir: approved.workspaceDir,
-      registerStream: false,
     });
     const authValue = approved.prepared.auth.apiKey;
     const streamAgent = {
       streamFn: dependencies.resolveStream({
-        currentStreamFn: dependencies.stream,
+        llmRuntime,
+        currentStreamFn: llmRuntime.streamSimple,
         ...(providerStream ? { providerStreamFn: providerStream } : {}),
         sessionId: request.sessionId,
         signal,

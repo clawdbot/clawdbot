@@ -10,6 +10,7 @@ import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { searchForSession } from "../../lib/sessions/navigation.ts";
+import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat/grouped.css";
@@ -66,6 +67,9 @@ export class CustodianPage extends OpenClawLightDomElement {
   /** Onboarding mode shows the Exit setup control; the route view sets this. */
   @property({ attribute: false }) onboarding = false;
 
+  /** New-agent mode starts a creation proposal conversation. */
+  @property({ attribute: false }) newAgentIntent = false;
+
   @state() private messages: CustodianMessage[] = [];
   @state() private input = "";
   @state() private sending = false;
@@ -93,7 +97,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     () => this.context?.gateway,
     (gateway) =>
       gateway.subscribeEvents((event) => {
-        if (this.onboarding || this.eventNudgeClosed) {
+        if (this.onboarding || this.newAgentIntent || this.eventNudgeClosed) {
           return;
         }
         const next = classifyCustodianEventNudge(event);
@@ -144,7 +148,17 @@ export class CustodianPage extends OpenClawLightDomElement {
   private currentSessionScopeKey(): string {
     // Mode selects the welcome contract, so changing it starts a new session
     // instead of carrying the previous route's transcript across modes.
-    return JSON.stringify([this.onboarding, this.connectionScopeKey()]);
+    return JSON.stringify([this.onboarding, this.newAgentIntent, this.connectionScopeKey()]);
+  }
+
+  private welcomeVariant(): Pick<SystemAgentChatParams, "welcomeVariant"> {
+    if (this.onboarding) {
+      return { welcomeVariant: "onboarding" };
+    }
+    if (this.newAgentIntent) {
+      return { welcomeVariant: "new-agent" };
+    }
+    return {};
   }
 
   private synchronizeClient(): void {
@@ -186,11 +200,11 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionScopeKey = scopeKey;
     this.sessionStarted = true;
     this.clearConversation();
-    // The onboarding variant seeds the first-run setup proposal; the permanent
+    // Route variants seed their dedicated proposal conversation; the permanent
     // presence surface gets the normal caretaker greeting instead.
     void this.requestReply(client, {
       sessionId: this.sessionId,
-      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
+      ...this.welcomeVariant(),
     });
   }
 
@@ -237,7 +251,18 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.retryParams = null;
       this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
       if (result.action === "open-agent") {
-        const sessionKey = this.context.gateway.snapshot.sessionKey?.trim();
+        let sessionKey = this.context.gateway.snapshot.sessionKey?.trim();
+        if (result.agentId) {
+          const roster = await this.context.agents.refreshList();
+          if (epoch !== this.requestEpoch || client !== this.activeClient) {
+            return;
+          }
+          sessionKey = buildAgentMainSessionKey({
+            agentId: result.agentId,
+            mainKey: roster?.mainKey,
+          });
+          this.context.gateway.setSessionKey(sessionKey);
+        }
         if (result.agentDraft === "hatch" && sessionKey) {
           // Preserve the destination session while preloading the localized
           // birth-sequence opener; draft-only chat routes are intentionally invalid.
@@ -289,7 +314,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.input = "";
     void this.requestReply(client, {
       sessionId: this.sessionId,
-      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
+      ...this.welcomeVariant(),
       message,
     });
   }
@@ -388,7 +413,7 @@ export class CustodianPage extends OpenClawLightDomElement {
             <div class="custodian__mark" aria-hidden="true">OC</div>
             <div>
               <h1>${t("custodian.title")}</h1>
-              <p>${t("custodian.subtitle")}</p>
+              <p>${t(this.onboarding ? "custodian.subtitle" : "custodian.subtitleCaretaker")}</p>
             </div>
           </div>
           ${this.onboarding

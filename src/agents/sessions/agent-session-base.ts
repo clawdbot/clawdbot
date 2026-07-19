@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import type {
   Agent,
@@ -36,6 +35,7 @@ import {
   type TurnStartEvent,
 } from "./extensions/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
@@ -183,7 +183,10 @@ export abstract class AgentSessionBase {
     apiKey?: string;
     headers?: Record<string, string>;
   }> {
-    if (this.agent.streamFn === streamSimple) {
+    if (
+      this.agent.streamFn ===
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+    ) {
       return this.getRequiredRequestAuth(model);
     }
 

@@ -572,14 +572,14 @@ struct OpenClawChatComposer: View {
                     .tag(session.key)
             }
         } label: {
-            Text("Session")
+            Text("Thread")
                 .font(OpenClawChatTypography.captionSemiBold)
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 160, alignment: .leading)
-        .help("Session")
+        .help("Thread")
     }
 
     @ViewBuilder

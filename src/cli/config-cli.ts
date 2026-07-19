@@ -2331,13 +2331,14 @@ async function runConfigOperations(params: {
     ...(unsetPaths.length > 0 || explicitSetPaths.length > 0
       ? {
           writeOptions: {
+            auditOrigin: "cli",
             ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
             ...(normalizedExplicitSetPaths.length > 0
               ? { explicitSetPaths: normalizedExplicitSetPaths }
               : {}),
           },
         }
-      : {}),
+      : { writeOptions: { auditOrigin: "cli" } }),
   });
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
@@ -2577,8 +2578,8 @@ export async function runConfigUnset(opts: {
       nextConfig: next,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       ...(unsetResult.leafContainer === "array"
-        ? {}
-        : { writeOptions: { unsetPaths: [parsedPath] } }),
+        ? { writeOptions: { auditOrigin: "cli" } }
+        : { writeOptions: { auditOrigin: "cli", unsetPaths: [parsedPath] } }),
     });
     const hint = configApplyHintForOperations(
       [buildUnsetOperation(parsedPath)],

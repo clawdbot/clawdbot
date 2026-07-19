@@ -81,6 +81,8 @@ export type ExecToolDefaults = {
   channelContext?: PluginHookChannelContext;
   accountId?: string;
   approvalReviewerDeviceId?: string;
+  /** Deny approval-requiring commands without creating operator approval events. */
+  nonInteractiveApproval?: boolean;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;

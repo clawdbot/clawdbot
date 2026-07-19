@@ -224,6 +224,9 @@ export const en: TranslationMap = {
     whatsapp: {
       title: "WhatsApp",
       subtitle: "Link WhatsApp Web and monitor connection health.",
+      loggedOut: "Logged out.",
+      logoutNotCleared:
+        "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
     },
     gatewayUrlConfirmation: {
       title: "Change Gateway URL",
@@ -1869,7 +1872,9 @@ export const en: TranslationMap = {
   custodian: {
     title: "OpenClaw",
     subtitle: "Your system setup guide",
+    subtitleCaretaker: "System setup and care.",
     exitSetup: "Exit setup",
+    newAgent: "New agent",
     hatchDraft: "Wake up, my friend!",
     placeholder: "Message OpenClaw…",
     sensitivePlaceholder: "Enter sensitive value…",
@@ -3904,6 +3909,20 @@ export const en: TranslationMap = {
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+      holdToRecordSetting: "Hold microphone button to dictate",
+      holdToRecordSettingDescription:
+        "Hold the composer microphone button, speak, then release to insert text without sending.",
+      dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
+      dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
+      dictationConnecting: "Starting dictation…",
+      dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
+      dictationFailed: "Dictation failed.",
+      dictationFinalizing: "Finishing dictation…",
+      dictationFinalizationTimedOut:
+        "Dictation stopped before the last partial transcript could be finalized.",
+      dictationProviderUnavailable: "No transcription provider is configured for dictation.",
+      dictationRecording: "Recording {elapsed}",
+      dictationReleaseToInsert: "Release to insert dictation",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",

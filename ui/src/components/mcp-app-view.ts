@@ -28,6 +28,7 @@ type McpAppViewPayload = {
   toolInput: unknown;
   toolResult: unknown;
   messageSupported?: boolean;
+  updateModelContextSupported?: boolean;
 };
 
 type HostContext = NonNullable<
@@ -91,6 +92,10 @@ function hostContext(element: Element | undefined, height: number): HostContext 
 class OpenClawAppBridge extends AppBridge {
   setMessageHandler(handler: NonNullable<AppBridge["onmessage"]>) {
     Reflect.set(this, "onmessage", handler);
+  }
+
+  setUpdateModelContextHandler(handler: NonNullable<AppBridge["onupdatemodelcontext"]>) {
+    Reflect.set(this, "onupdatemodelcontext", handler);
   }
 
   setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
@@ -307,7 +312,11 @@ export class McpAppView extends LitElement {
       const bridge = new OpenClawAppBridge(
         null,
         { name: "OpenClaw", version: "1.0.0" },
-        buildMcpAppHostCapabilities(payload.csp, payload.messageSupported === true),
+        buildMcpAppHostCapabilities(
+          payload.csp,
+          payload.messageSupported === true,
+          payload.updateModelContextSupported === true,
+        ),
         { hostContext: hostContext(mount, this.height) },
       );
       resources.bridge = bridge;
@@ -329,6 +338,12 @@ export class McpAppView extends LitElement {
             window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
           );
           return accepted ? {} : { isError: true };
+        });
+      }
+      if (payload.updateModelContextSupported === true) {
+        bridge.setUpdateModelContextHandler(async (params) => {
+          await this.request("mcp.app.updateModelContext", { ...params });
+          return {};
         });
       }
       bridge.oncalltool = async (params) =>

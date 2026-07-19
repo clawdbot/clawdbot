@@ -19,7 +19,6 @@ type AvatarFetch = { authToken: string; controller: AbortController };
 
 /** Bound local avatar fetches so a stalled Control UI media route cannot pin pending state forever. */
 const AGENT_SELECT_AVATAR_FETCH_TIMEOUT_MS = 30_000;
-
 export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) agents: GatewayAgentRow[] = [];
   @property({ attribute: false }) selectedId: string | null = null;
@@ -28,6 +27,7 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) authToken: string | null = null;
   @property({ attribute: false }) disabled = false;
   @property({ attribute: false }) onSelect: (agentId: string) => void = () => {};
+  @property({ attribute: false }) onCreateAgent: () => void = () => {};
 
   private readonly avatarBlobUrlByRoute = new Map<string, string>();
   private readonly avatarFetchByRoute = new Map<string, AvatarFetch>();
@@ -144,6 +144,10 @@ export class AgentSelect extends OpenClawLightDomElement {
 
   private readonly handleSelect = (event: WebAwesomeSelectEvent) => {
     const item = event.detail.item as HTMLElement & { checked?: boolean; value?: string };
+    if (item.hasAttribute("data-create-agent")) {
+      this.onCreateAgent();
+      return;
+    }
     const agentId = item.value ?? item.getAttribute("value");
     if (!agentId) {
       return;
@@ -165,7 +169,7 @@ export class AgentSelect extends OpenClawLightDomElement {
       this.agents.find((agent) => agent.id === this.defaultId) ??
       this.agents[0];
     const selectedBadge = selectedAgent ? agentBadgeText(selectedAgent.id, this.defaultId) : null;
-    const unavailable = this.disabled || this.agents.length === 0;
+    const unavailable = this.disabled;
 
     return html`
       <wa-dropdown class="agent-select" placement="bottom-start" @wa-select=${this.handleSelect}>
@@ -200,6 +204,11 @@ export class AgentSelect extends OpenClawLightDomElement {
             </wa-dropdown-item>
           `;
         })}
+        <div class="agent-select__separator" role="separator"></div>
+        <wa-dropdown-item class="agent-select__option" data-create-agent>
+          <span slot="icon">${icons.users}</span>
+          <span class="agent-select__option-label">${t("custodian.newAgent")}</span>
+        </wa-dropdown-item>
       </wa-dropdown>
     `;
   }

@@ -789,6 +789,7 @@ export async function maybeRepairGatewayServiceConfig(
         nextConfig: nextCfg,
         afterWrite: { mode: "auto" },
         writeOptions: {
+          auditOrigin: "doctor",
           allowConfigSizeDrop: options.allowConfigSizeDrop === true || updateRepairMode,
           skipPluginValidation: options.skipPluginValidation === true || updateRepairMode,
           preservedLegacyRootKeys: options.preservedLegacyRootKeys,

@@ -519,6 +519,17 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts per-agent tools.swarm config", () => {
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { enabled: true } } }),
+    );
+    expectSchemaSuccess(AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: true } }));
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { unknownKey: 1 } } }),
+      "tools.swarm",
+    );
+  });
+
   it("rejects non-positive contextTokens on agent entries and defaults", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),

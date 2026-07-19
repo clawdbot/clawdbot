@@ -179,7 +179,7 @@ openclaw onboard --reset --reset-scope full
 
 ## Locale
 
-Interactive onboarding uses the CLI wizard locale for fixed setup copy. Resolve order:
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:
 
 1. `OPENCLAW_LOCALE`
 2. `LC_ALL`
@@ -191,6 +191,7 @@ Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use u
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 
 ## Non-interactive setup

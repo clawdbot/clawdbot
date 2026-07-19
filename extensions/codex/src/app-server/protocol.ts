@@ -165,6 +165,7 @@ export type CodexThreadStartResponse = {
 export type CodexThreadForkParams = JsonObject & {
   threadId: string;
   lastTurnId?: string | null;
+  beforeTurnId?: string | null;
   path?: string | null;
   model?: string | null;
   modelProvider?: string | null;

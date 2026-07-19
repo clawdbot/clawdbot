@@ -18,6 +18,12 @@ function resolveControllerSessionKey(entry: SubagentRunRecord): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
 }
 
+function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
+  return entry.collect
+    ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
+    : resolveControllerSessionKey(entry);
+}
+
 /** Lists requester-owned runs, optionally scoped to the lifetime of a requester run. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -438,7 +444,7 @@ export function countActiveRunsForSessionFromRuns(
 
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
   for (const entry of runs.values()) {
-    if (resolveControllerSessionKey(entry) !== key) {
+    if (resolveConcurrencyOwnerSessionKey(entry) !== key) {
       continue;
     }
     const existing = latestByChildSessionKey.get(entry.childSessionKey);

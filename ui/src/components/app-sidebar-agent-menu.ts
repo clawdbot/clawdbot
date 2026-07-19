@@ -224,6 +224,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             case `${COMMAND_VALUE_PREFIX}agent-settings`:
               params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
               break;
+            case `${COMMAND_VALUE_PREFIX}new-agent`:
+              params.onNavigate("custodian", { search: "?intent=new-agent" });
+              break;
             case `${COMMAND_VALUE_PREFIX}settings`:
               params.onNavigate("config");
               break;
@@ -306,6 +309,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               <div class="sidebar-customize-menu__separator" role="separator"></div>
             `
           : nothing}
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+          <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
+        </wa-dropdown-item>
         <wa-dropdown-item
           class="sidebar-customize-menu__item"
           value="command:capabilities"

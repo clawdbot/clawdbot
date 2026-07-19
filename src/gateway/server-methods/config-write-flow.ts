@@ -249,6 +249,7 @@ export async function commitGatewayConfigWrite(params: {
     nextConfig: params.nextConfig,
     writeOptions: {
       ...params.writeOptions,
+      auditOrigin: "config-rpc",
       runtimeRefresh: {
         ...params.writeOptions.runtimeRefresh,
         includeAuthStoreRefs: false,

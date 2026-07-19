@@ -194,6 +194,7 @@ describe("plugins cli uninstall", () => {
       },
       writeOptions: {
         allowConfigSizeDrop: true,
+        auditOrigin: "plugin-install",
         afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },

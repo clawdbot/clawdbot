@@ -28,6 +28,15 @@ export const PresenceEntrySchema = closedObject({
   roles: Type.Optional(Type.Array(NonEmptyString)),
   scopes: Type.Optional(Type.Array(NonEmptyString)),
   instanceId: Type.Optional(NonEmptyString),
+  user: Type.Optional(
+    closedObject({
+      /** Opaque identity key: authenticated email today, durable profile id later. Clients group presence by this. */
+      id: NonEmptyString,
+      email: Type.Optional(NonEmptyString),
+      name: Type.Optional(NonEmptyString),
+      avatarUrl: Type.Optional(NonEmptyString),
+    }),
+  ),
 });
 
 /** Health snapshot is intentionally opaque because providers contribute nested shapes. */

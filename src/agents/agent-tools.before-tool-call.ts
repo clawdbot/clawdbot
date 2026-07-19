@@ -219,7 +219,7 @@ export type DeferredPluginToolApproval = {
 };
 
 type BeforeToolCallWrapperOptions = {
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   emitDiagnostics: boolean;
 };
 type BeforeToolCallPreparingTool = AnyAgentTool & {
@@ -1215,7 +1215,7 @@ export function cancelDeferredPluginToolApproval(
 
 async function resolveBeforeToolCallApprovalOutcome(params: {
   result: PluginHookBeforeToolCallResult | undefined;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   toolName: string;
   toolCallId?: string;
   ctx?: HookContext;
@@ -1252,6 +1252,16 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
       params: params.baseParams,
     };
   }
+  if (params.approvalMode === "deny") {
+    notifyPluginApprovalResolution(approval, PluginApprovalResolutions.DENY);
+    return {
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-approval",
+      reason: "approval_required",
+      params: params.baseParams,
+    };
+  }
   return await requestPluginToolApproval({
     approval,
     toolName: params.toolName,
@@ -1266,7 +1276,7 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
 async function resolveSkillWorkshopApprovalForFinalParams(params: {
   toolName: string;
   params: unknown;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
@@ -1437,7 +1447,7 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
@@ -1750,7 +1760,7 @@ export async function runBeforeToolCallHook(args: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -2049,7 +2059,7 @@ export function wrapToolWithBeforeToolCallHook(
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];

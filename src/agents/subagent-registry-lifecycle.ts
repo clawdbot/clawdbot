@@ -82,6 +82,8 @@ import {
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
+import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
+import { releaseSwarmRun } from "./swarm-scheduler.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -941,6 +943,7 @@ export function createSubagentRegistryLifecycleController(params: {
   function scheduleRequesterSettleWake(runId: string, entry: SubagentRunRecord): void {
     const requesterSessionKey = entry.requesterSessionKey?.trim();
     if (
+      entry.collect ||
       !requesterSessionKey ||
       scheduledRequesterSettleWakeRuns.has(runId) ||
       scheduledRequesterSettleWakeTimers.has(runId)
@@ -1252,6 +1255,26 @@ export function createSubagentRegistryLifecycleController(params: {
     if (cleanupParams.provisionalKill) {
       // The provider result or bounded kill reconciliation owns terminal settle.
       // Waking here could tell the requester to finalize while the child still runs.
+      return;
+    }
+    if (cleanupParams.entry.collect) {
+      // Delete-mode session cleanup already ran before this durable bookkeeping.
+      // Preserve only the collector result tombstone for waits and group caps.
+      if (cleanupParams.cleanup === "delete") {
+        params.clearPendingLifecycleError(cleanupParams.runId);
+        runCleanupTail("context-engine cleanup", async () => {
+          await params.notifyContextEngineSubagentEnded({
+            childSessionKey: cleanupParams.entry.childSessionKey,
+            reason: "deleted",
+            agentDir: cleanupParams.entry.agentDir,
+            workspaceDir: cleanupParams.entry.workspaceDir,
+          });
+        });
+      }
+      cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
+      cleanupParams.entry.requesterSettleWake = undefined;
+      params.persist();
+      retryDeferredCompletedAnnounces(cleanupParams.runId);
       return;
     }
     if (cleanupParams.cleanup === "delete") {
@@ -2068,6 +2091,9 @@ export function createSubagentRegistryLifecycleController(params: {
           mutated = true;
         }
       }
+      if (updateSwarmCollectorCompletion(entry)) {
+        mutated = true;
+      }
       if (provisionalKillSnapshot) {
         // Keep the tombstone's superseded generation boundary through task
         // commit. Clearing it on the canonical registry row must not let a
@@ -2182,6 +2208,9 @@ export function createSubagentRegistryLifecycleController(params: {
       // Update only its task projection; the newer generation owns all session effects.
       await retireSupersededSession(entry);
       return;
+    }
+    if (entry.collect) {
+      releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
     }
     const isProvisionalKill = entry.killReconciliation !== undefined;
     // Record only the current, non-superseded callback with a committed outcome; the

@@ -1069,7 +1069,7 @@ type DeleteSessionEntryLifecycleParams = {
   archiveTranscript: boolean;
   expectedEntry?: SessionEntry;
   expectedLifecycleRevision?: string;
-  expectedSessionId?: string;
+  expectedSessionId?: string | null;
   expectedUpdatedAt?: number;
   requireWriteSuccess?: boolean;
   storePath: string;
@@ -1101,11 +1101,13 @@ async function deleteSessionEntryLifecycleInternal(
       params.expectedLifecycleRevision === undefined ||
       deletedEntry.lifecycleRevision === params.expectedLifecycleRevision;
     const expectedSessionIdMatches =
-      !params.expectedSessionId ||
-      deletedEntry.sessionId === params.expectedSessionId ||
-      (deletedEntry.sessionId === undefined &&
-        params.expectedLifecycleRevision !== undefined &&
-        expectedLifecycleRevisionMatches);
+      params.expectedSessionId === undefined ||
+      (params.expectedSessionId === null
+        ? deletedEntry.sessionId === undefined
+        : deletedEntry.sessionId === params.expectedSessionId ||
+          (deletedEntry.sessionId === undefined &&
+            params.expectedLifecycleRevision !== undefined &&
+            expectedLifecycleRevisionMatches));
     const expectedUpdatedAtMatches =
       params.expectedUpdatedAt === undefined || deletedEntry.updatedAt === params.expectedUpdatedAt;
     if (

@@ -99,6 +99,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
 const { configHandlers } = await import("./config.js");
 
 const GATEWAY_CONFIG_WRITE_OPTIONS = {
+  auditOrigin: "config-rpc",
   runtimeRefresh: {
     includeAuthStoreRefs: false,
   },

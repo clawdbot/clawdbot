@@ -789,8 +789,14 @@ export async function approveDevicePairing(
     accessMetadata?: DevicePairingAccessMetadata;
     approvedVia?: Extract<
       PairedDeviceApprovalKind,
-      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+      "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
     >;
+    /**
+     * Replace the pending scopes only if this is still a brand-new device.
+     * Used by trusted-proxy auto-approval to cap grants without ever approving
+     * an existing-device repair or upgrade request.
+     */
+    autoApproveNewDeviceScopes?: readonly string[];
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -802,8 +808,9 @@ export async function approveDevicePairing(
         accessMetadata?: DevicePairingAccessMetadata;
         approvedVia?: Extract<
           PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
+        autoApproveNewDeviceScopes?: readonly string[];
       }
     | string,
   maybeBaseDir?: string,
@@ -815,10 +822,19 @@ export async function approveDevicePairing(
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
+    const pendingRecord = state.pendingById[requestId];
+    if (!pendingRecord) {
       return null;
     }
+    if (
+      options?.autoApproveNewDeviceScopes &&
+      (pendingRecord.isRepair || state.pairedByDeviceId[pendingRecord.deviceId])
+    ) {
+      return null;
+    }
+    const pending = options?.autoApproveNewDeviceScopes
+      ? { ...pendingRecord, scopes: [...options.autoApproveNewDeviceScopes] }
+      : pendingRecord;
     const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     const roleMismatchScope = resolveScopeOutsideRequestedRoles({

@@ -396,6 +396,7 @@ describe("session hook context wiring", () => {
         sessionId: "daily-session",
         text: "daily",
         updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        reset: { mode: "daily" },
       });
 
       const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");

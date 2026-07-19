@@ -7,6 +7,12 @@ scenario:
     primary:
       - channels.access-policy
   objective: Verify groupPolicy open accepts a mentioned group message.
+  gatewayConfigPatch:
+    channels:
+      whatsapp:
+        accounts:
+          $selectedAccount:
+            groupPolicy: open
   successCriteria:
     - The mentioned group message receives one marker reply.
   docsRefs:
@@ -19,12 +25,10 @@ scenario:
     suiteIsolation: isolated
     summary: Verify WhatsApp groupPolicy open behavior through the canonical adapter.
     config:
-      policyKey: groupPolicy
-      policyValue: open
       conversationKind: group
       conversationId: 120363000000000000@g.us
       senderId: 15550000002@s.whatsapp.net
-      mentionPrefix: "@openclaw "
+      mentionPrefix: "openclawqa "
       expectReply: true
       markerPrefix: WHATSAPP_QA_GROUP_OPEN
       timeoutMs: 60000
@@ -37,11 +41,6 @@ flow:
           args: [{ ref: env }, 60000]
         - call: waitForTransportReady
           args: [{ ref: env }, 60000]
-        - call: patchConfig
-          args:
-            - env: { ref: env }
-              patch:
-                expr: "({ channels: { whatsapp: { [config.policyKey]: config.policyValue, ...(env.transport.accountId === 'default' ? {} : { accounts: { [env.transport.accountId]: { [config.policyKey]: config.policyValue } } }) } } })"
         - resetTransport: true
         - set: marker
           value:

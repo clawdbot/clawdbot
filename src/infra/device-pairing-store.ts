@@ -48,6 +48,7 @@ const APPROVAL_KIND_MEMBERS = {
   owner: true,
   silent: true,
   "trusted-cidr": true,
+  "trusted-proxy": true,
   "ssh-verified": true,
   bootstrap: true,
 } satisfies Record<PairedDeviceApprovalKind, true>;

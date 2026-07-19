@@ -811,6 +811,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           onTogglePinnedAgent: (agentId) => togglePinnedAgent(this.context.navigation, agentId),
           onRefresh: () => this.refreshAgents(),
           onSelectAgent: (agentId) => this.selectAgent(agentId),
+          onCreateAgent: () => this.context.navigate("custodian", { search: "?intent=new-agent" }),
           onSelectPanel: (panel) => this.selectPanel(panel),
           onLoadFiles: (agentId) => void this.loadAgentFiles(agentId, true),
           onSelectFile: (name) => {

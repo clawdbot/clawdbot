@@ -30,6 +30,38 @@ export interface AuthProfileStore {
   updated_at: number;
 }
 
+export interface BoardTabs {
+  chat_dock: Generated<string>;
+  created_by: string;
+  position: number;
+  revision: number;
+  session_key: string;
+  tab_id: string;
+  title: string;
+}
+
+export interface BoardWidgets {
+  content_kind: string;
+  created_at: number;
+  created_by: string;
+  descriptor_json: string | null;
+  grant_state: Generated<string>;
+  granted_sha: string | null;
+  html: Uint8Array | null;
+  manifest: Generated<string>;
+  name: string;
+  position: number;
+  revision: number;
+  session_key: string;
+  sha256: string;
+  size_h: number;
+  size_w: number;
+  tab_id: string;
+  title: string | null;
+  updated_at: number;
+  view_generation: string | null;
+}
+
 export interface CacheEntries {
   blob: Uint8Array | null;
   expires_at: number | null;
@@ -295,6 +327,8 @@ export interface DB {
   acp_parent_stream_events: AcpParentStreamEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
+  board_tabs: BoardTabs;
+  board_widgets: BoardWidgets;
   cache_entries: CacheEntries;
   conversation_deliveries: ConversationDeliveries;
   conversations: Conversations;

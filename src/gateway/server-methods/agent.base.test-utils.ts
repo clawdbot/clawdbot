@@ -545,6 +545,35 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("attributes gateway agent prompts to the authenticated connection user", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "persist me",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "idem-attributed-user-turn-recorder",
+      },
+      {
+        reqId: "idem-attributed-user-turn-recorder",
+        client: {
+          ...requireValue(operatorWriteCliClient(), "expected operator client"),
+          authenticatedUserId: "alice@example.com",
+        },
+      },
+    );
+
+    const call = await waitForAgentCommandCall<
+      AgentCommandCall & { userTurnTranscriptRecorder?: { message?: unknown } }
+    >();
+    expect(call.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "persist me",
+      __openclaw: { senderId: "alice@example.com" },
+    });
+  });
+
   it("dispatches with the session id reloaded during lifecycle admission", async () => {
     const sessionKey = "agent:main:main";
     const initialSessionId = "session-before-reset";

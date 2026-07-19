@@ -226,7 +226,7 @@ extension OpenClawChatViewModel {
             return ChatSessionBatchResult(
                 succeededKeys: [],
                 errorsByKey: Dictionary(uniqueKeysWithValues: orderedKeys.map {
-                    ($0, String(localized: "Gateway changed before the session operation started."))
+                    ($0, String(localized: "Gateway changed before the thread operation started."))
                 }))
         }
         let result = await ChatSessionBatchMutationRunner.run(keys: orderedKeys) { key in

@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 // session write-lock behavior.
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -24,6 +25,7 @@ import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-t
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
@@ -43,6 +45,23 @@ const testModel: Model = {
   contextWindow: 1000,
   maxTokens: 1000,
 };
+
+describe("createAgentSession runtime ownership", () => {
+  it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
+    const modelRegistry = createTestModelRegistry();
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry,
+    });
+
+    expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
+      getModelRegistryRuntime(modelRegistry).llmRuntime,
+    );
+  });
+});
 
 function createModelWithoutBaseUrl(overrides: Partial<Model>): Model {
   const { baseUrl: _baseUrl, ...model } = { ...testModel, ...overrides };
@@ -85,6 +104,17 @@ function createAssistantResultStream(message: AssistantMessage) {
 
 function createEmptyResourceLoader(): ResourceLoader {
   return createResourceLoaderWithHandlers(new Map());
+}
+
+function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelRegistry {
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  for (const api of ["openai-responses", "bedrock-converse-stream"] as const) {
+    modelRegistry.registerProvider(`test-${api}`, {
+      api,
+      streamSimple: streamMocks.streamSimple,
+    });
+  }
+  return modelRegistry;
 }
 
 function createResourceLoaderWithHandlers(
@@ -130,7 +160,7 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
     resourceLoader: createEmptyResourceLoader(),
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory(),
-    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    modelRegistry: createTestModelRegistry(),
   });
 
   await session.agent.streamFn?.(
@@ -735,7 +765,7 @@ describe("AgentSession retry behavior", () => {
       settingsManager: SettingsManager.inMemory({
         retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },
       }),
-      modelRegistry: ModelRegistry.inMemory(authStorage),
+      modelRegistry: createTestModelRegistry(authStorage),
     });
   }
 

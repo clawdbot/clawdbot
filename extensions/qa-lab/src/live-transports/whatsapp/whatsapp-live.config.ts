@@ -163,6 +163,7 @@ export function buildWhatsAppQaConfig(
     authDir: string;
     dmPolicy: "allowlist" | "disabled" | "open" | "pairing";
     groupJid?: string;
+    ownerAllowFrom: string[];
     overrides?: WhatsAppQaConfigOverrides;
     sutAccountId: string;
   },
@@ -249,6 +250,13 @@ export function buildWhatsAppQaConfig(
     ...audioPreflightConfig,
     ...broadcastConfig,
     ...actionToolConfig,
+    commands: {
+      ...baseCfg.commands,
+      ownerAllowFrom: uniqueStrings([
+        ...normalizeStringEntries(baseCfg.commands?.ownerAllowFrom),
+        ...params.ownerAllowFrom,
+      ]),
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,

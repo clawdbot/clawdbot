@@ -11,6 +11,8 @@ import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
 import { protectPreparedProviderRuntimeAuth } from "../agents/provider-secret-egress.js";
 import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-plan/credential-scoped-model.js";
+import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runtime.js";
+import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import type { ImageDescriptionRequest } from "./types.js";
@@ -60,6 +62,7 @@ async function prepareResolvedImageRuntime(
   modelRegistry: Awaited<ReturnType<typeof resolveModelAsync>>["modelRegistry"],
 ): Promise<{ apiKey: string; model: Model }> {
   let model = resolvedModel;
+  const modelRuntime = getModelRegistryRuntime(modelRegistry);
   const apiKeyInfo = await getApiKeyForModel({
     model,
     cfg: params.cfg,
@@ -113,7 +116,13 @@ async function prepareResolvedImageRuntime(
     apiKeyInfo.mode === "aws-sdk" &&
     model.api === "bedrock-converse-stream"
   ) {
-    return { apiKey: "", model: applySecretRefHeaderSentinels(model, params.cfg) };
+    return {
+      apiKey: "",
+      model: bindModelLlmRuntime(
+        applySecretRefHeaderSentinels(model, params.cfg),
+        modelRuntime.llmRuntime,
+      ),
+    };
   }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   const preparedAuth = protectPreparedProviderRuntimeAuth({
@@ -142,7 +151,13 @@ async function prepareResolvedImageRuntime(
     model = { ...model, baseUrl: runtimeBaseUrl };
   }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
-  return { apiKey, model: applySecretRefHeaderSentinels(model, params.cfg) };
+  return {
+    apiKey,
+    model: bindModelLlmRuntime(
+      applySecretRefHeaderSentinels(model, params.cfg),
+      modelRuntime.llmRuntime,
+    ),
+  };
 }
 
 export async function resolveImageRuntime(

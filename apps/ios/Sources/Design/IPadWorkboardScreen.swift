@@ -1059,7 +1059,7 @@ private struct IPadWorkboardKanbanCard: View {
                     Button(action: self.openSession) {
                         Image(systemName: "bubble.left.and.text.bubble.right")
                     }
-                    .accessibilityLabel("Open Session")
+                    .accessibilityLabel("Open Thread")
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
                 }
@@ -1218,7 +1218,7 @@ struct IPadWorkboardQueueRow: View {
     private var actionMenuItems: some View {
         if self.card.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             Button(action: self.openSession) {
-                Text("Open Session")
+                Text("Open Thread")
                     .font(OpenClawType.subheadSemiBold)
             }
         }
@@ -1316,7 +1316,7 @@ private struct IPadWorkboardCardDetailSheet: View {
                         Button {
                             self.openSession()
                         } label: {
-                            Text("Open Session")
+                            Text("Open Thread")
                                 .font(OpenClawType.subheadSemiBold)
                         }
                     }

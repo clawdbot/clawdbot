@@ -274,6 +274,16 @@
         }
       }
     },
+    "dashboard": {
+      "emoji": "📋",
+      "title": "Dashboard",
+      "detailKeys": [
+        "action",
+        "tabId",
+        "name",
+        "title"
+      ]
+    },
     "nodes": {
       "emoji": "📱",
       "title": "Nodes",
@@ -674,6 +684,21 @@
         "thinking",
         "runTimeoutSeconds",
         "cleanup"
+      ]
+    },
+    "agents_wait": {
+      "emoji": "⏳",
+      "title": "Wait for Agents",
+      "detailKeys": [
+        "ids",
+        "timeoutSeconds"
+      ]
+    },
+    "structured_output": {
+      "emoji": "🧾",
+      "title": "Structured Output",
+      "detailKeys": [
+        "result"
       ]
     },
     "subagents": {

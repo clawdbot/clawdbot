@@ -28,6 +28,10 @@ export type {
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 export {
+  deleteSessionUpstreamLink,
+  upsertSessionUpstreamLink,
+} from "../sessions/session-upstream-links.js";
+export {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,
   type ClaudeCliHistoryLineClassification,

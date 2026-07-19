@@ -68,6 +68,14 @@ function lifecycle() {
   } satisfies IMessageIngressLifecycle;
 }
 
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -99,6 +107,71 @@ describe("iMessage durable ingress", () => {
         expect(onDurableEnqueueFailure).toHaveBeenCalledWith(101, appendError);
         expect(dispatch).not.toHaveBeenCalled();
       } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("notifies the source when inspection fails before durable append", async () => {
+    await withQueue(async (queue) => {
+      const onDurableEnqueueFailure = vi.fn();
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch: vi.fn(),
+        runtime: runtime(),
+        onDurableEnqueueFailure,
+      });
+
+      try {
+        await expect(ingress.receive(rawRow({ guid: undefined }))).rejects.toThrow(
+          "missing its stable GUID",
+        );
+        expect(onDurableEnqueueFailure).toHaveBeenCalledWith(101, expect.any(Error));
+        expect(await queue.listPending({ limit: "all" })).toHaveLength(0);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("serializes durable cursor advancement before admitting the next row", async () => {
+    await withQueue(async (queue) => {
+      const cursorGate = deferred();
+      const cursorStarted = deferred();
+      let currentTime = 1_000;
+      const onDurableEnqueue = vi.fn(async () => {
+        cursorStarted.resolve();
+        await cursorGate.promise;
+      });
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch: vi.fn(),
+        runtime: runtime(),
+        onDurableEnqueue,
+        now: () => currentTime,
+      });
+
+      try {
+        const first = ingress.receive(rawRow());
+        await cursorStarted.promise;
+        currentTime = 2_000;
+        const second = ingress.receive(rawRow({ id: 102, guid: "GUID-102" }));
+        await Promise.resolve();
+
+        expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
+          "GUID-101",
+        ]);
+        currentTime = 9_000;
+        cursorGate.resolve();
+        await Promise.all([first, second]);
+        expect(onDurableEnqueue).toHaveBeenCalledTimes(2);
+        expect(
+          (await queue.listPending({ limit: "all" })).map((record) => record.payload.receivedAt),
+        ).toEqual([1_000, 2_000]);
+      } finally {
+        cursorGate.resolve();
         await ingress.stop();
       }
     });
@@ -267,6 +340,35 @@ describe("iMessage durable ingress", () => {
         await ingress.waitForIdle();
         expect((await queue.enqueue("GUID-bad", {} as IMessageIngressPayload)).kind).toBe("failed");
         expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("dead-letters a persisted row whose inspected identity is malformed", async () => {
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        "GUID-missing",
+        {
+          version: 1,
+          receivedAt: Date.now(),
+          raw: rawRow({ guid: undefined }),
+        },
+        { laneKey: "chat:42" },
+      );
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch: vi.fn(),
+        runtime: runtime(),
+      });
+      ingress.start();
+      try {
+        await ingress.waitForIdle();
+        expect((await queue.enqueue("GUID-missing", {} as IMessageIngressPayload)).kind).toBe(
+          "failed",
+        );
       } finally {
         await ingress.stop();
       }

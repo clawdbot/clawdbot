@@ -5,14 +5,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const searchSessionTranscriptsMock = vi.fn();
+const listSessionEntriesMock = vi.fn();
+const resolveExistingAgentSessionStoreTargetsSyncMock = vi.fn();
 
 vi.mock("../../config/sessions/session-transcript-search.js", () => ({
   searchSessionTranscripts: (...args: unknown[]) => searchSessionTranscriptsMock(...args),
 }));
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  listSessionEntries: (...args: unknown[]) => listSessionEntriesMock(...args),
+}));
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
+  resolveExistingAgentSessionStoreTargetsSync: (...args: unknown[]) =>
+    resolveExistingAgentSessionStoreTargetsSyncMock(...args),
+}));
 
 import { sessionsHandlers } from "./sessions.js";
 
-const cfg = {
+let cfg: Record<string, unknown> = {
   agents: { list: [{ id: "main", default: true }, { id: "work" }] },
 };
 
@@ -34,8 +45,13 @@ async function callSearch(params: Record<string, unknown>): Promise<ReturnType<t
 
 describe("sessions.search gateway method", () => {
   beforeEach(() => {
+    cfg = { agents: { list: [{ id: "main", default: true }, { id: "work" }] } };
     searchSessionTranscriptsMock.mockReset();
     searchSessionTranscriptsMock.mockReturnValue({ hits: [], indexing: false });
+    listSessionEntriesMock.mockReset();
+    listSessionEntriesMock.mockReturnValue([]);
+    resolveExistingAgentSessionStoreTargetsSyncMock.mockReset();
+    resolveExistingAgentSessionStoreTargetsSyncMock.mockReturnValue([]);
   });
 
   it("validates params and rejects whitespace-only queries", async () => {
@@ -140,5 +156,80 @@ describe("sessions.search gateway method", () => {
       expect.objectContaining({ code: "INVALID_REQUEST", message: "agentId requires sessionKeys" }),
     );
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
+  });
+
+  it("searches only scoped keys in existing retired stores and deduplicates migrated hits", async () => {
+    resolveExistingAgentSessionStoreTargetsSyncMock.mockReturnValue([
+      { agentId: "retired", storePath: "/stores/retired-a/sessions.json" },
+      { agentId: "retired", storePath: "/stores/retired-b/sessions.json" },
+    ]);
+    const duplicate = {
+      sessionKey: "agent:retired:main",
+      sessionId: "session-retired",
+      messageId: "message-1",
+      role: "user",
+      timestamp: 20,
+      snippet: "needle",
+      score: 3,
+    };
+    searchSessionTranscriptsMock
+      .mockReturnValueOnce({
+        hits: [duplicate, { ...duplicate, messageId: "message-2", score: 1 }],
+        indexing: false,
+      })
+      .mockReturnValueOnce({
+        hits: [{ ...duplicate }, { ...duplicate, messageId: "message-3", score: 2 }],
+        indexing: false,
+      });
+
+    const respond = await callSearch({
+      agentId: "retired",
+      query: "needle",
+      sessionKeys: ["main"],
+      limit: 3,
+    });
+
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledTimes(2);
+    expect(searchSessionTranscriptsMock).toHaveBeenNthCalledWith(1, {
+      agentId: "retired",
+      query: "needle",
+      limit: 25,
+      sessionKeys: ["agent:retired:main"],
+      storePath: "/stores/retired-a/sessions.json",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        results: [
+          expect.objectContaining({ messageId: "message-1" }),
+          expect.objectContaining({ messageId: "message-3" }),
+          expect.objectContaining({ messageId: "message-2" }),
+        ],
+      }),
+    );
+  });
+
+  it("scopes omitted filters to the requested agent in a fixed store", async () => {
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { store: "/stores/shared/sessions.json" },
+    };
+    resolveExistingAgentSessionStoreTargetsSyncMock.mockReturnValue([
+      { agentId: "retired", storePath: "/stores/shared/sessions.json" },
+    ]);
+    listSessionEntriesMock.mockReturnValue([
+      { sessionKey: "agent:retired:mine", entry: {} },
+      { sessionKey: "agent:other:secret", entry: {} },
+    ]);
+
+    await callSearch({ agentId: "retired", query: "needle" });
+
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+      agentId: "retired",
+      query: "needle",
+      limit: 25,
+      sessionKeys: ["agent:retired:mine"],
+      storePath: "/stores/shared/sessions.json",
+    });
   });
 });

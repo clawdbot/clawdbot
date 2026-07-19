@@ -307,6 +307,17 @@ describe("amazon-bedrock provider plugin", () => {
     vi.resetModules();
   });
 
+  it("publishes its stream through the provider lifecycle", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    expect(
+      provider.createStreamFn?.({ model: { api: "bedrock-converse-stream" } } as never),
+    ).toBeTypeOf("function");
+    expect(
+      provider.createStreamFn?.({ model: { api: "anthropic-messages" } } as never),
+    ).toBeUndefined();
+  });
+
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 

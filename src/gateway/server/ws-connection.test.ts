@@ -433,6 +433,31 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(logWsControl.warn).not.toHaveBeenCalled();
   });
 
+  it("logs the authenticated user when a connection closes", async () => {
+    const { socket, logWsControl, passed } = await connectTestWs();
+    const handlerParams = passed as {
+      setClient: (client: never) => boolean;
+    };
+
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "ui" } },
+        connId: "conn-authenticated-user",
+        authenticatedUserId: "alice@example.com",
+        usesSharedGatewayAuth: false,
+      } as never),
+    ).toBe(true);
+
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    expect(logWsControl.info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^authenticated user disconnected code=1000 reason=done conn=.+ user=alice@example\.com$/,
+      ),
+    );
+  });
+
   it("skips node presence disconnects for stale reconnected sockets", async () => {
     const unregister = vi.fn(() => null);
     const { socket } = attachGatewayWsForTest({

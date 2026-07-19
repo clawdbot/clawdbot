@@ -1,4 +1,8 @@
-import type { MarkdownAnnotationSpan } from "./ir-spans.js";
+import {
+  copyMarkdownLinkSpan,
+  isAutoLinkedMarkdownLink,
+  type MarkdownAnnotationSpan,
+} from "./ir-spans.js";
 // Markdown Core module implements render behavior.
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
@@ -29,12 +33,22 @@ export type RenderLink = {
   close: string;
 };
 
+type MarkdownLinkOrigin = "authored" | "linkify";
+
+function getMarkdownLinkOrigin(link: MarkdownLinkSpan): MarkdownLinkOrigin {
+  return isAutoLinkedMarkdownLink(link) ? "linkify" : "authored";
+}
+
 /** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;
   escapeText: (text: string) => string;
-  buildLink?: (link: MarkdownLinkSpan, text: string) => RenderLink | null;
+  buildLink?: (
+    link: MarkdownLinkSpan,
+    text: string,
+    context: { origin: MarkdownLinkOrigin },
+  ) => RenderLink | null;
 };
 
 const STYLE_ORDER: MarkdownStyle[] = [
@@ -253,15 +267,21 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   const linkStarts = new Map<number, RenderLink[]>();
   if (options.buildLink) {
     const links = ir.links.flatMap((span) =>
-      subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
-        splitAtBoundaries(piece, annotationBoundaries),
-      ),
+      subtractRanges(span, dominantAnnotationRanges)
+        .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
+        .map((piece) =>
+          copyMarkdownLinkSpan(span, {
+            start: piece.start,
+            end: piece.end,
+            href: piece.href,
+          }),
+        ),
     );
     for (const link of links) {
       if (link.start === link.end) {
         continue;
       }
-      const rendered = options.buildLink(link, text);
+      const rendered = options.buildLink(link, text, { origin: getMarkdownLinkOrigin(link) });
       if (!rendered) {
         continue;
       }

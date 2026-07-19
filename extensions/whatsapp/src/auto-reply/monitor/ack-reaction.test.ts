@@ -13,6 +13,10 @@ vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
 
+vi.mock("./group-activation.js", () => ({
+  resolveGroupActivationFor: vi.fn(async () => "always"),
+}));
+
 type TestMsgOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
 
 function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMessage {
@@ -179,6 +183,67 @@ describe("maybeSendAckReaction", () => {
       {
         verbose: false,
         fromMe: false,
+        accountId: "default",
+        cfg,
+      },
+    );
+  });
+
+  it("uses the sender LID as the group reaction participant when no sender JID is available", async () => {
+    const cfg = createConfig("ack", {
+      ackReaction: {
+        emoji: "👀",
+        direct: true,
+        group: "always",
+      },
+    });
+    const ackReaction = await runAckReaction({
+      cfg,
+      msg: createMessage({
+        platform: {
+          chatJid: "120363000000000000@g.us",
+          sender: {
+            jid: null,
+            lid: "277038292303944@lid",
+          },
+        },
+        admission: {
+          conversation: {
+            kind: "group",
+            id: "120363000000000000@g.us",
+          },
+          sender: {
+            id: "277038292303944@lid",
+          },
+        },
+      }),
+      sessionKey: "whatsapp:default:120363000000000000@g.us",
+    });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "120363000000000000@g.us",
+      "msg-1",
+      "👀",
+      {
+        verbose: false,
+        fromMe: false,
+        participant: "277038292303944@lid",
+        accountId: "default",
+        cfg,
+      },
+    );
+
+    await ackReaction?.remove();
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "120363000000000000@g.us",
+      "msg-1",
+      "",
+      {
+        verbose: false,
+        fromMe: false,
+        participant: "277038292303944@lid",
         accountId: "default",
         cfg,
       },

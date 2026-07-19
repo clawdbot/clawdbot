@@ -55,12 +55,13 @@ import {
 } from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
-import type {
-  DoctorSessionSqliteIssue,
-  DoctorSessionSqliteMode,
-  DoctorSessionSqliteOptions,
-  DoctorSessionSqliteReport,
-  DoctorSessionSqliteTargetReport,
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteMode,
+  type DoctorSessionSqliteOptions,
+  type DoctorSessionSqliteReport,
+  type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 export {
   restoreSessionSqliteMigrationRun,
@@ -81,13 +82,6 @@ type LegacySessionRecord = {
   sessionKey: string;
   transcriptPath?: string;
 };
-
-const WARNING_ISSUE_CODES = new Set([
-  "transcript_missing",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "unreferenced_jsonl_archive_failed",
-]);
 
 /** Runs the targeted doctor SQLite session migration/inspection submode. */
 export async function runDoctorSessionSqlite(
@@ -140,9 +134,9 @@ export async function runDoctorSessionSqlite(
   }
   if (activeRun) {
     archiveImportedLegacySessionStores(targets, reports, activeRun, fullyCoveredStorePaths);
-    const hasIssues = reports.some((report) => report.issues.length > 0);
+    const hasBlockingIssues = reports.some((report) => blockingIssueCount(report) > 0);
     activeRun.manifest.completedAt = new Date().toISOString();
-    if (hasIssues) {
+    if (hasBlockingIssues) {
       activeRun.manifest.failedAt = activeRun.manifest.completedAt;
       const failureReports = writeSessionSqliteMigrationFailureReports(activeRun.manifestPath, {
         reason: "doctor import reported session SQLite migration issues",
@@ -341,7 +335,7 @@ function resolveFullyCoveredLegacyStorePaths(
           isLegacySessionRecordOwnedByTarget(cfg, target, record.sessionKey),
       ),
     );
-    if (issues.length === 0 && coversEveryRecord) {
+    if (issues.every(isSessionSqliteMigrationWarning) && coversEveryRecord) {
       covered.add(storePath);
     }
   }
@@ -459,7 +453,7 @@ function countLegacyTranscript(
 }
 
 function blockingIssueCount(report: DoctorSessionSqliteTargetReport): number {
-  return report.issues.filter((issue) => !WARNING_ISSUE_CODES.has(issue.code)).length;
+  return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
 }
 
 async function importLegacySessionRecord(

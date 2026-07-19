@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
@@ -56,6 +57,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
       });
       return await withMcpAppActiveView(active, "read", () => {
         const { view } = active;
+        const interactive = view.allowedAppToolNames !== undefined && view.readOnly !== true;
+        const updateModelContextSupported =
+          interactive && active.runtime.mcpAppModelContextRevoked !== true;
         const sandboxPort = context.getMcpAppSandboxPort?.();
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
@@ -87,8 +91,24 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
               }
             : {}),
           // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
-          messageSupported: view.allowedAppToolNames !== undefined && view.readOnly !== true,
+          messageSupported: interactive,
+          updateModelContextSupported,
         };
+      });
+    });
+  },
+  "mcp.app.updateModelContext": async ({ respond, params }) => {
+    await handle(respond, async () => {
+      const active = await resolveMcpAppActiveView({
+        sessionKey: requireString(params, "sessionKey"),
+        viewId: requireString(params, "viewId"),
+      });
+      return await withMcpAppActiveView(active, "read", () => {
+        if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
+          throw new Error("MCP App view is not authorized to update model context");
+        }
+        updateMcpAppModelContext(active.runtime, active.view, params);
+        return {};
       });
     });
   },

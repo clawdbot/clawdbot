@@ -1,16 +1,18 @@
-import { getApiProvider } from "@openclaw/ai/internal/runtime";
+import type { LlmRuntime } from "@openclaw/ai";
+import { defaultLlmRuntime, getApiProvider } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // Stream resolution tests cover how embedded runs choose provider, boundary,
 // native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import {
-  describeEmbeddedAgentStreamStrategy,
+  describeEmbeddedAgentStreamStrategy as describeEmbeddedAgentStreamStrategyImpl,
   resolveEmbeddedAgentApiKey,
-  resolveEmbeddedAgentStreamFn,
+  resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
 } from "./stream-resolution.js";
 
 const streamMocks = vi.hoisted(() => ({
@@ -37,6 +39,23 @@ vi.mock("../provider-transport-stream.js", async (importOriginal) => {
     createBoundaryAwareStreamFnForModel: vi.fn(actual.createBoundaryAwareStreamFnForModel),
   };
 });
+
+const llmRuntime = {
+  ...defaultLlmRuntime,
+  streamSimple: streamSimple as StreamFn,
+} as LlmRuntime;
+
+function describeEmbeddedAgentStreamStrategy(
+  params: Omit<Parameters<typeof describeEmbeddedAgentStreamStrategyImpl>[0], "llmRuntime">,
+) {
+  return describeEmbeddedAgentStreamStrategyImpl({ ...params, llmRuntime });
+}
+
+function resolveEmbeddedAgentStreamFn(
+  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamFnImpl>[0], "llmRuntime">,
+) {
+  return resolveEmbeddedAgentStreamFnImpl({ ...params, llmRuntime });
+}
 
 const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
   // Boundary wrapping remains real by default; individual cases replace only
@@ -75,6 +94,21 @@ afterEach(() => {
 });
 
 describe("describeEmbeddedAgentStreamStrategy", () => {
+  it("recovers the lifecycle owner from a prepared session stream", () => {
+    bindStreamLlmRuntime(streamSimple, llmRuntime);
+
+    expect(
+      describeEmbeddedAgentStreamStrategyImpl({
+        currentStreamFn: streamSimple,
+        model: {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+        } as never,
+      }),
+    ).toBe("boundary-aware:openai-responses");
+  });
+
   it("describes provider-owned stream paths explicitly", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({

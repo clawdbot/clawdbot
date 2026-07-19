@@ -12,17 +12,21 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
+  isConfiguredSessionStoreAgentId,
+  isPerAgentSessionStoreConfig,
+  resolveExistingAgentSessionStoreTargetsSync,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import {
   resolveSessionStoreAgentId,
@@ -67,14 +71,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    if (params.agentId && !params.sessionKeys) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
-      );
-      return;
-    }
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const sessionKeys = params.sessionKeys?.map((sessionKey) =>
       requestedAgentId
@@ -101,17 +97,87 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     }
     const agentId =
       requestedAgentId ?? agentIds.values().next().value ?? resolveDefaultAgentId(cfg);
+    const configured = isConfiguredSessionStoreAgentId(cfg, agentId);
+    if (requestedAgentId && !params.sessionKeys && configured) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
+      );
+      return;
+    }
+    const scopedSessionKeys = configured
+      ? sessionKeys
+      : sessionKeys?.filter((sessionKey) => {
+          const sessionAgentId =
+            requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+              ? requestedAgentId
+              : resolveSessionStoreAgentId(cfg, sessionKey);
+          return sessionAgentId === agentId;
+        });
+    if (!configured && scopedSessionKeys?.length === 0) {
+      respond(true, { results: [] }, undefined);
+      return;
+    }
+    const existingTargets = configured
+      ? []
+      : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
+    if (!configured && existingTargets.length === 0) {
+      respond(true, { results: [] }, undefined);
+      return;
+    }
     try {
-      const result = searchSessionTranscripts({
-        agentId,
-        query,
-        limit: params.limit,
-        ...(sessionKeys ? { sessionKeys } : {}),
+      const searchTargets = configured ? [undefined] : existingTargets;
+      const targetResults = searchTargets.flatMap((target) => {
+        const targetSessionKeys =
+          scopedSessionKeys ??
+          (target && !isPerAgentSessionStoreConfig(cfg.session?.store)
+            ? listSessionEntries({ agentId: target.agentId, storePath: target.storePath })
+                .map((entry) => entry.sessionKey)
+                .filter((sessionKey) => {
+                  const parsed = parseAgentSessionKey(sessionKey);
+                  return !parsed || normalizeAgentId(parsed.agentId) === agentId;
+                })
+            : undefined);
+        if (targetSessionKeys?.length === 0) {
+          return [];
+        }
+        return [
+          searchSessionTranscripts({
+            agentId: target?.agentId ?? agentId,
+            query,
+            // Over-fetch retired multi-store searches so deduplication can still fill the caller's
+            // requested page when the same transcript was copied during a store migration.
+            limit: configured ? params.limit : 25,
+            ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
+            ...(target ? { storePath: target.storePath } : {}),
+          }),
+        ];
+      });
+      const limit = params.limit ?? 10;
+      const sortedHits = targetResults
+        .flatMap((result) => result.hits)
+        .toSorted(
+          (left, right) =>
+            right.score - left.score ||
+            right.timestamp - left.timestamp ||
+            left.messageId.localeCompare(right.messageId),
+        );
+      const seenHits = new Set<string>();
+      const hits = sortedHits.filter((hit) => {
+        const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
+        if (seenHits.has(identity)) {
+          return false;
+        }
+        seenHits.add(identity);
+        return true;
       });
       respond(true, {
-        results: result.hits,
-        ...(result.indexing ? { indexing: true } : {}),
-        ...(result.truncated ? { truncated: true } : {}),
+        results: hits.slice(0, limit),
+        ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
+        ...(targetResults.some((result) => result.truncated) || hits.length > limit
+          ? { truncated: true }
+          : {}),
       });
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
@@ -294,8 +360,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           cfg,
           key,
         });
-        const store = storeCache.get(cachedStoreTarget.storePath) ?? cachedStoreTarget.store;
-        storeCache.set(cachedStoreTarget.storePath, store);
+        // Fixed stores share a legacy path but resolve to owner-specific SQLite databases. Keep
+        // synthetic misses from poisoning another agent's real store entry in this batch.
+        const storeCacheKey = `${cachedStoreTarget.agentId}\u0000${cachedStoreTarget.storePath}`;
+        const store = storeCache.get(storeCacheKey) ?? cachedStoreTarget.store;
+        storeCache.set(storeCacheKey, store);
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key,

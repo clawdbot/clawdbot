@@ -20,7 +20,6 @@ import {
 } from "../../llm/providers/stream-wrappers/openai.js";
 import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
-import { streamSimple } from "../../llm/stream.js";
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
@@ -43,6 +42,13 @@ import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
+
+function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
+  if (!streamFn) {
+    throw new Error("Cannot apply stream policy without a lifecycle-owned base stream.");
+  }
+  return streamFn;
+}
 import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
@@ -558,7 +564,7 @@ function createStreamFnWithExtraParams(
     log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
   }
 
-  const underlying = baseStreamFn ?? streamSimple;
+  const underlying = requireBaseStreamFn(baseStreamFn);
   const wrappedStreamFn: StreamFn = (callModel, context, options) => {
     const cacheRetention = resolveCacheRetention(
       extraParams,
@@ -661,7 +667,7 @@ function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+  const underlying = requireBaseStreamFn(baseStreamFn);
   return (model, context, options) => {
     if (!supportsGptParallelToolCallsPayload(model.api)) {
       return underlying(model, context, options);
@@ -695,7 +701,7 @@ function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean
 }
 
 function createOpenAICompletionsStoreCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+  const underlying = requireBaseStreamFn(baseStreamFn);
   return (model, context, options) => {
     if (!shouldStripOpenAICompletionsStore(model as ProviderRuntimeModel)) {
       return underlying(model, context, options);
@@ -751,7 +757,7 @@ function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   configured: Record<string, unknown>;
 }): StreamFn {
-  const underlying = params.baseStreamFn ?? streamSimple;
+  const underlying = requireBaseStreamFn(params.baseStreamFn);
   return (model, context, options) => {
     if (model.api !== "openai-completions") {
       return underlying(model, context, options);
@@ -774,7 +780,7 @@ function createOpenAICompletionsExtraBodyWrapper(
   baseStreamFn: StreamFn | undefined,
   extraBody: Record<string, unknown>,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+  const underlying = requireBaseStreamFn(baseStreamFn);
   return (model, context, options) => {
     if (model.api !== "openai-completions") {
       return underlying(model, context, options);

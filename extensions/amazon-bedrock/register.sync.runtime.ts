@@ -5,7 +5,6 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { registerApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   OpenClawPluginApi,
@@ -25,7 +24,7 @@ import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
+import { streamSimpleBedrock } from "./stream.runtime.js";
 import {
   isLatestAdaptiveBedrockModelRef,
   isOpus47OrNewerBedrockModelRef,
@@ -95,8 +94,16 @@ function isAnthropicBedrockModel(modelId: string): boolean {
   return false;
 }
 
+const bedrockStreamFn: StreamFn = (model, context, options) => {
+  if (model.api !== "bedrock-converse-stream") {
+    throw new Error(`Amazon Bedrock stream received unsupported API: ${model.api}`);
+  }
+  // The API check narrows the generic host model to the transport contract.
+  return streamSimpleBedrock(model as Parameters<typeof streamSimpleBedrock>[0], context, options);
+};
+
 function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+  const underlying = baseStreamFn ?? bedrockStreamFn;
   return (model, context, options) =>
     underlying(model, context, {
       ...options,
@@ -382,15 +389,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   });
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
 
-  registerApiProvider(
-    {
-      api: "bedrock-converse-stream",
-      stream: streamBedrock,
-      streamSimple: streamSimpleBedrock,
-    },
-    `plugin:${providerId}`,
-  );
-
   function resolveCurrentPluginConfig(
     config: OpenClawConfig | undefined,
   ): AmazonBedrockPluginConfig | undefined {
@@ -543,6 +541,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     normalizeResolvedModel: normalizeBedrockResolvedModel,
+    createStreamFn: ({ model }) =>
+      model.api === "bedrock-converse-stream" ? bedrockStreamFn : undefined,
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentPluginConfig = resolveCurrentPluginConfig(config);

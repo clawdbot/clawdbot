@@ -1021,6 +1021,13 @@ export interface SubagentRuns {
   spawn_mode: string | null;
   started_at: number | null;
   suppress_announce_reason: string | null;
+  swarm_collector: number | null;
+  swarm_completion_status: string | null;
+  swarm_group_id: string | null;
+  swarm_output_schema_json: string | null;
+  swarm_schema_error: string | null;
+  swarm_structured_json: string | null;
+  swarm_usage_json: string | null;
   task: string;
   task_name: string | null;
   wake_on_descendant_settle: number | null;

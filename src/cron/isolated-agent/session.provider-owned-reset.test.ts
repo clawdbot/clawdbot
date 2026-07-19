@@ -21,7 +21,7 @@ function providerOwnedEntry(): SessionEntry {
 }
 
 describe("resolveCronSession provider-owned daily reset", () => {
-  it("keeps a provider-owned CLI session across the default daily boundary", () => {
+  it("keeps a provider-owned CLI session with the default reset policy", () => {
     const sessionKey = "agent:main:cron:daily-job";
     const entry = providerOwnedEntry();
 
@@ -52,7 +52,7 @@ describe("resolveCronSession provider-owned daily reset", () => {
     };
 
     const result = resolveCronSession({
-      cfg: { session: {} } as OpenClawConfig,
+      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
       sessionKey,
       agentId: "main",
       nowMs: NOW_MS,

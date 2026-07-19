@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.R
+import ai.openclaw.app.SHARED_AUDIO_DOCUMENT_MIME_TYPES
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
@@ -87,6 +88,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -273,6 +275,8 @@ fun ChatScreen(
   val inputDrafts = composerState.textDrafts
   val imagePickerOwnerCheckpoint =
     rememberSaveable(saver = ChatComposerMediaCheckpoint.Saver) { ChatComposerMediaCheckpoint() }
+  val filePickerOwnerCheckpoint =
+    rememberSaveable(saver = ChatComposerMediaCheckpoint.Saver) { ChatComposerMediaCheckpoint() }
   val voiceNoteCommitCheckpoint = remember { ChatComposerMediaCheckpoint() }
   val input = inputDrafts[composerOwner]
   val attachmentsByOwner by composerState.attachments.collectAsState()
@@ -371,6 +375,36 @@ fun ChatScreen(
           }
       }
     }
+  val pickAudioOrDocument =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      val lease = filePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
+      if (uri == null) {
+        composerState.cancelMediaAcquisition(lease.authorizationId)
+        return@rememberLauncherForActivityResult
+      }
+      val importOwner =
+        if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) {
+          currentPickerOwner
+        } else {
+          lease.owner
+        }
+      viewModel.importChatComposerAttachments(
+        owner = importOwner,
+        mediaAuthorizationId = lease.authorizationId,
+        mainSessionKey = currentPickerMainSessionKey,
+        expectedCount = 1,
+      ) {
+        listOfNotNull(
+          try {
+            loadPickedAudioOrDocumentAttachment(resolver, uri)
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            null
+          },
+        )
+      }
+    }
 
   LaunchedEffect(composerOwner) {
     dictationController.cancel()
@@ -457,8 +491,8 @@ fun ChatScreen(
     viewModel.withChatShareDraftLease(share.id, ownerSnapshot) {
       val staged =
         withContext(Dispatchers.IO) {
-          stageChatShareDraft(share) { uri ->
-            loadSizedImageAttachment(resolver, uri)
+          stageChatShareDraft(share) { attachment ->
+            loadSharedAttachment(resolver, attachment)
           }
         }
       if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@withChatShareDraftLease
@@ -482,9 +516,9 @@ fun ChatScreen(
       inputDrafts[ownerSnapshot] =
         mergeSharedChatText(sharedText = staged.text, currentInput = inputDrafts[ownerSnapshot])
       val admissionOmissions = composerState.addAttachments(ownerSnapshot, staged.attachments)
-      composerState.reportImageOmission(
+      composerState.reportAttachmentOmission(
         ownerSnapshot,
-        staged.failedImageCount + staged.droppedImageCount + admissionOmissions,
+        staged.failedAttachmentCount + staged.droppedAttachmentCount + admissionOmissions,
       )
       viewModel.acknowledgeChatShareDraft(share.id, ownerSnapshot)
     }
@@ -631,6 +665,12 @@ fun ChatScreen(
         val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
         imagePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
         pickImages.launch("image/*")
+      },
+      onPickAudioOrDocument = {
+        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
+        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
+        filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
+        pickAudioOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
       },
       onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
       voiceNoteState = voiceNoteState,
@@ -1141,7 +1181,7 @@ private fun ChatMessageList(
 
     if (timeline.items.isEmpty()) {
       if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
-        ClawLoadingState(title = nativeString("Loading session"), modifier = Modifier.align(Alignment.Center))
+        ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
       } else {
         EmptyChatHint(
           healthOk = healthOk,
@@ -1296,8 +1336,8 @@ internal val starterPrompts =
     StarterPrompt(
       mark = "1",
       title = nativeText("Catch me up"),
-      subtitle = nativeText("Summarize recent sessions and next steps."),
-      message = nativeText("Catch me up on my recent OpenClaw sessions and suggest next steps."),
+      subtitle = nativeText("Summarize recent threads and next steps."),
+      message = nativeText("Catch me up on my recent OpenClaw threads and suggest next steps."),
     ),
     StarterPrompt(
       mark = "2",
@@ -1635,6 +1675,7 @@ private fun ChatComposer(
   onThinkingLevelChange: (String) -> Unit,
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
+  onPickAudioOrDocument: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
@@ -1752,6 +1793,7 @@ private fun ChatComposer(
           value = value,
           onValueChange = onValueChange,
           onPickImages = onPickImages,
+          onPickAudioOrDocument = onPickAudioOrDocument,
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
           dictationActive = dictationActive,
@@ -2118,6 +2160,7 @@ private fun ChatInputPill(
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
+  onPickAudioOrDocument: () -> Unit,
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   dictationActive: Boolean,
@@ -2146,6 +2189,11 @@ private fun ChatInputPill(
       Surface(onClick = onPickImages, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
         Box(contentAlignment = Alignment.Center) {
           Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Attach image"), modifier = Modifier.size(20.dp))
+        }
+      }
+      Surface(onClick = onPickAudioOrDocument, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attachment"), modifier = Modifier.size(20.dp))
         }
       }
       Box(modifier = Modifier.weight(1f)) {

@@ -188,6 +188,71 @@ export function createSqliteAuditRecordStore<T>(
         });
       }, options);
     },
+    delete(key: string): void {
+      runOpenClawStateWriteTransaction((database) => {
+        executeSqliteQuerySync(
+          database.db,
+          getAuditRecordKysely(database.db)
+            .deleteFrom("diagnostic_events")
+            .where("scope", "=", scope)
+            .where("event_key", "=", key),
+        );
+      }, options);
+    },
+    compareAndSet(
+      key: string,
+      expectedValue: T | null,
+      value: T | null,
+      createdAt = Date.now(),
+    ): boolean {
+      const expectedPayloadJson = expectedValue === null ? null : JSON.stringify(expectedValue);
+      const record = value === null ? null : prepareRecord({ key, value, createdAt });
+      let updated = false;
+      runOpenClawStateWriteTransaction((database) => {
+        const current = executeSqliteQueryTakeFirstSync(
+          database.db,
+          getAuditRecordKysely(database.db)
+            .selectFrom("diagnostic_events")
+            .select("payload_json")
+            .where("scope", "=", scope)
+            .where("event_key", "=", key),
+        );
+        if ((current?.payload_json ?? null) !== expectedPayloadJson) {
+          return;
+        }
+        if (record) {
+          executeSqliteQuerySync(
+            database.db,
+            getAuditRecordKysely(database.db)
+              .insertInto("diagnostic_events")
+              .values({
+                scope,
+                event_key: record.event_key,
+                payload_json: record.payload_json,
+                created_at: record.created_at,
+                sequence: nextAuditSequence({ database: database.db, scope, legacy: false }),
+              })
+              .onConflict((conflict) =>
+                conflict.columns(["scope", "event_key"]).doUpdateSet({
+                  payload_json: record.payload_json,
+                  created_at: record.created_at,
+                }),
+              ),
+          );
+          pruneAuditRecords({ database: database.db, scope, maxEntries, protectedKey: key });
+        } else {
+          executeSqliteQuerySync(
+            database.db,
+            getAuditRecordKysely(database.db)
+              .deleteFrom("diagnostic_events")
+              .where("scope", "=", scope)
+              .where("event_key", "=", key),
+          );
+        }
+        updated = true;
+      }, options);
+      return updated;
+    },
     registerLegacyMany(records: readonly SqliteAuditRecordEntry<T>[]): void {
       const prepared = records.map(prepareRecord);
       if (prepared.length === 0) {

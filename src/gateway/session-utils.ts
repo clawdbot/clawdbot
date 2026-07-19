@@ -77,9 +77,13 @@ import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
   getSessionStoreCacheVersion,
+  isConfiguredSessionStoreAgentId,
+  isLegacyOnlySessionStoreTarget,
   isTerminalSessionStatus,
+  readLegacySessionStoreTarget,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
+  resolveExistingAgentSessionStoreTargetsSync,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
   resolveStorePath,
@@ -1320,31 +1324,31 @@ function buildGatewaySessionStoreScanTargets(params: {
 function resolveGatewaySessionStoreCandidates(
   cfg: OpenClawConfig,
   agentId: string,
-): SessionStoreTarget[] {
+): { existing: SessionStoreTarget[]; fallback: SessionStoreTarget } {
   const storeConfig = cfg.session?.store;
-  const defaultTarget = {
+  const fallback = {
     agentId,
     storePath: resolveStorePath(storeConfig, { agentId }),
   };
-  if (!isStorePathTemplate(storeConfig)) {
-    return [defaultTarget];
-  }
-  const targets = new Map<string, SessionStoreTarget>();
-  targets.set(defaultTarget.storePath, defaultTarget);
-  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    if (target.agentId === agentId) {
-      targets.set(target.storePath, target);
-    }
-  }
-  return [...targets.values()];
+  return {
+    existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId),
+    fallback,
+  };
 }
 
 function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
+  options: { allowLegacyFallback?: boolean } = {},
 ): Record<string, SessionEntry> {
   try {
+    if (options.allowLegacyFallback) {
+      const legacyStore = readLegacySessionStoreTarget(storePath, agentId);
+      if (legacyStore) {
+        return legacyStore;
+      }
+    }
     return Object.fromEntries(
       listAccessorSessionEntries({
         ...(agentId ? { agentId } : {}),
@@ -1370,15 +1374,30 @@ function resolveGatewaySessionStoreLookup(params: {
   match: { entry: SessionEntry; key: string } | undefined;
 } {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
-  const candidates = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
-  const fallback = candidates[0] ?? {
-    agentId: params.agentId,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
-  };
+  const { existing, fallback } = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
+  const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
+  const candidates = configured
+    ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
+    : existing;
+  if (candidates.length === 0) {
+    // Discovery is read-only. Only configured agents may cross the fallback edge that creates a
+    // missing SQLite store; retired/manual agents must already have a discovered store.
+    return {
+      storePath: fallback.storePath,
+      store: {},
+      match: undefined,
+    };
+  }
   const loadStore = (target: SessionStoreTarget) =>
-    loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId);
-  let selectedStorePath = fallback.storePath;
-  let selectedStore = params.initialStore ?? loadStore(fallback);
+    loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
+      allowLegacyFallback: !configured,
+    });
+  const firstCandidate = candidates[0] ?? fallback;
+  let selectedStorePath = firstCandidate.storePath;
+  let selectedStore =
+    params.initialStore && firstCandidate.storePath === fallback.storePath
+      ? params.initialStore
+      : loadStore(firstCandidate);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
@@ -1906,7 +1925,6 @@ export function buildGatewaySessionRow(params: {
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
-  const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const now = params.now ?? Date.now();
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
@@ -1942,6 +1960,10 @@ export function buildGatewaySessionRow(params: {
   const sessionAgentId = normalizeAgentId(
     parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
   );
+  const skipTranscriptUsage =
+    params.skipTranscriptUsageFallback === true ||
+    (!isConfiguredSessionStoreAgentId(cfg, sessionAgentId) &&
+      isLegacyOnlySessionStoreTarget(storePath, sessionAgentId));
   const rowContext = params.rowContext;
   const subagentRun = rowContext
     ? rowContext.subagentRuns.getDisplaySubagentRun(key)

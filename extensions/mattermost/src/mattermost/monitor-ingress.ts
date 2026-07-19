@@ -1,11 +1,8 @@
 // Mattermost plugin module owns raw WebSocket durable ingress mapping and draining.
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -98,10 +95,7 @@ type MattermostIngressPayload = {
   rawEvent: string;
 };
 
-type MattermostIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+type MattermostIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type MattermostIngressDispatch = (
   post: MattermostPost,
@@ -244,170 +238,66 @@ export function createMattermostIngressMonitor(options: {
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }): MattermostIngressMonitor {
-  let queue = options.queue;
-  let drain: ChannelIngressDrain | undefined;
-  let running = true;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let lastPrunedAt = 0;
-
-  const getQueue = (): ChannelIngressQueue<MattermostIngressPayload> => {
-    queue ??= getMattermostRuntime().state.openChannelIngressQueue<MattermostIngressPayload>({
-      accountId: options.accountId,
-    });
-    return queue;
-  };
-
-  const getDrain = (): ChannelIngressDrain => {
-    drain ??= createChannelIngressDrain<MattermostIngressPayload>({
-      queue: getQueue(),
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-      retryPolicy: {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
-      resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
-      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-      onLog: (message) => options.runtime.log?.(`mattermost ${message}`),
-      dispatchClaimedEvent: async (record, lifecycle) => {
-        if (record.payload.version !== MATTERMOST_INGRESS_PAYLOAD_VERSION) {
-          throw new MattermostIngressPermanentError(
-            "invalid-event",
-            `Mattermost ingress row ${record.id} has an unsupported version.`,
-          );
-        }
-        const { post, payload } = parseClaimedEvent(record.payload.rawEvent, record.id);
-        return await options.dispatch(post, payload, lifecycle);
-      },
-    });
-    return drain;
-  };
-
-  const pruneIfDue = async (): Promise<void> => {
-    const now = Date.now();
-    if (now - lastPrunedAt < MATTERMOST_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
+  const monitor = createChannelIngressMonitor<
+    string,
+    Omit<MattermostIngressPayload, "version">,
+    MattermostIngressPayload
+  >({
+    queue:
+      options.queue ??
+      (() =>
+        getMattermostRuntime().state.openChannelIngressQueue<MattermostIngressPayload>({
+          accountId: options.accountId,
+        })),
+    inspect: (rawEvent) => inspectMattermostIngressEvent(rawEvent),
+    payload: {
+      version: MATTERMOST_INGRESS_PAYLOAD_VERSION,
+      serialize: (rawEvent, { receivedAt }) => ({ receivedAt, rawEvent }),
+      deserialize: (body) => body.rawEvent,
+      encode: ({ body }) => ({ version: MATTERMOST_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload) => ({
+        version: payload.version,
+        body: { receivedAt: payload.receivedAt, rawEvent: payload.rawEvent },
+      }),
+      createClaimError: (kind, claim) =>
+        new MattermostIngressPermanentError(
+          "invalid-event",
+          kind === "invalid-version"
+            ? `Mattermost ingress row ${claim.id} has an unsupported version.`
+            : `Mattermost ingress row ${claim.id} has invalid post identity.`,
+        ),
+    },
+    deliver: async (rawEvent, lifecycle, claim) => {
+      const { post, payload } = parseClaimedEvent(rawEvent, claim.id);
+      return await options.dispatch(post, payload, lifecycle);
+    },
+    pollIntervalMs: options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
+    // Preserve Mattermost's existing one-drain-at-a-time delivery cycle.
+    waitForDeliveryIdleBeforeRepump: true,
+    retention: {
+      pruneIntervalMs: MATTERMOST_INGRESS_PRUNE_INTERVAL_MS,
       completedTtlMs: MATTERMOST_INGRESS_COMPLETED_TTL_MS,
       completedMaxEntries: MATTERMOST_INGRESS_COMPLETED_MAX_ENTRIES,
       failedTtlMs: MATTERMOST_INGRESS_FAILED_TTL_MS,
       failedMaxEntries: MATTERMOST_INGRESS_FAILED_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const runPump = async (): Promise<void> => {
-    try {
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        // stop() may have run during the async prune; creating the lazy drain
-        // now would leave an undisposed instance dispatching after stop.
-        if (!running) {
-          break;
-        }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce();
-        await activeDrain.waitForIdle();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.runtime.error?.(`mattermost ingress drain failed: ${formatErrorMessage(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
-    }
-  };
-
-  const requestDrain = (): void => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  const timer = setInterval(
-    requestDrain,
-    options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
-  );
-  timer.unref?.();
-  requestDrain();
-
-  // Serialize admissions: WS message callbacks run concurrently, and a post
-  // stuck in append-retry backoff must delay its successors or same-channel
-  // arrival order inverts in the queue (order over latency).
-  let admissionTail: Promise<void> = Promise.resolve();
-
-  const admitOnce = async (rawEvent: string): Promise<void> => {
-    const facts = inspectMattermostIngressEvent(rawEvent);
-    if (!facts) {
-      return;
-    }
-    const receivedAt = Date.now();
-    // Websockets have no nack: a dropped append is a lost post (reconnect
-    // never replays). Retry transient failures before letting the error
-    // escalate to the socket teardown in monitor-websocket.
-    let lastError: unknown;
-    for (const delayMs of [0, 100, 300]) {
-      if (delayMs > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        await getQueue().enqueue(
-          facts.eventId,
-          {
-            version: MATTERMOST_INGRESS_PAYLOAD_VERSION,
-            receivedAt,
-            rawEvent,
-          },
-          { receivedAt, laneKey: facts.laneKey },
-        );
-        requestDrain();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
-  };
+    },
+    drain: {
+      resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      onLog: (message) => options.runtime.log?.(`mattermost ${message}`),
+    },
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+    createStoppedError: () => new Error("Mattermost ingress is stopped."),
+    onError: (error) =>
+      options.runtime.error?.(`mattermost ingress drain failed: ${formatErrorMessage(error)}`),
+  });
+  monitor.start();
 
   return {
-    receive: (rawEvent) => {
-      const admission = admissionTail.then(() => admitOnce(rawEvent));
-      admissionTail = admission.catch(() => undefined);
-      return admission;
-    },
-    stop: async () => {
-      running = false;
-      clearInterval(timer);
-      // A caller returning from stop() must know every accepted envelope is
-      // durably committed; an in-flight admission racing process exit would
-      // otherwise lose the post.
-      await admissionTail;
-      drain?.dispose();
-      await pumping;
-      // The pump may have lazily created the drain after the first dispose.
-      drain?.dispose();
-      await drain?.waitForIdle();
-    },
-    waitForIdle: async () => {
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      await drain?.waitForIdle();
-    },
+    receive: (rawEvent) => monitor.admit(rawEvent).then(() => undefined),
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
   };
 }

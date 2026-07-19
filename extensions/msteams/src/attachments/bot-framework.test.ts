@@ -535,6 +535,88 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       ]);
     });
 
+    it.each([
+      {
+        name: "attachment info is unavailable",
+        stage: "info",
+        init: { status: 500 },
+        warning: "msteams botFramework attachmentInfo non-ok",
+      },
+      {
+        name: "attachment view is unavailable",
+        stage: "view",
+        init: { status: 500 },
+        warning: "msteams botFramework attachmentView non-ok",
+      },
+      {
+        name: "attachment view content-length is invalid",
+        stage: "view",
+        init: { status: 200, headers: { "content-length": "0x3" } },
+        warning: "msteams botFramework attachmentView invalid content-length",
+      },
+      {
+        name: "attachment view exceeds maxBytes",
+        stage: "view",
+        init: { status: 200, headers: { "content-length": "11" } },
+      },
+    ] as const)("preserves the stable outcome when $name cleanup rejects", async (scenario) => {
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown) => {
+        unhandledRejections.push(reason);
+      };
+      const cancel = vi.fn(() => {
+        throw new Error("discarded Teams response cancellation failed");
+      });
+      const body = new ReadableStream<Uint8Array>({ cancel });
+      const discardedResponse = new Response(body, scenario.init);
+      const warn = vi.fn();
+      const fetchFn: typeof fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (scenario.stage === "info" || url.endsWith("/views/original")) {
+          return discardedResponse;
+        }
+        return new Response(
+          JSON.stringify({
+            name: "doc.pdf",
+            type: "application/pdf",
+            views: [{ viewId: "original", size: 1 }],
+          }),
+          { status: 200 },
+        );
+      });
+      process.on("unhandledRejection", onUnhandledRejection);
+
+      try {
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+          logger: { warn },
+        });
+
+        expect(media).toBeUndefined();
+        expect(runtime.saveCalls).toHaveLength(0);
+        expect(cancel).toHaveBeenCalledOnce();
+        if (scenario.warning) {
+          expect(warn).toHaveBeenCalledWith(scenario.warning, expect.any(Object));
+        } else {
+          expect(warn).not.toHaveBeenCalled();
+        }
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(unhandledRejections).toStrictEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandledRejection);
+        expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+      }
+    });
+
     it("bounds an unbounded attachmentInfo JSON body and cancels the stream", async () => {
       const state = { canceled: false, enqueued: 0 };
       const chunkBytes = 1024 * 1024;

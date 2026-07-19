@@ -53,7 +53,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     hoisted.terminalTranscriptNewer = false;
   });
 
-  it("keeps a provider-owned CLI session across the default daily boundary", () => {
+  it("keeps a provider-owned CLI session with the default reset policy", () => {
     const sessionKey = "agent:main:cli";
     seedProviderOwned(sessionKey);
 
@@ -80,7 +80,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     };
 
     const result = resolveSession({
-      cfg: { session: {} } as OpenClawConfig,
+      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
       sessionKey,
       agentId: "main",
     });

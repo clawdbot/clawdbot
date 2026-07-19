@@ -65,10 +65,11 @@ continuity comes from layers around it:
 The main session rolls forward through resets and compaction rather than
 growing forever:
 
-- By default the session resets daily at 04:00 local time (configurable, or
-  idle-based; see [Session management](/concepts/session)). On `/new` and
-  `/reset`, the tail of the ending conversation is saved to daily memory
-  notes, and the next session re-primes recent notes.
+- By default there is no automatic reset; compaction keeps the active context
+  bounded while preserving the rolling session. Daily and idle resets are
+  opt-in (see [Session management](/concepts/session)). On `/new` and `/reset`,
+  the tail of the ending conversation is saved to daily memory notes, and the
+  next session re-primes recent notes.
 - When the conversation approaches the context window, compaction summarizes
   and continues in place — the transcript history stays in the session store.
 - The per-agent session store keeps archived transcripts until a disk budget

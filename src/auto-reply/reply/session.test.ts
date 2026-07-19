@@ -1258,7 +1258,7 @@ describe("initSessionState RawBody", () => {
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:main:discord:channel:daily-rollover";
     const existingSessionId = "session-before-daily-reset";
-    // Stale under the default daily reset (atHour 4): started ~48h ago so
+    // Stale under the configured daily reset (atHour 4): started ~48h ago so
     // sessionStartedAt < today's reset boundary.
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
 
@@ -1277,7 +1277,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -1319,7 +1319,7 @@ describe("initSessionState RawBody", () => {
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:main:discord:channel:daily-rollover-behavior";
     const existingSessionId = "session-before-daily-reset-behavior";
-    // Stale under the default daily reset (atHour 4): started ~48h ago.
+    // Stale under the configured daily reset (atHour 4): started ~48h ago.
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
 
     await writeSessionStoreFast(storePath, {
@@ -1340,7 +1340,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -1408,7 +1408,9 @@ describe("initSessionState RawBody", () => {
         ChatType: "channel",
         SessionKey: sessionKey,
       },
-      cfg: { session: { store: storePath } } as OpenClawConfig,
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
@@ -1441,7 +1443,9 @@ describe("initSessionState RawBody", () => {
         ChatType: "direct",
         SessionKey: sessionKey,
       },
-      cfg: { session: { store: storePath } } as OpenClawConfig,
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
@@ -1484,7 +1488,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -1534,7 +1538,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -2093,7 +2097,7 @@ describe("initSessionState reset policy", () => {
     vi.useRealTimers();
   });
 
-  it("defaults to daily reset at 4am local time", async () => {
+  it("keeps the current session across the former daily boundary by default", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-daily-");
     const storePath = path.join(root, "sessions.json");
@@ -2106,11 +2110,6 @@ describe("initSessionState reset policy", () => {
         updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
       },
     });
-    enqueueSystemEvent("stale daily rollover event", { sessionKey });
-    enqueueSystemEvent("stale daily rollover session-id event", {
-      sessionKey: existingSessionId,
-    });
-
     const cfg = { session: { store: storePath } } as OpenClawConfig;
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
@@ -2118,21 +2117,12 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
       sessionKey,
-      previousSessionId: existingSessionId,
+      previousSessionId: undefined,
     });
-    await expect(
-      drainFormattedSystemEvents({
-        cfg,
-        sessionKey,
-        isMainSession: false,
-        isNewSession: true,
-      }),
-    ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -2149,7 +2139,9 @@ describe("initSessionState reset policy", () => {
       },
     });
 
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = {
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+    } as OpenClawConfig;
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
@@ -2801,7 +2793,7 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).toBe(existingSessionId);
   });
 
-  it("defaults to daily resets when only resetByType is configured", async () => {
+  it("keeps the no-reset default for types without an override", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-type-default-");
     const storePath = path.join(root, "sessions.json");
@@ -2827,8 +2819,8 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("keeps legacy idleMinutes behavior without reset config", async () => {
@@ -4499,7 +4491,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello",
@@ -4555,7 +4549,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       operation.setPhase("running");
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello while active",
@@ -4611,7 +4607,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         resetTriggered: false,
       });
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello after boundary",
@@ -4668,7 +4666,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       operation.setPhase("running");
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello after boundary",
@@ -4700,7 +4700,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("keeps provider-owned CLI sessions on implicit daily reset boundaries", async () => {
+  it("keeps provider-owned CLI sessions under the default no-reset policy", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));

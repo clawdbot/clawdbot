@@ -47,6 +47,7 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
@@ -1472,9 +1473,15 @@ export async function runPreparedReply(
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
-  const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
-    hasMedia: userTurnMediaForPersistence.length > 0,
-  });
+  // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
+  // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
+  // room-event lines that merely contain the marker keep their real text.
+  const userTurnTranscriptText =
+    !hasUserBody && transcriptBody === MEDIA_ONLY_USER_TEXT
+      ? ""
+      : resolvePersistedUserTurnText(transcriptBody, {
+          hasMedia: userTurnMediaForPersistence.length > 0,
+        });
   const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
   const conversationRef = conversationIdentity?.conversationRef;
   const transportMessageId =
@@ -1516,12 +1523,7 @@ export async function runPreparedReply(
             ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
             : {}),
           ...(transport ? { transport } : {}),
-          ...(userTurnMediaForPersistence.length > 0
-            ? {
-                media: userTurnMediaForPersistence,
-                mediaOnlyText: "[User sent media without caption]",
-              }
-            : {}),
+          ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           // Persist the message's own arrival timestamp so the single
           // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
           // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that

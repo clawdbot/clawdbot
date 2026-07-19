@@ -4,6 +4,7 @@ import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-ru
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import { buildInboundMediaNote } from "../media-note.js";
@@ -137,7 +138,7 @@ function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
     normalizeOptionalString(params.sessionCtx.CommandBody) ??
     normalizeOptionalString(params.sessionCtx.RawBody) ??
     (params.hasUserBody ? params.baseBody.trim() : undefined) ??
-    "[User sent media without caption]"
+    MEDIA_ONLY_USER_TEXT
   );
 }
 
@@ -226,7 +227,7 @@ export function buildReplyPromptEnvelopeBase(
     ? ROOM_EVENT_PROMPT
     : params.hasUserBody
       ? resetModelBody
-      : "[User sent media without caption]";
+      : MEDIA_ONLY_USER_TEXT;
   // Room-event transcript rows are plain chat lines; replay treats them as
   // conversation, while the OpenClaw marker remains current-turn context only.
   const transcriptBody = params.isHeartbeat
@@ -237,7 +238,7 @@ export function buildReplyPromptEnvelopeBase(
         ? resolveRoomEventTranscriptBody(params)
         : params.hasUserBody
           ? params.baseBody
-          : "[User sent media without caption]";
+          : MEDIA_ONLY_USER_TEXT;
   const currentInboundContext: CurrentInboundPromptContext | undefined =
     !params.isBareSessionReset && currentInboundContextText
       ? {

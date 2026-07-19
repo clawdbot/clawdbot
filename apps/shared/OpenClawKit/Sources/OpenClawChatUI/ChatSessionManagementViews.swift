@@ -27,11 +27,11 @@ enum ChatSessionBatchValidationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .cannotArchive:
-            String(localized: "This session cannot be archived while it is active or running.")
+            String(localized: "This thread cannot be archived while it is active or running.")
         case .cannotDelete:
-            String(localized: "The main session cannot be deleted.")
+            String(localized: "The main thread cannot be deleted.")
         case .attachmentOwnerPinned:
-            String(localized: "Remove attachments or wait for delivery before archiving or deleting this session.")
+            String(localized: "Remove attachments or wait for delivery before archiving or deleting this thread.")
         }
     }
 }
@@ -241,7 +241,7 @@ struct ChatSessionInspectorSheet: View {
                     }
                 }
             }
-            .navigationTitle("Session Info")
+            .navigationTitle("Thread Info")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { self.dismiss() }
@@ -409,7 +409,7 @@ struct ChatSessionGroupsSheet: View {
                 }
             }
             .overlay { if self.isLoading { ProgressView() } }
-            .navigationTitle("Session Groups")
+            .navigationTitle("Thread Groups")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { self.dismiss() }
@@ -450,7 +450,7 @@ struct ChatSessionGroupsSheet: View {
                 }
                 .disabled(self.isMutating)
                 } message: {
-                    Text("Sessions in this group become ungrouped.")
+                    Text("Threads in this group become ungrouped.")
                         .font(OpenClawChatTypography.body)
                 }
         }
@@ -567,7 +567,7 @@ struct ChatNewSessionOptionsPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("New Session Options")
+            Text("New Thread Options")
                 .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .headline))
             Picker("Agent", selection: self.$selectedAgentID) {
                 ForEach(self.agents) { agent in
@@ -615,7 +615,7 @@ struct ChatNewSessionOptionsPopover: View {
                             self.onComplete()
                         } else {
                             self.errorText = self.viewModel.errorText
-                                ?? String(localized: "The session could not be created.")
+                                ?? String(localized: "The thread could not be created.")
                         }
                     }
                 }

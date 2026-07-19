@@ -2,7 +2,9 @@
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -15,7 +17,9 @@ import {
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
+import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { hashConfigIncludeRaw } from "./includes.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   createConfigIO as createObservedConfigIO,
   getRuntimeConfigSourceSnapshot,
@@ -3247,6 +3251,48 @@ describe("config io write", () => {
     });
   });
 
+  it("restores the prior snapshot slot when post-commit refresh rolls back", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf-8");
+
+      try {
+        await withEnvAsync(
+          { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
+          async () => {
+            await writeConfigFile(initialConfig, { skipRuntimeSnapshotRefresh: true });
+            const priorSlot = readConfigSnapshotAuditRecord({
+              env: process.env,
+              homedir: () => home,
+              configPath,
+            });
+            setRuntimeConfigSnapshotRefreshHandler({
+              refresh: () => {
+                throw new Error("synthetic refresh failure");
+              },
+            });
+
+            await expect(
+              writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
+            ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+
+            expect(
+              readConfigSnapshotAuditRecord({
+                env: process.env,
+                homedir: () => home,
+                configPath,
+              }),
+            ).toEqual(priorSlot);
+          },
+        );
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+      }
+    });
+  });
+
   it("rolls back a managed root write when canonical rereads exhaust env generations", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -3438,6 +3484,18 @@ describe("config io write", () => {
 
           const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
           expect(persisted.plugins?.entries?.demo?.config).toStrictEqual({ mode: "auto" });
+          const auditRecord = listConfigAuditRecordsForTests({
+            env: process.env,
+            homedir: () => home,
+          })
+            .filter((record) => record.event === "config.write")
+            .findLast((record) => record.configPath === configPath);
+          expect(auditRecord).toMatchObject({ changedPathCount: expect.any(Number) });
+          if (!auditRecord || auditRecord.event !== "config.write") {
+            throw new Error("expected config write audit record");
+          }
+          expect(auditRecord.changedPathCount).toBeGreaterThanOrEqual(1);
+          expect(auditRecord.changedPaths).toContain("plugins.entries.demo.config");
         });
       } finally {
         mockLoadPluginManifestRegistry.mockReturnValue({
@@ -3580,6 +3638,288 @@ describe("config io write", () => {
         `Config write will strip JSON5 comments from ${configPath}.`,
       ]);
       await expect(fs.readFile(configPath, "utf-8")).resolves.not.toContain("operator note");
+    });
+  });
+
+  it("records capped changed paths, origin, and the latest redacted source snapshot", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const originalVars = Object.fromEntries(
+        Array.from({ length: 70 }, (_, index) => [
+          `SETTING_${index.toString().padStart(2, "0")}`,
+          "before",
+        ]),
+      );
+      const nextVars = Object.fromEntries(Object.keys(originalVars).map((key) => [key, "after"]));
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ env: { vars: originalVars }, gateway: { port: 18789 } }, null, 2)}\n`,
+      );
+      const io = createFastConfigIO(home);
+      const snapshot = await io.readConfigFileSnapshot();
+      const nextConfig = structuredClone(snapshot.config);
+      nextConfig.env = { ...nextConfig.env, vars: nextVars };
+
+      const result = await io.writeConfigFile(nextConfig, { auditOrigin: "doctor" });
+
+      const record = listConfigAuditRecordsForTests({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+      })
+        .filter((candidate) => candidate.event === "config.write")
+        .findLast((candidate) => candidate.configPath === configPath);
+      expect(record).toMatchObject({
+        event: "config.write",
+        origin: "doctor",
+        changedPathCount: 70,
+      });
+      if (!record || record.event !== "config.write") {
+        throw new Error("expected config write audit record");
+      }
+      expect(record.changedPaths).toHaveLength(64);
+      expect(record.changedPaths?.at(-1)).toBe("…+7 more");
+      expect(record.changedPaths?.slice(0, 2)).toEqual([
+        "env.vars.SETTING_00",
+        "env.vars.SETTING_01",
+      ]);
+
+      const slot = readConfigSnapshotAuditRecord({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        configPath,
+      });
+      expect(slot).toMatchObject({ configPath, rawHash: result.persistedHash });
+      if (!slot) {
+        throw new Error("expected snapshot slot");
+      }
+      // The slot is diff-only, so every leaf is fingerprinted.
+      const slotVars =
+        (slot.fingerprintedAuthoredConfig as { env?: { vars?: Record<string, string> } }).env
+          ?.vars ?? {};
+      expect(Object.keys(slotVars)).toHaveLength(70);
+      for (const [name, value] of Object.entries(slotVars)) {
+        expect(value, name).toMatch(/^fp:[0-9a-f]{12}$/);
+      }
+      expect(
+        (slot.fingerprintedAuthoredConfig as { gateway?: { port?: string } }).gateway?.port,
+      ).toMatch(/^fp:[0-9a-f]{12}$/);
+    });
+  });
+
+  it("journals an offline edit before a later config write replaces the snapshot slot", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const io = createConfigIO({
+            configPath,
+            env: process.env,
+            homedir: () => home,
+            logger: silentLogger,
+          });
+          const firstWrite = await io.writeConfigFile({ gateway: { port: 18789 } });
+          await fs.writeFile(
+            configPath,
+            `${JSON.stringify({ gateway: { port: 18790 } }, null, 2)}\n`,
+            "utf-8",
+          );
+          const offlineSnapshot = await io.readConfigFileSnapshot();
+          const secondWrite = await io.writeConfigFile({ gateway: { port: 18791 } });
+          const records = listConfigAuditRecordsForTests({ env: process.env, homedir: () => home });
+
+          expect(records).toContainEqual(
+            expect.objectContaining({
+              event: "config.external",
+              detectedBy: "write",
+              previousHash: firstWrite.persistedHash,
+              nextHash: offlineSnapshot.hash,
+              changedPaths: expect.arrayContaining(["gateway.port"]),
+            }),
+          );
+          expect(records).toContainEqual(
+            expect.objectContaining({
+              event: "config.write",
+              nextHash: secondWrite.persistedHash,
+            }),
+          );
+        },
+      );
+    });
+  });
+
+  it("shares raw snapshot hashes between config writes and gateway startup reconciliation", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const stateDir = path.join(home, ".openclaw");
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const io = createConfigIO({
+            configPath,
+            env: process.env,
+            homedir: () => home,
+            logger: silentLogger,
+          });
+          const write = await io.writeConfigFile({ gateway: { port: 18789 } });
+          const writtenSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
+          const slot = readConfigSnapshotAuditRecord({
+            env: process.env,
+            homedir: () => home,
+            configPath,
+          });
+          expect(writtenSnapshot.valid).toBe(true);
+          expect(slot).toMatchObject({ rawHash: write.persistedHash });
+          expect(slot?.rawHash).toBe(writtenSnapshot.hash);
+
+          const watcher = {
+            options: { usePolling: false },
+            on: vi.fn(),
+            close: vi.fn(async () => {}),
+          };
+          watcher.on.mockImplementation(() => watcher);
+          const watchSpy = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
+          const startForSnapshot = (snapshot: ConfigFileSnapshot) =>
+            startGatewayConfigReloader({
+              initialConfig: snapshot.config,
+              initialCompareConfig: snapshot.sourceConfig,
+              initialSnapshotRawHash: snapshot.hash ?? null,
+              initialAuthoredConfig: snapshot.parsed,
+              initialSnapshotValid: snapshot.valid,
+              initialSnapshotIssues: snapshot.issues,
+              readSnapshot: async () => snapshot,
+              initialPluginInstallRecords: {},
+              readPluginInstallRecords: async () => ({}),
+              onNoopConfigCommit: async () => {},
+              onHotReload: async () => {},
+              onRestart: async () => {},
+              log: { info: () => {}, ...silentLogger },
+              watchPath: configPath,
+            });
+
+          const firstReloader = startForSnapshot(writtenSnapshot);
+          await firstReloader.stop();
+          expect(
+            listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
+              (record) => record.event === "config.external",
+            ),
+          ).toEqual([]);
+
+          const handEditedAuthoredConfig = structuredClone(
+            writtenSnapshot.parsed,
+          ) as OpenClawConfig;
+          handEditedAuthoredConfig.gateway = {
+            ...handEditedAuthoredConfig.gateway,
+            port: 18790,
+          };
+          await fs.writeFile(
+            configPath,
+            `${JSON.stringify(handEditedAuthoredConfig, null, 2)}\n`,
+            "utf-8",
+          );
+          const handEditedSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
+          const secondReloader = startForSnapshot(handEditedSnapshot);
+          await secondReloader.stop();
+          watchSpy.mockRestore();
+
+          const externalRecord = listConfigAuditRecordsForTests({
+            env: process.env,
+            homedir: () => home,
+          }).findLast((record) => record.event === "config.external");
+          expect(externalRecord).toMatchObject({
+            event: "config.external",
+            detectedBy: "startup",
+            previousHash: write.persistedHash,
+            nextHash: handEditedSnapshot.hash,
+            changedPaths: ["gateway.port"],
+            valid: true,
+          });
+        },
+      );
+    });
+  });
+
+  it("reseeds a shared state slot when the gateway starts for another config path", async () => {
+    await withSuiteHome(async (home) => {
+      const configPathA = path.join(home, ".openclaw", "config-a.json");
+      const configPathB = path.join(home, ".openclaw", "config-b.json");
+      const stateDir = path.join(home, ".openclaw");
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: configPathA,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const io = createConfigIO({
+            configPath: configPathA,
+            env: process.env,
+            homedir: () => home,
+            logger: silentLogger,
+          });
+          await io.writeConfigFile({ gateway: { port: 18789 } });
+          await fs.writeFile(
+            configPathB,
+            `${JSON.stringify({ gateway: { port: 18790 } }, null, 2)}\n`,
+            "utf-8",
+          );
+
+          await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPathB }, async () => {
+            const snapshot = await readConfigFileSnapshotForRuntimeTransaction({});
+            const watcher = {
+              options: { usePolling: false },
+              on: vi.fn(),
+              close: vi.fn(async () => {}),
+            };
+            watcher.on.mockImplementation(() => watcher);
+            const watchSpy = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
+            const reloader = startGatewayConfigReloader({
+              initialConfig: snapshot.config,
+              initialCompareConfig: snapshot.sourceConfig,
+              initialSnapshotRawHash: snapshot.hash ?? null,
+              initialAuthoredConfig: snapshot.parsed,
+              initialSnapshotValid: snapshot.valid,
+              initialSnapshotIssues: snapshot.issues,
+              readSnapshot: async () => snapshot,
+              initialPluginInstallRecords: {},
+              readPluginInstallRecords: async () => ({}),
+              onNoopConfigCommit: async () => {},
+              onHotReload: async () => {},
+              onRestart: async () => {},
+              log: { info: () => {}, ...silentLogger },
+              watchPath: configPathB,
+            });
+            await reloader.stop();
+            watchSpy.mockRestore();
+
+            expect(
+              listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
+                (record) => record.event === "config.external",
+              ),
+            ).toEqual([]);
+            expect(
+              readConfigSnapshotAuditRecord({
+                env: process.env,
+                homedir: () => home,
+                configPath: configPathB,
+              }),
+            ).toMatchObject({
+              configPath: configPathB,
+              rawHash: snapshot.hash,
+            });
+          });
+        },
+      );
     });
   });
 });

@@ -9,6 +9,10 @@ type ChannelGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
+type ChannelLogoutResult = {
+  cleared: boolean;
+};
+
 type ChannelGatewaySnapshot = {
   client: ChannelGatewayClient | null;
   connected: boolean;
@@ -43,7 +47,7 @@ export type ChannelCapability = {
   refresh: (probe?: boolean, options?: LoadChannelsOptions) => Promise<void>;
   startWhatsApp: (force: boolean, accountId?: string) => Promise<void>;
   waitWhatsApp: (accountId?: string) => Promise<void>;
-  logoutWhatsApp: () => Promise<void>;
+  logoutWhatsApp: (accountId?: string) => Promise<void>;
   subscribe: (listener: (state: ChannelsState) => void) => () => void;
   dispose: () => void;
 };
@@ -261,19 +265,26 @@ async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Prom
   return true;
 }
 
-async function logoutWhatsApp(state: ChannelsState): Promise<boolean> {
+async function logoutWhatsApp(state: ChannelsState, accountId?: string): Promise<boolean> {
   const operation = beginWhatsAppOperation(state);
   if (!operation) {
     return false;
   }
   try {
-    await operation.client.request("channels.logout", { channel: "whatsapp" });
+    const result = await operation.client.request<ChannelLogoutResult>("channels.logout", {
+      channel: "whatsapp",
+      ...(accountId ? { accountId } : {}),
+    });
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
     }
-    state.whatsappLoginMessage = "Logged out.";
-    state.whatsappLoginQrDataUrl = null;
-    state.whatsappLoginConnected = null;
+    if (result.cleared) {
+      state.whatsappLoginMessage = t("channels.whatsapp.loggedOut");
+      state.whatsappLoginQrDataUrl = null;
+      state.whatsappLoginConnected = null;
+    } else {
+      state.whatsappLoginMessage = t("channels.whatsapp.logoutNotCleared");
+    }
   } catch (err) {
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
@@ -398,9 +409,9 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
           await loadChannels(state, true);
         }
       }),
-    logoutWhatsApp: () =>
+    logoutWhatsApp: (accountId) =>
       run(async () => {
-        if (await logoutWhatsApp(state)) {
+        if (await logoutWhatsApp(state, accountId)) {
           await loadChannels(state, true);
         }
       }),

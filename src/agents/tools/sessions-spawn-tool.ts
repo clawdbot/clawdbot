@@ -12,6 +12,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -29,6 +30,7 @@ import {
   spawnSubagentDirect,
 } from "../subagent-spawn.js";
 import { normalizeSubagentTaskName } from "../subagent-task-name.js";
+import { resolveSwarmConfig } from "../swarm-config.js";
 import {
   describeSessionsSpawnTool,
   SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
@@ -123,6 +125,7 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 function createSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
+  swarmEnabled: boolean;
 }) {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
@@ -161,6 +164,14 @@ function createSessionsSpawnToolSchema(params: {
         description: "Light bootstrap; subagent only.",
       }),
     ),
+    ...(params.swarmEnabled
+      ? {
+          collect: Type.Optional(Type.Boolean()),
+          outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+          fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+          groupId: Type.Optional(Type.String()),
+        }
+      : {}),
     ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
 
     // Inline attachments (snapshot-by-value).
@@ -226,6 +237,8 @@ export function createSessionsSpawnTool(
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    requesterRunId?: string;
+    swarmCollector?: boolean;
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
 ): AnyAgentTool {
@@ -235,6 +248,9 @@ export function createSessionsSpawnTool(
   });
   const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
   const threadAvailable = hasAnyThreadAvailability(threadAvailability);
+  const requesterAgentId =
+    opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
+  const swarmConfig = resolveSwarmConfig(opts?.config, requesterAgentId);
   return {
     label: "Sessions",
     name: "sessions_spawn",
@@ -242,9 +258,42 @@ export function createSessionsSpawnTool(
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
-    parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
+    parameters: createSessionsSpawnToolSchema({
+      acpAvailable,
+      threadAvailable,
+      swarmEnabled: swarmConfig.enabled,
+    }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      if (opts?.swarmCollector && params.collect !== true) {
+        throw new ToolInputError(
+          "sessions_spawn from a collector requires collect=true so approvals stay non-interactive.",
+        );
+      }
+      const swarmParam = ["collect", "outputSchema", "fastMode", "groupId"].find((key) =>
+        Object.hasOwn(params, key),
+      );
+      if (swarmParam && !swarmConfig.enabled) {
+        throw new ToolInputError(
+          `sessions_spawn parameter "${swarmParam}" requires tools.swarm.enabled=true.`,
+        );
+      }
+      const hasCollectParam = Object.hasOwn(params, "collect");
+      const collect = params.collect === true;
+      if (params.outputSchema !== undefined && !collect) {
+        throw new ToolInputError('sessions_spawn "outputSchema" requires collect=true.');
+      }
+      if (params.groupId !== undefined && !collect) {
+        throw new ToolInputError('sessions_spawn "groupId" requires collect=true.');
+      }
+      if (
+        collect &&
+        (params.thread === true || params.visible === true || params.mode === "session")
+      ) {
+        throw new ToolInputError(
+          "sessions_spawn collect=true does not support thread, visible, or session mode.",
+        );
+      }
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
         Object.hasOwn(params, key),
       );
@@ -274,6 +323,9 @@ export function createSessionsSpawnTool(
       const taskName = taskNameResult.taskName;
       const label = readStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
+      if (collect && runtime === "acp") {
+        throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
+      }
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
@@ -282,7 +334,7 @@ export function createSessionsSpawnTool(
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
-      const expectsCompletionMessage = params.expectsCompletionMessage !== false;
+      const expectsCompletionMessage = collect ? false : params.expectsCompletionMessage !== false;
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
@@ -411,6 +463,16 @@ export function createSessionsSpawnTool(
           agentId: requestedAgentId,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
+          collect: hasCollectParam ? collect : undefined,
+          outputSchema:
+            params.outputSchema && typeof params.outputSchema === "object"
+              ? (params.outputSchema as Record<string, unknown>)
+              : undefined,
+          fastMode:
+            params.fastMode === true || params.fastMode === false || params.fastMode === "auto"
+              ? params.fastMode
+              : undefined,
+          groupId: readStringParam(params, "groupId"),
           cwd,
           thread,
           mode,
@@ -444,6 +506,7 @@ export function createSessionsSpawnTool(
           workspaceDir: opts?.workspaceDir,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          requesterRunId: opts?.requesterRunId,
         },
       );
 

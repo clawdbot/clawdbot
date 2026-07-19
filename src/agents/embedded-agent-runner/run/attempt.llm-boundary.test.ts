@@ -1,6 +1,7 @@
 // Coverage for sanitizing replay messages at the LLM boundary.
 import { describe, expect, it } from "vitest";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   installRuntimeContextMessageForPrompt,
@@ -233,6 +234,42 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timezone: "UTC",
     });
     expect(output[2]?.content).toBe(`${expectedCurrentPrefix}Current ask`);
+  });
+
+  it("injects media-only text before timestamping with legacy-identical provider bytes", () => {
+    const timestamp = 1717570800000;
+    const persisted = {
+      role: "user",
+      content: "",
+      timestamp,
+      MediaPath: "/tmp/input.png",
+      MediaPaths: ["/tmp/input.png"],
+    };
+    const legacy = { ...persisted, content: MEDIA_ONLY_USER_TEXT };
+    const [normalizedPersisted] = normalizeMessagesForLlmBoundary(
+      [persisted] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
+      [legacy] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const expectedText = `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${MEDIA_ONLY_USER_TEXT}`;
+
+    expect(normalizedPersisted).toEqual(normalizedLegacy);
+    expect(normalizedPersisted?.content).toBe(expectedText);
+
+    const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+    const [normalizedArray] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          ...persisted,
+          content: [{ type: "text", text: "   " }, image],
+        },
+      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    expect(normalizedArray?.content).toEqual([{ type: "text", text: expectedText }, image]);
   });
 
   it("can leave user message bytes bare for cache-sensitive local providers", () => {

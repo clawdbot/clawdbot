@@ -119,6 +119,14 @@ describe("gateway probe endpoints", () => {
             error: { code: "gateway_unavailable" },
           });
 
+          const blockedBoard = await sendGatewayRequest(server, {
+            path: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage",
+          });
+          expect(blockedBoard.res.statusCode).toBe(503);
+          expect(JSON.parse(blockedBoard.getBody())).toMatchObject({
+            error: { code: "gateway_unavailable" },
+          });
+
           expect(resumeGatewaySuspend(prepared.suspensionId)).toEqual({
             ok: true,
             status: "running",

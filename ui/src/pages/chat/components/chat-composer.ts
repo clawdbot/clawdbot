@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
@@ -46,6 +47,7 @@ import {
 } from "../../../lib/session-goal.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
@@ -134,6 +136,8 @@ type ChatComposerProps = {
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
+  gatewayClient?: GatewayBrowserClient | null;
+  composerHoldToRecord?: boolean;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -146,6 +150,7 @@ type ChatComposerProps = {
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
+  onDictationError?: (message: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -196,6 +201,9 @@ type ChatComposerState = {
   // Stable Lit ref: an inline arrow would change identity per render and force
   // a layout re-measure of the textarea on every chat render, not just attach.
   textareaRef: ((element?: Element) => void) | null;
+  dictation: ComposerDictationController | null;
+  dictationDraftKey: string | null;
+  dictationSelection: { start: number; end: number } | null;
 };
 
 function createChatComposerState(): ChatComposerState {
@@ -224,6 +232,9 @@ function createChatComposerState(): ChatComposerState {
     microphoneWarning: null,
     microphoneDiscoveryRequest: 0,
     textareaRef: null,
+    dictation: null,
+    dictationDraftKey: null,
+    dictationSelection: null,
   };
 }
 
@@ -328,8 +339,12 @@ export function resetChatComposerState(paneId?: string) {
   if (paneId) {
     // Goal elapsed timers are keyed by element and cleaned up when their
     // element leaves the DOM, so a per-pane reset does not need to touch them.
+    composerStates.get(paneId)?.dictation?.dispose();
     composerStates.delete(paneId);
     return;
+  }
+  for (const state of composerStates.values()) {
+    state.dictation?.dispose();
   }
   composerStates.clear();
   for (const timer of goalElapsedTimers.values()) {
@@ -1762,6 +1777,8 @@ type ChatRunControlsProps = {
   voiceVideoCapable?: boolean;
   voiceVideoEnabled?: boolean;
   voiceVideoPending?: boolean;
+  dictation?: ComposerDictationController;
+  onDictationPointerDown?: (event: PointerEvent) => void;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
@@ -1851,6 +1868,54 @@ function renderMicrophonePicker(props: MicrophonePickerProps) {
   `;
 }
 
+function renderComposerVoiceButton(props: ChatRunControlsProps) {
+  const active = props.dictation?.active === true;
+  const finalizing = props.dictation?.finalizing === true;
+  const holding = props.dictation?.locksComposer === true;
+  const label = finalizing
+    ? t("chat.composer.dictationFinalizing")
+    : active
+      ? t("chat.composer.dictationReleaseToInsert")
+      : t("chat.composer.startVoiceInput");
+  // This shape owns pointer capture. Keep it stable while dictation rerenders,
+  // or replacing the button releases capture and cancels the active hold.
+  return html`
+    <span class="chat-talk-control">
+      <openclaw-tooltip .content=${label}>
+        <button
+          class=${active
+            ? `chat-send-btn chat-send-btn--dictating${finalizing ? " chat-send-btn--dictation-finalizing" : ""}`
+            : `chat-send-btn chat-send-btn--voice${props.dictation ? " chat-send-btn--hold-enabled" : ""}`}
+          type="button"
+          @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
+          @click=${(event: MouseEvent) =>
+            props.dictation ? props.dictation.handleClick(event) : props.onToggleVoice?.()}
+          @contextmenu=${(event: MouseEvent) => props.dictation?.handleContextMenu(event)}
+          ?disabled=${finalizing ||
+          (!active && (!props.connected || props.sending || props.isBusy))}
+          aria-label=${label}
+        >
+          ${finalizing
+            ? icons.loader
+            : active
+              ? html`
+                  ${renderMicrophoneActivity({
+                    status: props.dictation?.connecting ? "connecting" : "listening",
+                    inputLevel: props.dictation?.inputLevel,
+                  })}
+                  <span class="chat-send-btn__dictation-time">${props.dictation?.elapsed}</span>
+                `
+              : html`
+                  ${icons.mic}
+                  <span class="agent-chat__control-label">${label}</span>
+                `}
+        </button>
+      </openclaw-tooltip>
+      ${holding ? nothing : props.microphonePicker}
+    </span>
+  `;
+}
+
 function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const steersActiveRun = props.followUpMode === "steer";
@@ -1897,6 +1962,29 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // only its stop affordance instead of a fake listening meter plus a
   // duplicate announcement.
   const voiceErrored = props.voiceStatus === "error";
+  const voiceButton = renderComposerVoiceButton(props);
+  const sendAction = html`
+    <openclaw-tooltip
+      .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
+    >
+      <button
+        class="chat-send-btn"
+        @click=${storeDraftAndSend}
+        ?disabled=${!props.canSend || props.sending}
+        aria-label=${props.isBusy
+          ? t("chat.runControls.queueMessage")
+          : t("chat.runControls.sendMessage")}
+      >
+        ${icons.arrowUp}
+        <span class="agent-chat__control-label"
+          >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
+        >
+      </button>
+    </openclaw-tooltip>
+  `;
+  const dictationPrimaryAction = html`
+    ${props.dictation?.active || !hasComposedContent ? nothing : sendAction} ${voiceButton}
+  `;
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
@@ -1989,46 +2077,11 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
               </button>
             </openclaw-tooltip>
           `
-        : hasComposedContent || !props.onToggleVoice
-          ? html`
-              <openclaw-tooltip
-                .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
-              >
-                <button
-                  class="chat-send-btn"
-                  @click=${storeDraftAndSend}
-                  ?disabled=${!props.canSend || props.sending}
-                  aria-label=${props.isBusy
-                    ? t("chat.runControls.queueMessage")
-                    : t("chat.runControls.sendMessage")}
-                >
-                  ${icons.arrowUp}
-                  <span class="agent-chat__control-label"
-                    >${props.isBusy
-                      ? t("chat.runControls.queue")
-                      : t("chat.runControls.send")}</span
-                  >
-                </button>
-              </openclaw-tooltip>
-            `
-          : html`
-              <span class="chat-talk-control">
-                <openclaw-tooltip .content=${t("chat.composer.startVoiceInput")}>
-                  <button
-                    class="chat-send-btn chat-send-btn--voice"
-                    @click=${props.onToggleVoice}
-                    ?disabled=${!props.connected || props.sending || props.isBusy}
-                    aria-label=${t("chat.composer.startVoiceInput")}
-                  >
-                    ${icons.mic}
-                    <span class="agent-chat__control-label"
-                      >${t("chat.composer.startVoiceInput")}</span
-                    >
-                  </button>
-                </openclaw-tooltip>
-                ${props.microphonePicker}
-              </span>
-            `}
+        : props.dictation
+          ? dictationPrimaryAction
+          : hasComposedContent || !props.onToggleVoice
+            ? sendAction
+            : voiceButton}
   `;
 }
 
@@ -2051,6 +2104,12 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const draftKey = composerDraftKey(props);
+  if (state.dictationDraftKey !== null && state.dictationDraftKey !== draftKey) {
+    state.dictation?.dispose();
+    state.dictation = null;
+    state.dictationSelection = null;
+  }
+  state.dictationDraftKey = draftKey;
   const visibleDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : props.draft;
   const actionDraft = visibleDraft;
@@ -2482,6 +2541,67 @@ export function renderChatComposer(props: ChatComposerProps) {
         onSelect: selectMicrophone,
       })
     : nothing;
+  const dictationOptions = {
+    client: props.gatewayClient ?? null,
+    connected: props.connected,
+    enabled: props.composerHoldToRecord !== false,
+    realtimeTalkActive: props.realtimeTalkActive === true,
+    onCommit: (transcript: string) => {
+      const target = state.composerTextarea;
+      const selection = state.dictationSelection ?? {
+        start: target?.selectionStart ?? visibleDraft.length,
+        end: target?.selectionEnd ?? visibleDraft.length,
+      };
+      const currentDraft = target?.value ?? props.getDraft?.() ?? props.draft;
+      const insertion = insertComposerDictation(
+        currentDraft,
+        transcript,
+        selection.start,
+        selection.end,
+      );
+      if (target) {
+        target.value = insertion.value;
+        adjustTextareaHeight(target);
+      }
+      commitComposerDraft(props, insertion.value);
+      state.dictationSelection = null;
+      requestUpdate();
+      queueMicrotask(() => {
+        const textarea = state.composerTextarea;
+        if (!textarea) {
+          return;
+        }
+        textarea.focus({ preventScroll: true });
+        textarea.selectionStart = insertion.caret;
+        textarea.selectionEnd = insertion.caret;
+      });
+    },
+    onError: (message: string) => props.onDictationError?.(message),
+    onStateChange: requestUpdate,
+    // With an initial empty composer, this button retains the existing
+    // send-after-typing behavior until the host rerenders the primary actions.
+    // Once a draft is rendered, the separate voice control starts Talk directly.
+    onTap:
+      actionDraft.trim() || props.attachments?.length
+        ? () => props.onToggleRealtimeTalk?.()
+        : handleVoicePrimaryAction,
+  };
+  state.dictation ??= new ComposerDictationController(dictationOptions);
+  state.dictation.update(dictationOptions);
+  const dictation =
+    props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
+      ? state.dictation
+      : undefined;
+  const handleDictationPointerDown = (event: PointerEvent) => {
+    const target = state.composerTextarea;
+    state.dictationSelection = {
+      start: target?.selectionStart ?? visibleDraft.length,
+      end: target?.selectionEnd ?? visibleDraft.length,
+    };
+    if (dictation?.handlePointerDown(event) && target) {
+      target.readOnly = true;
+    }
+  };
   const runControlsProps: ChatRunControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(actionDraft),
@@ -2507,6 +2627,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
+    dictation,
+    onDictationPointerDown: handleDictationPointerDown,
   };
   const cameraFacingMode = props.realtimeTalkVideoStream
     ?.getVideoTracks?.()[0]
@@ -2581,6 +2703,31 @@ export function renderChatComposer(props: ChatComposerProps) {
                 `
               : nothing}
             <div class="agent-chat__composer-status-stack">
+              ${dictation?.active
+                ? html`
+                    <div
+                      class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      <span class="agent-chat__dictation-label"
+                        >${dictation.finalizing
+                          ? t("chat.composer.dictationFinalizing")
+                          : dictation.connecting
+                            ? t("chat.composer.dictationConnecting")
+                            : t("chat.composer.dictationRecording", {
+                                elapsed: dictation.elapsed,
+                              })}</span
+                      >
+                      ${dictation.partial
+                        ? html`<span class="agent-chat__dictation-partial"
+                            >${dictation.partial}</span
+                          >`
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
               ${renderChatPlanChecklist(props.planStatus, {
                 active: showAbortableUi,
                 variant: "bar",
@@ -2672,6 +2819,7 @@ export function renderChatComposer(props: ChatComposerProps) {
                   .value=${visibleDraft}
                   dir=${detectTextDirection(visibleDraft)}
                   ?disabled=${!canCompose}
+                  ?readonly=${dictation?.locksComposer === true}
                   aria-autocomplete="list"
                   aria-controls=${ifDefined(slashMenuVisible ? slashMenuListboxId : undefined)}
                   aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}

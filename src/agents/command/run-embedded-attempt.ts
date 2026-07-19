@@ -153,12 +153,7 @@ export async function runEmbeddedAgentAttempt(params: {
       ? {
           input: {
             text: recorderTranscriptText,
-            ...(hasTranscriptMedia
-              ? {
-                  media: transcriptMedia,
-                  mediaOnlyText: "[User sent media without caption]",
-                }
-              : {}),
+            ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
           },
         }
       : {}),

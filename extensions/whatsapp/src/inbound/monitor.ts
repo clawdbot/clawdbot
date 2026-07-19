@@ -60,7 +60,7 @@ import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe
 import {
   createWhatsAppDurableInboundMessageId,
   createWhatsAppDurableInboundQueue,
-  createWhatsAppIngressDrain,
+  createWhatsAppIngressMonitor,
   enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
   type WhatsAppDurableInboundQueue,
@@ -439,6 +439,7 @@ export async function attachWebInboxToSocket(
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
   const pendingMessageHandlers = new Set<Promise<void>>();
+  let durableIngressActive = false;
   // Close-path coordination: resolve waiters when debounce work appears so
   // shutdown can force-flush without timer-driven polling (fake-timer safe).
   const debounceWorkWaiters = new Set<() => void>();
@@ -471,7 +472,10 @@ export async function attachWebInboxToSocket(
   let nextReceiveOrder = 0;
   const publishPendingWorkState = (at = Date.now()) => {
     options.onPendingWorkChanged?.(
-      pendingMessageHandlers.size + pendingDebounceKeys.size + activeInboundFlushes.size,
+      pendingMessageHandlers.size +
+        pendingDebounceKeys.size +
+        activeInboundFlushes.size +
+        (durableIngressActive ? 1 : 0),
       at,
     );
   };
@@ -1515,75 +1519,7 @@ export async function attachWebInboxToSocket(
     return "deferred";
   };
 
-  let durableDrainPass: Promise<void> | undefined;
-  let durableDrainRequested = false;
-  let durableDrainClosed = false;
-  const requestDurableInboundDrain = (): Promise<void> => {
-    if (durableDrainClosed) {
-      return Promise.resolve();
-    }
-    durableDrainRequested = true;
-    if (!durableDrainPass) {
-      let passFailed = false;
-      const task = (async () => {
-        await durableInboundDrain.recoverStaleClaims();
-        while (durableDrainRequested) {
-          durableDrainRequested = false;
-          const result = await durableInboundDrain.drainOnce();
-          if (result.started > 0) {
-            await durableInboundDrain.waitForIdle();
-            durableDrainRequested = true;
-          }
-        }
-      })().catch((error: unknown) => {
-        passFailed = true;
-        throw error;
-      });
-      durableDrainPass = task;
-      pendingMessageHandlers.add(task);
-      publishPendingWorkState();
-      void task
-        .finally(() => {
-          if (durableDrainPass === task) {
-            durableDrainPass = undefined;
-          }
-          pendingMessageHandlers.delete(task);
-          publishPendingWorkState();
-          if (durableDrainRequested && !passFailed) {
-            void requestDurableInboundDrain().catch((error: unknown) => {
-              inboundLogger.error(
-                { error: formatError(error) },
-                "whatsapp durable inbound drain failed",
-              );
-            });
-          }
-        })
-        .catch(() => undefined);
-    }
-    return durableDrainPass;
-  };
-  const requestDrainAfterLaneSettlement = () => {
-    void requestDurableInboundDrain().catch((error: unknown) => {
-      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed");
-    });
-  };
-  const continueDrainAfterLaneSettlement = (
-    lifecycle: WhatsAppIngressLifecycle,
-  ): WhatsAppIngressLifecycle => ({
-    abortSignal: lifecycle.abortSignal,
-    onAdopted: async () => {
-      await lifecycle.onAdopted();
-      requestDrainAfterLaneSettlement();
-    },
-    onDeferred: lifecycle.onDeferred,
-    onAdoptionFinalizing: lifecycle.onAdoptionFinalizing,
-    onAbandoned: async () => {
-      await lifecycle.onAbandoned();
-      requestDrainAfterLaneSettlement();
-    },
-  });
-  // Lazy closures above only run post-start, so the const-after-use is TDZ-safe.
-  const durableInboundDrain = createWhatsAppIngressDrain({
+  const durableInboundMonitor = createWhatsAppIngressMonitor({
     queue: durableInboundQueue,
     dispatch: async (msg, payload, lifecycle) => {
       const remoteJid = msg.key?.remoteJid;
@@ -1594,18 +1530,19 @@ export async function attachWebInboxToSocket(
           ...(remoteJid && id
             ? { eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }) }
             : {}),
-          lifecycle: continueDrainAfterLaneSettlement(lifecycle),
+          lifecycle,
         }),
       };
     },
+    pollIntervalMs: WHATSAPP_INGRESS_DRAIN_INTERVAL_MS,
     onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
+    onError: (error) =>
+      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed"),
+    onActivityChange: (active) => {
+      durableIngressActive = active;
+      publishPendingWorkState();
+    },
   });
-  const durableDrainTimer = setInterval(() => {
-    void requestDurableInboundDrain().catch((error: unknown) => {
-      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed");
-    });
-  }, WHATSAPP_INGRESS_DRAIN_INTERVAL_MS);
-  durableDrainTimer.unref?.();
 
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
@@ -1672,10 +1609,8 @@ export async function attachWebInboxToSocket(
       };
       let result: { kind: string } | undefined;
       let appendError: unknown;
-      // Bounded retry for transient store blips. The retired live-dispatch
-      // fallback is gone deliberately: with the replay guard deleted it
-      // bypassed drain dedupe and lane serialization, trading a duplicate
-      // reply/session race for availability against an already-broken store.
+      // Admission stays local because the prepared-context map needs enqueue's
+      // atomic accepted/pending/completed result; the shared monitor hides it.
       for (const delayMs of [0, 100, 300]) {
         if (delayMs > 0) {
           await new Promise((resolve) => {
@@ -1732,12 +1667,7 @@ export async function attachWebInboxToSocket(
           // keepForDrain avoids orphaning a second map entry forever.
           finishPreparation(undefined);
         }
-        void requestDurableInboundDrain().catch((error: unknown) => {
-          inboundLogger.error(
-            { error: formatError(error) },
-            "whatsapp durable inbound drain failed",
-          );
-        });
+        durableInboundMonitor.requestDrain();
       }
     }
   };
@@ -1770,7 +1700,6 @@ export async function attachWebInboxToSocket(
   };
   const drainInboundBeforeSocketClose = async () => {
     groupMetadataCacheClosed = true;
-    clearInterval(durableDrainTimer);
     // Interleave force-flush with event-driven wait for drain dispatch so close
     // cannot deadlock inside the debounce window. Debounce semantics stay intact.
     for (;;) {
@@ -1789,13 +1718,16 @@ export async function attachWebInboxToSocket(
       }
     }
     await drainDebouncedInboundMessages();
-    // Claims must finish (or release) before a successor monitor starts.
-    try {
-      await durableInboundDrain.waitForIdle();
-    } finally {
-      durableDrainClosed = true;
-      durableInboundDrain.dispose();
+    // A flush can adopt one claim and wake the next row in the same lane.
+    // Alternate until neither the monitor nor debounce layer can create more work.
+    for (;;) {
+      await durableInboundMonitor.waitForIdle();
+      if (pendingDebounceKeys.size === 0 && activeInboundFlushes.size === 0) {
+        break;
+      }
+      await drainDebouncedInboundMessages();
     }
+    await durableInboundMonitor.stop();
   };
   const drainInboundBeforeSocketCloseWithTimeout = async () => {
     let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -1817,12 +1749,9 @@ export async function attachWebInboxToSocket(
       if (timeout) {
         clearTimeout(timeout);
       }
-      // A drain timeout abandons the graceful path before its own dispose
-      // runs; a successor monitor must never share this account queue with a
-      // still-live drain. dispose() is idempotent, so the graceful path's own
-      // cleanup stays harmless.
-      durableDrainClosed = true;
-      durableInboundDrain.dispose();
+      // Start abort/dispose even when channel work ignored the graceful bound;
+      // a successor must not share this account queue with a live owner.
+      void durableInboundMonitor.stop();
     }
   };
   const handleConnectionUpdate = (update: Partial<import("baileys").ConnectionState>) => {
@@ -1922,10 +1851,7 @@ export async function attachWebInboxToSocket(
     forgetFullGroupMetadata(update.id);
   }) as unknown as (...args: unknown[]) => void);
 
-  void requestDurableInboundDrain().catch((err: unknown) => {
-    inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
-    inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
-  });
+  durableInboundMonitor.start();
 
   const groupHydrationTask = (async () => {
     try {

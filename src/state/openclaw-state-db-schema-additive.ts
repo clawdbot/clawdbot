@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -10,6 +12,53 @@ import {
   repairLegacyTaskDeliveryStatuses,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+
+function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
+  if (typeof recordJson !== "string") {
+    return null;
+  }
+  let record: unknown;
+  try {
+    record = JSON.parse(recordJson) as unknown;
+  } catch {
+    return null;
+  }
+  if (!isRecord(record) || !isRecord(record.original)) {
+    return null;
+  }
+  const mediaRoot = record.original.mediaRoot;
+  if (typeof mediaRoot === "string" && mediaRoot.trim()) {
+    return path.resolve(mediaRoot);
+  }
+  const originalPath = record.original.path;
+  if (typeof originalPath !== "string" || !originalPath.trim()) {
+    return null;
+  }
+  const resolvedOriginalPath = path.resolve(originalPath);
+  return path.dirname(path.dirname(path.dirname(resolvedOriginalPath)));
+}
+
+function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
+  const rows = db
+    .prepare("SELECT attachment_id, record_json FROM managed_outgoing_image_records")
+    .all() as Array<{ attachment_id: string; record_json: unknown }>;
+  const updateRoot = db.prepare(
+    "UPDATE managed_outgoing_image_records SET original_media_root = ? WHERE attachment_id = ?",
+  );
+  const deleteRecord = db.prepare(
+    "DELETE FROM managed_outgoing_image_records WHERE attachment_id = ?",
+  );
+  for (const row of rows) {
+    const mediaRoot = resolveLegacyManagedImageRoot(row.record_json);
+    if (mediaRoot) {
+      updateRoot.run(mediaRoot, row.attachment_id);
+    } else {
+      // This table had no shipped writer. Discard malformed unexpected rows
+      // instead of retaining unusable empty roots or wedging every database open.
+      deleteRecord.run(row.attachment_id);
+    }
+  }
+}
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   const addedDiagnosticEventSequence = ensureColumn(
@@ -190,8 +239,16 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "commitments", "snoozed_until_ms INTEGER");
   ensureColumn(db, "commitments", "expired_at_ms INTEGER");
   // The shipped JSON runtime predeclared this table but never populated it.
-  // Add required typed columns before Doctor or runtime can insert canonical rows.
-  ensureColumn(db, "managed_outgoing_image_records", "original_media_root TEXT NOT NULL");
+  // The transitional default makes ADD COLUMN portable; schema-v2 tables are
+  // rebuilt from canonical STRICT SQL immediately afterward, removing it.
+  const addedOriginalMediaRoot = ensureColumn(
+    db,
+    "managed_outgoing_image_records",
+    "original_media_root TEXT NOT NULL DEFAULT ''",
+  );
+  if (addedOriginalMediaRoot) {
+    backfillLegacyManagedImageRoots(db);
+  }
   ensureColumn(db, "managed_outgoing_image_records", "agent_id TEXT");
   ensureColumn(
     db,
@@ -239,6 +296,13 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "requester_settle_wake_batch_run_ids_json TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_last_error TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_retire_after INTEGER");
+  ensureColumn(db, "subagent_runs", "swarm_group_id TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_collector INTEGER");
+  ensureColumn(db, "subagent_runs", "swarm_output_schema_json TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_completion_status TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_structured_json TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");

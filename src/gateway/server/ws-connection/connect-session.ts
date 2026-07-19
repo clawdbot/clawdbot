@@ -1,5 +1,6 @@
 // Gateway WebSocket connect finalization attaches node/session state and sends hello-ok.
 import os from "node:os";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -105,6 +106,7 @@ export async function attachAuthenticatedGatewayConnect(
     role,
     scopes,
     device,
+    authResult,
     authMethod,
     pairingLocality,
     sessionUsesSharedGatewayAuth,
@@ -120,6 +122,7 @@ export async function attachAuthenticatedGatewayConnect(
   const clientId = connectParams.client.id;
   const instanceId = connectParams.client.instanceId;
   const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
+  const authenticatedUserId = normalizeOptionalString(authResult.user);
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -222,6 +225,7 @@ export async function attachAuthenticatedGatewayConnect(
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
+    ...(authenticatedUserId ? { authenticatedUserId } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -295,6 +299,12 @@ export async function attachAuthenticatedGatewayConnect(
     auth: authMethod,
   });
 
+  if (authenticatedUserId) {
+    logWsControl.info(
+      `authenticated user connected conn=${connId} user=${formatForLog(authenticatedUserId)}`,
+    );
+  }
+
   if (isWebchatConnect(connectParams)) {
     logWsControl.info(
       `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
@@ -314,6 +324,9 @@ export async function attachAuthenticatedGatewayConnect(
       roles: [role],
       scopes,
       instanceId: device?.id ?? instanceId,
+      ...(authenticatedUserId
+        ? { user: { id: authenticatedUserId, email: authenticatedUserId } }
+        : {}),
       reason: "connect",
     });
     incrementPresenceVersion();

@@ -41,6 +41,7 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     nextConfig: validated.config,
     baseHash: params.configSnapshot.hash,
     writeOptions: {
+      auditOrigin: "doctor",
       allowConfigSizeDrop: true,
       skipOutputLogs: params.jsonMode,
     },

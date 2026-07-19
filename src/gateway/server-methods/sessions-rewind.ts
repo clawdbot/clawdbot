@@ -7,6 +7,7 @@ import {
   validateSessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   forkSessionAtMessage,
@@ -21,7 +22,10 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import {
+  readSessionUpstreamLink,
+  type SessionUpstreamLink,
+} from "../../sessions/session-upstream-links.js";
 import {
   buildDashboardSessionKey,
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -41,6 +45,13 @@ type MessageCutAction = "fork" | "rewind" | "switch";
 
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
+
+function resolveUpstreamForkHarness(link: SessionUpstreamLink) {
+  const matches = listRegisteredAgentHarnesses().filter((entry) =>
+    entry.harness.sessionFork?.upstreamKinds.includes(link.upstreamKind),
+  );
+  return matches.length === 1 ? matches[0]?.harness.sessionFork : undefined;
+}
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": async (options) => {
@@ -179,7 +190,10 @@ async function mutateSessionAtMessage(
   }
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
-  if (readSessionUpstreamLink(initial.canonicalKey, initial.target.agentId)) {
+  const initialUpstreamLink = readSessionUpstreamLink(initial.canonicalKey, initial.target.agentId);
+  // Only fork may cross to an upstream-owned conversation (it creates a new thread).
+  // Rewind and switch would mutate the shared upstream history in place; fail closed.
+  if (initialUpstreamLink && action !== "fork") {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR));
     return;
   }
@@ -273,7 +287,8 @@ async function mutateSessionAtMessage(
         );
         return;
       }
-      if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {
+      const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
+      if (upstreamLink && action !== "fork") {
         respond(
           false,
           undefined,
@@ -293,30 +308,107 @@ async function mutateSessionAtMessage(
       }
       const targetKey =
         action === "fork" ? buildDashboardSessionKey(current.target.agentId) : current.canonicalKey;
-      const result = await (action === "fork"
-        ? forkSessionAtMessage({
-            agentId: current.target.agentId,
-            entryId,
-            sessionKey: current.canonicalKey,
-            sessionStoreKey: current.sessionStoreKey,
-            storePath: current.storePath,
-            targetKey,
-          })
-        : action === "rewind"
-          ? rewindSessionToMessage({
+      const upstreamForkHarness = upstreamLink
+        ? resolveUpstreamForkHarness(upstreamLink)
+        : undefined;
+      if (upstreamLink && !upstreamForkHarness) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR),
+        );
+        return;
+      }
+      const upstreamFork =
+        upstreamLink && upstreamForkHarness
+          ? await upstreamForkHarness.fork({
+              targetKey,
+              source: {
+                agentId: current.target.agentId,
+                sessionId: current.entry.sessionId,
+                sessionKey: current.canonicalKey,
+                storePath: current.storePath,
+                entryId,
+              },
+              upstream: {
+                catalogId: upstreamLink.catalogId,
+                hostId: upstreamLink.hostId,
+                kind: upstreamLink.upstreamKind,
+                threadId: upstreamLink.threadId,
+                ref: upstreamLink.upstreamRef,
+              },
+            })
+          : undefined;
+      if (upstreamFork?.status === "failed") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            upstreamFork.code === "upstream-unavailable"
+              ? ErrorCodes.UNAVAILABLE
+              : ErrorCodes.INVALID_REQUEST,
+            upstreamFork.message,
+            { details: { reason: upstreamFork.code } },
+          ),
+        );
+        return;
+      }
+      if (upstreamFork?.status === "created") {
+        // Canonical fork lineage stays upstream. Linked sessions intentionally do not enter
+        // the local branch graph; branch listing/switching remains rejected for them above.
+        respond(
+          true,
+          {
+            sessionKey: upstreamFork.key,
+            ...(upstreamFork.editorText !== undefined
+              ? { editorText: upstreamFork.editorText }
+              : {}),
+          },
+          undefined,
+        );
+        emitSessionsChanged(context, {
+          sessionKey: upstreamFork.key,
+          ...(upstreamFork.key === "global" && requestedAgent.agentId
+            ? { agentId: requestedAgent.agentId }
+            : {}),
+          reason: "fork",
+        });
+        return;
+      }
+      let result: SessionMessageCutMutationResult | SessionBranchSwitchMutationResult;
+      try {
+        result = await (action === "fork"
+          ? forkSessionAtMessage({
               agentId: current.target.agentId,
               entryId,
               sessionKey: current.canonicalKey,
               sessionStoreKey: current.sessionStoreKey,
               storePath: current.storePath,
+              targetKey,
             })
-          : switchSessionBranch({
-              agentId: current.target.agentId,
-              leafEntryId: entryId,
-              sessionKey: current.canonicalKey,
-              sessionStoreKey: current.sessionStoreKey,
-              storePath: current.storePath,
-            }));
+          : action === "rewind"
+            ? rewindSessionToMessage({
+                agentId: current.target.agentId,
+                entryId,
+                sessionKey: current.canonicalKey,
+                sessionStoreKey: current.sessionStoreKey,
+                storePath: current.storePath,
+              })
+            : switchSessionBranch({
+                agentId: current.target.agentId,
+                leafEntryId: entryId,
+                sessionKey: current.canonicalKey,
+                sessionStoreKey: current.sessionStoreKey,
+                storePath: current.storePath,
+              }));
+      } catch {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, `Failed to ${action} the local session. Try again.`),
+        );
+        return;
+      }
       if (result.status !== "created") {
         respondMessageCutError(result, action, entryId, respond);
         return;

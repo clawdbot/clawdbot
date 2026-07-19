@@ -1,6 +1,7 @@
 // Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  assertCodexThreadForkParams,
   readCodexModelListResponse,
   readCodexTurn,
   assertCodexThreadStartResponse,
@@ -49,6 +50,24 @@ describe("Codex thread response validators", () => {
       delete (response.thread as Record<string, unknown>).sessionId;
       expect(() => assertResponse(response)).toThrow("Invalid Codex app-server");
     }
+  });
+});
+
+describe("assertCodexThreadForkParams", () => {
+  it("accepts the experimental beforeTurnId boundary", () => {
+    expect(
+      assertCodexThreadForkParams({
+        threadId: "thread-1",
+        beforeTurnId: "turn-2",
+        excludeTurns: true,
+      }),
+    ).toMatchObject({ beforeTurnId: "turn-2" });
+  });
+
+  it("rejects a non-string beforeTurnId", () => {
+    expect(() => assertCodexThreadForkParams({ threadId: "thread-1", beforeTurnId: 2 })).toThrow(
+      "Invalid Codex app-server thread/fork params",
+    );
   });
 });
 

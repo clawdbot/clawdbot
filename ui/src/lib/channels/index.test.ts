@@ -131,6 +131,84 @@ describe("channels controller WhatsApp wait", () => {
   });
 });
 
+describe("channels controller WhatsApp logout", () => {
+  it("preserves login state when no stored session was cleared", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "channels.logout"
+        ? { cleared: false, loggedOut: false }
+        : createChannelsSnapshot("refreshed"),
+    );
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
+    channels.state.whatsappLoginMessage = "Scan this QR.";
+    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
+    channels.state.whatsappLoginConnected = true;
+
+    await channels.logoutWhatsApp("work");
+
+    expect(request).toHaveBeenCalledWith("channels.logout", {
+      channel: "whatsapp",
+      accountId: "work",
+    });
+    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
+    expect(channels.state.whatsappLoginMessage).toBe(
+      "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+    );
+    expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
+    expect(channels.state.whatsappLoginConnected).toBe(true);
+    expect(channels.state.whatsappBusy).toBe(false);
+    channels.dispose();
+  });
+
+  it("clears login state only when the Gateway confirms session clearance", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "channels.logout"
+        ? { cleared: true, loggedOut: true }
+        : createChannelsSnapshot("refreshed"),
+    );
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
+    channels.state.whatsappLoginMessage = "Scan this QR.";
+    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
+    channels.state.whatsappLoginConnected = true;
+
+    await channels.logoutWhatsApp();
+
+    expect(channels.state.whatsappLoginMessage).toBe("Logged out.");
+    expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
+    expect(channels.state.whatsappLoginConnected).toBeNull();
+    expect(channels.state.whatsappBusy).toBe(false);
+    channels.dispose();
+  });
+
+  it("reports a Gateway failure without discarding login state", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.logout") {
+        throw new Error("credential cleanup failed");
+      }
+      return createChannelsSnapshot("refreshed");
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
+    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
+    channels.state.whatsappLoginConnected = true;
+
+    await channels.logoutWhatsApp();
+
+    expect(channels.state.whatsappLoginMessage).toBe("Error: credential cleanup failed");
+    expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
+    expect(channels.state.whatsappLoginConnected).toBe(true);
+    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
+    channels.dispose();
+  });
+});
+
 describe("channel refresh sequencing", () => {
   it("keeps a stale slow probe from replacing a newer runtime snapshot", async () => {
     const slowProbe = createDeferred<ChannelsStatusSnapshot | null>();

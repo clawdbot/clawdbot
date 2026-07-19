@@ -230,7 +230,7 @@ async function defaultProxyValidationFetchCheck({
       dispatcher,
       redirect: "manual",
     });
-    void response.body?.cancel();
+    void response.body?.cancel().catch(() => undefined);
     return {
       ok: response.ok,
       status: response.status,

@@ -389,6 +389,12 @@ export type SessionEntry = SessionRestartRecoveryState &
       };
     };
     fastMode?: FastMode;
+    /** Swarm group for collector-mode child sessions. */
+    swarmGroupId?: string;
+    /** Marks non-interactive collector-mode child sessions. */
+    swarmCollector?: boolean;
+    /** JSON Schema exposed through the synthetic structured_output tool. */
+    swarmOutputSchema?: Record<string, unknown>;
     verboseLevel?: string;
     traceLevel?: string;
     reasoningLevel?: string;

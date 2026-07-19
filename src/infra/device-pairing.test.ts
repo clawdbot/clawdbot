@@ -494,6 +494,64 @@ describe("device pairing tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  test("caps trusted-proxy auto-approval for new devices and refuses repairs", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const initial = await requestDevicePairing(
+      {
+        deviceId: "browser-device-1",
+        publicKey: "public-key-browser-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    const approved = await approveDevicePairing(
+      initial.request.requestId,
+      {
+        callerScopes: ["operator.read"],
+        approvedVia: "trusted-proxy",
+        autoApproveNewDeviceScopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    expectRecordFields(approved, "trusted-proxy approved result", {
+      status: "approved",
+      requestId: initial.request.requestId,
+    });
+    expect(await getPairedDevice("browser-device-1", baseDir)).toMatchObject({
+      approvedScopes: ["operator.read"],
+      approvedVia: "trusted-proxy",
+    });
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "browser-device-1",
+        publicKey: "public-key-browser-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    await expect(
+      approveDevicePairing(
+        repair.request.requestId,
+        {
+          callerScopes: ["operator.read", "operator.write"],
+          approvedVia: "trusted-proxy",
+          autoApproveNewDeviceScopes: ["operator.read", "operator.write"],
+        },
+        baseDir,
+      ),
+    ).resolves.toBeNull();
+
+    expect((await listDevicePairing(baseDir)).pending).toContainEqual(
+      expect.objectContaining({ requestId: repair.request.requestId, isRepair: true }),
+    );
+    expect((await getPairedDevice("browser-device-1", baseDir))?.approvedScopes).toEqual([
+      "operator.read",
+    ]);
+  });
+
   test.each([
     {
       name: "node custom scope",

@@ -428,10 +428,10 @@ describe("native app i18n inventory", () => {
           entry.source === "Open Settings",
       ),
     ).toBe(true);
-    expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
+    expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);
     expect(
       entries.some(
-        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search sessions",
+        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search threads",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);

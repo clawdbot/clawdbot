@@ -595,7 +595,7 @@ private fun ApprovalsSettingsScreen(
       rows =
         listOf(
           SettingsMetric(nativeString("Gateway Pending"), execApprovals.size.toString()),
-          SettingsMetric(nativeString("Session Activity"), pendingToolCalls.size.toString()),
+          SettingsMetric(nativeString("Thread Activity"), pendingToolCalls.size.toString()),
           SettingsMetric(nativeString("Issues"), issueCount.toString()),
           SettingsMetric(nativeString("Active Runs"), pendingRunCount.toString()),
         ),
@@ -637,8 +637,8 @@ private fun ApprovalsSettingsScreen(
       )
     }
     if (pendingToolCalls.isNotEmpty()) {
-      Text(text = nativeString("Session activity"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = nativeString("Chat tool calls waiting in the active session remain visible here."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      Text(text = nativeString("Thread activity"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = nativeString("Chat tool calls waiting in the active thread remain visible here."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       SessionToolCallsPanel(toolCalls = pendingToolCalls)
     }
   }
@@ -2325,7 +2325,7 @@ private fun AboutStatusRow(
 /** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
-    nativeString("OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.")
+    nativeString("OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.")
   } else {
     nativeString("A Gateway update is available. Run the update from the Web UI or CLI when you are ready.")
   }

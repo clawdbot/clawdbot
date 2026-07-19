@@ -183,6 +183,10 @@ main session are either suppressed or reported through a safe direct route when 
 - If a caller explicitly requests strict external delivery with no resolvable external channel, the request fails with `INVALID_REQUEST`.
 - If `bestEffortDeliver` is enabled and no external channel can be resolved, delivery is downgraded to session-only instead of failing.
 
+## Minimal scopes for third-party clients
+
+Gateway approval resolution is guarded by the dedicated `operator.approvals` scope. This applies to both the owner-specific `exec.approval.resolve` method and the kind-agnostic `approval.resolve` method; `operator.write` does not subsume it. Dashboards and integrations should request only the scopes required by the methods they use. Treat approval-resolution access as remote-execution-grade authority and grant `operator.approvals` deliberately, even when the client only presents a small approval UI.
+
 ## Approval forwarding to chat channels
 
 You can forward exec approval prompts to any chat channel (including plugin channels) and approve

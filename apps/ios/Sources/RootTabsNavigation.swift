@@ -66,7 +66,7 @@ extension RootTabs {
             case .workboard: String(localized: "Workboard")
             case .skillWorkshop: String(localized: "Skill Workshop")
             case .instances: String(localized: "Instances")
-            case .sessions: String(localized: "Sessions")
+            case .sessions: String(localized: "Threads")
             case .files: String(localized: "Files")
             case .dreaming: String(localized: "Dreaming")
             case .usage: String(localized: "Usage")

@@ -243,6 +243,23 @@ export type CodeModeConfig =
       maxSearchLimit?: number;
     };
 
+export type SwarmConfig =
+  | boolean
+  | {
+      /** Enable collector-mode subagents and agents_wait. Default: false. */
+      enabled?: boolean;
+      /** Maximum concurrently running collector children per swarm group. */
+      maxConcurrent?: number;
+      /** Maximum live collector children per swarm group. */
+      maxChildrenPerGroup?: number;
+      /** Maximum lifetime collector spawns per swarm group. */
+      maxTotalPerGroup?: number;
+      /** Maximum agents_wait timeout in seconds. */
+      waitTimeoutSecondsMax?: number;
+      /** Default child agent id when sessions_spawn omits agentId. */
+      defaultAgentId?: string;
+    };
+
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
@@ -408,6 +425,8 @@ export type AgentToolsConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
   codeMode?: CodeModeConfig;
+  /** Per-agent swarm override; merges over the top-level tools.swarm config. */
+  swarm?: SwarmConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -727,6 +746,8 @@ export type ToolsConfig = {
   toolSearch?: ToolSearchConfig;
   /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
   codeMode?: CodeModeConfig;
+  /** Collector-mode subagents and wait controls. */
+  swarm?: SwarmConfig;
   /** sessions_spawn tool configuration. */
   sessions_spawn?: SessionsSpawnToolsConfig;
   /** Sub-agent tool policy defaults (deny wins). */

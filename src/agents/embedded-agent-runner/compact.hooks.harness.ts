@@ -211,6 +211,10 @@ export const buildEmbeddedSystemPromptMock = vi.fn(() => "");
 export const resolveEmbeddedAgentStreamFnMock: Mock<
   (params?: unknown) => MockEmbeddedAgentStreamFn
 > = vi.fn((_params?: unknown) => vi.fn());
+const getModelRegistryRuntimeMock = vi.fn(() => ({
+  apiRegistry: {},
+  llmRuntime: { streamSimple: vi.fn() },
+}));
 export const getApiKeyForModelMock: Mock<
   (params?: { profileId?: string; allowAuthProfileFallback?: boolean }) => Promise<{
     apiKey: string;
@@ -460,6 +464,11 @@ export function resetCompactSessionStateMocks(): void {
   }));
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  getModelRegistryRuntimeMock.mockReset();
+  getModelRegistryRuntimeMock.mockReturnValue({
+    apiRegistry: {},
+    llmRuntime: { streamSimple: vi.fn() },
+  });
   getApiKeyForModelMock.mockReset();
   getApiKeyForModelMock.mockImplementation(async (params?: { profileId?: string }) => ({
     apiKey: "test",
@@ -692,6 +701,10 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../provider-stream.js", () => ({
     registerProviderStreamForModel: registerProviderStreamForModelMock,
+  }));
+
+  vi.doMock("../sessions/model-registry-runtime.js", () => ({
+    getModelRegistryRuntime: getModelRegistryRuntimeMock,
   }));
 
   vi.doMock("../../hooks/internal-hooks.js", async () => {

@@ -39,7 +39,6 @@ import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
@@ -114,8 +113,8 @@ internal fun retainRefusedAssistantPrompt(
 data class ChatShareDraft(
   val id: Long,
   val text: String?,
-  val imageUris: List<Uri>,
-  val droppedImageCount: Int,
+  val attachments: List<SharedAttachment>,
+  val droppedAttachmentCount: Int,
 )
 
 internal const val MAX_PENDING_CHAT_SHARES = 16
@@ -925,15 +924,17 @@ class MainViewModel private constructor(
   }
 
   /** Opens shared content as a fresh composer draft; sending still requires an explicit tap. */
-  fun handleShareLaunch(request: ShareLaunchRequest): Boolean {
-    val owner = currentOrProvisionalChatComposerOwner()
+  internal fun handleShareLaunch(
+    request: ShareLaunchRequest,
+    owner: ChatComposerOwner,
+  ): Boolean {
     val accepted =
       chatShareDraftQueue.enqueue(
         ChatShareDraft(
           id = chatShareDraftSeq.incrementAndGet(),
           text = request.text,
-          imageUris = request.imageUris,
-          droppedImageCount = request.droppedImageCount,
+          attachments = request.attachments,
+          droppedAttachmentCount = request.droppedAttachmentCount,
         ),
         owner,
       )
@@ -1586,6 +1587,8 @@ class MainViewModel private constructor(
         sessionKey = chatSessionKey.value,
         mainSessionKey = mainSessionKey.value,
       )
+
+  internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
 
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
     (

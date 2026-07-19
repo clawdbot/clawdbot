@@ -7,6 +7,12 @@ scenario:
     primary:
       - channels.access-policy
   objective: Verify dmPolicy disabled rejects direct messages.
+  gatewayConfigPatch:
+    channels:
+      whatsapp:
+        accounts:
+          $selectedAccount:
+            dmPolicy: disabled
   successCriteria:
     - The direct message produces no outbound reply.
   docsRefs:
@@ -19,8 +25,6 @@ scenario:
     suiteIsolation: isolated
     summary: Verify WhatsApp dmPolicy disabled behavior through the canonical adapter.
     config:
-      policyKey: dmPolicy
-      policyValue: disabled
       conversationKind: direct
       conversationId: 15550000001@s.whatsapp.net
       senderId: 15550000002@s.whatsapp.net
@@ -37,11 +41,6 @@ flow:
           args: [{ ref: env }, 60000]
         - call: waitForTransportReady
           args: [{ ref: env }, 60000]
-        - call: patchConfig
-          args:
-            - env: { ref: env }
-              patch:
-                expr: "({ channels: { whatsapp: { [config.policyKey]: config.policyValue, ...(env.transport.accountId === 'default' ? {} : { accounts: { [env.transport.accountId]: { [config.policyKey]: config.policyValue } } }) } } })"
         - resetTransport: true
         - set: marker
           value:

@@ -12,10 +12,6 @@ const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
 
-vi.mock("../../llm/stream.js", () => ({
-  streamSimple: streamMocks.streamSimple,
-}));
-
 import type { AgentTool } from "../runtime/index.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
@@ -172,6 +168,11 @@ async function createTestSession(
       retry: { enabled: false },
     });
   const sessionManager = options.sessionManager ?? SessionManager.inMemory();
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  modelRegistry.registerProvider(model.provider, {
+    api: model.api,
+    streamSimple: streamMocks.streamSimple,
+  });
   const result = await createAgentSession({
     model,
     noTools: "builtin",
@@ -179,7 +180,7 @@ async function createTestSession(
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
-    modelRegistry: ModelRegistry.inMemory(authStorage),
+    modelRegistry,
   });
   sessions.push(result.session);
   return { ...result, settingsManager, sessionManager };

@@ -188,6 +188,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       return resolvedDefaultThinkingLevel;
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
+    // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
+    const thinkingCatalog = await loadModelCatalog({ config: params.cfg, readOnly: true });
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
@@ -203,6 +205,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           provider: params.provider,
           model: params.model,
           workspaceDir: params.workspaceDir,
+          thinkingCatalog,
           resolvedThinkLevel,
           resolvedVerboseLevel: "off",
           resolvedReasoningLevel: "off",
@@ -315,6 +318,14 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: true, reply: markCommandReplyForDelivery(directiveResult.reply) };
   }
 
+  const shouldPrepareStatusThinkingCatalog =
+    directiveResult.result.inlineStatusRequested ||
+    directiveResult.result.directives.hasStatusDirective ||
+    directiveResult.result.command.commandBodyNormalized.trim() === "/status";
+  const thinkingCatalog = shouldPrepareStatusThinkingCatalog
+    ? await directiveResult.result.modelState.resolveThinkingCatalog()
+    : undefined;
+
   const inlineActionResult = await handleInlineActions({
     ctx: params.ctx,
     sessionCtx: sessionState.sessionCtx,
@@ -345,6 +356,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     elevatedAllowed: directiveResult.result.elevatedAllowed,
     elevatedFailures: directiveResult.result.elevatedFailures,
     defaultActivation: () => directiveResult.result.defaultActivation,
+    thinkingCatalog,
     resolvedThinkLevel: directiveResult.result.resolvedThinkLevel,
     resolvedVerboseLevel: directiveResult.result.resolvedVerboseLevel,
     resolvedReasoningLevel: directiveResult.result.resolvedReasoningLevel,

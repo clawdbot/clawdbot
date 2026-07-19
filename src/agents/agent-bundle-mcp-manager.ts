@@ -21,6 +21,7 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import { revokeMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
   buildMcpRequesterRuntimeCacheKey,
   partitionMcpServersByConnectionScope,
@@ -303,6 +304,14 @@ export function createSessionMcpRuntimeManager(
       await lifecycle.disposeManagedSession(sessionId);
     },
     deferRetirement(sessionId, retirementOpts) {
+      if (retirementOpts?.retainAcrossReuse === true) {
+        for (const runtimeKey of lifecycle.runtimeKeysForSessionId(sessionId)) {
+          const runtime = store.runtimesBySessionId.get(runtimeKey);
+          if (runtime) {
+            revokeMcpAppModelContext(runtime);
+          }
+        }
+      }
       if (retirementOpts?.retainAcrossReuse === true) {
         store.requiredRetirementSessionIds.add(sessionId);
       } else {

@@ -846,7 +846,7 @@ private struct MacChatSurface: View {
         .init(
             id: "catch-up",
             title: String(localized: "Catch me up"),
-            prompt: String(localized: "Summarize what happened in my sessions since yesterday.")),
+            prompt: String(localized: "Summarize what happened in my threads since yesterday.")),
     ]
 
     #if DEBUG

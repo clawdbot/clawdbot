@@ -4,6 +4,7 @@
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -45,6 +46,7 @@ export function searchSessionTranscripts(params: {
   limit?: number;
   query: string;
   sessionKeys?: string[];
+  storePath?: string;
 }): SessionTranscriptSearchResult {
   const query = params.query.trim();
   if (!query) {
@@ -53,14 +55,20 @@ export function searchSessionTranscripts(params: {
   if (query.length > SEARCH_QUERY_MAX_CHARS) {
     throw new Error(`query must not exceed ${SEARCH_QUERY_MAX_CHARS} characters`);
   }
+  const databasePath = params.storePath
+    ? resolveSqliteTargetFromSessionStorePath(params.storePath, {
+        agentId: params.agentId,
+      }).path
+    : undefined;
   const databaseOptions = {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
+    ...(databasePath ? { path: databasePath } : {}),
   };
   const database = openOpenClawAgentDatabase(databaseOptions);
   const dirtySessions = listSessionsNeedingTranscriptIndexReconcile(database.db);
   if (dirtySessions.length > 0) {
-    startSessionTranscriptIndexReconcile(params);
+    startSessionTranscriptIndexReconcile(databaseOptions);
   }
   const indexing =
     dirtySessions.length > 0 || isSessionTranscriptIndexReconcileRunning(databaseOptions);

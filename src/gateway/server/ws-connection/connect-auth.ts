@@ -80,6 +80,7 @@ export async function authenticateGatewayConnect(
     sendHandshakeErrorResponse,
   } = context;
   const resolvedAuth = getResolvedAuth();
+  const hasRequestedScopes = Array.isArray(connectParams.scopes);
   const admission = await admitGatewayConnect(context);
   if (!admission) {
     return undefined;
@@ -457,6 +458,7 @@ export async function authenticateGatewayConnect(
     usesLegacyNodeProtocol,
     role,
     scopes,
+    hasRequestedScopes,
     isControlUi,
     isBrowserOperatorUi,
     isWebchat,

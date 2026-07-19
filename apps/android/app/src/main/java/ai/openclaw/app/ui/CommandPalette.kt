@@ -92,7 +92,7 @@ internal fun CommandPalette(
     listOf(
       CommandItem(CommandAction.Chat, nativeText("Open Chat"), nativeText("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline, onOpenChat),
       CommandItem(CommandAction.Voice, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone, onOpenVoice),
-      CommandItem(CommandAction.Sessions, nativeText("Browse Sessions"), nativeText("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
+      CommandItem(CommandAction.Sessions, nativeText("Browse Threads"), nativeText("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
       CommandItem(CommandAction.Providers, nativeText("Providers & Models"), verbatimText(providerCommandSubtitle(isConnected, providers, models)), Icons.Outlined.Inventory2, onOpenProviders),
       CommandItem(CommandAction.Settings, nativeText("Settings"), nativeText("Gateway, voice, notifications, privacy"), Icons.Outlined.Settings, onOpenSettings),
     )
@@ -143,7 +143,7 @@ internal fun CommandPalette(
 
         if (actionRows.isEmpty()) {
           item {
-            ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Sessions, Providers, or Settings."))
+            ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Threads, Providers, or Settings."))
           }
         } else {
           item {
@@ -152,14 +152,14 @@ internal fun CommandPalette(
         }
 
         item {
-          CommandSectionLabel(title = nativeString("Sessions"))
+          CommandSectionLabel(title = nativeString("Threads"))
         }
 
         if (sessionRows.isEmpty()) {
           item {
             ClawPanel {
               Text(
-                text = if (isConnected) nativeString("No matching sessions yet.") else nativeString("Connect the Gateway to search sessions."),
+                text = if (isConnected) nativeString("No matching threads yet.") else nativeString("Connect the Gateway to search threads."),
                 style = ClawTheme.type.body,
                 color = ClawTheme.colors.textMuted,
               )
@@ -174,7 +174,7 @@ internal fun CommandPalette(
                     key = session.key,
                     ownerAgentId = session.ownerAgentId,
                     title = commandSessionTitle(session.displayName),
-                    subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw session"),
+                    subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw thread"),
                     metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: nativeString("now"),
                   )
                 },
@@ -307,7 +307,7 @@ private fun CommandSessionListRow(
         Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      CommandRowChevron(contentDescription = nativeString("Open session"))
+      CommandRowChevron(contentDescription = nativeString("Open thread"))
     }
   }
 }
@@ -374,7 +374,7 @@ internal fun providerCommandSubtitle(
 }
 
 /** Falls back to the canonical main-session label when gateway display names are blank. */
-private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")
+private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
 
 /** Formats command-palette session timestamps for compact rows. */
 internal fun commandRelativeTime(

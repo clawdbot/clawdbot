@@ -143,6 +143,7 @@ vi.mock("./subagent-announce-origin.js", () => ({
 vi.mock("./subagent-registry-steer-runtime.js", () => ({
   replaceSubagentRunAfterSteer: vi.fn(() => true),
   finalizeInterruptedSubagentRun: vi.fn(async () => 1),
+  reserveSwarmCollectorLaunch: vi.fn(() => true),
 }));
 
 function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -233,7 +234,7 @@ describe("subagent-orphan-recovery", () => {
     vi.restoreAllMocks();
   });
 
-  it("recovers orphaned sessions with abortedLastRun=true", async () => {
+  it("recovers orphaned collectors with their non-interactive output contract", async () => {
     const sessionEntry = {
       sessionId: "session-abc",
       updatedAt: Date.now(),
@@ -244,7 +245,10 @@ describe("subagent-orphan-recovery", () => {
       "agent:main:subagent:test-session-1": sessionEntry,
     });
 
-    const run = createTestRunRecord();
+    const run = createTestRunRecord({
+      collect: true,
+      outputSchema: { type: "object", required: ["answer"] },
+    });
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", run);
 
@@ -266,6 +270,12 @@ describe("subagent-orphan-recovery", () => {
     expect(opts.sessionKey).toBe("agent:main:subagent:test-session-1");
     expect(opts.message).toContain("gateway reload");
     expect(opts.message).toContain("Test task: implement feature X");
+    expect(opts.swarmCollector).toBe(true);
+    expect(opts.swarmOutputSchema).toEqual({ type: "object", required: ["answer"] });
+    expect(subagentRegistrySteerRuntime.reserveSwarmCollectorLaunch).toHaveBeenCalledWith(
+      "run-1",
+      opts.idempotencyKey,
+    );
     expect(dispatchAgent.mock.calls[0]?.[1]).toBe(10_000);
     expect(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledOnce();
     const replaceParams = requireRecord(

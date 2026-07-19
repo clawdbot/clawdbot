@@ -109,6 +109,7 @@ type ProcessGatewayAllowlistParams = {
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
   approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -708,6 +709,23 @@ export async function processGatewayAllowlist(
     );
   }
   if (requiresAsk) {
+    if (params.nonInteractiveApproval) {
+      const text = `Exec denied (approval_required): ${params.command}`;
+      return {
+        deniedResult: {
+          content: [{ type: "text", text }],
+          details: {
+            status: "failed",
+            exitCode: null,
+            failureKind: "approval_required",
+            durationMs: 0,
+            aggregated: text,
+            timedOut: false,
+            cwd: params.workdir,
+          },
+        },
+      };
+    }
     const [autoReviewSegment] = allowlistEval.segments;
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&

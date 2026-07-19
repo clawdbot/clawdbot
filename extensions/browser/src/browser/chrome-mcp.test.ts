@@ -1594,10 +1594,19 @@ describe("chrome MCP page parsing", () => {
       title: "",
       url: "https://example.com/",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "explicit-cdp-url-required",
+      },
     });
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
-    expect(calls.map(([call]) => call.name)).toEqual(["new_page", "navigate_page", "list_pages"]);
-    expect(calls[2]?.[2]?.timeout).toBe(25_000);
+    expect(calls.map(([call]) => call.name)).toEqual([
+      "list_pages",
+      "new_page",
+      "navigate_page",
+      "list_pages",
+    ]);
+    expect(calls[3]?.[2]?.timeout).toBe(25_000);
   });
 
   it("opens about:blank directly without an extra navigate", async () => {
@@ -1612,6 +1621,10 @@ describe("chrome MCP page parsing", () => {
       title: "",
       url: "about:blank",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "explicit-cdp-url-required",
+      },
     });
     expect(session.client["callTool"]).toHaveBeenCalledWith({
       name: "new_page",
@@ -1619,7 +1632,7 @@ describe("chrome MCP page parsing", () => {
     });
     const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
     const callNames = callToolMock.mock.calls.map(([call]) => call.name);
-    expect(callNames).toEqual(["new_page"]);
+    expect(callNames).toEqual(["list_pages", "new_page"]);
   });
 
   it("preserves unrelated targets and refs when new_page returns only the created page", async () => {
@@ -1667,7 +1680,7 @@ describe("chrome MCP page parsing", () => {
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls.map(
       ([call]) => call.name,
     );
-    expect(calls).toEqual(["list_pages", "take_snapshot", "new_page", "click"]);
+    expect(calls).toEqual(["list_pages", "take_snapshot", "list_pages", "new_page", "click"]);
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {

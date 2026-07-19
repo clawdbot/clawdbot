@@ -1603,7 +1603,6 @@ describe("CLI attempt execution", () => {
       userInput: {
         text: "",
         media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
-        mediaOnlyText: "[User sent media without caption]",
       },
       finalText: "",
       sessionId: sessionEntry.sessionId,
@@ -1627,9 +1626,11 @@ describe("CLI attempt execution", () => {
     ).toContainEqual(
       expect.objectContaining({
         role: "user",
-        content: "[User sent media without caption]",
+        content: "",
         MediaPath: "/media/inbound/image-1.png",
+        MediaPaths: ["/media/inbound/image-1.png"],
         MediaType: "image/png",
+        MediaTypes: ["image/png"],
       }),
     );
   });

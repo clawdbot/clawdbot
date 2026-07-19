@@ -18,6 +18,7 @@ type AgentSelectElement = HTMLElement & {
   authToken: string | null;
   disabled: boolean;
   onSelect: (agentId: string) => void;
+  onCreateAgent: () => void;
   updateComplete: Promise<boolean>;
 };
 
@@ -351,7 +352,7 @@ it("renders the agent picker as a Web Awesome dropdown", async () => {
     const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
     const options = Array.from(
       element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
-        "wa-dropdown-item",
+        "wa-dropdown-item[data-agent-id]",
       ),
     );
     expect(dropdown).not.toBeNull();
@@ -419,12 +420,28 @@ it("selects a different agent and ignores the already-selected agent", async () 
   }
 });
 
-it("renders a disabled trigger with the empty-state label", async () => {
+it("opens the new-agent flow from the footer item", async () => {
+  const onCreateAgent = vi.fn();
+  const element = await createAgentSelect({ onCreateAgent });
+
+  try {
+    const item = element.querySelector("[data-create-agent]");
+    element
+      .querySelector("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+
+    expect(onCreateAgent).toHaveBeenCalledOnce();
+  } finally {
+    element.remove();
+  }
+});
+
+it("keeps the new-agent footer reachable with an empty roster", async () => {
   const element = await createAgentSelect({ agents: [], selectedId: null });
 
   try {
     const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    expect(trigger?.disabled).toBe(true);
+    expect(trigger?.disabled).toBe(false);
     expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe("No agents");
   } finally {
     element.remove();

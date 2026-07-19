@@ -5,7 +5,6 @@ import {
   createFixedWindowRateLimiter,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   readTwilioWebhookForm,
   respondTwiml,
@@ -43,7 +42,6 @@ export type SmsWebhookHandlerParams = {
   account: ResolvedSmsAccount;
   ingress: {
     enqueue: (form: Record<string, string>) => Promise<{ duplicate: boolean }>;
-    drainOnce: () => Promise<void>;
   };
   log?: SmsWebhookLog;
 };
@@ -143,12 +141,8 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     if (verdict.duplicate) {
       params.log?.warn?.(`SMS webhook ignored replayed message ${messageSid}`);
     }
-    // Reserve detached work under HTTP admission; it only pumps the durable drain.
-    void runDetachedWebhookWork(() => params.ingress.drainOnce()).catch((err: unknown) => {
-      params.log?.error?.(
-        `SMS ingress drain failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
+    // Durable admission also reserves the monitor pump under this HTTP request's
+    // detached work root, so the response can acknowledge immediately after commit.
     respondTwiml(res, 200);
     return true;
   };

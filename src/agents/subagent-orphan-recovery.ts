@@ -33,6 +33,7 @@ import {
 import {
   finalizeInterruptedSubagentRun,
   replaceSubagentRunAfterSteer,
+  reserveSwarmCollectorLaunch,
 } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
@@ -167,6 +168,12 @@ async function resumeOrphanedSession(params: {
 
   try {
     const idempotencyKey = crypto.randomUUID();
+    if (
+      params.originalRun.collect === true &&
+      !reserveSwarmCollectorLaunch(params.originalRunId, idempotencyKey)
+    ) {
+      return { resumed: false, error: "failed to reserve collector recovery launch" };
+    }
     const result = await params.gatewayRuntime.dispatchAgent<{ runId: string }>(
       {
         message: resumeMessage,
@@ -174,6 +181,12 @@ async function resumeOrphanedSession(params: {
         idempotencyKey,
         deliver: false,
         lane: "subagent",
+        ...(params.originalRun.collect
+          ? {
+              swarmCollector: true,
+              swarmOutputSchema: params.originalRun.outputSchema,
+            }
+          : {}),
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: params.originalRun.requesterSessionKey,

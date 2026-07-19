@@ -181,9 +181,9 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
+export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
-    return;
+    return true;
   }
 
   const resolveReal = async (targetPath: string): Promise<string | null> => {
@@ -203,17 +203,18 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
       resolveReal(entry.attachmentsDir),
     ]);
     if (!dirReal) {
-      return;
+      return true;
     }
 
     const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
     const dirBase = dirReal;
     if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
-      return;
+      return false;
     }
     await fs.rm(dirBase, { recursive: true, force: true });
+    return true;
   } catch {
-    // best effort
+    return false;
   }
 }
 

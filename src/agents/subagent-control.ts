@@ -651,6 +651,14 @@ export async function steerControlledSubagentRun(params: {
       error: ownershipError,
     };
   }
+  if (params.entry.collect) {
+    return {
+      status: "forbidden",
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      error: "Collector subagents cannot be steered; use agents_wait or cancel the task.",
+    };
+  }
   if (params.controller.controlScope !== "children") {
     return {
       status: "forbidden",
@@ -834,6 +842,12 @@ export async function sendControlledSubagentMessage(params: {
   });
   if (ownershipError) {
     return { status: "forbidden" as const, error: ownershipError };
+  }
+  if (params.entry.collect) {
+    return {
+      status: "forbidden" as const,
+      error: "Collector subagents cannot receive follow-up messages; use agents_wait.",
+    };
   }
   if (params.controller.controlScope !== "children") {
     return {

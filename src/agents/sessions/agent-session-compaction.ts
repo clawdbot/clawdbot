@@ -1,5 +1,4 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
   calculateContextTokens,
@@ -14,6 +13,7 @@ import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
@@ -109,7 +109,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     | undefined
   > {
-    if (this.agent.streamFn !== streamSimple) {
+    if (
+      this.agent.streamFn !==
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+    ) {
       return this.getCompactionRequestAuth(model);
     }
 

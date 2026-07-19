@@ -88,6 +88,10 @@ function describeDeviceError(error: unknown, kind: RealtimeTalkDeviceKind): stri
   );
 }
 
+export function describeRealtimeTalkInputError(error: unknown): string {
+  return describeDeviceError(error, "audioinput");
+}
+
 async function discoverRealtimeTalkDevices(
   requestPermission: boolean,
   kind: RealtimeTalkDeviceKind,

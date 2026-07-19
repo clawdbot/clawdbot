@@ -13,6 +13,7 @@ import { resolveSimpleCompletionModelResolverWorkspace } from "../../agents/simp
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -23,6 +24,10 @@ import {
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
+
+vi.mock("../../agents/sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (owner: unknown) => owner,
+}));
 
 type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
@@ -172,7 +177,6 @@ function setup(entry: SessionEntry = sessionEntry) {
     authProfile?: string;
     catalogWorkspace?: string;
     prepareWorkspace?: string;
-    registerStream?: boolean;
   } = {};
   const resolveModel = vi.fn<Deps["resolveModel"]>(
     async (_provider, _model, _dir, _cfg, options) => {
@@ -185,8 +189,12 @@ function setup(entry: SessionEntry = sessionEntry) {
       modelParams.modelResolver,
     );
     await modelParams.modelResolver?.(PROVIDER, MODEL, modelParams.agentDir, modelParams.cfg, {});
+    const apiRegistry = {};
     return {
-      model: logicalModel,
+      model: bindModelLlmRuntime(logicalModel, {
+        registry: apiRegistry,
+        streamSimple: fallbackStream,
+      } as never),
       auth: {
         apiKey: AUTH_MARKER,
         profileId: PROFILE,
@@ -201,8 +209,7 @@ function setup(entry: SessionEntry = sessionEntry) {
   const loadManifestSnapshot = vi.fn(
     () => ({ plugins: [] }) as unknown as ReturnType<Deps["loadManifestSnapshot"]>,
   );
-  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>((streamParams) => {
-    scope.registerStream = streamParams.registerStream;
+  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => {
     return stream;
   });
   const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
@@ -238,7 +245,6 @@ function setup(entry: SessionEntry = sessionEntry) {
     resolveProviderStream,
     resolveStream,
     applyStreamPolicy,
-    stream: fallbackStream,
     wrapStream: vi.fn((streamFn: StreamFn) => streamFn),
     createTrace: vi.fn(() => ({ traceId: "1".repeat(32), spanId: "2".repeat(16) })),
   };
@@ -364,7 +370,6 @@ describe("worker inference provider runtime", () => {
       authProfile: PROFILE,
       catalogWorkspace: WORKSPACE,
       prepareWorkspace: WORKSPACE,
-      registerStream: false,
     });
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];
     expect(streamModel).toMatchObject({ baseUrl: ENDPOINT });

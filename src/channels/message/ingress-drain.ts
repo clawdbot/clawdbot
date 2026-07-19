@@ -4,7 +4,7 @@
  * Owns claim recovery, per-lane serialization, adoption-time complete, retry /
  * dead-letter disposition, pre-adoption stall watchdog, and optional supersede.
  */
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
@@ -228,6 +228,23 @@ export function createChannelIngressDrain<
       state.claimRefreshTimer = undefined;
     }
   };
+
+  const abortActiveClaims = () => {
+    // Retire before abort so replacements recover; Set.delete makes disposal repeat safe.
+    // Claim-token fencing prevents this owner from settling a recovered claim.
+    deregisterLiveIngressDrainInstance(ownerId);
+    const reason = toErrorObject(options.abortSignal?.reason, "ingress-drain-aborted");
+    for (const state of activeByLane.values()) {
+      if (state.phase === "dispatching" || state.phase === "deferred") {
+        state.abortController.abort(reason);
+      }
+    }
+  };
+  if (options.abortSignal?.aborted) {
+    abortActiveClaims();
+  } else {
+    options.abortSignal?.addEventListener("abort", abortActiveClaims, { once: true });
+  }
 
   const removeActive = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     clearStallTimer(state);
@@ -811,6 +828,7 @@ export function createChannelIngressDrain<
     },
     dispose: () => {
       disposed = true;
+      options.abortSignal?.removeEventListener("abort", abortActiveClaims);
       deregisterLiveIngressDrainInstance(ownerId);
       // Snapshot: removeActive mutates activeByLane during this sweep.
       const activeStates = Array.from(activeByLane.values());

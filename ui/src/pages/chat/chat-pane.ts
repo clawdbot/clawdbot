@@ -2852,6 +2852,8 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkVideoPending: state.realtimeTalkVideoPending,
       realtimeTalkCameraError: state.realtimeTalkCameraError,
       connected: state.connected,
+      gatewayClient: state.client,
+      composerHoldToRecord: state.settings.composerHoldToRecord,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledActionLabel:
@@ -2982,6 +2984,11 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state as never);
+        state.requestUpdate?.();
+      },
+      onDictationError: (message) => {
+        state.lastError = message;
+        state.chatError = message;
         state.requestUpdate?.();
       },
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),

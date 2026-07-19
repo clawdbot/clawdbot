@@ -183,10 +183,10 @@ internal fun SessionsScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Text(text = nativeString("Sessions"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          Text(text = nativeString("Threads"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
             icon = Icons.Default.Search,
-            contentDescription = nativeString("Focus session search"),
+            contentDescription = nativeString("Focus thread search"),
             onClick = {
               searchFocusRequester.requestFocus()
               keyboardController?.show()
@@ -208,12 +208,12 @@ internal fun SessionsScreen(
           value = searchText,
           onValueChange = { searchText = it },
           modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
-          placeholder = { Text(text = nativeString("Search sessions"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+          placeholder = { Text(text = nativeString("Search threads"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
           singleLine = true,
           trailingIcon = {
             if (searchText.isNotEmpty()) {
               IconButton(onClick = { searchText = "" }) {
-                Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Clear session search"))
+                Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Clear thread search"))
               }
             }
           },
@@ -282,7 +282,7 @@ internal fun SessionsScreen(
               }
             }
           }
-          SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = nativeString("Toggle session layout"), onClick = { compactLayout = !compactLayout })
+          SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = nativeString("Toggle thread layout"), onClick = { compactLayout = !compactLayout })
         }
       }
 
@@ -297,10 +297,10 @@ internal fun SessionsScreen(
             contentAlignment = Alignment.Center,
           ) {
             when (sessionEmptyMode(searchQuery, searchLoading)) {
-              SessionEmptyMode.SearchLoading -> ClawLoadingState(title = nativeString("Searching sessions"))
+              SessionEmptyMode.SearchLoading -> ClawLoadingState(title = nativeString("Searching threads"))
               SessionEmptyMode.SearchNoMatches ->
                 ClawEmptyState(
-                  title = nativeString("No matching sessions"),
+                  title = nativeString("No matching threads"),
                   body = nativeString("Try a different search or clear the current query."),
                   action = { ClawPrimaryButton(text = nativeString("Clear Search"), onClick = { searchText = "" }) },
                 )
@@ -339,7 +339,7 @@ internal fun SessionsScreen(
             SessionRow(
               session = session,
               title = displaySessionTitle(session),
-              subtitle = if (active) nativeString("Current session") else nativeString("OpenClaw session"),
+              subtitle = if (active) nativeString("Current thread") else nativeString("OpenClaw thread"),
               metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: nativeString("now"),
               active = active,
               compact = compactLayout,
@@ -394,7 +394,7 @@ internal fun SessionsScreen(
 
   renameSessionTarget?.let { session ->
     SessionTextDialog(
-      title = nativeString("Rename session"),
+      title = nativeString("Rename thread"),
       stateKey = session.stateKey,
       initialValue = session.label ?: session.displayName.orEmpty(),
       confirmLabel = nativeString("Rename"),
@@ -474,7 +474,7 @@ internal fun SessionsScreen(
       onDismissRequest = { deleteGroupName = null },
       containerColor = ClawTheme.colors.surfaceRaised,
       title = { Text(nativeString("Delete group?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("Sessions in \"\$group\" are kept and move back to Ungrouped.", group), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      text = { Text(nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
       confirmButton = {
         TextButton(
           onClick = {
@@ -497,8 +497,8 @@ internal fun SessionsScreen(
     AlertDialog(
       onDismissRequest = { deleteSessionTarget = null },
       containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text(nativeString("Delete session?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("This permanently deletes the session and its transcript."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      title = { Text(nativeString("Delete thread?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = { Text(nativeString("This permanently deletes the thread and its transcript."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
       confirmButton = {
         TextButton(
           onClick = {
@@ -955,17 +955,17 @@ internal fun sessionEmptyMode(
 /** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
-    SessionFilter.Recent -> nativeString("No sessions yet")
-    SessionFilter.Current -> nativeString("No current session")
-    SessionFilter.Archived -> nativeString("No archived sessions")
+    SessionFilter.Recent -> nativeString("No threads yet")
+    SessionFilter.Current -> nativeString("No current thread")
+    SessionFilter.Archived -> nativeString("No archived threads")
   }
 
 /** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
-    SessionFilter.Current -> nativeString("Open Chat to start or resume the current session.")
-    SessionFilter.Archived -> nativeString("Archived sessions will show up here.")
+    SessionFilter.Current -> nativeString("Open Chat to start or resume the current thread.")
+    SessionFilter.Archived -> nativeString("Archived threads will show up here.")
   }
 
 /** Formats session timestamps for compact mobile metadata. */
@@ -987,4 +987,4 @@ internal fun relativeSessionTime(
 private fun displaySessionTitle(session: ChatSessionEntry): String =
   session.label?.takeIf { it.isNotBlank() }
     ?: session.displayName?.takeIf { it.isNotBlank() }
-    ?: nativeString("Main session")
+    ?: nativeString("Main thread")

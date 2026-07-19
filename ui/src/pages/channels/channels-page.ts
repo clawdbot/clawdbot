@@ -16,6 +16,9 @@ import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 
+const NOSTR_PROFILE_TIMEOUT_ERROR =
+  "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.";
+
 type NostrOperation = {
   generation: number;
   gateway: ApplicationContext["gateway"];
@@ -25,6 +28,12 @@ type NostrOperation = {
   accountId: string;
   headers: Record<string, string>;
 };
+
+function formatNostrProfileOperationError(error: unknown, prefix: string): string {
+  return error instanceof DOMException && error.name === "TimeoutError"
+    ? NOSTR_PROFILE_TIMEOUT_ERROR
+    : `${prefix}: ${String(error)}`;
+}
 
 class ChannelsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -356,7 +365,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         saving: false,
-        error: `Profile update failed: ${String(err)}`,
+        error: formatNostrProfileOperationError(err, "Profile update failed"),
         success: null,
       };
     }
@@ -421,7 +430,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         importing: false,
-        error: `Profile import failed: ${String(err)}`,
+        error: formatNostrProfileOperationError(err, "Profile import failed"),
         success: null,
       };
     }
@@ -475,7 +484,8 @@ class ChannelsPage extends OpenClawLightDomElement {
             void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
           onWhatsAppWait: () =>
             void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
-          onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
+          onWhatsAppLogout: () =>
+            void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),

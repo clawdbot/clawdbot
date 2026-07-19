@@ -216,7 +216,7 @@ struct CommandCenterTab: View {
     private var defaultChatSessionSection: some View {
         CommandPanel(padding: 12) {
             VStack(spacing: 10) {
-                self.cardHeader(title: "Agent session")
+                self.cardHeader(title: "Agent thread")
 
                 Button {
                     self.openDefaultChatSession()
@@ -231,12 +231,12 @@ struct CommandCenterTab: View {
     private var recentSessions: some View {
         CommandPanel(padding: 12) {
             VStack(spacing: 10) {
-                self.cardHeader(title: "Recent sessions")
+                self.cardHeader(title: "Recent threads")
 
                 if self.recentSessionPreviewSessions.isEmpty {
                     CommandEmptyStateRow(
                         icon: self.gatewayConnected ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
-                        title: self.gatewayConnected ? "No recent sessions" : "Gateway offline",
+                        title: self.gatewayConnected ? "No recent threads" : "Gateway offline",
                         detail: self
                             .gatewayConnected ? "Start a chat and it will appear here." : "Connect to the gateway.")
                 } else {
@@ -739,7 +739,7 @@ struct CommandSessionsScreen: View {
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Sessions")
+        .navigationTitle("Threads")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
         .task(id: self.refreshID) {
@@ -781,7 +781,7 @@ struct CommandSessionsScreen: View {
         } message: { group in
             Text(verbatim: String(
                 format: String(
-                    localized: "Sessions in \u{201C}%@\u{201D} move back to Ungrouped."),
+                    localized: "Threads in \u{201C}%@\u{201D} move back to Ungrouped."),
                 group))
                 .font(OpenClawType.caption)
         }
@@ -794,7 +794,7 @@ struct CommandSessionsScreen: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Sessions")
+                Text("Threads")
                     .font(OpenClawType.title2)
                 Text(self.headerDetail)
                     .font(OpenClawType.captionMedium)
@@ -809,8 +809,8 @@ struct CommandSessionsScreen: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Text(self.showArchived
-                        ? LocalizedStringKey("Archived sessions")
-                        : LocalizedStringKey("Recent sessions"))
+                        ? LocalizedStringKey("Archived threads")
+                        : LocalizedStringKey("Recent threads"))
                         .font(OpenClawType.subheadBold)
                     Spacer(minLength: 8)
                     if self.isLoading {
@@ -833,7 +833,7 @@ struct CommandSessionsScreen: View {
                 if let loadErrorText {
                     CommandEmptyStateRow(
                         icon: "exclamationmark.triangle.fill",
-                        title: "Sessions unavailable",
+                        title: "Threads unavailable",
                         detail: .verbatim(loadErrorText))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
@@ -872,15 +872,15 @@ struct CommandSessionsScreen: View {
     private var headerDetail: String {
         if self.isLoading, self.sessions.isEmpty {
             return self.showArchived
-                ? String(localized: "Loading archived sessions")
-                : String(localized: "Loading recent sessions")
+                ? String(localized: "Loading archived threads")
+                : String(localized: "Loading recent threads")
         }
         let count = self.visibleSessions.count
         if count == 0 {
             return self.emptyTitle
         }
         return String(
-            AttributedString(localized: "^[\(count) session](inflect: true)").characters)
+            AttributedString(localized: "^[\(count) thread](inflect: true)").characters)
     }
 
     private var visibleSessions: [OpenClawChatSessionEntry] {
@@ -910,13 +910,13 @@ struct CommandSessionsScreen: View {
             return String(localized: "Gateway offline")
         }
         return self.showArchived
-            ? String(localized: "No archived sessions")
-            : String(localized: "No recent sessions")
+            ? String(localized: "No archived threads")
+            : String(localized: "No recent threads")
     }
 
     private var emptyDetail: String {
         self.showArchived
-            ? String(localized: "Archived sessions will appear here.")
+            ? String(localized: "Archived threads will appear here.")
             : String(localized: "Start a chat and it will appear here.")
     }
 

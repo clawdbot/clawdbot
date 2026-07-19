@@ -24,6 +24,7 @@ import {
   assertCdpEndpointAllowed,
   fetchJson,
   fetchOk,
+  resolveCdpTabOwnership,
   scopeCdpPolicyToConfiguredEndpoint,
 } from "./cdp.helpers.js";
 
@@ -219,6 +220,97 @@ describe("cdp helpers", () => {
       Authorization: "Basic b3BlbmNsYXc6cmVsYXktdG9rZW4=",
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads caller abort and strict CDP policy through browser identity lookup", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          webSocketDebuggerUrl: "wss://1.1.1.1/devtools/browser/BROWSER-1",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      release,
+    });
+    const controller = new AbortController();
+    const policy = {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["1.1.1.1"],
+    };
+    const resolveOwnership = resolveCdpTabOwnership as unknown as (params: {
+      profileName: string;
+      cdpUrl: string;
+      nativeTargetId: string;
+      timeoutMs: number;
+      signal: AbortSignal;
+      ssrfPolicy: typeof policy;
+    }) => ReturnType<typeof resolveCdpTabOwnership>;
+
+    await expect(
+      resolveOwnership({
+        profileName: "remote",
+        cdpUrl: "https://1.1.1.1",
+        nativeTargetId: "TARGET-1",
+        timeoutMs: 4321,
+        signal: controller.signal,
+        ssrfPolicy: policy,
+      }),
+    ).resolves.toMatchObject({ status: "durable", nativeTargetId: "TARGET-1" });
+
+    const request = requireGuardedFetchRequest();
+    expect(request.policy).toBe(policy);
+    expect(request.signal).not.toBe(controller.signal);
+    controller.abort(new Error("caller stopped ownership lookup"));
+    expect(request.signal.aborted).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("classifies browser identity network failures without hiding caller aborts", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("version lookup timed out"));
+    await expect(
+      resolveCdpTabOwnership({
+        profileName: "remote",
+        cdpUrl: "https://browser.example",
+        nativeTargetId: "TARGET-1",
+      }),
+    ).resolves.toEqual({
+      status: "non-durable",
+      reason: "browser-identity-lookup-failed",
+    });
+
+    const controller = new AbortController();
+    const abortError = new Error("caller stopped ownership lookup");
+    fetchWithSsrFGuardMock.mockImplementationOnce(
+      async ({ signal }: { signal: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("ownership lookup aborted"),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    const resolveOwnership = resolveCdpTabOwnership as unknown as (params: {
+      profileName: string;
+      cdpUrl: string;
+      nativeTargetId: string;
+      signal: AbortSignal;
+    }) => ReturnType<typeof resolveCdpTabOwnership>;
+    const pending = resolveOwnership({
+      profileName: "remote",
+      cdpUrl: "https://browser.example",
+      nativeTargetId: "TARGET-1",
+      signal: controller.signal,
+    });
+    controller.abort(abortError);
+
+    await expect(pending).rejects.toBe(abortError);
   });
 
   it("decodes URL credentials before sending guarded CDP auth headers", async () => {
