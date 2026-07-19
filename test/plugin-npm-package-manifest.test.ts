@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { normalizeNpmPackJson } from "../scripts/lib/npm-pack-json-compat.mjs";
 import {
   resolveAugmentedPluginNpmPackageJson,
   resolveAugmentedPluginNpmManifest,
@@ -70,7 +71,7 @@ function listNpmPackDryRunFiles(packageDir: string): string[] {
   if (result.status !== 0) {
     throw new Error(result.stderr.trim() || `npm pack failed with exit ${result.status}`);
   }
-  const [packResult] = JSON.parse(result.stdout) as [
+  const [packResult] = normalizeNpmPackJson(result.stdout) as [
     {
       files?: { path?: string }[];
     },
@@ -371,7 +372,9 @@ describe("plugin npm package manifest staging", () => {
 
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
     const nodeModulesPath = join(packageDir, "node_modules");
+    const packageLockPath = join(packageDir, "package-lock.json");
     expect(existsSync(nodeModulesPath)).toBe(false);
+    expect(existsSync(packageLockPath)).toBe(false);
 
     withAugmentedPluginNpmManifestForPackage(
       { repoRoot: repoDir, packageDir, bundleDependencies: true },
@@ -387,6 +390,7 @@ describe("plugin npm package manifest staging", () => {
     );
 
     expect(existsSync(nodeModulesPath)).toBe(false);
+    expect(existsSync(packageLockPath)).toBe(false);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 

@@ -133,6 +133,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ClawHub 0.23.1 expects npm 11's array-shaped `npm pack --json` output.
+# npm 12 emits a package-name keyed object, so normalize only ClawHub's npm subprocess.
+real_npm_cli="$(command -v npm)"
+npm_compat_bin="${pack_dir}/npm-compat-bin"
+mkdir -p "${npm_compat_bin}"
+printf '#!/usr/bin/env bash\nexec node %q "$@"\n' \
+  "${repo_root}/scripts/lib/npm-pack-json-compat.mjs" > "${npm_compat_bin}/npm"
+chmod 0755 "${npm_compat_bin}/npm"
+
 pack_cmd=(
   "${clawhub_cli}"
   --workdir
@@ -174,6 +183,8 @@ if [[ "${packed_mode}" == "false" ]]; then
 
   pack_json="${pack_dir}/pack.json"
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
+    OPENCLAW_REAL_NPM_CLI="${real_npm_cli}" \
+    PATH="${npm_compat_bin}:${PATH}" \
     node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" -- \
     "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
