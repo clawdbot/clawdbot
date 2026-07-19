@@ -629,10 +629,11 @@ describe("package acceptance workflow", () => {
   });
 
   it("starts prerelease core publication before plugin npm convergence", () => {
-    const orchestration = workflowStep(
+    const publishStep = workflowStep(
       workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
       "Dispatch publish workflows",
-    ).run;
+    );
+    const orchestration = publishStep.run;
     if (!orchestration) {
       throw new Error("Expected release publish orchestration script");
     }
@@ -654,6 +655,11 @@ describe("package acceptance workflow", () => {
     );
     expect(orchestration).toContain(
       "Core prerelease publication starts before every fallible plugin",
+    );
+    expect(publishStep.env?.CLAWHUB_PLAN_OUTCOME).toBe("${{ steps.clawhub_plan.outcome }}");
+    expect(orchestration).toContain('if [[ "${CLAWHUB_PLAN_OUTCOME}" != "success" ]]; then');
+    expect(orchestration).toContain(
+      "ClawHub release planning step failed; prerelease ecosystem repair is required.",
     );
     expect(orchestration).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
     expect(orchestration).toMatch(
