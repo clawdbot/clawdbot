@@ -640,6 +640,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
         }
 
+        const shouldPreserveCallerDeferredRestart = () =>
+          restartDeferredToCaller.has(rKey) &&
+          !manuallyStopped.has(rKey) &&
+          getRuntime(channelId, id).restartPending === true;
+
         let resolveStart: (() => void) | undefined;
         const startGate = new Promise<void>((resolve) => {
           resolveStart = resolve;
@@ -763,7 +768,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
           if (abort.signal.aborted || manuallyStopped.has(rKey)) {
             setStoppedRuntime(channelId, id, {
-              restartPending: false,
+              restartPending: shouldPreserveCallerDeferredRestart(),
               lastStopAt: Date.now(),
             });
             return;
@@ -1091,7 +1096,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         } catch (error) {
           if (!handedOffTask) {
             setStoppedRuntime(channelId, id, {
-              restartPending: false,
+              ...(error instanceof SecretSurfaceUnavailableError ? { configured: true } : {}),
+              restartPending: abort.signal.aborted && shouldPreserveCallerDeferredRestart(),
               lastError: formatErrorMessage(error),
             });
           }

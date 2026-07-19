@@ -2974,6 +2974,59 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("keeps aborted starting accounts known when startup cleanup settles before reload start", async () => {
+    let accountIds = ["account-a"];
+    let configuredCalls = 0;
+    const firstConfiguredGate = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        isConfigured: async () => {
+          configuredCalls += 1;
+          if (configuredCalls === 1) {
+            await firstConfiguredGate.promise;
+          }
+          return true;
+        },
+      }),
+    );
+    const manager = createManager();
+
+    const initialStart = manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => configuredCalls === 1,
+      "expected account-a to pause during configuration",
+    );
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    firstConfiguredGate.resolve();
+    await initialStart;
+
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.restartPending,
+    ).toBe(true);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-b", "account-a"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
   it("lets manual stops cancel pending hot-reload handoffs before paired starts", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
