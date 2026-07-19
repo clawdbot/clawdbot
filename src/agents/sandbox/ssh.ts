@@ -753,7 +753,8 @@ export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "done",
 ].join("\n");
 
-const SSH_UPLOAD_TIMEOUT_MS = 30_000;
+const SSH_UPLOAD_IDLE_TIMEOUT_MS = 30_000;
+const SSH_UPLOAD_POST_PRODUCER_TIMEOUT_MS = 60_000;
 
 /** Stream a local directory to the remote sandbox with tar over ssh. */
 export async function uploadDirectoryToSshTarget(params: {
@@ -762,7 +763,10 @@ export async function uploadDirectoryToSshTarget(params: {
   remoteDir: string;
   remoteRootDir?: string;
   signal?: AbortSignal;
-  timeoutMs?: number;
+  /** Maximum time the pipeline may transfer no data before it is killed. */
+  idleTimeoutMs?: number;
+  /** Maximum time the SSH client may take to exit after the local archive finished. */
+  postProducerTimeoutMs?: number;
 }): Promise<void> {
   await assertSafeUploadSymlinks(params.localDir);
   const remoteCommand = buildRemoteCommand([
@@ -800,19 +804,50 @@ export async function uploadDirectoryToSshTarget(params: {
     let tarCode = 0;
     let sshCode = 0;
     let settled = false;
-    const timeoutMs = params.timeoutMs ?? SSH_UPLOAD_TIMEOUT_MS;
-    // An SSH peer that accepts TCP but never completes the banner keeps both
-    // children alive forever, so bound the pipeline even when no signal is set.
-    const timeout = setTimeout(() => {
-      fail(new Error(`SSH directory upload timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+    const idleTimeoutMs = params.idleTimeoutMs ?? SSH_UPLOAD_IDLE_TIMEOUT_MS;
+    const postProducerTimeoutMs =
+      params.postProducerTimeoutMs ?? SSH_UPLOAD_POST_PRODUCER_TIMEOUT_MS;
+    // An SSH peer that accepts TCP but never completes the banner (or a
+    // connection that stalls mid-transfer) leaves both children alive forever
+    // while transferring no data. Bound that no-progress phase with the idle
+    // watchdog: every byte read from tar resets it, so slow-but-alive uploads
+    // of large workspaces are never cut off. Once tar exits, every workspace
+    // byte is already handed to the SSH client, so the idle watchdog would
+    // mistake legitimate post-producer SSH work (authentication, remote
+    // command, buffered drain) for a stall; switch to a separate, more
+    // generous exit grace instead, so a small-upload peer that never
+    // finishes its handshake is still bounded instead of hanging forever.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearIdleWatchdog = () => {
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+    };
+    const armIdleWatchdog = () => {
+      clearIdleWatchdog();
+      idleTimer = setTimeout(() => {
+        fail(new Error(`SSH directory upload stalled: no data transferred for ${idleTimeoutMs}ms`));
+      }, idleTimeoutMs);
+    };
+    const armPostProducerWatchdog = () => {
+      clearIdleWatchdog();
+      idleTimer = setTimeout(() => {
+        fail(
+          new Error(
+            `SSH directory upload stalled: SSH client did not exit within ${postProducerTimeoutMs}ms of the local archive finishing`,
+          ),
+        );
+      }, postProducerTimeoutMs);
+    };
+    armIdleWatchdog();
 
     const fail = (error: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timeout);
+      clearIdleWatchdog();
       for (const child of [tar, ssh]) {
         try {
           child.kill("SIGKILL");
@@ -825,6 +860,7 @@ export async function uploadDirectoryToSshTarget(params: {
 
     tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
     tar.stderr.on("error", fail);
+    tar.stdout.on("data", armIdleWatchdog);
     tar.stdout.on("error", fail);
     ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
     ssh.stdout.on("error", fail);
@@ -838,6 +874,9 @@ export async function uploadDirectoryToSshTarget(params: {
     tar.on("close", (code) => {
       tarClosed = true;
       tarCode = code ?? 0;
+      // Producer finished: stop measuring remote liveness by tar output, but
+      // keep the remaining SSH exit bounded with a separate grace timer.
+      armPostProducerWatchdog();
       maybeResolve();
     });
     ssh.on("close", (code) => {
@@ -851,7 +890,7 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       settled = true;
-      clearTimeout(timeout);
+      clearIdleWatchdog();
       if (tarCode !== 0) {
         reject(
           new Error(
