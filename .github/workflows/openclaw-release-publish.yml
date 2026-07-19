@@ -845,6 +845,7 @@ jobs:
 
           openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
           openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"
+          github_release_already_public="false"
 
           is_stable_release() {
             [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
@@ -1316,6 +1317,10 @@ jobs:
               "${has_sha}" == "true" &&
               "${has_proof}" == "true" &&
               "${has_canonical_body}" == "true" ]]; then
+              # Exact-bound public releases are resumable. A prior attempt may
+              # have published successfully but failed while replacing the
+              # final postpublish evidence asset.
+              github_release_already_public="true"
               return 0
             fi
 
@@ -1326,6 +1331,7 @@ jobs:
             if [[ "${has_asset}" == "true" &&
               "${has_canonical_body}" == "true" &&
               "${has_proof}" != "true" ]]; then
+              github_release_already_public="true"
               return 0
             fi
 
@@ -2560,10 +2566,12 @@ jobs:
             upload_dependency_evidence_release_asset
             append_release_proof_to_github_release
             if [[ "${failed}" == "0" ]]; then
-              # Attach truthful prepublication evidence while the release is
-              # still draft. Completion is recorded only after undrafting.
-              upload_release_evidence_assets
-              publish_github_release
+              if [[ "${github_release_already_public}" != "true" ]]; then
+                # Attach truthful prepublication evidence while the release is
+                # still draft. Completion is recorded only after undrafting.
+                upload_release_evidence_assets
+                publish_github_release
+              fi
               mark_release_completion
               upload_release_evidence_assets
               if [[ "${release_ecosystem_converged}" == "true" ]]; then
