@@ -1,10 +1,13 @@
+import fs from "node:fs";
 import { rm } from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  closeOpenClawStateDatabaseForTest,
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -12,6 +15,7 @@ import {
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -47,6 +51,55 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
     resolveOption: questionGatewayHoisted.resolveQuestionOverGatewaySpy,
   },
 }));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      // This file's turn tests were authored against the injected harness
+      // dispatcher. Assembled turns now dispatch through core's own provider
+      // dispatcher, which an extension test cannot intercept; convert each
+      // resolved turn to a prepared one that drives the harness dispatcher,
+      // while leaving the outer runner as the sole lifecycle owner.
+      const harness = await import("./bot.create-telegram-bot.test-harness.js");
+      const resolveTurn = params.adapter.resolveTurn;
+      return await actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (input, eventClass, preflight) => {
+            const resolved = await resolveTurn(input, eventClass, preflight);
+            if (!("route" in resolved) || "runDispatch" in resolved) {
+              return resolved;
+            }
+            const plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan =
+              resolved;
+            return {
+              ...plan,
+              runDispatch: async () =>
+                await harness.dispatchReplyWithBufferedBlockDispatcher({
+                  ctx: plan.ctxPayload,
+                  cfg: plan.cfg,
+                  dispatcherOptions: {
+                    ...plan.dispatcherOptions,
+                    deliver: plan.delivery.deliver,
+                    onError: plan.delivery.onError,
+                  },
+                  toolsAllow: plan.toolsAllow,
+                  replyOptions: plan.replyOptions,
+                  replyResolver: plan.replyResolver,
+                }),
+            } as typeof resolved;
+          },
+        },
+      });
+    },
+  };
+});
 
 const {
   answerCallbackQuerySpy,
@@ -377,6 +430,8 @@ function systemEventOptions(index = 0) {
 }
 
 const ORIGINAL_TZ = process.env.TZ;
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+let scopedStateDir: string | undefined;
 
 describe("createTelegramBot", () => {
   beforeAll(async () => {
@@ -384,12 +439,30 @@ describe("createTelegramBot", () => {
   });
   beforeAll(() => {
     process.env.TZ = "UTC";
+    // Isolate persistent state from the operator's real ~/.openclaw: assembled
+    // turns resolve session/agent bindings through the state DB, and an ambient
+    // Codex session binding fails its generation reclaim, so the embedded agent
+    // drops the turn without replying and reply-wait tests hang to timeout.
+    closeOpenClawStateDatabaseForTest();
+    scopedStateDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-telegram-bot-state-")),
+    );
+    process.env.OPENCLAW_STATE_DIR = scopedStateDir;
   });
   afterAll(() => {
     if (ORIGINAL_TZ === undefined) {
       delete process.env.TZ;
     } else {
       process.env.TZ = ORIGINAL_TZ;
+    }
+    closeOpenClawStateDatabaseForTest();
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    if (scopedStateDir) {
+      fs.rmSync(scopedStateDir, { recursive: true, force: true });
     }
   });
 

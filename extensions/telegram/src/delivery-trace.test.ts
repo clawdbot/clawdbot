@@ -1,9 +1,9 @@
 // Telegram delivery trace goldens: replayable wire-level lifecycle recordings.
 //
 // Drives the REAL dispatcher wiring: buildTelegramMessageContext builds the
-// turn context, dispatchTelegramMessage builds its draft lanes and deliver
-// glue, and the injected dispatchReplyWithBufferedBlockDispatcher seam captures
-// the exact dispatcher/reply options the SDK reply dispatcher would consume.
+// turn context, dispatchTelegramMessage builds its draft lanes and delivery
+// glue, and a core turn-runtime mock captures the exact dispatcher/reply options
+// the SDK reply dispatcher would consume.
 // The scripted IN steps stand in for the model loop; OUT events are the grammY
 // Bot API calls (sendMessage / editMessageText / sendChatAction /
 // deleteMessage) observed at a recording API mock with scripted message ids.
@@ -17,9 +17,12 @@ import {
   type DeliveryTraceScenarioName,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { describe, it, vi } from "vitest";
+import { afterEach, describe, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   baseTelegramMessageContextConfig,
@@ -32,11 +35,16 @@ import { createTelegramSendChatActionHandler } from "./sendchataction-401-backof
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
 type BufferedDispatcherParams = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+  PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]
 >[0];
 type BufferedDispatcherResult = Awaited<
-  ReturnType<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>
+  ReturnType<PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]>
 >;
+type CapturedDispatch = {
+  dispatcherOptions?: BufferedDispatcherParams["dispatcherOptions"];
+  replyOptions?: BufferedDispatcherParams["replyOptions"];
+  resolveDispatch?: (result: BufferedDispatcherResult) => void;
+};
 
 const TRACE_CHAT_ID = 4242;
 // The scripted preview-delete dwell (MIN_PREVIEW_DWELL_MS = 4s) plus margin, so
@@ -135,11 +143,23 @@ function createRecordingTelegramApi(state: TelegramTraceWireState): Bot["api"] {
   return api as unknown as Bot["api"];
 }
 
-function createTraceTelegramDeps(captured: {
-  dispatcherOptions?: BufferedDispatcherParams["dispatcherOptions"];
-  replyOptions?: BufferedDispatcherParams["replyOptions"];
-  resolveDispatch?: (result: BufferedDispatcherResult) => void;
-}): TelegramBotDeps {
+function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
+  const coreRuntime = createPluginRuntimeMock({
+    channel: {
+      reply: {
+        dispatchReplyWithBufferedBlockDispatcher: (params) => {
+          captured.dispatcherOptions = params.dispatcherOptions;
+          captured.replyOptions = params.replyOptions;
+          return new Promise((resolve) => {
+            captured.resolveDispatch = resolve;
+          });
+        },
+      },
+    },
+  });
+  vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation((params) =>
+    coreRuntime.channel.inbound.run(params),
+  );
   return {
     getRuntimeConfig: (() => ({
       config: baseTelegramMessageContextConfig,
@@ -155,16 +175,8 @@ function createTraceTelegramDeps(captured: {
       created: false,
     })) as unknown as TelegramBotDeps["upsertChannelPairingRequest"],
     enqueueSystemEvent: (async () => {}) as unknown as TelegramBotDeps["enqueueSystemEvent"],
-    // The capture seam: dispatchTelegramMessage hands the SDK reply dispatcher
-    // its deliver wiring here; the trace drives those callbacks directly and
-    // resolves this promise at the scripted idle step, exactly where the real
-    // agent loop would settle.
-    dispatchReplyWithBufferedBlockDispatcher: ((params: BufferedDispatcherParams) => {
-      captured.dispatcherOptions = params.dispatcherOptions;
-      captured.replyOptions = params.replyOptions;
-      return new Promise((resolve) => {
-        captured.resolveDispatch = resolve;
-      });
+    dispatchReplyWithBufferedBlockDispatcher: (() => {
+      throw new Error("trace dispatch bypassed the core runtime mock");
     }) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
     buildModelsProviderData: (async () => ({
       byProvider: new Map<string, Set<string>>(),
@@ -216,7 +228,7 @@ async function setupTelegramTrace(recorder: WireRecorder) {
   if (!context) {
     throw new Error("trace context was not built");
   }
-  const captured: Parameters<typeof createTraceTelegramDeps>[0] = {};
+  const captured: CapturedDispatch = {};
   const dispatchDone = dispatchTelegramMessage({
     context,
     bot: { api } as unknown as Bot,
@@ -316,6 +328,10 @@ async function setupTelegramTrace(recorder: WireRecorder) {
     }
   };
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const TELEGRAM_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
   "streaming-happy",

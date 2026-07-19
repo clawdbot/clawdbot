@@ -208,6 +208,10 @@ const dispatchReplyHoisted = vi.hoisted(() => ({
       }),
   ),
 }));
+vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcher:
+    dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
+}));
 export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
