@@ -228,6 +228,87 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
+    it("repairs a mismatched inherited user bus before running systemctl --user", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 1000;
+      const statSpy = vi.spyOn(fs, "stat").mockResolvedValue({
+        isSocket: () => true,
+      } as Awaited<ReturnType<typeof fs.stat>>);
+      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const fakeBinDir = path.join(tmpDir, "bin");
+      const callsPath = path.join(tmpDir, "systemctl-calls.log");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeSleep(fakeBinDir);
+      await fs.writeFile(
+        path.join(fakeBinDir, "systemctl"),
+        `#!/bin/sh
+printf 'runtime=%s bus=%s args=%s\n' "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$*" >> "$OPENCLAW_SYSTEMCTL_CALLS"
+case "$2" in
+  is-active|restart) exit 0 ;;
+esac
+exit 1
+`,
+        { mode: 0o755 },
+      );
+
+      const { scriptPath } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: path.join(tmpDir, "home"),
+        OPENCLAW_STATE_DIR: path.join(tmpDir, "state"),
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+      const result = await executeScript(scriptPath, {
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_SYSTEMCTL_CALLS: callsPath,
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+      const calls = await fs.readFile(callsPath, "utf-8");
+
+      expect(result.code).toBeNull();
+      expect(statSpy).toHaveBeenCalledWith("/run/user/1000/bus");
+      expect(calls).toContain(
+        "runtime=/run/user/1000 bus=unix:path=/run/user/1000/bus args=--user is-active --quiet openclaw-gateway.service",
+      );
+      expect(calls).toContain(
+        "runtime=/run/user/1000 bus=unix:path=/run/user/1000/bus args=--user restart openclaw-gateway.service",
+      );
+      expect(calls).not.toContain("runtime=/run/user/0");
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it("does not rewrite a custom user bus environment", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 1000;
+      const statSpy = vi.spyOn(fs, "stat");
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/srv/openclaw-runtime",
+        DBUS_SESSION_BUS_ADDRESS: "unix:abstract=/openclaw-user-bus",
+      });
+
+      expect(statSpy).not.toHaveBeenCalled();
+      expect(content).not.toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("keeps the inherited environment when the effective user bus is unavailable", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 1000;
+      vi.spyOn(fs, "stat").mockRejectedValue(
+        Object.assign(new Error("missing bus"), { code: "ENOENT" }),
+      );
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+
+      expect(content).not.toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      await cleanupScript(scriptPath);
+    });
+
     it("creates restart scripts in a private temp directory with exclusive creation", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       const timestamp = 1_727_201_234_567;

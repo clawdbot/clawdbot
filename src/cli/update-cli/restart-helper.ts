@@ -61,6 +61,41 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
+async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string> {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  if (uid <= 0) {
+    return "";
+  }
+
+  const expectedRuntimeDir = `/run/user/${uid}`;
+  const expectedBusAddress = `unix:path=${expectedRuntimeDir}/bus`;
+  const runtimeDir = normalizeOptionalString(env.XDG_RUNTIME_DIR);
+  const busAddress = normalizeOptionalString(env.DBUS_SESSION_BUS_ADDRESS);
+  const runtimeUid = runtimeDir?.match(/^\/run\/user\/(\d+)$/)?.[1];
+  const busUid = busAddress?.match(/\/run\/user\/(\d+)\/bus(?:$|[,;])/u)?.[1];
+  const missingUserBusEnv = !runtimeDir || !busAddress;
+  const mismatchedUserBusEnv =
+    (runtimeUid !== undefined && runtimeUid !== String(uid)) ||
+    (busUid !== undefined && busUid !== String(uid));
+  if (!missingUserBusEnv && !mismatchedUserBusEnv) {
+    return "";
+  }
+
+  try {
+    const stat = await fs.stat(path.join(expectedRuntimeDir, "bus"));
+    if (!stat.isSocket()) {
+      return "";
+    }
+  } catch {
+    return "";
+  }
+
+  return `# Repair a missing or cross-user D-Bus environment inherited by the updater.
+export XDG_RUNTIME_DIR='${shellEscape(expectedRuntimeDir)}'
+export DBUS_SESSION_BUS_ADDRESS='${shellEscape(expectedBusAddress)}'
+`;
+}
+
 /**
  * Prepares a standalone script to restart the gateway service.
  * This script is written to a temporary directory and does not depend on
@@ -83,6 +118,7 @@ export async function prepareRestartScript(
       const unitName = resolveSystemdUnit(env);
       const escaped = shellEscape(unitName);
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
+      const userBusRepair = await renderLinuxUserBusRepair({ ...process.env, ...env });
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
@@ -90,6 +126,7 @@ export async function prepareRestartScript(
 sleep 1
 exec 3>&2
 ${logSetup}
+${userBusRepair}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
 if systemctl --user is-active --quiet '${escaped}' || systemctl --user is-enabled --quiet '${escaped}'; then
   if systemctl --user restart '${escaped}'; then
