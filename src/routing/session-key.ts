@@ -234,7 +234,11 @@ export function buildAgentPeerSessionKey(params: {
     if (linkedPeerId) {
       peerId = linkedPeerId;
     }
-    peerId = normalizeLowercaseStringOrEmpty(peerId);
+    const preservesCase =
+      !linkedPeerId && (dmScope === "per-channel-peer" || dmScope === "per-account-channel-peer");
+    peerId = preservesCase
+      ? normalizeSessionPeerId({ channel: params.channel, peerKind: "direct", peerId })
+      : normalizeLowercaseStringOrEmpty(peerId);
     if (dmScope === "per-account-channel-peer" && peerId) {
       const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
       const accountId = normalizeAccountId(params.accountId);

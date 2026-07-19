@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeConversationPeerId } from "../../routing/conversation-ref.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
+  parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   requiresFoldedSessionKeyAliasProof,
 } from "../../sessions/session-key-utils.js";
@@ -41,7 +42,7 @@ function normalizeEntryTarget(value: unknown): string {
     return "";
   }
   const trimmed = value.trim();
-  const sigilIndexes = ["!", "#"]
+  const sigilIndexes = ["!", "#", "@"]
     .map((sigil) => trimmed.indexOf(sigil))
     .filter((index) => index >= 0);
   if (sigilIndexes.length === 0) {
@@ -55,6 +56,18 @@ function entryDeliveryTargets(entry: SessionEntry | undefined): string[] {
   const origin = sessionDeliveryOrigin(entry);
   const candidates = [context?.to, origin?.nativeChannelId, origin?.to, entry?.groupId];
   return candidates.map(normalizeEntryTarget).filter(Boolean);
+}
+
+function entryProofTargets(entry: SessionEntry | undefined, normalizedBaseKey: string): string[] {
+  const peerKind = parseSessionDeliveryRoute(normalizedBaseKey)?.peerKind;
+  if (peerKind !== "direct" && peerKind !== "dm") {
+    return entryDeliveryTargets(entry);
+  }
+  const origin = sessionDeliveryOrigin(entry);
+  const foldedBaseKey = normalizeLowercaseStringOrEmpty(normalizedBaseKey);
+  return [origin?.nativeDirectUserId, origin?.from]
+    .map(normalizeEntryTarget)
+    .filter((target) => target && foldedBaseKey.includes(normalizeLowercaseStringOrEmpty(target)));
 }
 
 function normalizeEntryThreadId(value: unknown): string {
@@ -86,7 +99,7 @@ export function isConfirmedLowercasedLegacyAlias(
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
-  const targetMatches = entryDeliveryTargets(entry).some((target) =>
+  const targetMatches = entryProofTargets(entry, normalizedBaseKey).some((target) =>
     normalizedBaseKey.includes(target),
   );
   if (!targetMatches) {
@@ -107,7 +120,7 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
-  const targets = entryDeliveryTargets(entry);
+  const targets = entryProofTargets(entry, normalizedBaseKey);
   // Existing delivery metadata is treated as proof against folding to a different opaque target.
   if (targets.length > 0 && !targets.some((target) => normalizedBaseKey.includes(target))) {
     return true;

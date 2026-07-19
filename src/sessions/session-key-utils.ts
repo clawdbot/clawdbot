@@ -62,8 +62,14 @@ type CasePreservingPeerDescriptor = {
 const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   // #82853 — Signal group IDs (opaque). Encoded to match prior behavior exactly.
   { channel: "signal", peerKinds: new Set(["group"]), span: "segment", unscoped: true },
-  // #75670 — Matrix room IDs (opaque, embedded `:server`) plus thread event suffix.
-  { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
+  // #75670 rooms, #102313 DM MXIDs — Matrix ids are opaque and embed `:server`,
+  // plus the thread event suffix.
+  {
+    channel: "matrix",
+    peerKinds: new Set(["channel", "group", "direct", "dm"]),
+    span: "tail",
+    unscoped: true,
+  },
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
@@ -83,6 +89,27 @@ function findCasePreservingPeerDescriptor(
   const c = normalizeLowercaseStringOrEmpty(channel);
   const k = normalizeLowercaseStringOrEmpty(peerKind);
   return CASE_PRESERVING_PEERS.find((d) => d.channel === c && d.peerKinds.has(k));
+}
+
+const DIRECT_PEER_KINDS = new Set(["direct", "dm"]);
+
+function isDirectPeerKind(peerKind: string | undefined | null): boolean {
+  return DIRECT_PEER_KINDS.has(normalizeLowercaseStringOrEmpty(peerKind));
+}
+
+function matchKeyBodyCasePreservingPeer(
+  channel: string | undefined,
+  peerKindOrAccount: string | undefined,
+  accountScopedPeerKind: string | undefined,
+): CasePreservingPeerDescriptor | undefined {
+  const scopedKind = normalizeOptionalLowercaseString(accountScopedPeerKind);
+  if (isDirectPeerKind(scopedKind)) {
+    const scoped = findCasePreservingPeerDescriptor(channel, scopedKind);
+    if (scoped) {
+      return scoped;
+    }
+  }
+  return findCasePreservingPeerDescriptor(channel, peerKindOrAccount);
 }
 
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
@@ -105,11 +132,13 @@ export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefine
       bodyStartIndex += 1;
     }
   }
-  const descriptor = findCasePreservingPeerDescriptor(
-    parts[bodyStartIndex],
-    parts[bodyStartIndex + 1],
+  return (
+    matchKeyBodyCasePreservingPeer(
+      parts[bodyStartIndex],
+      parts[bodyStartIndex + 1],
+      parts[bodyStartIndex + 2],
+    )?.span === "tail"
   );
-  return descriptor?.span === "tail";
 }
 
 export function normalizeSessionPeerId(params: {
@@ -195,7 +224,11 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
         };
         // Preserve tails behind nested or malformed ownership wrappers without
         // treating an inner channel-shaped identity as a runtime route.
-        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
+        const accountSegment = isDirectPeerKind(peerKind) ? "(?:[^:]+:)?" : "";
+        const scopedRe = new RegExp(
+          `^(?:agent:[^:]*:)+:*${channel}:${accountSegment}${kind}:`,
+          "i",
+        );
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);

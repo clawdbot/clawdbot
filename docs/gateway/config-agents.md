@@ -1245,7 +1245,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `global`: all participants in a channel context share a single session (use only when shared context is intended).
 - **`dmScope`**: how DMs are grouped.
   - `main`: all DMs share the main session.
-  - `per-peer`: isolate by sender id across channels.
+  - `per-peer`: isolate by sender id across channels, matched case-insensitively.
   - `per-channel-peer`: isolate per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate per account + channel + sender (recommended for multi-account).
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing. Dock commands such as `/dock_discord` use the same map to switch the active session's reply route to another linked channel peer; see [Channel docking](/concepts/channel-docking).

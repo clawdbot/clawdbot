@@ -49,15 +49,24 @@ visible to Bob.
 | Value                      | Behavior                                                 |
 | -------------------------- | -------------------------------------------------------- |
 | `main` (default)           | All DMs share the [main session](/concepts/main-session) |
-| `per-peer`                 | Isolate by sender, across channels                       |
+| `per-peer`                 | Isolate by sender, across channels (case-insensitive)    |
 | `per-channel-peer`         | Isolate by channel + sender (recommended)                |
 | `per-account-channel-peer` | Isolate by account + channel + sender                    |
 
 <Tip>
 If the same person contacts you from multiple channels, use
 `session.identityLinks` to map their identities to one canonical peer id so
-they share a session.
+they share a session. A canonical label is opaque config text rather than a
+native user id, so it is matched case-insensitively.
 </Tip>
+
+<Warning>
+`per-peer` keys are channel-agnostic by design, so peer ids that differ only by
+case always resolve to one session. On channels with opaque, case-sensitive user
+ids (Matrix MXIDs), two case-distinct users therefore share one DM session under
+`per-peer`. Use `per-channel-peer` or `per-account-channel-peer`, which keep such
+ids distinct.
+</Warning>
 
 ### Dock linked channels
 

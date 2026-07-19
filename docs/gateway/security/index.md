@@ -196,12 +196,12 @@ By default, OpenClaw routes all DMs into the main session for cross-device conti
 
 `session.dmScope` values:
 
-| Value                      | Scope                                                                  |
-| -------------------------- | ---------------------------------------------------------------------- |
-| `main` (config default)    | All DMs share one session.                                             |
-| `per-channel-peer`         | Each channel+sender pair gets an isolated DM context (secure DM mode). |
-| `per-account-channel-peer` | Like above, split further by account (multi-account channels).         |
-| `per-peer`                 | Each sender gets one session across all channels of the same type.     |
+| Value                      | Scope                                                                                                                                                            |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main` (config default)    | All DMs share one session.                                                                                                                                       |
+| `per-channel-peer`         | Each channel+sender pair gets an isolated DM context (secure DM mode).                                                                                           |
+| `per-account-channel-peer` | Like above, split further by account (multi-account channels).                                                                                                   |
+| `per-peer`                 | Each sender gets one session across all channels of the same type. Sender ids are matched case-insensitively, so case-distinct ids on the same channel share it. |
 
 Local CLI onboarding preserves an explicit `session.dmScope` and otherwise leaves it unset, so the `"main"` default applies: all direct messages across channels share the agent's rolling main session (the personal-agent default). For shared or multi-user inboxes, set `session.dmScope: "per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic.
 
