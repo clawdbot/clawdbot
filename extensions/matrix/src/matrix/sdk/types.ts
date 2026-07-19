@@ -154,6 +154,13 @@ export type MatrixStoredRecoveryKey = {
 
 export type MatrixAuthDict = Record<string, unknown>;
 
+export type MatrixUiaResponseBody = {
+  flows?: Array<{ stages?: string[] }>;
+  completed?: string[];
+  session?: string;
+  params?: Record<string, Record<string, unknown> | undefined>;
+};
+
 export type MatrixUiAuthCallback = <T>(
   makeRequest: (authData: MatrixAuthDict | null) => Promise<T>,
 ) => Promise<T>;

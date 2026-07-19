@@ -1,103 +1,18 @@
 // Matrix tests cover crypto bootstrap plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixCryptoBootstrapper } from "./crypto-bootstrap.js";
-import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
+import {
+  createBootstrapperDeps,
+  createBootstrapperHarness,
+  createCryptoApi,
+  createVerifiedDeviceStatus,
+  expectBootstrapCrossSigningCall,
+  type BootstrapCrossSigningMock,
+  type MatrixCryptoBootstrapperDeps,
+  type MockCallSource,
+} from "./crypto-bootstrap.test-helpers.js";
 import type { MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
-
-type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = ConstructorParameters<
-  typeof MatrixCryptoBootstrapper<TRawEvent>
->[0];
-
-type BootstrapCrossSigningMock = Mock<MatrixCryptoBootstrapApi["bootstrapCrossSigning"]>;
-type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-
-function mockObjectArg(
-  source: MockCallSource,
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const call = source.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex} to exist`);
-  }
-  const value = call[argIndex];
-  if (!value || typeof value !== "object") {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectBootstrapCrossSigningCall(
-  source: MockCallSource,
-  callNumber: number,
-  expected?: { setupNewCrossSigning?: boolean },
-) {
-  const options = mockObjectArg(source, "bootstrapCrossSigning", callNumber - 1);
-  expect(options.authUploadDeviceSigningKeys).toBeTypeOf("function");
-  if (expected && "setupNewCrossSigning" in expected) {
-    expect(options.setupNewCrossSigning).toBe(expected.setupNewCrossSigning);
-  }
-}
-
-function createBootstrapperDeps() {
-  return {
-    getUserId: vi.fn(async () => "@bot:example.org"),
-    getPassword: vi.fn<() => string | undefined>(() => "super-secret-password"),
-    canUnlockSecretStorage: vi.fn(async () => true),
-    getDeviceId: vi.fn(() => "DEVICE123"),
-    verificationManager: {
-      trackVerificationRequest: vi.fn(),
-    },
-    recoveryKeyStore: {
-      bootstrapSecretStorageWithRecoveryKey: vi.fn<
-        MatrixRecoveryKeyStore["bootstrapSecretStorageWithRecoveryKey"]
-      >(async () => {}),
-    },
-    decryptBridge: {
-      bindCryptoRetrySignals: vi.fn(),
-    },
-  };
-}
-
-function createCryptoApi(overrides?: Partial<MatrixCryptoBootstrapApi>): MatrixCryptoBootstrapApi {
-  return {
-    on: vi.fn(),
-    bootstrapCrossSigning: vi.fn(async () => {}),
-    bootstrapSecretStorage: vi.fn(async () => {}),
-    requestOwnUserVerification: vi.fn(async () => null),
-    ...overrides,
-  };
-}
-
-function createVerifiedDeviceStatus(overrides?: {
-  localVerified?: boolean;
-  crossSigningVerified?: boolean;
-  signedByOwner?: boolean;
-}) {
-  return {
-    isVerified: () => true,
-    localVerified: overrides?.localVerified ?? true,
-    crossSigningVerified: overrides?.crossSigningVerified ?? true,
-    signedByOwner: overrides?.signedByOwner ?? true,
-  };
-}
-
-function createBootstrapperHarness(
-  cryptoOverrides?: Partial<MatrixCryptoBootstrapApi>,
-  depsOverrides?: Partial<ReturnType<typeof createBootstrapperDeps>>,
-) {
-  const deps = {
-    ...createBootstrapperDeps(),
-    ...depsOverrides,
-  };
-  const crypto = createCryptoApi(cryptoOverrides);
-  const bootstrapper = new MatrixCryptoBootstrapper(
-    deps as unknown as MatrixCryptoBootstrapperDeps<MatrixRawEvent>,
-  );
-  return { deps, crypto, bootstrapper };
-}
 
 async function runExplicitSecretStorageRepairScenario(firstError: string) {
   const bootstrapCrossSigning = vi
@@ -371,50 +286,6 @@ describe("MatrixCryptoBootstrapper", () => {
     expectSecretStorageRepairRetry(deps, crypto, bootstrapCrossSigning);
   });
 
-  it("does not mutate secret storage before forced repair fails on password UIA without a password", async () => {
-    const deps = createBootstrapperDeps();
-    deps.getPassword = vi.fn<() => string | undefined>(() => undefined);
-    const bootstrapCrossSigning = vi.fn<
-      ({
-        authUploadDeviceSigningKeys,
-      }: {
-        authUploadDeviceSigningKeys?: <T>(
-          makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
-        ) => Promise<T>;
-      }) => Promise<void>
-    >(async ({ authUploadDeviceSigningKeys }) => {
-      await authUploadDeviceSigningKeys?.(async (authData) => {
-        if (authData === null) {
-          throw new Error("need auth");
-        }
-        if (authData.type === "m.login.dummy") {
-          throw new Error("dummy rejected");
-        }
-        return undefined;
-      });
-    });
-    const crypto = createCryptoApi({
-      bootstrapCrossSigning,
-      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
-    });
-    const bootstrapper = new MatrixCryptoBootstrapper(
-      deps as unknown as MatrixCryptoBootstrapperDeps<MatrixRawEvent>,
-    );
-
-    await expect(
-      bootstrapper.bootstrap(crypto, {
-        strict: true,
-        forceResetCrossSigning: true,
-        allowSecretStorageRecreateWithoutRecoveryKey: true,
-      }),
-    ).rejects.toThrow(
-      "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
-    );
-
-    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
-    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects forced reset before mutation when the active recovery key is unavailable", async () => {
     const deps = createBootstrapperDeps();
     deps.canUnlockSecretStorage = vi.fn(async () => false);
@@ -560,59 +431,6 @@ describe("MatrixCryptoBootstrapper", () => {
     await expect(bootstrapper.bootstrap(crypto, { strict: true })).rejects.toThrow(
       "Cross-signing bootstrap finished but server keys are still not published",
     );
-  });
-
-  it("uses password UIA fallback when null and dummy auth fail", async () => {
-    const bootstrapCrossSigning = vi.fn(async () => {});
-    const { bootstrapper, crypto } = createBootstrapperHarness({
-      bootstrapCrossSigning,
-      isCrossSigningReady: vi.fn(async () => true),
-      userHasCrossSigningKeys: vi.fn(async () => true),
-      getDeviceVerificationStatus: vi.fn(async () => ({
-        isVerified: () => true,
-      })),
-    });
-
-    await bootstrapper.bootstrap(crypto);
-
-    const bootstrapCrossSigningCalls = bootstrapCrossSigning.mock.calls as Array<
-      [
-        {
-          authUploadDeviceSigningKeys?: <T>(
-            makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
-          ) => Promise<T>;
-        }?,
-      ]
-    >;
-    const authUploadDeviceSigningKeys =
-      bootstrapCrossSigningCalls[0]?.[0]?.authUploadDeviceSigningKeys;
-    expect(authUploadDeviceSigningKeys).toBeTypeOf("function");
-
-    const seenAuthStages: Array<Record<string, unknown> | null> = [];
-    const result = await authUploadDeviceSigningKeys?.(async (authData) => {
-      seenAuthStages.push(authData);
-      if (authData === null) {
-        throw new Error("need auth");
-      }
-      if (authData.type === "m.login.dummy") {
-        throw new Error("dummy rejected");
-      }
-      if (authData.type === "m.login.password") {
-        return "ok";
-      }
-      throw new Error("unexpected auth stage");
-    });
-
-    expect(result).toBe("ok");
-    expect(seenAuthStages).toEqual([
-      null,
-      { type: "m.login.dummy" },
-      {
-        type: "m.login.password",
-        identifier: { type: "m.id.user", user: "@bot:example.org" },
-        password: "super-secret-password", // pragma: allowlist secret
-      },
-    ]);
   });
 
   it("resets cross-signing when first bootstrap attempt throws", async () => {

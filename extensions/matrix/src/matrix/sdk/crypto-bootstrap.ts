@@ -10,6 +10,7 @@ import type {
   MatrixCryptoBootstrapApi,
   MatrixRawEvent,
   MatrixUiAuthCallback,
+  MatrixUiaResponseBody,
 } from "./types.js";
 import type {
   MatrixVerificationManager,
@@ -41,6 +42,120 @@ export type MatrixCryptoBootstrapResult = {
 };
 
 const CROSS_SIGNING_PUBLICATION_WAIT_MS = 5_000;
+
+const INTERACTIVE_RESET_UIA_STAGES = new Set(["org.matrix.cross_signing_reset", "m.oauth"]);
+
+type CrossSigningBootstrapOptions = {
+  forceResetCrossSigning: boolean;
+  allowAutomaticCrossSigningReset: boolean;
+  allowSecretStorageRecreateWithoutRecoveryKey: boolean;
+  strict: boolean;
+};
+
+type MatrixUiaChallenge = { httpStatus: number; data: MatrixUiaResponseBody };
+
+function asUiaChallenge(err: unknown): MatrixUiaChallenge | null {
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+  const candidate = err as { httpStatus?: unknown; data?: { flows?: unknown } };
+  if (candidate.httpStatus !== 401 || !Array.isArray(candidate.data?.flows)) {
+    return null;
+  }
+  return candidate as MatrixUiaChallenge;
+}
+
+function collectUiaStages(body: MatrixUiaResponseBody): string[] {
+  const stages: string[] = [];
+  for (const flow of body.flows ?? []) {
+    for (const stage of flow?.stages ?? []) {
+      if (typeof stage === "string" && !stages.includes(stage)) {
+        stages.push(stage);
+      }
+    }
+  }
+  return stages;
+}
+
+function completedUiaStages(body: MatrixUiaResponseBody): Set<string> {
+  const completed = new Set<string>();
+  for (const stage of body.completed ?? []) {
+    if (typeof stage === "string") {
+      completed.add(stage);
+    }
+  }
+  return completed;
+}
+
+function uiaSession(body: MatrixUiaResponseBody): string | undefined {
+  return typeof body.session === "string" && body.session ? body.session : undefined;
+}
+
+function selectNextSupportedUiaStage(
+  body: MatrixUiaResponseBody,
+  opts: { hasPassword: boolean },
+): string | undefined {
+  const completed = completedUiaStages(body);
+  const supported = (stage: string): boolean =>
+    stage === "m.login.dummy" || (stage === "m.login.password" && opts.hasPassword);
+  let fallback: string | undefined;
+  for (const flow of body.flows ?? []) {
+    const stages = (flow?.stages ?? []).filter((stage): stage is string => {
+      return typeof stage === "string";
+    });
+    const remaining = stages.filter((stage) => !completed.has(stage));
+    if (remaining.length === 0) {
+      continue;
+    }
+    if (remaining.every((stage) => stage === "m.login.dummy")) {
+      return remaining[0];
+    }
+    if (fallback === undefined && remaining.every(supported)) {
+      fallback = remaining[0];
+    }
+  }
+  return fallback;
+}
+
+function extractUiaStageUrl(body: MatrixUiaResponseBody, stage: string): string | undefined {
+  const params = body.params?.[stage];
+  const url = params && typeof params.url === "string" ? params.url.trim() : "";
+  return url || undefined;
+}
+
+class MatrixCrossSigningResetRequiredError extends Error {
+  readonly stages: string[];
+  readonly resetUrl?: string;
+  readonly session?: string;
+
+  constructor(opts: { stages: string[]; resetUrl?: string; session?: string }) {
+    const resetUrl = opts.resetUrl?.trim() || undefined;
+    super(
+      resetUrl
+        ? `Matrix cross-signing key upload requires interactive approval from the homeserver auth service. Open ${resetUrl} in a browser as the bot user, approve the cross-signing reset, then re-run the bootstrap while the approval is fresh.`
+        : "Matrix cross-signing key upload requires interactive approval from the homeserver auth service, but no approval URL was advertised. Reset the user's server-side cross-signing keys with homeserver admin tooling, then re-run the bootstrap.",
+    );
+    this.name = "MatrixCrossSigningResetRequiredError";
+    this.stages = opts.stages;
+    this.resetUrl = resetUrl;
+    this.session = opts.session;
+  }
+}
+
+class MatrixUiaUnsupportedStagesError extends Error {
+  readonly stages: string[];
+
+  constructor(opts: { stages: string[]; hasPassword: boolean }) {
+    const stageList = opts.stages.length > 0 ? opts.stages.join(", ") : "none advertised";
+    super(
+      `Matrix cross-signing key upload requires UIA stages this client cannot satisfy non-interactively: ${stageList}.${
+        opts.hasPassword ? "" : " Set matrix.password to enable the m.login.password fallback."
+      }`,
+    );
+    this.name = "MatrixUiaUnsupportedStagesError";
+    this.stages = opts.stages;
+  }
+}
 
 export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   private verificationHandlerRegistered = false;
@@ -112,23 +227,54 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     password?: string;
   }): MatrixUiAuthCallback {
     return async <T>(makeRequest: (authData: MatrixAuthDict | null) => Promise<T>): Promise<T> => {
+      let challenge: MatrixUiaChallenge;
       try {
         return await makeRequest(null);
-      } catch {
-        // Some homeservers require an explicit dummy UIA stage even when no user interaction is needed.
-        try {
-          return await makeRequest({ type: "m.login.dummy" });
-        } catch {
-          if (!params.password?.trim()) {
-            throw new Error(
-              "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
-            );
+      } catch (err) {
+        const parsed = asUiaChallenge(err);
+        if (!parsed) {
+          throw err;
+        }
+        challenge = parsed;
+      }
+      const password = params.password?.trim();
+      for (;;) {
+        const nextStage = selectNextSupportedUiaStage(challenge.data, {
+          hasPassword: Boolean(password),
+        });
+        if (!nextStage) {
+          const stages = collectUiaStages(challenge.data);
+          const session = uiaSession(challenge.data);
+          const resetStage = stages.find((stage) => INTERACTIVE_RESET_UIA_STAGES.has(stage));
+          if (resetStage) {
+            throw new MatrixCrossSigningResetRequiredError({
+              stages,
+              resetUrl: extractUiaStageUrl(challenge.data, resetStage),
+              session,
+            });
           }
-          return await makeRequest({
-            type: "m.login.password",
-            identifier: { type: "m.id.user", user: params.userId },
-            password: params.password,
-          });
+          throw new MatrixUiaUnsupportedStagesError({ stages, hasPassword: Boolean(password) });
+        }
+        const session = uiaSession(challenge.data);
+        const authData: MatrixAuthDict =
+          nextStage === "m.login.password" && password
+            ? {
+                type: "m.login.password",
+                identifier: { type: "m.id.user", user: params.userId },
+                password,
+              }
+            : { type: "m.login.dummy" };
+        try {
+          return await makeRequest(session ? { ...authData, session } : authData);
+        } catch (err) {
+          const parsed = asUiaChallenge(err);
+          if (!parsed) {
+            throw err;
+          }
+          if (completedUiaStages(parsed.data).size <= completedUiaStages(challenge.data).size) {
+            throw err;
+          }
+          challenge = parsed;
         }
       }
     };
@@ -136,12 +282,29 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
   private async bootstrapCrossSigning(
     crypto: MatrixCryptoBootstrapApi,
-    options: {
-      forceResetCrossSigning: boolean;
-      allowAutomaticCrossSigningReset: boolean;
-      allowSecretStorageRecreateWithoutRecoveryKey: boolean;
-      strict: boolean;
-    },
+    options: CrossSigningBootstrapOptions,
+  ): Promise<{ ready: boolean; published: boolean }> {
+    try {
+      return await this.runCrossSigningBootstrap(crypto, options);
+    } catch (err) {
+      if (err instanceof MatrixCrossSigningResetRequiredError) {
+        LogService.warn(
+          "MatrixClientLite",
+          "Cross-signing bootstrap needs interactive approval:",
+          err.message,
+        );
+        if (options.strict) {
+          throw err;
+        }
+        return { ready: false, published: false };
+      }
+      throw err;
+    }
+  }
+
+  private async runCrossSigningBootstrap(
+    crypto: MatrixCryptoBootstrapApi,
+    options: CrossSigningBootstrapOptions,
   ): Promise<{ ready: boolean; published: boolean }> {
     const userId = await this.deps.getUserId();
     const authUploadDeviceSigningKeys = this.createSigningKeysUiAuthCallback({
@@ -218,6 +381,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         await resetCrossSigning();
         await this.trustFreshOwnIdentity(crypto);
       } catch (err) {
+        if (err instanceof MatrixCrossSigningResetRequiredError) {
+          throw err;
+        }
         const shouldRepairSecretStorage =
           options.allowSecretStorageRecreateWithoutRecoveryKey &&
           isRepairableSecretStorageAccessError(err);
@@ -234,6 +400,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
             await resetCrossSigning();
             await this.trustFreshOwnIdentity(crypto);
           } catch (repairErr) {
+            if (repairErr instanceof MatrixCrossSigningResetRequiredError) {
+              throw repairErr;
+            }
             LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", repairErr);
             if (options.strict) {
               throw repairErr instanceof Error ? repairErr : new Error(String(repairErr));
@@ -264,6 +433,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         authUploadDeviceSigningKeys,
       });
     } catch (err) {
+      if (err instanceof MatrixCrossSigningResetRequiredError) {
+        throw err;
+      }
       const shouldRepairSecretStorage =
         options.allowSecretStorageRecreateWithoutRecoveryKey &&
         isRepairableSecretStorageAccessError(err);
@@ -298,6 +470,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
             authUploadDeviceSigningKeys,
           });
         } catch (resetErr) {
+          if (resetErr instanceof MatrixCrossSigningResetRequiredError) {
+            throw resetErr;
+          }
           LogService.warn("MatrixClientLite", "Failed to bootstrap cross-signing:", resetErr);
           if (options.strict) {
             throw resetErr instanceof Error ? resetErr : new Error(String(resetErr));
@@ -326,6 +501,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
       });
       await this.trustFreshOwnIdentity(crypto);
     } catch (err) {
+      if (err instanceof MatrixCrossSigningResetRequiredError) {
+        throw err;
+      }
       LogService.warn("MatrixClientLite", "Fallback cross-signing bootstrap failed:", err);
       if (options.strict) {
         throw err instanceof Error ? err : new Error(String(err));
