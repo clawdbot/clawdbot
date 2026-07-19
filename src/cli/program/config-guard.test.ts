@@ -514,7 +514,7 @@ describe("ensureConfigReady", () => {
       "  - channels.quietchat: invalid",
       "",
       `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
+      "Audit, status, health, logs, tasks list/audit, doctor, and update commands still run with invalid config.",
       `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -661,6 +661,10 @@ describe("ensureConfigReady", () => {
     const doctorRuntime = await runEnsureConfigReady(["doctor", "fix"]);
     expect(doctorRuntime.exit).not.toHaveBeenCalled();
     expect(doctorRuntime.error).toHaveBeenCalledWith(expect.stringContaining("agentRuntime"));
+
+    const updateRuntime = await runEnsureConfigReady(["update"]);
+    expect(updateRuntime.exit).not.toHaveBeenCalled();
+    expect(updateRuntime.error).toHaveBeenCalledWith(expect.stringContaining("agentRuntime"));
   });
 
   it("allows an explicit invalid-config override", async () => {
