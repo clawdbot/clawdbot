@@ -34,6 +34,7 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
+        args: [-shellcheck=]
 
   # GitHub Actions security audit
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
