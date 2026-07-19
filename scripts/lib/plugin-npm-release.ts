@@ -677,10 +677,11 @@ function runNpmView(args: string[]): string {
 function resolveNpmLatestVersion(packageName: string): string {
   const raw = runNpmView([packageName, "dist-tags.latest", "--json"]);
   const parsed = JSON.parse(raw) as unknown;
-  if (typeof parsed !== "string" || !parsed.trim()) {
+  const version = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed;
+  if (typeof version !== "string" || !version.trim()) {
     throw new Error(`npm returned an invalid latest dist-tag for ${packageName}.`);
   }
-  return parsed.trim();
+  return version.trim();
 }
 
 export function collectPluginReleaseDependencyFreshnessErrors(
