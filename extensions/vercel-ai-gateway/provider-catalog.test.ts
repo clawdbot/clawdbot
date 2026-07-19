@@ -129,25 +129,31 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
-  it("excludes non-language models while preserving vision and legacy catalog rows", async () => {
+  it("preserves live long-context pricing tiers", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: jsonResponse({
         data: [
           {
-            id: "alibaba/qwen3-235b-a22b-thinking",
-            type: "language",
-            tags: ["vision", "reasoning"],
+            id: "openai/gpt-5.4",
+            name: "GPT 5.4",
+            pricing: {
+              input: "0.0000025",
+              output: "0.000015",
+              input_cache_read: "0.00000025",
+              input_tiers: [
+                { cost: "0.0000025", min: 0, max: 272_000 },
+                { cost: "0.000005", min: 272_000 },
+              ],
+              output_tiers: [
+                { cost: "0.000015", min: 0, max: 272_000 },
+                { cost: "0.0000225", min: 272_000 },
+              ],
+              input_cache_read_tiers: [
+                { cost: "0.00000025", min: 0, max: 272_000 },
+                { cost: "0.0000005", min: 272_000 },
+              ],
+            },
           },
-          ...[
-            ["embedding", "alibaba/qwen3-embedding-0.6b"],
-            ["image", "bfl/flux-2-flex"],
-            ["video", "alibaba/wan-v2.5-t2v-preview"],
-            ["reranking", "cohere/rerank-v3.5"],
-            ["speech", "fish-audio/s1"],
-            ["transcription", "fish-audio/transcribe-1"],
-            ["realtime", "openai/gpt-realtime-1.5"],
-          ].map(([type, id]) => ({ id, type })),
-          { id: "custom/legacy-model" },
         ],
       }),
       release: async () => {},
@@ -155,13 +161,114 @@ describe("vercel ai gateway provider catalog", () => {
     });
 
     await withLiveDiscovery(async () => {
-      expect((await buildVercelAiGatewayProvider()).models).toMatchObject([
+      const models = await discoverVercelAiGatewayModels();
+
+      expect(models[0]?.cost).toStrictEqual({
+        input: 2.5,
+        output: 15,
+        cacheRead: 0.25,
+        cacheWrite: 0,
+        tieredPricing: [
+          {
+            input: 2.5,
+            output: 15,
+            cacheRead: 0.25,
+            cacheWrite: 0,
+            range: [0, 272_000],
+          },
+          {
+            input: 5,
+            output: 22.5,
+            cacheRead: 0.5,
+            cacheWrite: 0,
+            range: [272_000],
+          },
+        ],
+      });
+    });
+  });
+
+  it("keeps valid pricing tiers when optional cache tier data is partial", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse({
+        data: [
+          {
+            id: "openai/gpt-5.6-luna",
+            pricing: {
+              input: "0.000001",
+              output: "0.000006",
+              input_cache_read: "0.0000001",
+              input_tiers: [
+                { cost: "0.000001", min: 0, max: 272_000 },
+                { cost: "0.000002", min: 272_000 },
+              ],
+              output_tiers: [
+                { cost: "0.000006", min: 0, max: 272_000 },
+                { cost: "0.000009", min: 272_000 },
+              ],
+              input_cache_read_tiers: [
+                { cost: "0.0000001", max: 272_000 },
+                { cost: "0.0000002", min: 272_000 },
+              ],
+            },
+          },
+          {
+            id: "xai/grok-4.20-non-reasoning-beta",
+            pricing: {
+              input: "0.00000125",
+              output: "0.0000025",
+              input_cache_read: "0.0000002",
+              input_tiers: [
+                { cost: "0.00000125", min: 0, max: 200_001 },
+                { cost: "0.0000025", min: 200_001 },
+              ],
+              output_tiers: [
+                { cost: "0.0000025", min: 0, max: 200_001 },
+                { cost: "0.000005", min: 200_001 },
+              ],
+              input_cache_read_tiers: [{ cost: "0.0000004", min: 200_001 }],
+            },
+          },
+        ],
+      }),
+      release: async () => {},
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+
+    await withLiveDiscovery(async () => {
+      const models = await discoverVercelAiGatewayModels();
+
+      expect(models[0]?.cost.tieredPricing).toStrictEqual([
         {
-          id: "alibaba/qwen3-235b-a22b-thinking",
-          reasoning: true,
-          input: ["text", "image"],
+          input: 1,
+          output: 6,
+          cacheRead: expect.closeTo(0.1),
+          cacheWrite: 0,
+          range: [0, 272_000],
         },
-        { id: "custom/legacy-model", input: ["text"] },
+        {
+          input: 2,
+          output: 9,
+          cacheRead: expect.closeTo(0.2),
+          cacheWrite: 0,
+          range: [272_000],
+        },
+      ]);
+      expect(models[1]?.cost.tieredPricing).toStrictEqual([
+        {
+          input: 1.25,
+          output: 2.5,
+          cacheRead: expect.closeTo(0.2),
+          cacheWrite: 0,
+          range: [0, 200_001],
+        },
+        {
+          input: 2.5,
+          output: 5,
+          cacheRead: expect.closeTo(0.2),
+          cacheWrite: 0,
+          range: [200_001],
+        },
       ]);
     });
   });

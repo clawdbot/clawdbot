@@ -26,6 +26,16 @@ type VercelPricingShape = {
   output?: number | string;
   input_cache_read?: number | string;
   input_cache_write?: number | string;
+  input_tiers?: unknown;
+  output_tiers?: unknown;
+  input_cache_read_tiers?: unknown;
+  input_cache_write_tiers?: unknown;
+};
+
+type ParsedVercelPricingTier = {
+  cost: number;
+  min: number;
+  max?: number;
 };
 
 type VercelGatewayModelShape = {
@@ -98,7 +108,7 @@ const STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG: readonly StaticVercelGatewayModel[
   },
 ] as const;
 
-function toPerMillionCost(value: number | string | undefined): number {
+function parsePerMillionCost(value: unknown): number | undefined {
   const numeric =
     typeof value === "number"
       ? value
@@ -106,9 +116,101 @@ function toPerMillionCost(value: number | string | undefined): number {
         ? parseStrictFiniteNumber(value)
         : undefined;
   if (numeric === undefined || numeric < 0) {
-    return 0;
+    return undefined;
   }
   return numeric * 1_000_000;
+}
+
+function toPerMillionCost(value: number | string | undefined): number {
+  return parsePerMillionCost(value) ?? 0;
+}
+
+function readNonNegativeSafeInteger(value: unknown): number | undefined {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : Number.NaN;
+  return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
+}
+
+function parsePricingTierList(value: unknown): ParsedVercelPricingTier[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const tiers: ParsedVercelPricingTier[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return undefined;
+    }
+    const entry = item as Record<string, unknown>;
+    const cost = parsePerMillionCost(entry.cost);
+    const min = entry.min === undefined && index === 0 ? 0 : readNonNegativeSafeInteger(entry.min);
+    const max = entry.max === undefined ? undefined : readNonNegativeSafeInteger(entry.max);
+    if (cost === undefined || min === undefined || (entry.max !== undefined && max === undefined)) {
+      return undefined;
+    }
+    if (max !== undefined && max <= min) {
+      return undefined;
+    }
+    tiers.push({ cost, min, ...(max === undefined ? {} : { max }) });
+  }
+  if (tiers[0]?.min !== 0 || tiers.at(-1)?.max !== undefined) {
+    return undefined;
+  }
+  for (let index = 1; index < tiers.length; index += 1) {
+    if (tiers[index - 1]?.max !== tiers[index]?.min) {
+      return undefined;
+    }
+  }
+  return tiers;
+}
+
+function pricingTierRangesMatch(
+  reference: ParsedVercelPricingTier[],
+  candidate: ParsedVercelPricingTier[],
+): boolean {
+  return (
+    reference.length === candidate.length &&
+    reference.every(
+      (tier, index) => tier.min === candidate[index]?.min && tier.max === candidate[index]?.max,
+    )
+  );
+}
+
+function normalizeTieredPricing(
+  pricing: VercelPricingShape | undefined,
+  flatCost: ModelDefinitionConfig["cost"],
+): NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]> | undefined {
+  const inputTiers = parsePricingTierList(pricing?.input_tiers);
+  const outputTiers = parsePricingTierList(pricing?.output_tiers);
+  if (!inputTiers || !outputTiers || !pricingTierRangesMatch(inputTiers, outputTiers)) {
+    return undefined;
+  }
+
+  const parsedCacheReadTiers = parsePricingTierList(pricing?.input_cache_read_tiers);
+  const parsedCacheWriteTiers = parsePricingTierList(pricing?.input_cache_write_tiers);
+  const cacheReadTiers =
+    parsedCacheReadTiers && pricingTierRangesMatch(inputTiers, parsedCacheReadTiers)
+      ? parsedCacheReadTiers
+      : undefined;
+  const cacheWriteTiers =
+    parsedCacheWriteTiers && pricingTierRangesMatch(inputTiers, parsedCacheWriteTiers)
+      ? parsedCacheWriteTiers
+      : undefined;
+
+  return inputTiers.map((tier, index) => {
+    const range: [number, number] | [number] =
+      tier.max === undefined ? [tier.min] : [tier.min, tier.max];
+    return {
+      input: tier.cost,
+      output: outputTiers[index]?.cost ?? flatCost.output,
+      cacheRead: cacheReadTiers?.[index]?.cost ?? flatCost.cacheRead,
+      cacheWrite: cacheWriteTiers?.[index]?.cost ?? flatCost.cacheWrite,
+      range,
+    };
+  });
 }
 
 function normalizeCost(pricing?: VercelPricingShape): ModelDefinitionConfig["cost"] {
@@ -179,6 +281,13 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
     fallback?.maxTokens ??
     VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS;
   const normalizedCost = normalizeCost(model.pricing);
+  const tieredPricing = normalizeTieredPricing(model.pricing, normalizedCost);
+  const hasLiveCost =
+    normalizedCost.input > 0 ||
+    normalizedCost.output > 0 ||
+    normalizedCost.cacheRead > 0 ||
+    normalizedCost.cacheWrite > 0 ||
+    tieredPricing !== undefined;
 
   return {
     id,
@@ -194,13 +303,9 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
       : (fallback?.input ?? ["text"]),
     contextWindow,
     maxTokens,
-    cost:
-      normalizedCost.input > 0 ||
-      normalizedCost.output > 0 ||
-      normalizedCost.cacheRead > 0 ||
-      normalizedCost.cacheWrite > 0
-        ? normalizedCost
-        : (fallback?.cost ?? VERCEL_AI_GATEWAY_DEFAULT_COST),
+    cost: hasLiveCost
+      ? { ...normalizedCost, ...(tieredPricing ? { tieredPricing } : {}) }
+      : (fallback?.cost ?? VERCEL_AI_GATEWAY_DEFAULT_COST),
   };
 }
 
