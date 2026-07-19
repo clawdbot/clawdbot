@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 const WORKFLOW_PATH = ".github/workflows/openclaw-cross-os-release-checks-reusable.yml";
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
+const FULL_RELEASE_VALIDATION_PATH = ".github/workflows/full-release-validation.yml";
 const WRAPPER_PATH = "scripts/github/run-openclaw-cross-os-release-checks.sh";
 const SCRIPT_PATH = "scripts/openclaw-cross-os-release-checks.ts";
 const HARNESS = "bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh";
@@ -68,6 +69,13 @@ describe("cross-OS release checks workflow", () => {
     expect(job(releaseChecks, "cross_os_release_checks").with?.packaged_upgrade_advisory).toBe(
       "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
     );
+    const fullRelease = readWorkflow(FULL_RELEASE_VALIDATION_PATH);
+    const releaseDispatch = step(
+      job(fullRelease, "release_checks"),
+      "Dispatch and monitor release checks",
+    );
+    expect(releaseDispatch.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expect(releaseDispatch.run).toContain('-f release_profile="$RELEASE_PROFILE"');
   });
 
   it("caches the installed packaged-upgrade baseline by immutable package identity", () => {

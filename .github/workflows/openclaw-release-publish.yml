@@ -1938,10 +1938,16 @@ jobs:
               --repo "${GITHUB_REPOSITORY}"
               --release-sha "${TARGET_SHA}"
               --workflow-ref "${CHILD_WORKFLOW_REF}"
-              --clawhub-workflow-ref "${clawhub_workflow_ref}"
               --evidence-out "${evidence_path}"
               --skip-github-release
             )
+            if [[ "${skip_clawhub}" != "true" ]]; then
+              [[ -n "${clawhub_workflow_ref// }" ]] || {
+                echo "ClawHub workflow ref is required when ClawHub verification is enabled." >&2
+                return 1
+              }
+              verify_args+=(--clawhub-workflow-ref "${clawhub_workflow_ref}")
+            fi
             if [[ "${skip_plugin_npm}" == "true" ]]; then
               verify_args+=(--skip-plugin-npm)
             else
