@@ -123,6 +123,52 @@ describe("groupCatalogSessionsByProject", () => {
       title: expectedPath,
     });
   });
+
+  it("groups equivalent Windows cwd spellings under the first display path", () => {
+    const result = groupCatalogSessionsByProject([
+      session("first", "C:\\Work\\Notes"),
+      session("second", "c:/work/notes/"),
+      session("third", "C:/WORK/NOTES"),
+    ]);
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toMatchObject({
+      key: "C:\\Work\\Notes",
+      label: "Notes",
+      title: "C:\\Work\\Notes",
+    });
+    expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+  });
+
+  it("folds case-varied Windows worktree paths into their origin project", () => {
+    const result = groupCatalogSessionsByProject([
+      session("direct", "C:\\Work\\OpenClaw"),
+      session("worktree", "c:/work/openclaw/.CLAUDE/WORKTREES/fix-1/ui/src"),
+    ]);
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["direct", "worktree"]);
+  });
+
+  it("keeps POSIX cwd matching case-sensitive", () => {
+    const result = groupCatalogSessionsByProject([
+      session("upper", "/Work/Notes"),
+      session("lower", "/work/notes"),
+      session("double-upper", "//mnt/Repo"),
+      session("double-lower", "//mnt/repo"),
+    ]);
+
+    expect(result.groups.map((group) => group.key)).toEqual([
+      "/Work/Notes",
+      "/work/notes",
+      "//mnt/Repo",
+      "//mnt/repo",
+    ]);
+  });
 });
 
 describe("groupCatalogSessionsByPerson", () => {

@@ -31,7 +31,10 @@ export function foldWorktreeCheckoutPath(path: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  const pattern = isWindowsPath(trimmed)
+    ? /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/i
+    : /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
+  const match = trimmed.match(pattern);
   return match ? match[1] || null : trimmed;
 }
 
@@ -50,6 +53,21 @@ type CatalogProjectGroup = {
   title: string;
   sessions: SessionCatalogSession[];
 };
+
+function isWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\");
+}
+
+function catalogProjectPathIdentity(value: string): string {
+  if (!isWindowsPath(value)) {
+    return value;
+  }
+  return `windows:${value
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase())
+    .join("/")}`;
+}
 
 export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogSession[]): {
   groups: CatalogProjectGroup[];
@@ -92,7 +110,8 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       ungrouped.push(session);
       continue;
     }
-    let group = projectGroupsByPath.get(projectPath);
+    const pathIdentity = catalogProjectPathIdentity(projectPath);
+    let group = projectGroupsByPath.get(pathIdentity);
     if (!group) {
       group = {
         kind: "project",
@@ -102,7 +121,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         title: projectPath,
         sessions: [],
       };
-      projectGroupsByPath.set(projectPath, group);
+      projectGroupsByPath.set(pathIdentity, group);
       projectGroups.push(group);
     }
     group.sessions.push(session);
