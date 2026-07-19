@@ -702,7 +702,7 @@ function canonicalPluginNames(value) {
   return names
     .map((name) => name.trim())
     .filter(Boolean)
-    .toSorted();
+    .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 function canonicalStringMap(value, label) {

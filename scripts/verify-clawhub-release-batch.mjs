@@ -51,7 +51,7 @@ function readPlan(path) {
 }
 
 async function mapWithConcurrency(items, concurrency, operation) {
-  const results = new Array(items.length);
+  const results = Array.from({ length: items.length });
   let nextIndex = 0;
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (nextIndex < items.length) {
@@ -79,7 +79,10 @@ export async function verifyClawHubReleaseBatch(options) {
   const delayMs = positiveInteger(options.delayMs, DEFAULT_DELAY_MS, "delayMs", MAX_DELAY_MS);
   const sleep =
     options.sleep ??
-    ((milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)));
+    ((milliseconds) =>
+      new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, milliseconds);
+      }));
   const verify =
     options.verify ??
     ((plugin) =>
@@ -222,8 +225,10 @@ async function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    },
+  );
 }
