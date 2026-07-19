@@ -432,10 +432,19 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         if (result?.kind === "failed-retryable") {
           return result;
         }
-        if (isAborted() || lifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: createStoppedError() };
-        }
+        // Terminal and handoff outcomes must reach the drain even when stop
+        // races the return: the drain settles terminal results under abort and
+        // keeps deferred claims for their owner. Rewriting them to
+        // failed-retryable here would release claims whose side effects already
+        // ran, replaying delivered work on restart.
         if (result?.kind === "completed") {
+          // A deferred handoff recorded during delivery stays authoritative:
+          // the drain already placed the claim in deferred and only settles a
+          // completed result from dispatching, so a conflicting terminal return
+          // would strand the claim until later recovery.
+          if (deferredHandoff) {
+            return { kind: "deferred" };
+          }
           return result;
         }
         if (result?.kind === "deferred") {
@@ -444,11 +453,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           return { kind: "deferred" };
         }
+        if (deferredHandoff) {
+          return { kind: "deferred" };
+        }
+        if (isAborted() || lifecycle.abortSignal.aborted) {
+          return { kind: "failed-retryable", error: createStoppedError() };
+        }
         if (!handedOff) {
           // A policy gate or deliberate no-dispatch is terminal for transport replay.
           await wrappedLifecycle.onAdopted();
         }
-        return deferredHandoff ? { kind: "deferred" } : { kind: "completed" };
+        return { kind: "completed" };
       },
     });
     return drain;

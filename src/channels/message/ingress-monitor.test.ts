@@ -802,6 +802,82 @@ describe("channel ingress monitor", () => {
     });
   });
 
+  it("completes deliveries whose terminal result races a stop abort", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await new Promise<void>((resolve) => {
+          if (lifecycle.abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { kind: "completed" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-stop-completed", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // Side effects finished and the channel reported completed; settling the
+      // claim for retry would replay already-delivered work on restart.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toEqual([]);
+    });
+  });
+
+  it("keeps deferred handoffs with their owner when a stop abort races the return", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        lifecycle.onDeferred();
+        await new Promise<void>((resolve) => {
+          if (lifecycle.abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { kind: "deferred" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-stop-deferred-race", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // The deferred owner still owns the claim; releasing it for retry would
+      // replay work the owner is completing.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toHaveLength(1);
+    });
+  });
+
+  it("keeps a deferred handoff authoritative when delivery then returns completed", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "completed" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-deferred-then-completed", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // Contract pin: a deferred handoff owns the claim, so a conflicting
+      // completed return must surface as deferred. Through today's drain both
+      // outcomes leave the row held (the drain only completes from
+      // dispatching); this locks the claim with its owner rather than letting
+      // a sibling drain release or replay it.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toHaveLength(1);
+    });
+  });
+
   it("clears a queued drain request when abort wins an active pump", async () => {
     await withQueue(async (queue) => {
       let markPruneStarted = () => {};
