@@ -39,7 +39,6 @@ let nextManualRunId = 1;
 async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: ActivatedManualRun,
-  mode?: "due" | "force",
 ): Promise<void> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
@@ -254,13 +253,11 @@ async function finishPreparedManualRun(
         snapshot: postRunSnapshot,
         removed: postRunRemoved,
       });
+      // A manual run reaches this path with operator origin, so it never owns
+      // the scheduler-consuming force-preserve semantics; repair expired slots
+      // without pinning a paced job the way a scheduled force run would.
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
-        ...(mode === "force"
-          ? {
-              preserveExpiredPacedNextRunJobId: jobId,
-            }
-          : {}),
       });
       await persistOrRestore(state, rollbackSnapshot);
       if (removedJob) {
@@ -328,7 +325,7 @@ export async function run(
     if (!activeRun.ran) {
       return activeRun;
     }
-    await finishPreparedManualRun(state, activeRun, mode);
+    await finishPreparedManualRun(state, activeRun);
     return { ok: true, ran: true } as const;
   });
   if (admission.kind === "stopped") {
