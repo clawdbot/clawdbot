@@ -53,7 +53,7 @@ function runStage(stage) {
 
 export async function runReleaseReadiness(stages = RELEASE_READINESS_STAGES, options = {}) {
   const concurrency = options.concurrency ?? 4;
-  const results = new Array(stages.length);
+  const results = Array.from({ length: stages.length });
   let nextIndex = 0;
   const workers = Array.from({ length: Math.min(concurrency, stages.length) }, async () => {
     while (nextIndex < stages.length) {
@@ -110,8 +110,10 @@ async function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    },
+  );
 }
