@@ -6443,6 +6443,65 @@ describe("deferred channel reload abort generation", () => {
     expect(channels.start).not.toHaveBeenCalled();
   });
 
+  it("preserves known accounts when plugin cancellation rollback coalesces with candidate account edits", async () => {
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const channels = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
+      await params.beforeReplace(new Set(["whatsapp"]));
+      return {
+        restartChannels: new Set(),
+        activeChannels: new Set(),
+        cancelled: true,
+      };
+    };
+    const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
+    const plan = createPluginReloadPlan();
+    plan.changedPaths = ["plugins.enabled", "channels.whatsapp.accounts.primary.enabled"];
+    plan.hotReasons = plan.changedPaths;
+
+    await expect(applyHotReload(plan, {})).rejects.toThrow(
+      "config hot reload cancelled by config supersession or in-process restart",
+    );
+
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
+      includeKnownAccounts: true,
+    });
+  });
+
+  it("preserves known accounts when plugin pre-stop rollback coalesces with candidate account edits", async () => {
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const channels = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {
+        throw new Error("stop failed during drain");
+      }),
+    };
+    const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
+      await params.beforeReplace(new Set(["whatsapp"]));
+      return {
+        restartChannels: new Set(),
+        activeChannels: new Set(),
+      };
+    };
+    const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
+    const plan = createPluginReloadPlan();
+    plan.changedPaths = ["plugins.enabled", "channels.whatsapp.accounts.primary.enabled"];
+    plan.hotReasons = plan.changedPaths;
+
+    await expect(applyHotReload(plan, {})).rejects.toThrow(
+      "failed to stop channels before plugin reload: whatsapp",
+    );
+
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
+      includeKnownAccounts: true,
+    });
+  });
+
   it("does not roll back a failed plugin pre-stop after lifecycle restart aborts", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
