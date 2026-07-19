@@ -180,7 +180,7 @@ function computeDependencyFingerprint({ workspace, frozenLockfile }) {
     addRecord(hash, kind, relativePath, contents);
   }
 
-  return `v2-${hash.digest("hex")}`;
+  return `v3-${hash.digest("hex")}`;
 }
 
 function parseArgs(argv) {

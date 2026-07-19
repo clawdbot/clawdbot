@@ -2166,6 +2166,12 @@ describe("ci workflow guards", () => {
     expect(installStep.run).toContain(
       "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install",
     );
+    expect(installStep.run).toContain(
+      '[ "$sticky_snapshot_matches" = "true" ] && [ "$STICKY_WRITER" != "true" ]',
+    );
+    expect(installStep.run).toContain(
+      "Sticky dependency writer is reconciling the matching snapshot",
+    );
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 15m");
     expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
@@ -2472,7 +2478,7 @@ describe("ci workflow guards", () => {
       execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: root });
 
       const baseline = fingerprint();
-      expect(baseline).toMatch(/^v2-[a-f0-9]{64}$/);
+      expect(baseline).toMatch(/^v3-[a-f0-9]{64}$/);
 
       // Presence is part of the record type, so a real file cannot collide
       // with the representation of an absent optional install input.
