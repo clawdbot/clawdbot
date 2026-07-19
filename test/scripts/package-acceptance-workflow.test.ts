@@ -692,6 +692,10 @@ describe("package acceptance workflow", () => {
     expect(orchestration).toContain(
       "no plugin npm child dispatched; repair from the release publish run",
     );
+    expect(orchestration).toContain('if [[ "${skip_clawhub}" != "true" ]]; then');
+    expect(orchestration).toContain(
+      'verify_args+=(--clawhub-workflow-ref "${clawhub_workflow_ref}")',
+    );
     expect(orchestration).toMatch(
       /upload_release_evidence_assets\n\s+publish_github_release\n\s+mark_release_completion\n\s+upload_release_evidence_assets/,
     );
