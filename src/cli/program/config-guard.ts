@@ -17,7 +17,15 @@ import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
-const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
+const ALLOWED_INVALID_COMMANDS = new Set([
+  "audit",
+  "doctor",
+  "logs",
+  "health",
+  "help",
+  "status",
+  "update",
+]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "run",
   "status",
@@ -361,7 +369,7 @@ export async function ensureConfigReady(
   );
   params.runtime.error(
     muted(
-      "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
+      "Audit, status, health, logs, tasks list/audit, doctor, and update commands still run with invalid config.",
     ),
   );
   if (isPluginPackagingFailure && isGatewayStartup) {
