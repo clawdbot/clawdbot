@@ -226,6 +226,13 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
     return undefined;
   }
+  // AssistantMessage usage always carries a cost object whose totals default to
+  // zero, so a bare `total` cannot mark an explicit cost. Only a provider-billed
+  // total is authoritative (see applyProviderReportedUsageCost); adapter-default
+  // zeros fall through to the pricing-known estimate path.
+  if ((cost as { totalOrigin?: unknown }).totalOrigin !== "provider-billed") {
+    return undefined;
+  }
   return (
     readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
     readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
