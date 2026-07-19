@@ -73,11 +73,9 @@ async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string>
   const busAddress = normalizeOptionalString(env.DBUS_SESSION_BUS_ADDRESS);
   const runtimeUid = runtimeDir?.match(/^\/run\/user\/(\d+)$/)?.[1];
   const busUid = busAddress?.match(/\/run\/user\/(\d+)\/bus(?:$|[,;])/u)?.[1];
-  const missingUserBusEnv = !runtimeDir || !busAddress;
-  const mismatchedUserBusEnv =
-    (runtimeUid !== undefined && runtimeUid !== String(uid)) ||
-    (busUid !== undefined && busUid !== String(uid));
-  if (!missingUserBusEnv && !mismatchedUserBusEnv) {
+  const repairRuntimeDir = !runtimeDir || (runtimeUid !== undefined && runtimeUid !== String(uid));
+  const repairBusAddress = !busAddress || (busUid !== undefined && busUid !== String(uid));
+  if (!repairRuntimeDir && !repairBusAddress) {
     return "";
   }
 
@@ -90,9 +88,12 @@ async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string>
     return "";
   }
 
-  return `# Repair a missing or cross-user D-Bus environment inherited by the updater.
-export XDG_RUNTIME_DIR='${shellEscape(expectedRuntimeDir)}'
-export DBUS_SESSION_BUS_ADDRESS='${shellEscape(expectedBusAddress)}'
+  const exports = [
+    repairRuntimeDir ? `export XDG_RUNTIME_DIR='${shellEscape(expectedRuntimeDir)}'` : "",
+    repairBusAddress ? `export DBUS_SESSION_BUS_ADDRESS='${shellEscape(expectedBusAddress)}'` : "",
+  ].filter(Boolean);
+  return `# Repair missing or cross-user D-Bus values inherited by the updater.
+${exports.join("\n")}
 `;
 }
 

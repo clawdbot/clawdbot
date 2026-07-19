@@ -293,6 +293,56 @@ exit 1
       await cleanupScript(scriptPath);
     });
 
+    it("preserves a custom user bus when the runtime directory is missing", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 1000;
+      vi.spyOn(fs, "stat").mockResolvedValue({
+        isSocket: () => true,
+      } as Awaited<ReturnType<typeof fs.stat>>);
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "",
+        DBUS_SESSION_BUS_ADDRESS: "unix:abstract=/openclaw-user-bus",
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
+    it("repairs both missing standard user bus values", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 1000;
+      vi.spyOn(fs, "stat").mockResolvedValue({
+        isSocket: () => true,
+      } as Awaited<ReturnType<typeof fs.stat>>);
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "",
+        DBUS_SESSION_BUS_ADDRESS: "",
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).toContain("export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("keeps a valid standard user bus environment", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 1000;
+      const statSpy = vi.spyOn(fs, "stat");
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/run/user/1000",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+      });
+
+      expect(statSpy).not.toHaveBeenCalled();
+      expect(content).not.toContain("export XDG_RUNTIME_DIR=");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
     it("keeps the inherited environment when the effective user bus is unavailable", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       process.getuid = () => 1000;
