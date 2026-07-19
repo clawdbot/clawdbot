@@ -2,7 +2,15 @@
 // Generates npm-shrinkwrap.json files that mirror pnpm lock policy for
 // published packages while stripping dev-only dependency state.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -475,7 +483,52 @@ export function createNpmShrinkwrapExecOptions(invocation, cwd, env = process.en
 
 function runNpm(args, cwd) {
   const npm = createNpmShrinkwrapCommand(args);
-  execFileSync(npm.command, npm.args, createNpmShrinkwrapExecOptions(npm, cwd));
+  try {
+    execFileSync(npm.command, npm.args, createNpmShrinkwrapExecOptions(npm, cwd));
+  } catch (error) {
+    const output = [error?.stderr, error?.stdout]
+      .map((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : String(value ?? "")))
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join("\n");
+    const command = [npm.command, ...npm.args].join(" ");
+    throw new Error(
+      output ? `Command failed: ${command}\n${output}` : `Command failed: ${command}`,
+    );
+  }
+}
+
+/**
+ * npm 12 no longer reads npm-shrinkwrap.json, but its package-lock format is
+ * identical. Stage the prior published lock under npm's supported filename.
+ * @internal Directly tested script implementation detail.
+ */
+export function stageShrinkwrapAsPackageLock(tempDir) {
+  const shrinkwrapPath = path.join(tempDir, "npm-shrinkwrap.json");
+  if (!existsSync(shrinkwrapPath)) {
+    return false;
+  }
+  const packageLockPath = path.join(tempDir, "package-lock.json");
+  rmSync(packageLockPath, { force: true });
+  renameSync(shrinkwrapPath, packageLockPath);
+  return true;
+}
+
+/** @internal Directly tested script implementation detail. */
+export function promotePackageLockToShrinkwrap(tempDir) {
+  const packageLockPath = path.join(tempDir, "package-lock.json");
+  if (!existsSync(packageLockPath)) {
+    throw new Error("npm package-lock-only install did not create package-lock.json");
+  }
+  const shrinkwrapPath = path.join(tempDir, "npm-shrinkwrap.json");
+  rmSync(shrinkwrapPath, { force: true });
+  renameSync(packageLockPath, shrinkwrapPath);
+}
+
+function refreshNpmShrinkwrap(npmInstallArgs, tempDir) {
+  stageShrinkwrapAsPackageLock(tempDir);
+  runNpm(npmInstallArgs, tempDir);
+  promotePackageLockToShrinkwrap(tempDir);
 }
 
 function packageExtensionAppliesToDependency(selector, dependencyName) {
@@ -701,7 +754,7 @@ function normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallAr
   // shrinkwraps as inactive, drop their cached subtree, then ask npm to recalculate this
   // package's authoritative lock with registry integrity hashes.
   writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
-  runNpm(npmInstallArgs, tempDir);
+  refreshNpmShrinkwrap(npmInstallArgs, tempDir);
 
   const normalized = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
   const remaining = collectOverrideViolations(normalized, overrideRules);
@@ -759,11 +812,7 @@ function generateShrinkwrap(packageDir, options = {}) {
       path.join(tempDir, "package.json"),
       `${JSON.stringify(packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides), null, 2)}\n`,
     );
-    runNpm(npmInstallArgs, tempDir);
-    runNpm(
-      ["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund", ...peerResolutionArgs],
-      tempDir,
-    );
+    refreshNpmShrinkwrap(npmInstallArgs, tempDir);
     normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
     const generated = restoreCurrentPnpmLockedPackages(
       normalizeNpmVersionDrift(

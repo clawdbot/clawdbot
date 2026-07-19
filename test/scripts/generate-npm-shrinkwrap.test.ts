@@ -1,4 +1,6 @@
 // Generate Npm Shrinkwrap tests cover generate npm shrinkwrap script behavior.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -21,7 +23,9 @@ import {
   resolvePackageDirs,
   resolveShrinkwrapJobs,
   restoreCurrentPnpmLockedPackages,
+  promotePackageLockToShrinkwrap,
   shouldUseLegacyPeerDepsForShrinkwrap,
+  stageShrinkwrapAsPackageLock,
   shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
 
@@ -74,6 +78,33 @@ describe("generate-npm-shrinkwrap", () => {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10 * 60 * 1000,
     });
+  });
+
+  it("round-trips publish locks through npm 12's supported package-lock filename", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-test-"));
+    try {
+      const shrinkwrap = JSON.stringify({ lockfileVersion: 3, packages: {} });
+      writeFileSync(path.join(root, "npm-shrinkwrap.json"), shrinkwrap);
+
+      expect(stageShrinkwrapAsPackageLock(root)).toBe(true);
+      expect(readFileSync(path.join(root, "package-lock.json"), "utf8")).toBe(shrinkwrap);
+
+      promotePackageLockToShrinkwrap(root);
+      expect(readFileSync(path.join(root, "npm-shrinkwrap.json"), "utf8")).toBe(shrinkwrap);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails clearly when npm package-lock-only produces no lockfile", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-test-"));
+    try {
+      expect(() => promotePackageLockToShrinkwrap(root)).toThrow(
+        "npm package-lock-only install did not create package-lock.json",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("normalizes pnpm scoped override selectors for npm shrinkwrap", () => {
