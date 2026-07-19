@@ -46,6 +46,7 @@ export type RunSshSandboxCommandParams = {
   allowFailure?: boolean;
   signal?: AbortSignal;
   tty?: boolean;
+  timeoutMs?: number;
 };
 
 function normalizeInlineSshMaterial(contents: string, filename: string): string {
@@ -670,6 +671,8 @@ export async function disposeSshSandboxSession(session: SshSandboxSession): Prom
   await fs.rm(path.dirname(session.configPath), { recursive: true, force: true });
 }
 
+const SSH_COMMAND_TIMEOUT_MS = 60_000;
+
 /** Run a remote command through ssh and return buffered stdout/stderr. */
 export async function runSshSandboxCommand(
   params: RunSshSandboxCommandParams,
@@ -692,6 +695,9 @@ export async function runSshSandboxCommand(
     maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
     reject: false,
     stripFinalNewline: false,
+    // An SSH peer that accepts TCP but stalls before the banner never exits, so
+    // bound the command even when the caller provides no abort signal.
+    timeout: params.timeoutMs ?? SSH_COMMAND_TIMEOUT_MS,
   });
   if (params.signal?.aborted || result.isCanceled) {
     throw createAbortError("Aborted");

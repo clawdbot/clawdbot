@@ -14,6 +14,7 @@ import {
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+  runSshSandboxCommand,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
 } from "./ssh.js";
@@ -383,6 +384,30 @@ describe("sandbox ssh helpers", () => {
           remoteDir: "/remote/workspace",
         }),
       ).resolves.toBeUndefined();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a sandbox command that stalls past the timeout",
+    async () => {
+      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-cmd-timeout-"));
+      tempDirs.push(localDir);
+      const hangingSsh = path.join(localDir, "hang-ssh.mjs");
+      await fs.writeFile(hangingSsh, "#!/usr/bin/env node\nsetInterval(() => {}, 1e9);\n", {
+        mode: 0o755,
+      });
+
+      await expect(
+        runSshSandboxCommand({
+          session: {
+            command: hangingSsh,
+            configPath: "/tmp/openclaw-test-ssh-config",
+            host: "openclaw-sandbox",
+          },
+          remoteCommand: "true",
+          timeoutMs: 100,
+        }),
+      ).rejects.toThrow(/timed out/i);
     },
   );
 });
