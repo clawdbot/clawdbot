@@ -25,6 +25,7 @@ import {
   validateCandidateReleaseNotes,
   validateFullManifest,
   validateNpmPreflightRunSource,
+  validatePublishEvidence,
   validatePreflightManifest,
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
@@ -710,6 +711,9 @@ describe("release candidate checklist", () => {
       duplicateOption("--npm-preflight-run", "111", "222"),
       duplicateOption("--windows-node-tag", "v0.6.3", "v0.6.4"),
       duplicateFlag("--skip-dispatch"),
+      duplicateFlag("--dispatch-publish"),
+      duplicateOption("--publish-run", "111", "222"),
+      duplicateFlag("--wait-for-ecosystem"),
       duplicateFlag("--skip-local-generated-check"),
       duplicateFlag("--skip-parallels"),
       duplicateFlag("--skip-telegram"),
@@ -861,6 +865,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'preflight_run_id=222'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
+    expect(command).toContain("'wait_for_clawhub=false'");
     expect(command).toContain("'--ref' 'main'");
     expect(command).not.toContain("windows_node_tag=");
 
@@ -875,6 +880,116 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("can dispatch the publish controller through ecosystem convergence", () => {
+    const options = {
+      ...parseArgs([
+        "--tag",
+        "v2026.5.14-beta.3",
+        "--full-release-run",
+        "111",
+        "--npm-preflight-run",
+        "222",
+        "--skip-dispatch",
+        "--dispatch-publish",
+        "--wait-for-ecosystem",
+      ]),
+      fullReleaseRunAttempt: 1,
+    };
+
+    expect(options.dispatchPublish).toBe(true);
+    expect(buildPublishCommand(options)).toContain("'wait_for_clawhub=true'");
+  });
+
+  it("binds a resumed publish run to the exact release candidate evidence", () => {
+    const evidence = {
+      releaseTag: "v2026.5.14-beta.3",
+      releaseSha: "a".repeat(40),
+      npmDistTag: "beta",
+      pluginPublishScope: "all-publishable",
+      plugins: [],
+      releaseProfile: "beta",
+      windowsNodeTag: null,
+      windowsNodeInstallerDigests: {},
+      releasePublishRunId: "333",
+      npmPreflightRunId: "222",
+      fullReleaseValidationRunId: "111",
+      fullReleaseValidationRunAttempt: "2",
+      completionStates: ["beta-live", "ecosystem-converged"],
+      ecosystemConverged: true,
+    };
+    const expected = {
+      tag: "v2026.5.14-beta.3",
+      targetSha: "a".repeat(40),
+      npmDistTag: "beta",
+      publishRunId: "333",
+      npmPreflightRunId: "222",
+      fullReleaseRunId: "111",
+      fullReleaseRunAttempt: 2,
+      releaseProfile: "beta",
+      pluginPublishScope: "all-publishable",
+      plugins: "",
+      windowsNodeTag: "",
+      windowsNodeInstallerDigests: "",
+      waitForEcosystem: true,
+    };
+
+    expect(validatePublishEvidence(evidence, expected)).toEqual({
+      status: "passed",
+      completionState: "ecosystem-converged",
+    });
+    expect(() =>
+      validatePublishEvidence({ ...evidence, releaseTag: "v2026.5.15" }, expected),
+    ).toThrow("publish evidence mismatch for releaseTag");
+    expect(() =>
+      validatePublishEvidence({ ...evidence, pluginPublishScope: "selected" }, expected),
+    ).toThrow("publish evidence mismatch for pluginPublishScope");
+    expect(() =>
+      validatePublishEvidence(
+        { ...evidence, windowsNodeInstallerDigests: { "OpenClawSetup.exe": "sha256:other" } },
+        expected,
+      ),
+    ).toThrow("publish evidence mismatch for windowsNodeInstallerDigests");
+  });
+
+  it("treats alpha publish completion as prerelease even with full validation", () => {
+    const tag = "v2026.7.1-alpha.3";
+    expect(
+      validatePublishEvidence(
+        {
+          releaseTag: tag,
+          releaseSha: "a".repeat(40),
+          npmDistTag: "alpha",
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+          releaseProfile: "full",
+          windowsNodeTag: null,
+          windowsNodeInstallerDigests: {},
+          releasePublishRunId: "333",
+          npmPreflightRunId: "222",
+          fullReleaseValidationRunId: "111",
+          fullReleaseValidationRunAttempt: "1",
+          completionStates: ["beta-live"],
+          ecosystemConverged: false,
+        },
+        {
+          tag,
+          targetSha: "a".repeat(40),
+          npmDistTag: "alpha",
+          publishRunId: "333",
+          npmPreflightRunId: "222",
+          fullReleaseRunId: "111",
+          fullReleaseRunAttempt: 1,
+          releaseProfile: "full",
+          pluginPublishScope: "all-publishable",
+          plugins: "",
+          windowsNodeTag: "",
+          windowsNodeInstallerDigests: "",
+          waitForEcosystem: false,
+        },
+      ),
+    ).toEqual({ status: "passed", completionState: "beta-live" });
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {

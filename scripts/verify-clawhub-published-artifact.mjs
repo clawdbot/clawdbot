@@ -24,9 +24,9 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 
-class PermanentReadbackError extends Error {}
+export class PermanentReadbackError extends Error {}
 
-class RetryableReadbackError extends Error {
+export class RetryableReadbackError extends Error {
   constructor(message, requestedDelayMs) {
     super(message);
     this.retryAfterMs = requestedDelayMs;

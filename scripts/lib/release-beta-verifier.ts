@@ -29,6 +29,7 @@ type ReleaseVerifyBetaArgs = {
   postpublishVerifier?: string;
   skipPostpublish: boolean;
   skipGitHubRelease: boolean;
+  skipPluginNpm: boolean;
   skipClawHub: boolean;
   rerunFailedClawHub: boolean;
   workflowRuns: {
@@ -227,7 +228,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--release-sha SHA] [--workflow-ref REF] [--clawhub-workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID --clawhub-bootstrap-plugins NAMES] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
+      "Usage: pnpm release:verify-beta -- <version> [--release-sha SHA] [--workflow-ref REF] [--clawhub-workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID --clawhub-bootstrap-plugins NAMES] [--npm-telegram-run ID] [--skip-github-release] [--skip-plugin-npm] [--skip-clawhub]",
     );
   }
 
@@ -246,6 +247,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     postpublishVerifier: undefined,
     skipPostpublish: false,
     skipGitHubRelease: false,
+    skipPluginNpm: false,
     skipClawHub: false,
     rerunFailedClawHub: false,
     workflowRuns: {},
@@ -332,6 +334,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--skip-clawhub":
         parsed.skipClawHub = true;
         break;
+      case "--skip-plugin-npm":
+        parsed.skipPluginNpm = true;
+        break;
       case "--rerun-failed-clawhub":
         parsed.rerunFailedClawHub = true;
         break;
@@ -356,6 +361,24 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   }
 
   return parsed;
+}
+
+export function releaseCompletionStates(args: {
+  version: string;
+  skipPluginNpm: boolean;
+  skipClawHub: boolean;
+  skipGitHubRelease?: boolean;
+  skipPostpublish?: boolean;
+}): string[] {
+  const isPrerelease = args.version.includes("-alpha.") || args.version.includes("-beta.");
+  const ecosystemConverged = !args.skipPluginNpm && !args.skipClawHub;
+  if (args.skipGitHubRelease || args.skipPostpublish || (!isPrerelease && !ecosystemConverged)) {
+    return [];
+  }
+  return [
+    isPrerelease ? "beta-live" : "stable-ready",
+    ...(ecosystemConverged ? ["ecosystem-converged"] : []),
+  ];
 }
 
 export function resolveOpenClawNpmPostpublishVerifier(rootDir: string, override?: string): string {
@@ -1302,18 +1325,24 @@ export async function verifyBetaRelease(
     lines.push("openclaw postpublish verifier OK");
   }
 
-  const npmPlugins = collectPublishablePluginPackages(rootDir, {
-    packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
-  });
-  assertSelectedPackagesResolved({
-    label: "npm plugin",
-    selection: args.pluginSelection,
-    packages: npmPlugins,
-  });
-  for (const plugin of npmPlugins) {
-    await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+  const npmPlugins = args.skipPluginNpm
+    ? []
+    : collectPublishablePluginPackages(rootDir, {
+        packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
+      });
+  if (args.skipPluginNpm) {
+    lines.push("plugin npm deferred: ecosystem convergence is asynchronous");
+  } else {
+    assertSelectedPackagesResolved({
+      label: "npm plugin",
+      selection: args.pluginSelection,
+      packages: npmPlugins,
+    });
+    for (const plugin of npmPlugins) {
+      await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+    }
+    lines.push(`plugin npm OK: ${npmPlugins.length}`);
   }
-  lines.push(`plugin npm OK: ${npmPlugins.length}`);
 
   const clawHubPlugins = args.skipClawHub
     ? []
@@ -1438,7 +1467,11 @@ export async function verifyBetaRelease(
           npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
           npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
           githubReleaseUrl: releaseUrl ?? null,
-          pluginNpmPackageCount: npmPlugins.length,
+          releaseSha: args.releaseSha ?? null,
+          workflowRef: args.workflowRef ?? null,
+          completionStates: releaseCompletionStates(args),
+          ecosystemConverged: !args.skipPluginNpm && !args.skipClawHub,
+          pluginNpmPackageCount: args.skipPluginNpm ? null : npmPlugins.length,
           clawHubPackageCount: clawHubPlugins.length,
           workflowRuns,
           clawHubBootstrapEvidence:
