@@ -49,6 +49,10 @@ export type CreateSessionMcpRuntime = (params: {
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }) => SessionMcpRuntime;
 
+function toMcpRequestError(reason: unknown, fallbackMessage: string): Error {
+  return reason instanceof Error ? reason : new Error(fallbackMessage, { cause: reason });
+}
+
 export async function waitForSessionMcpRequest<T>(
   promise: Promise<T>,
   signal?: AbortSignal,
@@ -59,7 +63,7 @@ export async function waitForSessionMcpRequest<T>(
   signal.throwIfAborted();
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => {
-      reject(signal.reason ?? new Error("MCP request aborted"));
+      reject(toMcpRequestError(signal.reason, "MCP request aborted"));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     promise.then(
@@ -69,7 +73,7 @@ export async function waitForSessionMcpRequest<T>(
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(error);
+        reject(toMcpRequestError(error, "MCP request failed"));
       },
     );
   });
