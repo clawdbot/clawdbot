@@ -26,6 +26,10 @@ const streamMocks = vi.hoisted(() => {
     streamSimpleCalls,
     streamSimple: vi.fn((_model: Model, _context: Context, options?: SimpleStreamOptions) => {
       streamSimpleCalls.push((options ?? {}) as Record<string, unknown>);
+      // Upstream tightened the provider signature to require an event stream
+      // return. Hand back a completed empty assistant stream so the contract
+      // holds; the recorded options above stay the only thing retry tests read.
+      return createEmptyAssistantDoneStream();
     }),
   };
 });
@@ -154,6 +158,26 @@ function createAssistantResultStream(message: AssistantMessage) {
     stream.end();
   });
   return stream;
+}
+
+function createEmptyAssistantDoneStream() {
+  return createAssistantResultStream({
+    role: "assistant",
+    content: [],
+    api: testModel.api,
+    provider: testModel.provider,
+    model: testModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  });
 }
 
 function createEmptyResourceLoader(): ResourceLoader {
