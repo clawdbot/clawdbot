@@ -326,6 +326,7 @@ export const TARGET_KEYS = [
   "agents.defaults",
   "agents.entries",
   "agents.defaults.compaction",
+  "agents.defaults.compaction.enabled",
   "agents.defaults.compaction.mode",
   "agents.defaults.compaction.provider",
   "agents.defaults.compaction.thinkingLevel",

@@ -382,6 +382,12 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
+  /**
+   * Enable proactive embedded auto-compaction (default: true).
+   * When false, OpenClaw disables threshold-driven auto-compaction while keeping
+   * overflow recovery, OpenClaw preemptive overflow handling, and manual `/compact`.
+   */
+  enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Override the session thinking level for embedded OpenClaw compaction summaries. */

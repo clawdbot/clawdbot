@@ -425,6 +425,12 @@ describe("config help copy quality", () => {
   });
 
   it("documents agent compaction safeguards and memory flush behavior", () => {
+    const enabled = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.enabled"],
+      'FIELD_HELP["agents.defaults.compaction.enabled"] test invariant',
+    );
+    expect(/auto-compaction|overflow|\/compact/i.test(enabled)).toBe(true);
+
     const mode = expectDefined(
       FIELD_HELP["agents.defaults.compaction.mode"],
       'FIELD_HELP["agents.defaults.compaction.mode"] test invariant',

@@ -17,6 +17,7 @@ import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
+  resolveCompactionEnabled,
 } from "../agent-settings.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -200,6 +201,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       // has no associated context engine.
       applyAgentAutoCompactionGuard({
         settingsManager,
+        compactionEnabled: resolveCompactionEnabled(params.config),
         silentOverflowProneProvider: isSilentOverflowProneModel({
           provider,
           modelId,

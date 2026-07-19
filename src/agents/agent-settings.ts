@@ -99,6 +99,11 @@ export function resolveEffectiveCompactionMode(cfg?: OpenClawConfig): AgentCompa
   return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
+/** Resolve whether proactive embedded auto-compaction is enabled (default: true). */
+export function resolveCompactionEnabled(cfg?: OpenClawConfig): boolean {
+  return cfg?.agents?.defaults?.compaction?.enabled !== false;
+}
+
 /**
  * Detect providers whose shared model runtime `isContextOverflow` Case 2 (silent overflow)
  * fires on a successful turn and triggers OpenClaw runtime's `_runAutoCompaction` from
@@ -147,16 +152,20 @@ export function isSilentOverflowProneModel(model: {
  * fire from inside `Session.prompt()` and reassign `agent.state.messages`
  * before the provider call) when OpenClaw or a plugin owns compaction:
  * `contextEngineInfo.ownsCompaction === true`, effective safeguard compaction,
- * or an active model that is silent-overflow-prone (openclaw#75799).
+ * an active model that is silent-overflow-prone (openclaw#75799), or
+ * `agents.defaults.compaction.enabled: false`.
  * Default-mode runs against ordinary providers keep OpenClaw runtime's auto-compaction as
- * the existing baseline.
+ * the existing baseline. Overflow recovery and OpenClaw preemptive overflow handling stay
+ * available when config disables only proactive auto-compaction.
  */
 function shouldDisableAgentAutoCompaction(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
+  compactionEnabled?: boolean;
 }): boolean {
   return (
+    params.compactionEnabled === false ||
     params.contextEngineInfo?.ownsCompaction === true ||
     params.compactionMode === "safeguard" ||
     params.silentOverflowProneProvider === true
@@ -175,11 +184,14 @@ export function applyAgentAutoCompactionGuard(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
+  /** When false, disable proactive embedded auto-compaction from config. */
+  compactionEnabled?: boolean;
 }): { supported: boolean; disabled: boolean } {
   const disable = shouldDisableAgentAutoCompaction({
     contextEngineInfo: params.contextEngineInfo,
     compactionMode: params.compactionMode,
     silentOverflowProneProvider: params.silentOverflowProneProvider,
+    compactionEnabled: params.compactionEnabled,
   });
   const hasMethod = typeof params.settingsManager.setCompactionEnabled === "function";
   if (!disable || !hasMethod) {

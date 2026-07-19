@@ -26,6 +26,22 @@ New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
+To disable proactive threshold-driven auto-compaction, set:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+`enabled: false` turns off proactive embedded auto-compaction. Overflow recovery, OpenClaw preemptive overflow handling, and manual `/compact` remain available.
+
 You will see:
 
 - `embedded run auto-compaction start` / `complete` in normal Gateway logs.

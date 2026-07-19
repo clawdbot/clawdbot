@@ -361,6 +361,23 @@ describe("agent defaults schema", () => {
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
+  it("accepts compaction.enabled boolean", () => {
+    const disabled = AgentDefaultsSchema.parse({
+      compaction: { enabled: false },
+    })!;
+    const enabled = AgentDefaultsSchema.parse({
+      compaction: { enabled: true, mode: "default" },
+    })!;
+
+    expect(disabled.compaction?.enabled).toBe(false);
+    expect(enabled.compaction?.enabled).toBe(true);
+    expect(
+      validateConfigObject({
+        agents: { defaults: { compaction: { enabled: false } } },
+      }).ok,
+    ).toBe(true);
+  });
+
   it.each([
     "off",
     "minimal",

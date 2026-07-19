@@ -6,6 +6,7 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
+  resolveCompactionEnabled,
   applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
@@ -64,6 +65,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     settingsManager,
     contextEngineInfo: input.activeContextEngineInfo,
     compactionMode: resolveEffectiveCompactionMode(attempt.config),
+    compactionEnabled: resolveCompactionEnabled(attempt.config),
     silentOverflowProneProvider: isSilentOverflowProneModel({
       provider: attempt.provider,
       modelId: attempt.modelId,

@@ -5,6 +5,7 @@ import {
   applyAgentCompactionSettingsFromConfig,
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   isSilentOverflowProneModel,
+  resolveCompactionEnabled,
   resolveEffectiveCompactionMode,
 } from "./agent-settings.js";
 import { shouldCompact } from "./sessions/compaction/compaction.js";
@@ -347,6 +348,26 @@ describe("isSilentOverflowProneModel", () => {
   });
 });
 
+describe("resolveCompactionEnabled", () => {
+  it("defaults to enabled when unset", () => {
+    expect(resolveCompactionEnabled(undefined)).toBe(true);
+    expect(resolveCompactionEnabled({ agents: { defaults: { compaction: {} } } })).toBe(true);
+  });
+
+  it("returns false only when explicitly disabled", () => {
+    expect(
+      resolveCompactionEnabled({
+        agents: { defaults: { compaction: { enabled: false } } },
+      }),
+    ).toBe(false);
+    expect(
+      resolveCompactionEnabled({
+        agents: { defaults: { compaction: { enabled: true } } },
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("applyAgentAutoCompactionGuard", () => {
   // Direct repro of openclaw#75799: shared model runtime's silent-overflow detection misfires
   // on a successful turn against z.ai-style providers, triggering OpenClaw runtime's
@@ -355,6 +376,43 @@ describe("applyAgentAutoCompactionGuard", () => {
   // event and the provider request. Disabling embedded auto-compaction here keeps
   // state.messages intact; OpenClaw's preemptive compaction continues to
   // handle real overflow on its own path.
+  it("disables embedded auto-compaction when config sets compaction.enabled=false", () => {
+    const setCompactionEnabled = vi.fn();
+    const settingsManager = {
+      getCompactionReserveTokens: () => 20_000,
+      getCompactionKeepRecentTokens: () => 4_000,
+      applyOverrides: () => {},
+      setCompactionEnabled,
+    };
+
+    const result = applyAgentAutoCompactionGuard({
+      settingsManager,
+      compactionEnabled: false,
+    });
+
+    expect(result).toEqual({ supported: true, disabled: true });
+    expect(setCompactionEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("leaves embedded auto-compaction alone when compaction.enabled is true", () => {
+    const setCompactionEnabled = vi.fn();
+    const settingsManager = {
+      getCompactionReserveTokens: () => 20_000,
+      getCompactionKeepRecentTokens: () => 4_000,
+      applyOverrides: () => {},
+      setCompactionEnabled,
+    };
+
+    const result = applyAgentAutoCompactionGuard({
+      settingsManager,
+      compactionEnabled: true,
+      silentOverflowProneProvider: false,
+    });
+
+    expect(result).toEqual({ supported: true, disabled: false });
+    expect(setCompactionEnabled).not.toHaveBeenCalled();
+  });
+
   it("disables embedded auto-compaction for silent-overflow-prone providers", () => {
     const setCompactionEnabled = vi.fn();
     const settingsManager = {
