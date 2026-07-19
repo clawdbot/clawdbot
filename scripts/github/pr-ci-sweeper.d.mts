@@ -16,4 +16,5 @@ export function runPrCiSweeper(params: {
   core: Pick<Console, "info"> & { setFailed: (message: string) => void };
   dryRun?: boolean;
   appSlug?: string;
+  now?: number;
 }): Promise<Array<{ number: number; sha: string; action: "refire" | "skip"; reason: string }>>;
