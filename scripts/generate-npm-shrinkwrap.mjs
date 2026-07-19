@@ -494,6 +494,9 @@ function runNpm(args, cwd) {
     const command = [npm.command, ...npm.args].join(" ");
     throw new Error(
       output ? `Command failed: ${command}\n${output}` : `Command failed: ${command}`,
+      {
+        cause: error,
+      },
     );
   }
 }
