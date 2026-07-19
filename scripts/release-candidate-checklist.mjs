@@ -72,6 +72,7 @@ const RELEASE_CANDIDATE_STATE_KEYS = [
   "skipParallels",
   "skipTelegram",
   "telegramProviderMode",
+  "waitForEcosystem",
 ];
 
 function usage() {
@@ -89,7 +90,11 @@ Options:
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
   --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
-  --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
+  --dispatch-publish                  After candidate proof, dispatch and watch the mutating publish workflow.
+  --publish-run <id>                  Resume watching an already-dispatched publish workflow.
+  --wait-for-ecosystem                Keep the publish parent open until plugin npm and ClawHub converge.
+  --skip-local-generated-check        Compatibility alias: skip the local release-readiness gate.
+  --skip-readiness                    Skip the local release-readiness gate before dispatch.
   --skip-parallels                   Do not run local Parallels fresh/update candidate smoke.
   --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
   --telegram-provider-mode <mode>     mock-openai|live-frontier. Default: ${DEFAULT_TELEGRAM_PROVIDER_MODE}
@@ -133,6 +138,8 @@ export function parseArgs(argv) {
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
     skipDispatch: false,
+    dispatchPublish: false,
+    waitForEcosystem: false,
     skipLocalGeneratedCheck: false,
     skipParallels: false,
     skipTelegram: false,
@@ -143,6 +150,7 @@ export function parseArgs(argv) {
     npmPreflightRunId: "",
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
+    publishRunId: "",
     outputDir: "",
   };
   const seen = new Set();
@@ -179,7 +187,17 @@ export function parseArgs(argv) {
       case "--skip-dispatch":
         setOnce(arg, "skipDispatch", true);
         break;
+      case "--dispatch-publish":
+        setOnce(arg, "dispatchPublish", true);
+        break;
+      case "--publish-run":
+        setOnce(arg, "publishRunId", requireValue(args, ++index, arg));
+        break;
+      case "--wait-for-ecosystem":
+        setOnce(arg, "waitForEcosystem", true);
+        break;
       case "--skip-local-generated-check":
+      case "--skip-readiness":
         setOnce(arg, "skipLocalGeneratedCheck", true);
         break;
       case "--skip-parallels":
@@ -242,6 +260,12 @@ export function parseArgs(argv) {
   }
   if (options.skipDispatch && (!options.fullReleaseRunId || !options.npmPreflightRunId)) {
     throw new Error("--skip-dispatch requires --full-release-run and --npm-preflight-run");
+  }
+  if (options.publishRunId && !/^[1-9][0-9]*$/u.test(options.publishRunId)) {
+    throw new Error("--publish-run must be a positive GitHub Actions run id");
+  }
+  if (options.publishRunId) {
+    options.dispatchPublish = true;
   }
   if (options.pluginPublishScope === "selected" && !options.plugins.trim()) {
     throw new Error("--plugin-publish-scope selected requires --plugins");
@@ -316,8 +340,10 @@ export function buildReleaseCandidateState(options, { targetSha, toolingSha }) {
     skipParallels: options.skipParallels,
     skipTelegram: options.skipTelegram,
     telegramProviderMode: options.telegramProviderMode,
+    waitForEcosystem: options.waitForEcosystem,
     fullReleaseRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
+    publishRunId: options.publishRunId,
   };
 }
 
@@ -333,13 +359,14 @@ export function reconcileReleaseCandidateState(saved, expected) {
     throw new Error("release candidate state has an unsupported schema");
   }
   for (const key of RELEASE_CANDIDATE_STATE_KEYS) {
-    if (!isDeepStrictEqual(saved[key], expected[key])) {
+    const savedValue = key === "waitForEcosystem" ? Boolean(saved[key]) : saved[key];
+    if (!isDeepStrictEqual(savedValue, expected[key])) {
       throw new Error(
         `release candidate state mismatch for ${key}: saved=${JSON.stringify(saved[key])} current=${JSON.stringify(expected[key])}`,
       );
     }
   }
-  for (const key of ["fullReleaseRunId", "npmPreflightRunId"]) {
+  for (const key of ["fullReleaseRunId", "npmPreflightRunId", "publishRunId"]) {
     if (saved[key] && expected[key] && saved[key] !== expected[key]) {
       throw new Error(`release candidate state mismatch for ${key}`);
     }
@@ -349,6 +376,7 @@ export function reconcileReleaseCandidateState(saved, expected) {
     phase: typeof saved.phase === "string" ? saved.phase : expected.phase,
     fullReleaseRunId: expected.fullReleaseRunId || saved.fullReleaseRunId || "",
     npmPreflightRunId: expected.npmPreflightRunId || saved.npmPreflightRunId || "",
+    publishRunId: expected.publishRunId || saved.publishRunId || "",
   };
 }
 
@@ -661,6 +689,86 @@ export function validateNpmPreflightRunSource({
   };
 }
 
+function expectedPublishCompletionState(expected) {
+  return expected.waitForEcosystem
+    ? "ecosystem-converged"
+    : expected.tag.includes("-alpha.") || expected.tag.includes("-beta.")
+      ? "beta-live"
+      : "stable-ready";
+}
+
+function canonicalPluginNames(value) {
+  const names = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return names
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .toSorted();
+}
+
+function canonicalStringMap(value, label) {
+  let parsed = value;
+  if (typeof value === "string") {
+    parsed = value.trim() ? JSON.parse(value) : {};
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return Object.fromEntries(
+    Object.entries(parsed)
+      .map(([key, entryValue]) => [key, String(entryValue)])
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+export function validatePublishEvidence(evidence, expected) {
+  const expectedState = expectedPublishCompletionState(expected);
+  const exactFields = [
+    ["releaseTag", expected.tag],
+    ["releaseSha", expected.targetSha],
+    ["npmDistTag", expected.npmDistTag],
+    ["pluginPublishScope", expected.pluginPublishScope],
+    ["releaseProfile", expected.releaseProfile],
+    ["windowsNodeTag", expected.windowsNodeTag],
+    ["releasePublishRunId", expected.publishRunId],
+    ["npmPreflightRunId", expected.npmPreflightRunId],
+    ["fullReleaseValidationRunId", expected.fullReleaseRunId],
+    ["fullReleaseValidationRunAttempt", String(expected.fullReleaseRunAttempt)],
+  ];
+  for (const [key, value] of exactFields) {
+    if (String(evidence?.[key] ?? "") !== String(value)) {
+      throw new Error(
+        `publish evidence mismatch for ${key}: expected ${String(value)}, got ${String(evidence?.[key] ?? "")}`,
+      );
+    }
+  }
+  const actualPlugins = canonicalPluginNames(evidence.plugins);
+  const expectedPlugins = canonicalPluginNames(expected.plugins);
+  if (JSON.stringify(actualPlugins) !== JSON.stringify(expectedPlugins)) {
+    throw new Error("publish evidence mismatch for plugins");
+  }
+  const actualWindowsDigests = canonicalStringMap(
+    evidence.windowsNodeInstallerDigests ?? {},
+    "publish evidence windowsNodeInstallerDigests",
+  );
+  const expectedWindowsDigests = canonicalStringMap(
+    expected.windowsNodeInstallerDigests,
+    "expected windowsNodeInstallerDigests",
+  );
+  if (JSON.stringify(actualWindowsDigests) !== JSON.stringify(expectedWindowsDigests)) {
+    throw new Error("publish evidence mismatch for windowsNodeInstallerDigests");
+  }
+  if (
+    !Array.isArray(evidence.completionStates) ||
+    !evidence.completionStates.includes(expectedState)
+  ) {
+    throw new Error(`publish evidence does not prove completion state ${expectedState}`);
+  }
+  if (expected.waitForEcosystem && evidence.ecosystemConverged !== true) {
+    throw new Error("publish evidence does not prove plugin ecosystem convergence");
+  }
+  return { status: "passed", completionState: expectedState };
+}
+
 function candidateContributionRecordPullRequests(
   section,
   label,
@@ -939,12 +1047,17 @@ function runAndEcho(command, args) {
   return `${result.stdout ?? ""}${result.stderr ?? ""}`;
 }
 
-function runLocalGeneratedCheckIfNeeded(options) {
+function runReleaseReadinessIfNeeded(options) {
   if (options.skipLocalGeneratedCheck) {
-    return { status: "skipped", reason: "operator skipped --skip-local-generated-check" };
+    return { status: "skipped", reason: "operator skipped release readiness" };
   }
-  run("pnpm", ["release:generated:check"]);
-  return { status: "passed", command: "pnpm release:generated:check" };
+  const outputPath = join(options.outputDir, "release-readiness.json");
+  run(process.execPath, [
+    join(TOOLING_ROOT, "scripts/release-readiness-check.mjs"),
+    "--output",
+    outputPath,
+  ]);
+  return readJson(outputPath, "release readiness evidence");
 }
 
 /**
@@ -1143,29 +1256,7 @@ export function buildPublishCommand(options) {
       "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref",
     );
   }
-  const fields = [
-    ["tag", options.tag],
-    ["preflight_run_id", options.npmPreflightRunId],
-    ["full_release_validation_run_id", options.fullReleaseRunId],
-    ["full_release_validation_run_attempt", options.fullReleaseRunAttempt],
-    ["npm_dist_tag", options.npmDistTag],
-    ["plugin_publish_scope", options.pluginPublishScope],
-    ["publish_openclaw_npm", "true"],
-    ["release_profile", "from-validation"],
-    ["wait_for_clawhub", "false"],
-  ];
-  if (options.npmTelegramRunId) {
-    fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
-  }
-  if (options.windowsNodeTag) {
-    fields.push(["windows_node_tag", options.windowsNodeTag]);
-  }
-  if (options.windowsNodeInstallerDigests) {
-    fields.push(["windows_node_installer_digests", options.windowsNodeInstallerDigests]);
-  }
-  if (options.plugins.trim()) {
-    fields.push(["plugins", options.plugins]);
-  }
+  const fields = buildPublishFields(options);
   return [
     "gh",
     "workflow",
@@ -1179,6 +1270,33 @@ export function buildPublishCommand(options) {
   ]
     .map(shellQuote)
     .join(" ");
+}
+
+export function buildPublishFields(options) {
+  const fields = [
+    ["tag", options.tag],
+    ["preflight_run_id", options.npmPreflightRunId],
+    ["full_release_validation_run_id", options.fullReleaseRunId],
+    ["full_release_validation_run_attempt", options.fullReleaseRunAttempt],
+    ["npm_dist_tag", options.npmDistTag],
+    ["plugin_publish_scope", options.pluginPublishScope],
+    ["publish_openclaw_npm", "true"],
+    ["release_profile", "from-validation"],
+    ["wait_for_clawhub", options.waitForEcosystem ? "true" : "false"],
+  ];
+  if (options.npmTelegramRunId) {
+    fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
+  }
+  if (options.windowsNodeTag) {
+    fields.push(["windows_node_tag", options.windowsNodeTag]);
+  }
+  if (options.windowsNodeInstallerDigests) {
+    fields.push(["windows_node_installer_digests", options.windowsNodeInstallerDigests]);
+  }
+  if (options.plugins.trim()) {
+    fields.push(["plugins", options.plugins]);
+  }
+  return fields;
 }
 
 export function validatePreflightManifest(manifest, params) {
@@ -1411,6 +1529,7 @@ async function main() {
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
+  options.publishRunId = candidateState.publishRunId;
   writeReleaseCandidateState(statePath, candidateState);
   const releaseChangelog = run("git", ["show", `${targetSha}:CHANGELOG.md`], { capture: true });
   const releaseNotesVersion = releaseNotesVersionForTag(options.tag);
@@ -1435,7 +1554,8 @@ async function main() {
         ),
       )
     : "";
-  const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
+  candidateState = updateReleaseCandidateState(statePath, candidateState, "readiness");
+  const releaseReadiness = runReleaseReadinessIfNeeded(options);
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
@@ -1598,7 +1718,7 @@ async function main() {
     },
     releaseNotesCheck,
     releaseNotesProvenance,
-    localGeneratedCheck,
+    releaseReadiness,
     tarball: {
       name: basename(tarballPath),
       sha256: actualTarballSha,
@@ -1640,8 +1760,8 @@ async function main() {
         formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
         "Shipped baseline exclusions: none"
       }`,
-      `- local generated release checks: ${localGeneratedCheck.status}${
-        localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
+      `- release readiness: ${releaseReadiness.status}${
+        releaseReadiness.reason ? ` (${releaseReadiness.reason})` : ""
       }`,
       `- tarball: ${basename(tarballPath)}`,
       `- tarball sha256: ${actualTarballSha}`,
@@ -1661,12 +1781,75 @@ async function main() {
       "",
     ].join("\n"),
   );
-  updateReleaseCandidateState(statePath, candidateState, "completed");
+  candidateState = updateReleaseCandidateState(statePath, candidateState, "candidate-ready");
 
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
   console.log("publish command:");
   console.log(publishCommand);
+
+  if (options.dispatchPublish) {
+    const workflowFile = "openclaw-release-publish.yml";
+    if (!options.publishRunId) {
+      const workflowRef = options.tag.includes("-alpha.") ? options.workflowRef : "main";
+      options.publishRunId = dispatchWorkflow(
+        options.repo,
+        workflowFile,
+        workflowRef,
+        Object.fromEntries(
+          buildPublishFields({
+            ...options,
+            fullReleaseRunAttempt: fullRun.runAttempt,
+          }),
+        ),
+      );
+      candidateState = updateReleaseCandidateState(
+        statePath,
+        candidateState,
+        "publish-dispatched",
+        {
+          publishRunId: options.publishRunId,
+        },
+      );
+    }
+    const publishRun = await waitForSuccessfulRun(options.repo, options.publishRunId, {
+      workflowName: "OpenClaw Release Publish",
+      workflowRef: options.tag.includes("-alpha.") ? options.workflowRef : "main",
+    });
+    const publishEvidenceDir = join(options.outputDir, "publish-evidence");
+    downloadArtifact(
+      options.repo,
+      options.publishRunId,
+      `openclaw-release-postpublish-evidence-${options.tag}`,
+      publishEvidenceDir,
+    );
+    validatePublishEvidence(
+      readJson(
+        join(publishEvidenceDir, "release-postpublish-evidence.json"),
+        "release publish evidence",
+      ),
+      {
+        tag: options.tag,
+        targetSha,
+        npmDistTag: options.npmDistTag,
+        publishRunId: options.publishRunId,
+        npmPreflightRunId: options.npmPreflightRunId,
+        fullReleaseRunId: options.fullReleaseRunId,
+        fullReleaseRunAttempt: fullRun.runAttempt,
+        releaseProfile: options.releaseProfile,
+        pluginPublishScope: options.pluginPublishScope,
+        plugins: options.plugins,
+        windowsNodeTag: options.windowsNodeTag,
+        windowsNodeInstallerDigests: options.windowsNodeInstallerDigests,
+        waitForEcosystem: options.waitForEcosystem,
+      },
+    );
+    const phase = expectedPublishCompletionState(options);
+    updateReleaseCandidateState(statePath, candidateState, phase, {
+      publishRunId: options.publishRunId,
+    });
+    console.log(`${phase}: ${publishRun.url}`);
+  }
 }
 
 if (isDirectReleaseCandidateExecution(process.argv[1], fileURLToPath(import.meta.url))) {

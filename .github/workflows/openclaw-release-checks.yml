@@ -745,6 +745,7 @@ jobs:
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      packaged_upgrade_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}

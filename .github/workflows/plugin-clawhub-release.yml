@@ -412,7 +412,7 @@ jobs:
       inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
       publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
 
-  verify_published_clawhub_package:
+  verify_published_clawhub_packages:
     needs: [preview_plugins_clawhub, publish_plugins_clawhub]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
@@ -421,15 +421,11 @@ jobs:
       # ClawHub accepts uploads before its asynchronous security queue promotes
       # public versions. Cover one full queue cycle without operator reruns.
       OPENCLAW_CLAWHUB_VERIFY_ATTEMPTS: "54"
+      OPENCLAW_CLAWHUB_VERIFY_CONCURRENCY: "8"
       OPENCLAW_CLAWHUB_VERIFY_DELAY_MS: "30000"
     permissions:
       actions: read
       contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix:
-        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout verification tooling
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -446,23 +442,32 @@ jobs:
           install-deps: "false"
           use-actions-cache: "false"
 
-      - name: Download published package input
+      - name: Download published package inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ matrix.plugin.artifactName }}
-          path: ${{ runner.temp }}/clawhub-package-artifact
+          pattern: clawhub-package-*
+          path: ${{ runner.temp }}/clawhub-package-artifacts
+          merge-multiple: false
 
-      - name: Verify published ClawHub package
+      - name: Verify published ClawHub packages
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-          PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+          PLUGIN_PLAN: ${{ needs.preview_plugins_clawhub.outputs.matrix }}
         run: |
           set -euo pipefail
-          node scripts/verify-clawhub-published-artifact.mjs \
-            --expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact" \
-            --package-name "${PACKAGE_NAME}" \
-            --package-version "${PACKAGE_VERSION}" \
-            --publish-tag "${PACKAGE_TAG}" \
-            --registry "${CLAWHUB_REGISTRY}"
+          mkdir -p "${RUNNER_TEMP}/clawhub-batch-evidence"
+          printf '%s' "${PLUGIN_PLAN}" > "${RUNNER_TEMP}/clawhub-batch-evidence/plan.json"
+          node scripts/verify-clawhub-release-batch.mjs \
+            --plan "${RUNNER_TEMP}/clawhub-batch-evidence/plan.json" \
+            --artifacts-root "${RUNNER_TEMP}/clawhub-package-artifacts" \
+            --registry "${CLAWHUB_REGISTRY}" \
+            --output "${RUNNER_TEMP}/clawhub-batch-evidence/evidence.json"
+
+      - name: Upload ClawHub convergence evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-release-convergence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-batch-evidence
+          if-no-files-found: error
+          retention-days: 30

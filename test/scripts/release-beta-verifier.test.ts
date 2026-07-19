@@ -10,6 +10,7 @@ import {
   fetchStatusWithRetry,
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
+  releaseCompletionStates,
   readBoundedJsonResponse,
   resolveOpenClawNpmPostpublishVerifier,
   runNpmViewWithRetry,
@@ -97,6 +98,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       skipPostpublish: false,
       skipGitHubRelease: false,
       skipClawHub: false,
+      skipPluginNpm: false,
       rerunFailedClawHub: false,
       workflowRuns: {},
     });
@@ -135,6 +137,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "/tmp/trusted-postpublish.ts",
         "--skip-github-release",
         "--skip-clawhub",
+        "--skip-plugin-npm",
         "--rerun-failed-clawhub",
       ]),
     ).toEqual({
@@ -153,6 +156,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       skipPostpublish: false,
       skipGitHubRelease: true,
       skipClawHub: true,
+      skipPluginNpm: true,
       rerunFailedClawHub: true,
       workflowRuns: {
         fullReleaseValidation: "10",
@@ -206,6 +210,40 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "@openclaw/plugin-b",
       ]),
     ).toThrow("--clawhub-bootstrap-plugins requires --plugin-clawhub-bootstrap-run");
+  });
+});
+
+describe("releaseCompletionStates", () => {
+  it("distinguishes beta-live from stable-ready evidence", () => {
+    expect(
+      releaseCompletionStates({
+        version: "2026.7.3-beta.1",
+        skipPluginNpm: true,
+        skipClawHub: true,
+      }),
+    ).toEqual(["beta-live"]);
+    expect(
+      releaseCompletionStates({
+        version: "2026.7.3",
+        skipPluginNpm: false,
+        skipClawHub: false,
+      }),
+    ).toEqual(["stable-ready", "ecosystem-converged"]);
+    expect(
+      releaseCompletionStates({
+        version: "2026.7.3",
+        skipPluginNpm: false,
+        skipClawHub: true,
+      }),
+    ).toEqual([]);
+    expect(
+      releaseCompletionStates({
+        version: "2026.7.3",
+        skipPluginNpm: false,
+        skipClawHub: false,
+        skipGitHubRelease: true,
+      }),
+    ).toEqual([]);
   });
 });
 
