@@ -417,10 +417,14 @@ runs:
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
           export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
         fi
-        if [ "$sticky_snapshot_matches" = "true" ]; then
+        if [ "$sticky_snapshot_matches" = "true" ] && [ "$STICKY_WRITER" != "true" ]; then
           echo "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install"
         else
-          if [ "$sticky_fingerprint_matches" = "true" ]; then
+          if [ "$sticky_snapshot_matches" = "true" ]; then
+            # The canonical writer reconciles even a matching snapshot. Readers
+            # already proved importer completeness before reaching this branch.
+            echo "Sticky dependency writer is reconciling the matching snapshot"
+          elif [ "$sticky_fingerprint_matches" = "true" ]; then
             echo "Sticky dependency snapshot importer contents are incomplete; reinstalling"
           elif [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ]; then
             echo "Sticky dependency snapshot is stale (disk: $sticky_fingerprint, want: $OPENCLAW_STICKY_DEPS_FINGERPRINT); reinstalling"
