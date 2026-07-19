@@ -118,6 +118,43 @@ describe("UrbitSSEClient", () => {
     });
   });
 
+  describe("close", () => {
+    it("releases shutdown responses without leaking cancellation failures", async () => {
+      const shutdownResponses = ["PUT", "DELETE"].map((method) => {
+        const cancel = vi.fn().mockRejectedValue(new Error("cancel failed"));
+        const release = vi.fn().mockResolvedValue(undefined);
+        return {
+          method,
+          cancel,
+          release,
+          result: {
+            response: { body: { cancel } } as unknown as Response,
+            finalUrl: "https://example.com",
+            release,
+          },
+        };
+      });
+      const [unsubscribe, remove] = shutdownResponses;
+      if (!unsubscribe || !remove) {
+        throw new Error("Expected shutdown response fixtures");
+      }
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValueOnce(unsubscribe.result).mockResolvedValueOnce(remove.result);
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        autoReconnect: false,
+      });
+
+      await client.close();
+
+      expect(mockUrbitFetch).toHaveBeenCalledTimes(2);
+      for (const [index, response] of shutdownResponses.entries()) {
+        expect(mockUrbitFetch.mock.calls[index]?.[0].init?.method).toBe(response.method);
+        expect(response.cancel).toHaveBeenCalledOnce();
+        expect(response.release).toHaveBeenCalledOnce();
+      }
+    });
+  });
+
   describe("reconnection", () => {
     it("has autoReconnect enabled by default", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
