@@ -8,6 +8,7 @@ import {
   hasStoredGatewayAuth,
   type GatewayBrowserClient,
 } from "../api/gateway.ts";
+import type { GatewayAgentRow } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
@@ -115,6 +116,26 @@ type AppSidebarElement = HTMLElement & {
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
+
+function diffAgentRoster(
+  previous: readonly GatewayAgentRow[],
+  next: readonly GatewayAgentRow[],
+): { invalidatedIds: string[]; changedIds: string[] } {
+  const nextById = new Map(next.map((agent) => [agent.id, agent]));
+  const invalidatedIds: string[] = [];
+  const changedIds: string[] = [];
+  for (const agent of previous) {
+    const replacement = nextById.get(agent.id);
+    if (!replacement) {
+      invalidatedIds.push(agent.id);
+    } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
+      invalidatedIds.push(agent.id);
+      changedIds.push(agent.id);
+    }
+  }
+  return { invalidatedIds, changedIds };
+}
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
   const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
@@ -473,6 +494,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private lastNativeNavState: NativeNavState | undefined;
   private didConsiderNativeRouteRestore = false;
   private pendingNativeNewSession = false;
@@ -652,6 +674,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.sessionKeyClient = null;
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
+      this.agentRosterRefreshTimer = null;
+    }
     resetServerUiPrefsSync();
     for (const timer of this.settingsPreloadTimers.values()) {
       globalThis.clearTimeout(timer);
@@ -668,6 +694,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
         void runtimeConfig.refresh();
       }
+      this.scheduleAgentRosterRefresh();
       return;
     }
     if (event.event !== "ui.command" || !event.payload) {
@@ -713,6 +740,49 @@ class OpenClawShell extends OpenClawLightDomElement {
     context.gateway.setSessionKey(command.sessionKey);
     this.navigate("chat", { search: searchForSession(command.sessionKey) });
   };
+
+  private scheduleAgentRosterRefresh() {
+    // Persisted config writes can arrive as a tight sequence; roster state is
+    // snapshot-based, so only the final forced read in that burst is useful.
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
+    }
+    this.agentRosterRefreshTimer = globalThis.setTimeout(() => {
+      this.agentRosterRefreshTimer = null;
+      void this.refreshAgentRoster();
+    }, AGENT_ROSTER_REFRESH_DEBOUNCE_MS);
+  }
+
+  private async refreshAgentRoster() {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const previous = context.agents.state.agentsList;
+    const activeAgentId = context.agentSelection.state.selectedId;
+    const next = await context.agents.refreshList();
+    if (!next || this.context !== context) {
+      return;
+    }
+    const rosterDiff = diffAgentRoster(previous?.agents ?? [], next.agents);
+    if (rosterDiff.invalidatedIds.length > 0) {
+      context.agents.invalidateFiles(rosterDiff.invalidatedIds);
+      context.agentIdentity.invalidate(rosterDiff.invalidatedIds);
+    }
+    if (rosterDiff.changedIds.length > 0) {
+      void context.agentIdentity.ensure(rosterDiff.changedIds);
+    }
+    const previousIds = new Set(previous?.agents.map((agent) => agent.id) ?? []);
+    const nextIds = new Set(next.agents.map((agent) => agent.id));
+    if (
+      activeAgentId &&
+      context.agentSelection.state.selectedId === activeAgentId &&
+      previousIds.has(activeAgentId) &&
+      !nextIds.has(activeAgentId)
+    ) {
+      context.agentSelection.set(next.defaultId);
+    }
+  }
 
   private readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
     const context = this.context;

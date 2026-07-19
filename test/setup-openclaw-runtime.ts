@@ -32,6 +32,7 @@ type WorkerCleanupHelpers = {
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
+  resetPreparedModelRuntimeSnapshotsForTest: typeof import("../src/agents/prepared-model-runtime.test-support.js").resetPreparedModelRuntimeSnapshotsForTest;
   resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.test-support.js").resetSessionWriteLockStateForTest;
 };
 
@@ -78,6 +79,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     const [
       contextRuntimeState,
       modelsConfigState,
+      preparedModelRuntime,
       sessionWriteLockTestSupport,
       sessionStoreCache,
       sessionStoreWriterState,
@@ -88,6 +90,9 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       ),
       vi.importActual<typeof import("../src/agents/models-config-state.test-support.js")>(
         "../src/agents/models-config-state.test-support.js",
+      ),
+      vi.importActual<typeof import("../src/agents/prepared-model-runtime.test-support.js")>(
+        "../src/agents/prepared-model-runtime.test-support.js",
       ),
       vi.importActual<typeof import("../src/agents/session-write-lock.test-support.js")>(
         "../src/agents/session-write-lock.test-support.js",
@@ -109,6 +114,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
+      resetPreparedModelRuntimeSnapshotsForTest:
+        preparedModelRuntime.resetPreparedModelRuntimeSnapshotsForTest,
       resetSessionWriteLockStateForTest:
         sessionWriteLockTestSupport.resetSessionWriteLockStateForTest,
     };
@@ -384,6 +391,7 @@ afterEach(async () => {
     resetContextWindowCacheForTest,
     resetFileLockStateForTest,
     resetModelsJsonReadyCacheForTest,
+    resetPreparedModelRuntimeSnapshotsForTest,
     resetSessionWriteLockStateForTest,
   } = await loadWorkerCleanupHelpers();
   await drainSessionStoreWriterQueuesForTest();
@@ -393,6 +401,7 @@ afterEach(async () => {
   resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
+  resetPreparedModelRuntimeSnapshotsForTest();
   resetSessionWriteLockStateForTest();
   // Reset the no-op replay guard ledger via the registry import (not importActual)
   // so the singleton cleared here is the same instance the production gates mutate.

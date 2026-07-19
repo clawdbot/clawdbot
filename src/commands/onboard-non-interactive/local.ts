@@ -208,6 +208,7 @@ export async function runNonInteractiveLocalSetup(params: {
       opts,
       runtime,
       baseConfig,
+      workspaceDir,
     });
     if (!nextConfigAfterAuth) {
       return;

@@ -57,7 +57,7 @@ export type SystemAgentTurnRunner = (params: {
 export type SystemAgentSession = {
   sessionId: string;
   /** Exact live-tested inference owner for this ephemeral conversation. */
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
   proposalRef: { current?: string; operation?: SystemAgentOperation };
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */

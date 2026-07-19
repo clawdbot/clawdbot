@@ -2,7 +2,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
+import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { makeCfg } from "./isolated-agent.test-harness.js";
 import {
   DEFAULT_MESSAGE,
@@ -27,7 +27,7 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
   beforeAll(async () => {
     process.env.OPENCLAW_TEST_FAST = "1";
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
-    vi.mocked(loadModelCatalog).mockResolvedValue([]);
+    vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
     await withTempHome(async (home) => {
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "warm runtime" },
@@ -41,7 +41,7 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
     process.env.OPENCLAW_TEST_FAST = "1";
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedAgent).mockClear();
-    vi.mocked(loadModelCatalog).mockResolvedValue([]);
+    vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
   });
 
   it("wraps external hook content by default", async () => {
@@ -91,6 +91,7 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
 
       const resolved = await resolveCronModelSelection({
         cfg,
+        catalogConfig: cfg,
         cfgWithAgentDefaults: cfg,
         sessionEntry: {},
         payload: {
@@ -100,6 +101,8 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
         },
         isGmailHook: true,
         agentId: "main",
+        agentDir: `${home}/agents/main/agent`,
+        workspaceDir: `${home}/workspace`,
       });
 
       expect(resolved).toEqual({

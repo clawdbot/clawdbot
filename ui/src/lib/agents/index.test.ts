@@ -184,6 +184,29 @@ describe("createAgentCapability lifecycle", () => {
     agents.dispose();
   });
 
+  it("invalidates cached and in-flight file lists for changed agents", async () => {
+    const pending = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce({ agentId: "main", workspace: "old", files: [] })
+      .mockReturnValueOnce(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    await agents.refreshFiles("main");
+    expect(agents.files("main").list?.workspace).toBe("old");
+
+    const staleLoad = agents.refreshFiles("main");
+    agents.invalidateFiles(["main"]);
+    pending.resolve({ agentId: "main", workspace: "stale", files: [] });
+    await staleLoad;
+
+    expect(agents.files("main").list).toBeNull();
+    expect(agents.files("main").loading).toBe(false);
+    agents.dispose();
+  });
+
   it("does not commit a list request after disposal", async () => {
     const pending = deferred<unknown>();
     const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);

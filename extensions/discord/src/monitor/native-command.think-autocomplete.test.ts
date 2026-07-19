@@ -99,7 +99,11 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  getPreparedModelCatalogSnapshot: vi.fn(() => ({ entries: [], routeVariants: [] })),
+  loadPreparedModelCatalog: vi.fn(async () => []),
   normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+  resolveAgentDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/agents/${agentId}/agent`,
+  resolveAgentWorkspaceDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/workspaces/${agentId}`,
   resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig }) => {
     const configuredModel = params.cfg.agents?.defaults?.model;
     const primary =
@@ -313,6 +317,7 @@ describe("discord native /think autocomplete", () => {
     expect(context).toEqual({
       provider: "openai",
       model: "gpt-5.4",
+      agentId: "main",
       agentRuntime: "codex",
     });
 
@@ -374,6 +379,7 @@ describe("discord native /think autocomplete", () => {
       expect(context).toEqual({
         provider: "openai",
         model: "gpt-5.6-luna",
+        agentId: "main",
         agentRuntime: expectedRuntime,
       });
 

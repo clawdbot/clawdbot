@@ -168,10 +168,10 @@ const loadWorkerPlacementStartupModule = createLazyRuntimeModule(
   () => import("./server-worker-placement-startup.js"),
 );
 
-export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+export async function resetPreparedModelCatalogForTest(): Promise<void> {
+  const { resetPreparedModelCatalogForTest: resetPreparedModelCatalogForTestLocal } =
     await loadGatewayModelCatalogModule();
-  await resetModelCatalogCacheForTestLocal();
+  await resetPreparedModelCatalogForTestLocal();
 }
 
 ensureOpenClawCliOnPath();

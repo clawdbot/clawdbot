@@ -14,9 +14,11 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
-const outputTimeoutMs = 20_000;
-const exitAfterOutputTimeoutMs = 5_000;
-const exitOnlyTimeoutMs = 45_000;
+// Process startup includes TS transforms and plugin discovery, both of which can
+// stall behind neighboring CI shards. Bound observable milestones, not runner speed.
+const outputTimeoutMs = 45_000;
+const exitAfterOutputTimeoutMs = 30_000;
+const exitOnlyTimeoutMs = 60_000;
 
 afterEach(async () => {
   nativeHookRelayTesting.clearNativeHookRelaysForTests();
@@ -261,7 +263,7 @@ describe("hooks CLI process lifecycle", () => {
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe("");
-  }, 60_000);
+  }, 90_000);
 
   it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
     const fixture = await createLingeringPluginFixture();
@@ -293,5 +295,5 @@ describe("hooks CLI process lifecycle", () => {
         permissionDecisionReason: expect.any(String),
       },
     });
-  }, 60_000);
+  }, 150_000);
 });

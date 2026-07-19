@@ -154,9 +154,17 @@ export type GatewayRequestContext = {
     sessionKey: string,
     client: GatewayClient | null,
   ) => SessionApprovalReplay;
-  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
-  loadGatewayModelCatalogSnapshot: (params?: {
+  loadGatewayModelCatalog: (params?: {
+    agentId?: string;
+    agentDir?: string;
     readOnly?: boolean;
+    workspaceDir?: string;
+  }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: (params?: {
+    agentId?: string;
+    agentDir?: string;
+    readOnly?: boolean;
+    workspaceDir?: string;
   }) => Promise<ModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {

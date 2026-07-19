@@ -56,7 +56,7 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. Adding an entry does not restrict model overrides.
-- `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or `provider/*` entries; omit it or set `[]` to allow any model. Per-agent `agents.list[].modelPolicy.allow` replaces the default policy for that agent.
+- `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*` and `provider/namespace/*`; omit it or set `[]` to allow any model. Per-agent `agents.list[].modelPolicy.allow` replaces the default policy for that agent.
 - `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.list[].utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
@@ -80,7 +80,7 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including `provider/*` wildcard entries; otherwise it shows configured models plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including trailing prefix wildcard entries; otherwise it shows configured models plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 Full mechanics: [Model failover](/concepts/model-failover).
@@ -112,14 +112,14 @@ If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the allowlist fo
 
 ```text
 Model override "provider/model" is not allowed by agents.defaults.modelPolicy.allow.
-Add "provider/model" or "provider/*" to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.
+Add "provider/model", "provider/*", or a narrower "provider/namespace/*" prefix to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.
 ```
 
 Fix it by adding the model or a provider wildcard to the named `modelPolicy.allow` key, removing/emptying that list, or picking a model from `/model list`. If the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same command.
 
 For local/GGUF models, the allowlist needs the full provider-prefixed ref, for example `ollama/gemma4:26b` or `lmstudio/Gemma4-26b-a4-it-gguf` — check `openclaw models list --provider <provider>` for the exact string. Bare filenames or display names are not enough once the allowlist is active.
 
-To limit providers without listing every model, use `provider/*` wildcard entries:
+To limit providers without listing every model, use trailing prefix wildcard entries. A provider-wide `provider/*` matches every model under that provider; a narrower prefix such as `clawrouter/anthropic/*` matches only that namespace:
 
 ```json5
 {

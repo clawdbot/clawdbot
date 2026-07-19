@@ -1,9 +1,7 @@
 # Swarms — agent fan-out and orchestration in code mode
 
-Status: implementation spec (v1 in progress). This document is the frozen build
-spec. It will be rewritten as user-facing docs (`docs/tools/swarm.md`) once the
-feature lands and is tested. Feature-gated behind `tools.swarm` (default off);
-`main` remains shippable at every point.
+Status: Shipped — superseded by `docs/tools/swarm.md`. This document remains as
+the implementation design record.
 
 ## 1. What and why
 

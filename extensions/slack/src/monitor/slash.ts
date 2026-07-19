@@ -1,7 +1,11 @@
 // Slack plugin module implements slash behavior.
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  loadPreparedModelCatalog,
+  resolveAgentDir,
+  resolveDefaultModelForAgent,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
@@ -619,7 +623,16 @@ export async function registerSlackMonitorSlashCommands(params: {
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: cfg, readOnly: true })
+            ? await loadPreparedModelCatalog({
+                config: cfg,
+                ...(menuRoute
+                  ? {
+                      agentId: menuRoute.agentId,
+                      agentDir: resolveAgentDir(cfg, menuRoute.agentId),
+                    }
+                  : {}),
+                readOnly: true,
+              })
             : undefined;
         const menu = resolveCommandArgMenu({
           command: commandDefinition,

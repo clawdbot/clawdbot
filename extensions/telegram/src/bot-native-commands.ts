@@ -2,8 +2,9 @@
 import { randomUUID } from "node:crypto";
 import type { Bot, Context } from "grammy";
 import {
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   resolveAgentConfig,
+  resolveAgentDir,
   resolveDefaultModelForAgent,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -436,7 +437,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   model?: string;
   agentRuntime?: string;
   thinkingLevel?: string;
-  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
 }): Promise<string> {
   const explicit = normalizeOptionalString(params.thinkingLevel);
   if (explicit) {
@@ -457,7 +458,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
     agentRuntime: params.agentRuntime,
-    loadModelCatalog: async () => params.catalog,
+    loadRuntimeCatalog: async () => params.catalog,
   });
 }
 
@@ -1493,7 +1494,12 @@ export const registerTelegramNativeCommands = ({
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition?.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: runtimeCfg, readOnly: true })
+            ? await loadPreparedModelCatalog({
+                config: runtimeCfg,
+                agentId: route.agentId,
+                agentDir: resolveAgentDir(runtimeCfg, route.agentId),
+                readOnly: true,
+              })
             : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({

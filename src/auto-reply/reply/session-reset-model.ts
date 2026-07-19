@@ -42,14 +42,27 @@ function splitBody(body: string) {
   };
 }
 
-async function loadResetModelCatalog(cfg: OpenClawConfig): Promise<ModelCatalogEntry[]> {
-  const { loadModelCatalog } = await import("../../agents/model-catalog.js");
-  return loadModelCatalog({ config: cfg });
+async function loadResetModelCatalog(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<ModelCatalogEntry[]> {
+  const { loadPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
+  return loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    readOnly: true,
+  });
 }
 
 async function resolveResetFallbackModels(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<string[]> {
   if (params.agentId) {
     const { resolveAgentModelFallbacksOverride } = await import("../../agents/agent-scope.js");
@@ -161,6 +174,8 @@ async function applySelectionToSession(params: {
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
@@ -188,7 +203,14 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog = params.modelCatalog ?? (await loadResetModelCatalog(params.cfg));
+  const catalog =
+    params.modelCatalog ??
+    (await loadResetModelCatalog({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    }));
   const allowedModelKeys = await buildResetAllowedModelKeys({
     cfg: params.cfg,
     catalog,

@@ -490,8 +490,6 @@ src/agents/model-auth-availability.ts
 src/agents/model-auth.profiles.test.ts
 src/agents/model-auth.test.ts
 src/agents/model-auth.ts
-src/agents/model-catalog.test.ts
-src/agents/model-catalog.ts
 src/agents/model-fallback.test.ts
 src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
@@ -953,7 +951,6 @@ src/logging/logger.ts
 src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
-src/media-understanding/image.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
 src/media-understanding/runner.vision-skip.test.ts

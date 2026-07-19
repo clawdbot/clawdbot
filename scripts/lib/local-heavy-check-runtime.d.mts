@@ -6,6 +6,15 @@ export type LocalHostResources = {
 export function isLocalCheckEnabled(env: NodeJS.ProcessEnv): boolean;
 /** Ensure local check runs opt into safeguard environment outside CI. */
 export function resolveLocalHeavyCheckEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+/** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
+export function resolveRepoToolBinPath(
+  toolName: string,
+  options?: {
+    cwd?: string;
+    fileExists?: (candidate: string) => boolean;
+    resolveCommonDir?: (cwd: string) => string | null;
+  },
+): string;
 /** Apply local tsgo defaults for declaration skipping, caching, throttling, and profiling. */
 export function applyLocalTsgoPolicy(
   args: string[],

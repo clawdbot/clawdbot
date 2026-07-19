@@ -3,7 +3,6 @@
  * combines explicit policy, configured models, defaults, and runtime
  * auth-backed availability.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ModelAuthAvailabilityEvaluation,
@@ -301,7 +300,9 @@ export async function resolveLogicalVisibleModelCatalog(params: {
     const key = resolveLogicalKey(entry, params.routePolicy);
     const preferredKey = preferredKeys.has(key);
     const wildcardRoute =
-      policy.allowAny || policy.providerWildcards.has(normalizeProviderId(entry.provider));
+      policy.allowAny ||
+      (policy.hasProviderWildcards &&
+        policy.allowsByWildcard({ provider: entry.provider, model: entry.id }));
     if (!preferredKey && !wildcardRoute) {
       continue;
     }

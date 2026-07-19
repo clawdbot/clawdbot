@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -44,6 +44,39 @@ async function listModels(params: {
 }
 
 describe("models.list OpenAI routes", () => {
+  it("does not reuse a preloaded catalog owned by another agent", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(() =>
+      Promise.resolve({ entries: [], routeVariants: [] }),
+    );
+    const context = {
+      getRuntimeConfig: () =>
+        ({
+          agents: {
+            defaults: {},
+            list: [{ id: "main", default: true }, { id: "worker" }],
+          },
+        }) as OpenClawConfig,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+    const preloadedCatalog: ModelCatalogSnapshot = {
+      entries: [catalogEntry("gpt-main", "openai-responses")],
+      routeVariants: [],
+    };
+
+    await expect(
+      buildModelsListResult({
+        context,
+        agentId: "worker",
+        params: { view: "default" },
+        preloadedCatalog: { agentId: "main", snapshot: preloadedCatalog },
+      }),
+    ).resolves.toEqual({ models: [] });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker" }),
+    );
+  });
+
   it("keeps route-aware default browse indeterminate without the provider artifact", async () => {
     const resolveRoutes = vi.fn(() => null);
     const createResolver = vi.fn(() => resolveRoutes);

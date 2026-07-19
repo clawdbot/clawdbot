@@ -12,13 +12,12 @@ import {
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { loadModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
+import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
-import { loadModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import { isRetiredModelPickerProvider } from "../../agents/model-picker-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
@@ -35,11 +34,11 @@ import {
 } from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -160,25 +159,25 @@ export async function buildModelsProviderData(
     cfg,
     agentId,
   });
+  const catalogWorkspaceDir = options.workspaceDir;
   const workspaceDir =
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
     resolveDefaultAgentWorkspaceDir();
-  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config: cfg,
-    workspaceDir,
-    env: process.env,
-    allowScopedSnapshot: true,
-  });
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
 
-  const snapshot = await loadModelCatalogSnapshotForBrowse({
+  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
     view: options.view ?? "default",
     loadCatalog: ({ readOnly }) =>
-      loadModelCatalogSnapshot({ config: cfg, readOnly, metadataSnapshot }),
+      loadPreparedModelCatalogSnapshot({
+        config: cfg,
+        readOnly,
+        ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
+        ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
+      }),
   });
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({

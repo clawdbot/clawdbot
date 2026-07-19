@@ -12,10 +12,12 @@ const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogMocks = vi.hoisted(() => ({
   routeVariants: undefined as unknown[] | undefined,
 }));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  publishPreparedModelRuntimeSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
-    return { entries, routeVariants: modelCatalogMocks.routeVariants ?? entries };
+    return {
+      modelCatalog: { entries, routeVariants: modelCatalogMocks.routeVariants ?? entries },
+    };
   },
 }));
 
@@ -182,10 +184,41 @@ describe("warnIfModelConfigLooksOff", () => {
 
     await warnIfModelConfigLooksOff(config, prompter);
 
-    expect(loadModelCatalog).toHaveBeenCalledWith({
-      config,
-      useCache: false,
+    expect(loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ config, inheritedAuthDir: expect.any(String) }),
+      { force: true, provenance: "explicit" },
+    );
+  });
+
+  it("publishes validation catalogs for the selected agent", async () => {
+    const prompter = makePrompter({ note: vi.fn(async () => {}) });
+    const config = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        list: [
+          {
+            id: "worker",
+            workspace: "/tmp/openclaw-worker-workspace",
+            model: "openai/gpt-5.5",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    await warnIfModelConfigLooksOff(config, prompter, {
+      agentId: "worker",
+      agentDir: "/tmp/openclaw-worker-agent",
     });
+
+    expect(loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        agentId: "worker",
+        agentDir: "/tmp/openclaw-worker-agent",
+        workspaceDir: "/tmp/openclaw-worker-workspace",
+      }),
+      { force: true, provenance: "explicit" },
+    );
   });
 
   it("accepts subscription auth but not key sources for gpt-5.3-codex-spark", async () => {

@@ -3,9 +3,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
@@ -25,7 +28,6 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
-import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   appendTranscriptMessage,
   listSessionEntries,
@@ -35,6 +37,7 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   clearSessionStoreCacheForTest,
@@ -62,8 +65,6 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
-
-const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-pruning-integ-" });
 
 function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
@@ -93,8 +94,10 @@ function applyCappedMaintenanceConfig(mockLoadConfigLocal: ReturnType<typeof vi.
   });
 }
 
-async function createCaseDir(prefix: string): Promise<string> {
-  return await suiteRootTracker.make(prefix);
+function disableAutomaticDiskBudget(mockLoadConfigValue: ReturnType<typeof vi.fn>) {
+  mockLoadConfigValue.mockReturnValue({
+    session: { maintenance: { maxDiskBytes: false } },
+  });
 }
 
 async function expectPathExists(targetPath: string): Promise<void> {
@@ -186,30 +189,37 @@ async function seedSqliteTrajectoryEvent(params: {
 }
 
 describe("Integration: saveSessionStore with pruning", () => {
+  let testState: OpenClawTestState;
   let testDir: string;
   let storePath: string;
   let savedCacheTtl: string | undefined;
 
-  beforeAll(async () => {
-    await suiteRootTracker.setup();
-  });
-
-  afterAll(async () => {
-    await suiteRootTracker.cleanup();
-  });
-
   beforeEach(async () => {
     mockLoadConfig = vi.mocked(getRuntimeConfig) as ReturnType<typeof vi.fn>;
     mockLoadConfig.mockReset();
-    testDir = await createCaseDir("pruning-integ");
+    disableAutomaticDiskBudget(mockLoadConfig);
+    testState = await createOpenClawTestState({
+      prefix: "openclaw-pruning-integ-",
+      layout: "state-only",
+    });
+    testDir = testState.sessionsDir();
+    await fs.mkdir(testDir, { recursive: true });
     storePath = path.join(testDir, "sessions.json");
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     mockLoadConfig.mockReset();
+    disableAutomaticDiskBudget(mockLoadConfig);
+    // Reset/delete entry lifecycles kick fire-and-forget history maintenance.
+    // Serialize a no-op pass behind them before closing shared SQLite handles.
+    await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      maintenance: { maxDiskBytes: null, highWaterBytes: null },
+    });
     clearSessionStoreCacheForTest();
     closeOpenClawAgentDatabasesForTest();
     if (savedCacheTtl === undefined) {
@@ -217,6 +227,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     } else {
       process.env.OPENCLAW_SESSION_CACHE_TTL_MS = savedCacheTtl;
     }
+    await testState.cleanup();
   });
 
   it("saveSessionStore prunes stale model-run probes before capping real sessions", async () => {
@@ -1134,14 +1145,13 @@ describe("Integration: saveSessionStore with pruning", () => {
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       buildNextEntry: () => ({ sessionId: "live-budget-session", updatedAt: Date.now() }),
     });
-    const before = await measureSessionPhysicalDiskUsage(storePath);
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
           mode: "enforce",
           pruneAfter: "365d",
           maxEntries: 500,
-          maxDiskBytes: before.totalBytes - 1,
+          maxDiskBytes: 0,
           highWaterBytes: 0,
         },
       },
@@ -1653,7 +1663,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyCappedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
-    const externalDir = await createCaseDir("external-cap");
+    const externalDir = testState.path("external-cap");
+    await fs.mkdir(externalDir, { recursive: true });
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "external", "utf-8");
     const store: Record<string, SessionEntry> = {
@@ -1828,7 +1839,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const now = Date.now();
-    const externalDir = await createCaseDir("external-session");
+    const externalDir = testState.path("external-session");
+    await fs.mkdir(externalDir, { recursive: true });
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "z".repeat(400), "utf-8");
 

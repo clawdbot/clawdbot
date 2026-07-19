@@ -7,11 +7,12 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   resolveLocalHeavyCheckEnv,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mjs";
+import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
-const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
 const PREPARE_EXTENSION_BOUNDARY_ARGS = [
   path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mjs"),
 ];
@@ -178,6 +179,18 @@ function hasTrackedPath({ cwd, target }) {
   return result.status === 0 && result.stdout.trim().length > 0;
 }
 
+function resolveOxlintToolchainEnv(oxlintPath, env, platform = process.platform) {
+  const pathKey = platform === "win32" ? resolvePathEnvKey(env) : "PATH";
+  const delimiter = platform === "win32" ? ";" : path.delimiter;
+  const currentPath = env[pathKey]?.trim();
+  return {
+    ...env,
+    // Type-aware oxlint resolves its optional tsgolint peer through PATH, so
+    // keep the selected checkout's toolchain together in dependency-less worktrees.
+    [pathKey]: [path.dirname(oxlintPath), currentPath].filter(Boolean).join(delimiter),
+  };
+}
+
 async function prepareExtensionPackageBoundaryArtifacts(env) {
   const releaseArtifactsLock = acquireLocalHeavyCheckLockSync({
     cwd: process.cwd(),
@@ -256,10 +269,11 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
       await prepareExtensionPackageBoundaryArtifacts(env);
     }
 
+    const oxlintPath = resolveRepoToolBinPath("oxlint");
     const status = await runManagedCommand({
       bin: oxlintPath,
       args: finalArgs,
-      env,
+      env: resolveOxlintToolchainEnv(oxlintPath, env),
     });
     process.exitCode = status;
   } finally {

@@ -366,6 +366,28 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedAgent", () => {
+  it("reuses one standalone snapshot across configless runs", async () => {
+    mockSuccessfulEmbeddedAttempt();
+    mockSuccessfulEmbeddedAttempt();
+
+    for (const suffix of ["first", "second"]) {
+      await runEmbeddedAgent({
+        sessionId: `configless-${suffix}`,
+        sessionFile: nextSessionFile(),
+        workspaceDir,
+        prompt: "hello",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        timeoutMs: 5_000,
+        agentDir,
+        runId: nextRunId(`configless-${suffix}`),
+        enqueue: immediateEnqueue,
+      });
+    }
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the configured default model when the caller omits provider and model", async () => {
     const sessionFile = nextSessionFile();
     const cfg = {
@@ -521,7 +543,7 @@ describe("runEmbeddedAgent", () => {
     ).toEqual(expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4-6" }));
   });
 
-  it("skips models.json generation when dynamic model resolution succeeds", async () => {
+  it("publishes the standalone model snapshot before dynamic model resolution", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
     runEmbeddedAttemptMock.mockResolvedValueOnce(
@@ -555,7 +577,7 @@ describe("runEmbeddedAgent", () => {
     expect(
       (resolveModelCall?.[4] as { skipAgentDiscovery?: boolean } | undefined)?.skipAgentDiscovery,
     ).toBe(true);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
   });
 
   it("resolves explicit OpenAI OpenClaw runs through Codex when auth order starts with Codex OAuth", async () => {
@@ -700,7 +722,7 @@ describe("runEmbeddedAgent", () => {
       expect.objectContaining({ skipAgentDiscovery: true }),
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
@@ -774,7 +796,7 @@ describe("runEmbeddedAgent", () => {
         preferBundledStaticCatalogTransport: true,
       }),
     );
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
@@ -804,7 +826,7 @@ describe("runEmbeddedAgent", () => {
     });
 
     expect(resolveModelAsyncMock).not.toHaveBeenCalled();
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     const attempt = firstRunEmbeddedAttemptParams() as Record<string, unknown>;
     expect(attempt).toMatchObject({
       agentHarnessId: "codex",

@@ -7,7 +7,11 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
+import {
+  executeSystemAgentOperation,
+  isPersistentSystemAgentOperation,
+  type SystemAgentCommandDeps,
+} from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
@@ -450,8 +454,14 @@ describe("parseSystemAgentOperation", () => {
     });
     mockConfig.mutateConfigFile.mockClear();
     const { runtime, lines } = createSystemAgentTestRuntime();
+    const reboundBinding = { execution: { agentId: "main" } } as never;
+    const onVerifiedInferenceChanged = vi.fn();
     let verificationCalls = 0;
-    const verifyInferenceConfig = vi.fn(async ({ config }: { config: TestConfig }) => {
+    type VerifyInferenceParams = Parameters<
+      NonNullable<SystemAgentCommandDeps["verifyInferenceConfig"]>
+    >[0];
+    const verifyInferenceConfig = vi.fn(async (params: VerifyInferenceParams) => {
+      const { config, onVerifiedExecution } = params;
       verificationCalls += 1;
       const stagedDefaults = requireRecord(
         requireRecord(config.agents, "agents").defaults,
@@ -502,6 +512,8 @@ describe("parseSystemAgentOperation", () => {
           },
           channels: { telegram: { enabled: true } },
         });
+      } else {
+        onVerifiedExecution?.({} as never, reboundBinding);
       }
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 17 };
     });
@@ -509,7 +521,7 @@ describe("parseSystemAgentOperation", () => {
     const result = await executeSystemAgentOperation(
       { kind: "set-default-model", model: "openai/gpt-5.5" },
       runtime,
-      { approved: true, deps: { verifyInferenceConfig } },
+      { approved: true, deps: { verifyInferenceConfig }, onVerifiedInferenceChanged },
     );
 
     expect(result).toEqual({ applied: true });
@@ -520,8 +532,13 @@ describe("parseSystemAgentOperation", () => {
     );
     expect(verifyInferenceConfig).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ requireExecutionOwner: true }),
+      expect.objectContaining({
+        requireExecutionOwner: true,
+        onVerifiedExecution: expect.any(Function),
+      }),
     );
+    expect(onVerifiedInferenceChanged).toHaveBeenCalledOnce();
+    expect(onVerifiedInferenceChanged).toHaveBeenCalledWith(reboundBinding);
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({

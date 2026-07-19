@@ -34,7 +34,7 @@ export function buildProviderConfigModelCatalogForBrowse(params: {
   );
 }
 
-/** True when a browse view cannot be answered from read-only cached catalog entries. */
+/** True when a browse view requires the full published catalog generation. */
 export function modelCatalogBrowseRequiresFullDiscovery(params: {
   cfg: OpenClawConfig;
   view?: ModelCatalogBrowseView;
@@ -93,7 +93,7 @@ async function loadCatalogForBrowse<T>(params: {
 }
 
 /** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */
-export function loadModelCatalogSnapshotForBrowse(params: {
+export function loadPreparedModelCatalogSnapshotForBrowse(params: {
   cfg: OpenClawConfig;
   view?: ModelCatalogBrowseView;
   loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogSnapshot>;

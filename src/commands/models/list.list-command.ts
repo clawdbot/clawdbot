@@ -91,10 +91,10 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
+  const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveDefaultAgentDir(cfg);
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-  const workspaceDir =
-    resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir,
@@ -134,6 +134,8 @@ export async function modelsListCommand(
         enableCascade: enableSourcePlanCascade,
         providerFilter,
         cfg,
+        agentId,
+        agentDir,
         metadataSnapshot,
       })
     : undefined;
@@ -144,6 +146,8 @@ export async function modelsListCommand(
   }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
     const loaded = await loadListModelRegistry(cfg, {
+      agentId,
+      agentDir,
       providerFilter,
       normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
       loadAvailability: optsLocal?.loadAvailability,
@@ -160,7 +164,9 @@ export async function modelsListCommand(
       await loadRegistryState();
     } else if (!opts.all && opts.local) {
       const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
-      const loaded = loadConfiguredListModelRegistry(cfg, entries, {
+      const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
+        agentId,
+        agentDir,
         providerFilter,
         workspaceDir,
       });
@@ -175,6 +181,7 @@ export async function modelsListCommand(
   }
   const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
+    agentId,
     agentDir,
     authIndex,
     availableKeys,

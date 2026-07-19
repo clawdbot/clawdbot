@@ -80,8 +80,8 @@ describe("runAuthProbes", () => {
       resolveProviderEntryApiKeyBinding: vi.fn(),
       resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
     }));
-    vi.doMock("../../agents/model-catalog.js", () => ({
-      loadModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
+      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     try {
       const module = await importFreshModule<typeof import("./list.probe.js")>(
@@ -117,7 +117,7 @@ describe("runAuthProbes", () => {
       vi.doUnmock("../../agents/embedded-agent.js");
       vi.doUnmock("../../agents/auth-profiles.js");
       vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/model-catalog.js");
+      vi.doUnmock("../../agents/prepared-model-catalog.js");
     }
   });
 
@@ -170,8 +170,8 @@ describe("runAuthProbes", () => {
         source: "models.json",
       }),
     }));
-    vi.doMock("../../agents/model-catalog.js", () => ({
-      loadModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
+      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     const providerConfig = {
       baseUrl: "https://api.openai.com/v1",
@@ -235,7 +235,7 @@ describe("runAuthProbes", () => {
       vi.doUnmock("../../agents/embedded-agent.js");
       vi.doUnmock("../../agents/auth-profiles.js");
       vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/model-catalog.js");
+      vi.doUnmock("../../agents/prepared-model-catalog.js");
     }
   });
 
@@ -267,8 +267,8 @@ describe("runAuthProbes", () => {
         source: "OPENAI_API_KEY",
       }),
     }));
-    vi.doMock("../../agents/model-catalog.js", () => ({
-      loadModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
+      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     const cfg = {
       models: {
@@ -320,7 +320,7 @@ describe("runAuthProbes", () => {
       vi.doUnmock("../../agents/embedded-agent.js");
       vi.doUnmock("../../agents/auth-profiles.js");
       vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/model-catalog.js");
+      vi.doUnmock("../../agents/prepared-model-catalog.js");
     }
   });
 });

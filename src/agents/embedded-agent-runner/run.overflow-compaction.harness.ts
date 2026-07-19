@@ -806,11 +806,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   vi.doMock("../workspace-run.js", () => ({
-    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string }) => ({
+    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string; agentId?: string }) => ({
       workspaceDir: params.workspaceDir,
       usedFallback: false,
+      isCanonicalWorkspace: false,
       fallbackReason: undefined,
-      agentId: "main",
+      agentId: params.agentId ?? "main",
     })),
     redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
   }));
@@ -874,6 +875,23 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../models-config.js", () => ({
     ensureOpenClawModelsJson: vi.fn(async () => {}),
+  }));
+
+  vi.doMock("../prepared-model-runtime.js", () => ({
+    activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: Record<string, unknown>) => ({
+      snapshot: {
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
+    })),
+    prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
   }));
 
   vi.doMock("../context-window-guard.js", () => ({

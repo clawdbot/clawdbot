@@ -10,6 +10,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -20,7 +21,6 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded
 import { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
 import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
@@ -35,6 +35,7 @@ import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "../../agents/model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { resolveProviderModelRouteAuthRequirement } from "../../agents/provider-model-route-auth.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
@@ -64,7 +65,6 @@ import type {
   Tool,
   Usage,
 } from "../../llm/types.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -99,8 +99,7 @@ type WorkerInferenceRuntimeDependencies = {
     config: OpenClawConfig,
     sessionId: string,
   ) => WorkerInferenceSessionTarget | undefined;
-  loadManifestSnapshot: typeof loadManifestMetadataSnapshot;
-  loadCatalog: typeof loadModelCatalog;
+  acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
   resolveDefaultModel: typeof resolveDefaultModelForAgent;
   resolveSessionAuthProfile: typeof resolveSessionAuthProfileOverride;
   resolveAuthProfileMode: typeof resolveWorkerInferenceAuthProfileMode;
@@ -379,8 +378,7 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
       agentId: target.agentId ?? resolveDefaultAgentId(config),
     };
   },
-  loadManifestSnapshot: loadManifestMetadataSnapshot,
-  loadCatalog: loadModelCatalog,
+  acquireRuntimeLease: acquireAgentRunPreparedModelRuntime,
   resolveDefaultModel: resolveDefaultModelForAgent,
   resolveSessionAuthProfile: resolveSessionAuthProfileOverride,
   resolveAuthProfileMode: resolveWorkerInferenceAuthProfileMode,
@@ -419,9 +417,11 @@ async function resolveApprovedModel(params: {
   | {
       provider: string;
       model: string;
+      config: OpenClawConfig;
       agentDir: string;
       workspaceDir: string;
       prepared: PreparedSimpleCompletionModel;
+      release: () => void;
     }
   | undefined
 > {
@@ -430,159 +430,179 @@ async function resolveApprovedModel(params: {
   if (splitTrailingAuthProfile(rawRef).profile) {
     return undefined;
   }
-  const workspaceDir = resolveAgentWorkspaceDir(config, target.agentId);
-  const agentDir = resolveAgentDir(config, target.agentId);
-  const manifestSnapshot = dependencies.loadManifestSnapshot({ config, workspaceDir });
-  const defaultModel = dependencies.resolveDefaultModel({
-    cfg: config,
+  const runtimeLease = await dependencies.acquireRuntimeLease({
+    config,
     agentId: target.agentId,
-    manifestPlugins: manifestSnapshot.plugins,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    agentDir: resolveAgentDir(config, target.agentId),
+    inheritedAuthDir: resolveDefaultAgentDir(config),
   });
-  const agentModels = resolveAgentConfig(config, target.agentId)?.models;
-  const aliasConfig = agentModels
-    ? {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            models: { ...config.agents?.defaults?.models, ...agentModels },
+  const runtimeSnapshot = runtimeLease.snapshot;
+  try {
+    const lifecycleConfig = runtimeSnapshot.config;
+    const agentDir = runtimeSnapshot.agentDir;
+    const workspaceDir =
+      runtimeSnapshot.workspaceDir ?? resolveAgentWorkspaceDir(lifecycleConfig, target.agentId);
+    const manifestSnapshot = runtimeSnapshot.metadataSnapshot;
+    const preparedStores = runtimeSnapshot.createStores();
+    const defaultModel = dependencies.resolveDefaultModel({
+      cfg: lifecycleConfig,
+      agentId: target.agentId,
+      manifestPlugins: manifestSnapshot.plugins,
+      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    });
+    const agentModels = resolveAgentConfig(lifecycleConfig, target.agentId)?.models;
+    const aliasConfig = agentModels
+      ? {
+          ...lifecycleConfig,
+          agents: {
+            ...lifecycleConfig.agents,
+            defaults: {
+              ...lifecycleConfig.agents?.defaults,
+              models: { ...lifecycleConfig.agents?.defaults?.models, ...agentModels },
+            },
           },
-        },
-      }
-    : config;
-  const aliasIndex = buildModelAliasIndex({
-    cfg: aliasConfig,
-    defaultProvider: defaultModel.provider,
-    manifestPlugins: manifestSnapshot.plugins,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  });
-  const resolved = resolveModelRefFromString({
-    cfg: aliasConfig,
-    raw: rawRef,
-    defaultProvider: defaultModel.provider,
-    aliasIndex,
-    manifestPlugins: manifestSnapshot.plugins,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  });
-  if (
-    !resolved ||
-    normalizeProviderId(resolved.ref.provider) !== normalizeProviderId(request.modelRef.provider)
-  ) {
-    return undefined;
-  }
-  const catalog = await dependencies.loadCatalog({
-    agentDir,
-    config,
-    metadataSnapshot: manifestSnapshot,
-    useCache: false,
-    workspaceDir,
-  });
-  const policy = createModelVisibilityPolicy({
-    cfg: config,
-    catalog,
-    defaultProvider: defaultModel.provider,
-    defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
-    agentId: target.agentId,
-    manifestPlugins: manifestSnapshot.plugins,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  });
-  const resolvedKey = modelCatalogLogicalKey({
-    provider: resolved.ref.provider,
-    id: resolved.ref.model,
-  });
-  // Retained refs stay approved during cold discovery.
-  const known =
-    policy.allowedCatalog.some(
-      (entry: ModelCatalogEntry) => resolvedKey === modelCatalogLogicalKey(entry),
-    ) || policy.retainedKeys.has(resolvedKey);
-  if (!known || !policy.allows(resolved.ref)) {
-    return undefined;
-  }
-  const configuredDefaultProfile =
-    resolvedKey ===
-    modelCatalogLogicalKey({ provider: defaultModel.provider, id: defaultModel.model })
-      ? splitTrailingAuthProfile(resolveAgentEffectiveModelPrimary(config, target.agentId) ?? "")
-          .profile
-      : undefined;
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    provider: resolved.ref.provider,
-    modelId: resolved.ref.model,
-    config,
-    agentId: target.agentId,
-    sessionKey: target.sessionKey,
-  });
-  const agentRuntimeId =
-    harnessPolicy.runtimeSource !== "implicit" || config.plugins?.entries?.codex?.enabled === true
-      ? harnessPolicy.runtime
-      : undefined;
-  const sessionProfileId = await dependencies.resolveSessionAuthProfile({
-    cfg: config,
-    provider: resolved.ref.provider,
-    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+        }
+      : lifecycleConfig;
+    const aliasIndex = buildModelAliasIndex({
+      cfg: aliasConfig,
+      defaultProvider: defaultModel.provider,
+      manifestPlugins: manifestSnapshot.plugins,
+      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    });
+    const resolved = resolveModelRefFromString({
+      cfg: aliasConfig,
+      raw: rawRef,
+      defaultProvider: defaultModel.provider,
+      aliasIndex,
+      manifestPlugins: manifestSnapshot.plugins,
+      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    });
+    if (
+      !resolved ||
+      normalizeProviderId(resolved.ref.provider) !== normalizeProviderId(request.modelRef.provider)
+    ) {
+      runtimeLease.release();
+      return undefined;
+    }
+    const catalog = runtimeSnapshot.modelCatalog.entries;
+    const policy = createModelVisibilityPolicy({
+      cfg: lifecycleConfig,
+      catalog,
+      defaultProvider: defaultModel.provider,
+      defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
+      agentId: target.agentId,
+      manifestPlugins: manifestSnapshot.plugins,
+      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    });
+    const resolvedKey = modelCatalogLogicalKey({
       provider: resolved.ref.provider,
-      harnessRuntime: harnessPolicy.runtime,
-      config,
-    }),
-    agentDir,
-    sessionEntry: target.sessionEntry,
-    sessionStore: target.sessionStore,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-    isNewSession: false,
-  });
-  const sessionProfileSource = resolveReturnedProfileSource(target.sessionEntry, sessionProfileId);
-  const selectedProfile =
-    sessionProfileId && sessionProfileSource === "user"
-      ? { id: sessionProfileId, source: sessionProfileSource }
-      : configuredDefaultProfile
-        ? { id: configuredDefaultProfile, source: "user" as const }
-        : sessionProfileId
-          ? { id: sessionProfileId, source: sessionProfileSource }
-          : undefined;
-  const modelConfig = projectWorkerInferenceModelRouteConfig({
-    config,
-    provider: resolved.ref.provider,
-    modelId: resolved.ref.model,
-    authMode: selectedProfile
-      ? dependencies.resolveAuthProfileMode({
-          config,
-          agentDir,
-          profileId: selectedProfile.id,
-        })
-      : undefined,
-  });
-  const modelResolver = bindSimpleCompletionModelResolverWorkspace(
-    (provider, modelId, resolvedAgentDir, cfg, options) =>
-      dependencies.resolveModel(provider, modelId, resolvedAgentDir, cfg, {
-        ...options,
-        ...(agentRuntimeId ? { agentRuntimeId } : {}),
-        workspaceDir,
+      id: resolved.ref.model,
+    });
+    // Retained refs stay approved during cold discovery.
+    const known =
+      policy.allowedCatalog.some(
+        (entry: ModelCatalogEntry) => resolvedKey === modelCatalogLogicalKey(entry),
+      ) || policy.retainedKeys.has(resolvedKey);
+    if (!known || !policy.allows(resolved.ref)) {
+      runtimeLease.release();
+      return undefined;
+    }
+    const configuredDefaultProfile =
+      resolvedKey ===
+      modelCatalogLogicalKey({ provider: defaultModel.provider, id: defaultModel.model })
+        ? splitTrailingAuthProfile(
+            resolveAgentEffectiveModelPrimary(lifecycleConfig, target.agentId) ?? "",
+          ).profile
+        : undefined;
+    const harnessPolicy = resolveAgentHarnessPolicy({
+      provider: resolved.ref.provider,
+      modelId: resolved.ref.model,
+      config: lifecycleConfig,
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+    });
+    const agentRuntimeId =
+      harnessPolicy.runtimeSource !== "implicit" ||
+      lifecycleConfig.plugins?.entries?.codex?.enabled === true
+        ? harnessPolicy.runtime
+        : undefined;
+    const sessionProfileId = await dependencies.resolveSessionAuthProfile({
+      cfg: lifecycleConfig,
+      provider: resolved.ref.provider,
+      acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+        provider: resolved.ref.provider,
+        harnessRuntime: harnessPolicy.runtime,
+        config: lifecycleConfig,
       }),
-    workspaceDir,
-  );
-  // Route projection and credential selection are one decision. Pin even an
-  // automatic profile so generic auth fallback cannot cross to another route.
-  const prepared = await dependencies.prepareModel({
-    cfg: modelConfig,
-    provider: resolved.ref.provider,
-    modelId: resolved.ref.model,
-    agentDir,
-    ...(selectedProfile ? { profileId: selectedProfile.id } : {}),
-    ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
-    ...(selectedProfile ? { bindAuthOwner: true } : {}),
-    allowMissingApiKeyModes: ["aws-sdk"],
-    useAsyncModelResolution: true,
-    modelResolver,
-  });
-  return {
-    provider: resolved.ref.provider,
-    model: resolved.ref.model,
-    agentDir,
-    workspaceDir,
-    prepared,
-  };
+      agentDir,
+      sessionEntry: target.sessionEntry,
+      sessionStore: target.sessionStore,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+      isNewSession: false,
+    });
+    const sessionProfileSource = resolveReturnedProfileSource(
+      target.sessionEntry,
+      sessionProfileId,
+    );
+    const selectedProfile =
+      sessionProfileId && sessionProfileSource === "user"
+        ? { id: sessionProfileId, source: sessionProfileSource }
+        : configuredDefaultProfile
+          ? { id: configuredDefaultProfile, source: "user" as const }
+          : sessionProfileId
+            ? { id: sessionProfileId, source: sessionProfileSource }
+            : undefined;
+    const modelConfig = projectWorkerInferenceModelRouteConfig({
+      config: lifecycleConfig,
+      provider: resolved.ref.provider,
+      modelId: resolved.ref.model,
+      authMode: selectedProfile
+        ? dependencies.resolveAuthProfileMode({
+            config: lifecycleConfig,
+            agentDir,
+            profileId: selectedProfile.id,
+          })
+        : undefined,
+    });
+    const modelResolver = bindSimpleCompletionModelResolverWorkspace(
+      (provider, modelId, resolvedAgentDir, cfg, options) =>
+        dependencies.resolveModel(provider, modelId, resolvedAgentDir, cfg, {
+          ...options,
+          authStorage: preparedStores.authStorage,
+          modelRegistry: preparedStores.modelRegistry,
+          ...(agentRuntimeId ? { agentRuntimeId } : {}),
+          workspaceDir,
+        }),
+      workspaceDir,
+    );
+    // Route projection and credential selection are one decision. Pin even an
+    // automatic profile so generic auth fallback cannot cross to another route.
+    const prepared = await dependencies.prepareModel({
+      cfg: modelConfig,
+      provider: resolved.ref.provider,
+      modelId: resolved.ref.model,
+      agentDir,
+      ...(selectedProfile ? { profileId: selectedProfile.id } : {}),
+      ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
+      ...(selectedProfile ? { bindAuthOwner: true } : {}),
+      allowMissingApiKeyModes: ["aws-sdk"],
+      useAsyncModelResolution: true,
+      modelResolver,
+    });
+    return {
+      provider: resolved.ref.provider,
+      model: resolved.ref.model,
+      config: lifecycleConfig,
+      agentDir,
+      workspaceDir,
+      prepared,
+      release: runtimeLease.release,
+    };
+  } catch (error) {
+    runtimeLease.release();
+    throw error;
+  }
 }
 
 export function createWorkerInferenceExecutor(overrides?: object): WorkerInferenceExecutor;
@@ -622,201 +642,209 @@ export function createWorkerInferenceExecutor(
     if (!approved) {
       return inferenceError("model-not-approved");
     }
-    if ("error" in approved.prepared) {
-      return inferenceError("provider-error");
-    }
-    // Keep logical identity separate from transport endpoint encoding.
-    const modelIdentity: WorkerInferenceModelIdentity = {
-      api: approved.prepared.model.api,
-      provider: approved.provider,
-      model: approved.model,
-    };
-    const logicalModel = approved.prepared.model;
-    const llmRuntime = getModelLlmRuntime(logicalModel);
-    if (!llmRuntime) {
-      throw new Error("Prepared worker model has no lifecycle runtime owner");
-    }
-    const providerModel =
-      logicalModel.provider === "openai" && logicalModel.api === "openai-chatgpt-responses"
-        ? {
-            ...logicalModel,
-            baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(logicalModel.baseUrl),
-          }
-        : logicalModel;
-    const providerStream = dependencies.resolveProviderStream({
-      model: providerModel,
-      cfg: config,
-      agentDir: approved.agentDir,
-      workspaceDir: approved.workspaceDir,
-    });
-    const authValue = approved.prepared.auth.apiKey;
-    const streamAgent = {
-      streamFn: dependencies.resolveStream({
-        llmRuntime,
-        currentStreamFn: llmRuntime.streamSimple,
-        ...(providerStream ? { providerStreamFn: providerStream } : {}),
-        sessionId: request.sessionId,
-        signal,
-        model: providerModel,
-        resolvedApiKey: authValue,
-        authProfileId: approved.prepared.auth.profileId,
-      }),
-    };
-    const streamPolicyOptions: WorkerInferenceStartParams["options"] = {
-      ...(request.options.temperature !== undefined
-        ? { temperature: request.options.temperature }
-        : {}),
-      ...(request.options.maxTokens !== undefined ? { maxTokens: request.options.maxTokens } : {}),
-      ...(request.options.reasoning !== undefined ? { reasoning: request.options.reasoning } : {}),
-      ...(request.options.thinkingBudgets
-        ? { thinkingBudgets: { ...request.options.thinkingBudgets } }
-        : {}),
-    };
-    dependencies.applyStreamPolicy(
-      streamAgent,
-      config,
-      approved.provider,
-      approved.model,
-      streamPolicyOptions,
-      streamPolicyOptions.reasoning,
-      target.agentId,
-      approved.workspaceDir,
-      providerModel,
-      approved.agentDir,
-    );
-    const scopedStream = streamAgent.streamFn;
-    const model = providerModel;
-    if (!optionBudgetsFitModel(request.options, model)) {
-      return inferenceError("invalid-context");
-    }
-    if (signal.aborted || !params.isCurrent()) {
-      return inferenceError("cancelled");
-    }
-
-    const startedAt = dependencies.now();
-    const trace = dependencies.createTrace();
-    let modelCallSeq = 0;
-    const stream = dependencies.wrapStream(scopedStream, {
-      runId: request.runId,
-      sessionKey: target.sessionKey,
-      sessionId: request.sessionId,
-      provider: model.provider,
-      model: model.id,
-      api: model.api,
-      contextTokenBudget: model.contextTokens ?? model.contextWindow,
-      trace,
-      contentCapture: resolveDiagnosticModelContentCapturePolicy(config),
-      nextCallId: () => `${request.runId}:${request.turnId}:worker-model:${(modelCallSeq += 1)}`,
-    });
-    let usageRecorded = false;
-    const recordUsage = (usage: Usage) => {
-      if (usageRecorded) {
-        return;
-      }
-      usageRecorded = true;
-      dependencies.recordUsage({
-        config,
-        target,
-        request,
-        model,
-        usage,
-        durationMs: Math.max(0, dependencies.now() - startedAt),
-        trace,
-      });
-    };
-    const executionIsCurrent = () => !signal.aborted && params.isCurrent();
-    const toolCalls = createWorkerToolCallStream({
-      emit: params.emit,
-      isCurrent: executionIsCurrent,
-    });
-
-    const providerAbort = new AbortController();
-    const providerSignal = AbortSignal.any([signal, providerAbort.signal]);
     try {
-      const events = await stream(
-        model,
-        context,
-        buildStreamOptions({
-          request,
-          signal: providerSignal,
-          apiKey: authValue,
+      if ("error" in approved.prepared) {
+        return inferenceError("provider-error");
+      }
+      // Keep logical identity separate from transport endpoint encoding.
+      const modelIdentity: WorkerInferenceModelIdentity = {
+        api: approved.prepared.model.api,
+        provider: approved.provider,
+        model: approved.model,
+      };
+      const logicalModel = approved.prepared.model;
+      const llmRuntime = getModelLlmRuntime(logicalModel);
+      if (!llmRuntime) {
+        throw new Error("Prepared worker model has no lifecycle runtime owner");
+      }
+      const providerModel =
+        logicalModel.provider === "openai" && logicalModel.api === "openai-chatgpt-responses"
+          ? {
+              ...logicalModel,
+              baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(logicalModel.baseUrl),
+            }
+          : logicalModel;
+      const providerStream = dependencies.resolveProviderStream({
+        model: providerModel,
+        cfg: approved.config,
+        agentDir: approved.agentDir,
+        workspaceDir: approved.workspaceDir,
+      });
+      const authValue = approved.prepared.auth.apiKey;
+      const streamAgent = {
+        streamFn: dependencies.resolveStream({
+          llmRuntime,
+          currentStreamFn: llmRuntime.streamSimple,
+          ...(providerStream ? { providerStreamFn: providerStream } : {}),
+          sessionId: request.sessionId,
+          signal,
+          model: providerModel,
+          resolvedApiKey: authValue,
+          authProfileId: approved.prepared.auth.profileId,
         }),
+      };
+      const streamPolicyOptions: WorkerInferenceStartParams["options"] = {
+        ...(request.options.temperature !== undefined
+          ? { temperature: request.options.temperature }
+          : {}),
+        ...(request.options.maxTokens !== undefined
+          ? { maxTokens: request.options.maxTokens }
+          : {}),
+        ...(request.options.reasoning !== undefined
+          ? { reasoning: request.options.reasoning }
+          : {}),
+        ...(request.options.thinkingBudgets
+          ? { thinkingBudgets: { ...request.options.thinkingBudgets } }
+          : {}),
+      };
+      dependencies.applyStreamPolicy(
+        streamAgent,
+        approved.config,
+        approved.provider,
+        approved.model,
+        streamPolicyOptions,
+        streamPolicyOptions.reasoning,
+        target.agentId,
+        approved.workspaceDir,
+        providerModel,
+        approved.agentDir,
       );
-      for await (const event of events) {
-        if (event.type === "done") {
-          recordUsage(event.message.usage);
-          if (signal.aborted || !params.isCurrent()) {
-            return inferenceError("cancelled", event.message.usage);
-          }
-          for (const [contentIndex, content] of event.message.content.entries()) {
-            if (content.type === "toolCall") {
-              const endResult = toolCalls.end(contentIndex, event.message, content);
-              if (endResult === "cancelled") {
-                return inferenceError("cancelled", event.message.usage);
-              }
-              if (endResult === "invalid") {
-                return inferenceError("provider-error");
+      const scopedStream = streamAgent.streamFn;
+      const model = providerModel;
+      if (!optionBudgetsFitModel(request.options, model)) {
+        return inferenceError("invalid-context");
+      }
+      if (signal.aborted || !params.isCurrent()) {
+        return inferenceError("cancelled");
+      }
+
+      const startedAt = dependencies.now();
+      const trace = dependencies.createTrace();
+      let modelCallSeq = 0;
+      const stream = dependencies.wrapStream(scopedStream, {
+        runId: request.runId,
+        sessionKey: target.sessionKey,
+        sessionId: request.sessionId,
+        provider: model.provider,
+        model: model.id,
+        api: model.api,
+        contextTokenBudget: model.contextTokens ?? model.contextWindow,
+        trace,
+        contentCapture: resolveDiagnosticModelContentCapturePolicy(approved.config),
+        nextCallId: () => `${request.runId}:${request.turnId}:worker-model:${(modelCallSeq += 1)}`,
+      });
+      let usageRecorded = false;
+      const recordUsage = (usage: Usage) => {
+        if (usageRecorded) {
+          return;
+        }
+        usageRecorded = true;
+        dependencies.recordUsage({
+          config: approved.config,
+          target,
+          request,
+          model,
+          usage,
+          durationMs: Math.max(0, dependencies.now() - startedAt),
+          trace,
+        });
+      };
+      const executionIsCurrent = () => !signal.aborted && params.isCurrent();
+      const toolCalls = createWorkerToolCallStream({
+        emit: params.emit,
+        isCurrent: executionIsCurrent,
+      });
+
+      const providerAbort = new AbortController();
+      const providerSignal = AbortSignal.any([signal, providerAbort.signal]);
+      try {
+        const events = await stream(
+          model,
+          context,
+          buildStreamOptions({
+            request,
+            signal: providerSignal,
+            apiKey: authValue,
+          }),
+        );
+        for await (const event of events) {
+          if (event.type === "done") {
+            recordUsage(event.message.usage);
+            if (signal.aborted || !params.isCurrent()) {
+              return inferenceError("cancelled", event.message.usage);
+            }
+            for (const [contentIndex, content] of event.message.content.entries()) {
+              if (content.type === "toolCall") {
+                const endResult = toolCalls.end(contentIndex, event.message, content);
+                if (endResult === "cancelled") {
+                  return inferenceError("cancelled", event.message.usage);
+                }
+                if (endResult === "invalid") {
+                  return inferenceError("provider-error");
+                }
               }
             }
+            if (!toolCalls.matchesTerminal(event.message)) {
+              return inferenceError("provider-error");
+            }
+            return {
+              type: "done",
+              message: projectWorkerInferenceTerminalMessage({
+                message: event.message,
+                modelIdentity,
+                stopReason: event.reason,
+              }),
+            };
           }
-          if (!toolCalls.matchesTerminal(event.message)) {
-            return inferenceError("provider-error");
+          if (event.type === "error") {
+            recordUsage(event.error.usage);
+            return inferenceError(
+              event.reason === "aborted" ? "cancelled" : "provider-error",
+              event.error.usage,
+            );
           }
-          return {
-            type: "done",
-            message: projectWorkerInferenceTerminalMessage({
-              message: event.message,
-              modelIdentity,
-              stopReason: event.reason,
-            }),
-          };
-        }
-        if (event.type === "error") {
-          recordUsage(event.error.usage);
-          return inferenceError(
-            event.reason === "aborted" ? "cancelled" : "provider-error",
-            event.error.usage,
-          );
-        }
-        if (signal.aborted || !params.isCurrent()) {
-          return inferenceError("cancelled");
-        }
-        if (event.type === "toolcall_start") {
-          if (toolCalls.start(event.contentIndex, event.partial) === "cancelled") {
+          if (signal.aborted || !params.isCurrent()) {
             return inferenceError("cancelled");
           }
-          continue;
-        }
-        if (event.type === "toolcall_delta") {
-          const deltaResult = toolCalls.delta(event.contentIndex, event.delta, event.partial);
-          if (deltaResult === "cancelled") {
-            return inferenceError("cancelled");
+          if (event.type === "toolcall_start") {
+            if (toolCalls.start(event.contentIndex, event.partial) === "cancelled") {
+              return inferenceError("cancelled");
+            }
+            continue;
           }
-          if (deltaResult === "invalid") {
-            return inferenceError("provider-error");
+          if (event.type === "toolcall_delta") {
+            const deltaResult = toolCalls.delta(event.contentIndex, event.delta, event.partial);
+            if (deltaResult === "cancelled") {
+              return inferenceError("cancelled");
+            }
+            if (deltaResult === "invalid") {
+              return inferenceError("provider-error");
+            }
+            continue;
           }
-          continue;
-        }
-        if (event.type === "toolcall_end") {
-          const endResult = toolCalls.end(event.contentIndex, event.partial, event.toolCall);
-          if (endResult === "cancelled") {
-            return inferenceError("cancelled");
+          if (event.type === "toolcall_end") {
+            const endResult = toolCalls.end(event.contentIndex, event.partial, event.toolCall);
+            if (endResult === "cancelled") {
+              return inferenceError("cancelled");
+            }
+            if (endResult === "invalid") {
+              return inferenceError("provider-error");
+            }
+            continue;
           }
-          if (endResult === "invalid") {
-            return inferenceError("provider-error");
+          const workerEvent = toWorkerStreamEvent(event, modelIdentity);
+          if (workerEvent) {
+            params.emit(workerEvent);
           }
-          continue;
         }
-        const workerEvent = toWorkerStreamEvent(event, modelIdentity);
-        if (workerEvent) {
-          params.emit(workerEvent);
-        }
+        return inferenceError(signal.aborted ? "cancelled" : "provider-error");
+      } catch {
+        return inferenceError(signal.aborted ? "cancelled" : "provider-error");
+      } finally {
+        providerAbort.abort();
       }
-      return inferenceError(signal.aborted ? "cancelled" : "provider-error");
-    } catch {
-      return inferenceError(signal.aborted ? "cancelled" : "provider-error");
     } finally {
-      providerAbort.abort();
+      approved.release();
     }
   };
 }

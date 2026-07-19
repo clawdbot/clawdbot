@@ -230,6 +230,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   }));
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
+    augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),

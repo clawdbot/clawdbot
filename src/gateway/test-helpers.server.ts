@@ -425,7 +425,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   resetAgentEventsForTest();
   const mod = await getServerModule();
-  await mod.resetModelCatalogCacheForTest();
+  await mod.resetPreparedModelCatalogForTest();
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];

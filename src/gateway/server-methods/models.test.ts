@@ -50,7 +50,9 @@ function requestModelsList(params: {
   respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
   loadGatewayModelCatalog: (params?: {
+    agentDir?: string;
     readOnly?: boolean;
+    workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
   includeProviderCapabilities?: boolean;
@@ -211,7 +213,10 @@ describe("models.list", () => {
         },
         undefined,
       );
-      expect(loadGatewayModelCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+      expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: true }),
+      );
     } finally {
       clearRuntimeConfigSnapshot();
     }
@@ -320,7 +325,9 @@ describe("models.list", () => {
           },
           undefined,
         );
-        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: true });
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ readOnly: true }),
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -422,7 +429,9 @@ describe("models.list", () => {
           },
           undefined,
         );
-        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ readOnly: false }),
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -518,7 +527,9 @@ describe("models.list", () => {
         },
         undefined,
       );
-      expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
+      expect(loadConfiguredCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: false }),
+      );
 
       const { request: allRequest, respond: allRespond } = requestModelsList({
         view: "all",

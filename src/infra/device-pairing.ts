@@ -792,9 +792,9 @@ export async function approveDevicePairing(
       "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
     >;
     /**
-     * Replace the pending scopes only if this is still a brand-new device.
-     * Used by trusted-proxy auto-approval to cap grants without ever approving
-     * an existing-device repair or upgrade request.
+     * Replace the pending scopes only if this is still a brand-new operator device.
+     * The live role set is rechecked under the pairing lock so a merged request
+     * cannot inherit non-operator access through browser auto-approval.
      */
     autoApproveNewDeviceScopes?: readonly string[];
   },
@@ -826,16 +826,19 @@ export async function approveDevicePairing(
     if (!pendingRecord) {
       return null;
     }
+    const autoApproveScopes = options?.autoApproveNewDeviceScopes;
+    const requestedRoles = resolveRequestedRoles(pendingRecord);
     if (
-      options?.autoApproveNewDeviceScopes &&
-      (pendingRecord.isRepair || state.pairedByDeviceId[pendingRecord.deviceId])
+      autoApproveScopes &&
+      (pendingRecord.isRepair ||
+        state.pairedByDeviceId[pendingRecord.deviceId] ||
+        !sameStringSet(requestedRoles, [OPERATOR_ROLE]))
     ) {
       return null;
     }
-    const pending = options?.autoApproveNewDeviceScopes
-      ? { ...pendingRecord, scopes: [...options.autoApproveNewDeviceScopes] }
+    const pending = autoApproveScopes
+      ? { ...pendingRecord, scopes: [...autoApproveScopes] }
       : pendingRecord;
-    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     const roleMismatchScope = resolveScopeOutsideRequestedRoles({
       requestedRoles,

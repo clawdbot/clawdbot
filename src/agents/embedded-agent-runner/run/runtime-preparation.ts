@@ -2,6 +2,7 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
@@ -50,6 +51,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     context?: Omit<Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0], "phase">,
   ) => void;
   fallbackConfigured: boolean;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const params = input.runParams;
   let provider = input.provider;
@@ -64,6 +66,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     hookRunner: input.hookRunner,
     hookContext: input.hookContext,
     onHooksResolved: () => input.markStartupStage("hooks"),
+    preparedModelRuntime: input.preparedModelRuntime,
   });
   provider = modelSetup.provider;
   modelId = modelSetup.modelId;

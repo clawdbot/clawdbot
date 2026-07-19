@@ -34,7 +34,7 @@ const baseCatalog: TestCatalogEntry[] = [
 let catalog: TestCatalogEntry[] = [...baseCatalog];
 const plantedVisionSentinel = "PLANTED_VISION_DESC_zq7x";
 
-const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
+const loadModelCatalog = vi.hoisted(() => vi.fn(async (_params: unknown) => catalog));
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
@@ -60,9 +60,12 @@ vi.mock("../agents/model-catalog.js", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog,
   };
 });
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalog,
+}));
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
@@ -119,14 +122,8 @@ function requireCapabilityOutput(result: CapabilityResult, index: number) {
 
 describe("runCapability image skip", () => {
   beforeAll(async () => {
-    vi.doMock("../agents/model-catalog.js", async () => {
-      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
-        "../agents/model-catalog.js",
-      );
-      return {
-        ...actual,
-        loadModelCatalog,
-      };
+    vi.doMock("../agents/prepared-model-catalog.js", () => {
+      return { loadPreparedModelCatalog: loadModelCatalog };
     });
     ({ buildProviderRegistry, resolveAutoImageModel, runCapability } = await import("./runner.js"));
     ({ applyMediaUnderstanding } = await import("./apply.js"));
@@ -149,6 +146,7 @@ describe("runCapability image skip", () => {
       const result = await runCapability({
         capability: "image",
         cfg,
+        agentId: "vision-agent",
         ctx,
         attachments: cache,
         media,
@@ -167,6 +165,10 @@ describe("runCapability image skip", () => {
       }
       expect(attempt.outcome).toBe("skipped");
       expect(attempt.reason).toBe("primary model supports vision natively");
+      expect(loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "vision-agent" }),
+      );
+      expect(loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
     } finally {
       await cache.cleanup();
     }

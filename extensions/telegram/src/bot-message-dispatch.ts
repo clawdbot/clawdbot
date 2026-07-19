@@ -18,7 +18,7 @@ import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
 import {
   findModelInCatalog,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
@@ -51,7 +51,12 @@ async function resolveStickerVisionSupport(
   agentId: string,
 ) {
   try {
-    const catalog = await loadModelCatalog({ config: cfg });
+    const catalog = await loadPreparedModelCatalog({
+      config: cfg,
+      agentId,
+      agentDir: resolveAgentDir(cfg, agentId),
+      readOnly: true,
+    });
     const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     return entry ? modelSupportsVision(entry) : false;

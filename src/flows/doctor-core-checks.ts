@@ -377,7 +377,7 @@ const hooksModelCheck: HealthCheck = {
       return [];
     }
     const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-    const { loadModelCatalog } = await import("../agents/model-catalog.js");
+    const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
     const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
       await import("../agents/model-selection.js");
     const hooksModelRef = resolveHooksGmailModel({
@@ -399,7 +399,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadModelCatalog({ config: ctx.cfg, readOnly: true });
+    const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
     const status = getModelRefStatus({
       cfg: ctx.cfg,
       catalog,

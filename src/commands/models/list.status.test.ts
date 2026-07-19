@@ -291,8 +291,8 @@ vi.mock("../../agents/harness/runtime-plugin.js", () => ({
 vi.mock("../../cli/update-cli/plugin-payload-validation.js", () => ({
   runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
 }));
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await mocks.loadModelCatalog(...args);
     return { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
   },
@@ -439,6 +439,7 @@ async function withOpenAIStatusFixture<T>(
     catalog?: unknown[];
     routeVariants?: unknown[];
     utilityModel?: string;
+    modelPolicyAllow?: string[];
   },
   run: () => Promise<T>,
 ): Promise<T> {
@@ -459,6 +460,9 @@ async function withOpenAIStatusFixture<T>(
     agents: {
       defaults: {
         model: { primary: params.primary, fallbacks: params.fallbacks ?? [] },
+        ...(params.modelPolicyAllow
+          ? { modelPolicy: { allow: params.modelPolicyAllow } }
+          : undefined),
         // Route tests target the configured primary/fallback models; keep the
         // derived utility model out unless a test opts in explicitly.
         utilityModel: params.utilityModel ?? "",
@@ -597,6 +601,54 @@ describe("modelsStatusCommand auth overview", () => {
     ).toBe(true);
     expect((payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai"))).toBe(
       true,
+    );
+  });
+
+  it("expands nested wildcard policy entries to the models they actually allow", async () => {
+    await withOpenAIStatusFixture(
+      {
+        primary: "clawrouter/anthropic/claude-haiku-4-5",
+        profiles: {},
+        modelPolicyAllow: ["clawrouter/anthropic/*"],
+        catalog: [
+          {
+            provider: "clawrouter",
+            id: "anthropic/claude-haiku-4-5",
+            name: "Claude Haiku",
+          },
+          {
+            provider: "clawrouter",
+            id: "google/gemini-3.5-flash",
+            name: "Gemini Flash",
+          },
+          { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+        ],
+      },
+      async () => {
+        const localRuntime = createRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+
+        expect(parseFirstJsonLog(localRuntime).allowed).toEqual([
+          "clawrouter/anthropic/claude-haiku-4-5",
+        ]);
+      },
+    );
+  });
+
+  it("preserves a restrictive wildcard when the current catalog has no match", async () => {
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.6-sol",
+        profiles: {},
+        modelPolicyAllow: ["clawrouter/anthropic/*"],
+        catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      },
+      async () => {
+        const localRuntime = createRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+
+        expect(parseFirstJsonLog(localRuntime).allowed).toEqual(["clawrouter/anthropic/*"]);
+      },
     );
   });
 

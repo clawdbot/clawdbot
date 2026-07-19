@@ -1429,10 +1429,37 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Resolve manual protocol base
+        id: protocol_manual_base
+        if: matrix.task == 'bundled-protocol' && github.event_name == 'workflow_dispatch' && !inputs.release_gate
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the default branch head for the manual protocol target." >&2
+            exit 1
+          fi
+          merge_base_sha="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${TARGET_SHA}" \
+              --jq '.merge_base_commit.sha'
+          )"
+          if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the manual protocol target merge base." >&2
+            exit 1
+          fi
+          echo "sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
+          PROTOCOL_MANUAL_BASE_SHA: ${{ steps.protocol_manual_base.outputs.sha }}
           PROTOCOL_SINCE_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
           RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
@@ -1448,10 +1475,35 @@ jobs:
               process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
             ' "$1"
           }
+          resolve_manual_merge_base() {
+            local default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+            local default_sha
+            local merge_base_sha
+            default_sha="$(git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }')"
+            if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve the default branch head for the manual target." >&2
+              return 1
+            fi
+            merge_base_sha="$(
+              gh api --method GET \
+                "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
+                --jq '.merge_base_commit.sha'
+            )"
+            if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve the manual target merge base." >&2
+              return 1
+            fi
+            printf '%s\n' "$merge_base_sha"
+          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
               if [[ -n "${PROTOCOL_SINCE_BASE_SHA:-}" ]]; then
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
+              elif [[ -n "${PROTOCOL_MANUAL_BASE_SHA:-}" ]]; then
+                PROTOCOL_SINCE_BASE_SHA="$PROTOCOL_MANUAL_BASE_SHA"
+                export PROTOCOL_SINCE_BASE_SHA
                 git fetch --no-tags --no-recurse-submodules --depth=1 origin \
                   "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
               else
@@ -1492,23 +1544,7 @@ jobs:
                   "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
-                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-                default_sha="$(
-                  git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }'
-                )"
-                if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                  echo "Could not resolve the default branch head for the max-lines ratchet." >&2
-                  exit 1
-                fi
-                merge_base_sha="$(
-                  gh api --method GET \
-                    "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
-                    --jq '.merge_base_commit.sha'
-                )"
-                if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                  echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
-                  exit 1
-                fi
+                merge_base_sha="$(resolve_manual_merge_base)"
                 timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"

@@ -195,7 +195,9 @@ export function createExecApprovalHandlers(
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
-      const explicitId = normalizeOptionalString(p.id) ?? null;
+      // IDs are opaque cross-surface handles. Preserve every supplied byte so
+      // the manager can reject unsafe values instead of silently normalizing them.
+      const explicitId = p.id ?? null;
       const host = normalizeOptionalString(p.host) ?? "";
       const nodeId = normalizeOptionalString(p.nodeId) ?? "";
       const approvalContext = resolveSystemRunApprovalRequestContext({
@@ -365,7 +367,7 @@ export function createExecApprovalHandlers(
             false,
             undefined,
             errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-              details: { reason: error.reason },
+              details: { code: error.code, reason: error.reason },
             }),
           );
           return;

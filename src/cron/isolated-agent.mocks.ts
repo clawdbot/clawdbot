@@ -10,8 +10,8 @@ vi.mock("../agents/embedded-agent.js", () => ({
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(),
 }));
 
 vi.mock("../agents/model-selection.js", async () => {

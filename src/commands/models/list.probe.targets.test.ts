@@ -19,8 +19,8 @@ const resolveAuthProfileEligibilityMock = vi.fn<
 }));
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {

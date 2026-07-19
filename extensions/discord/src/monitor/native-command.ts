@@ -1,6 +1,6 @@
 // Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
+import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -488,7 +488,16 @@ async function dispatchDiscordCommandInteraction(params: {
   // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
     command.key === "think" && menuNeedsModelContext
-      ? await loadModelCatalog({ config: cfg, readOnly: true })
+      ? await loadPreparedModelCatalog({
+          config: cfg,
+          ...(menuModelContext?.agentId
+            ? {
+                agentId: menuModelContext.agentId,
+                agentDir: resolveAgentDir(cfg, menuModelContext.agentId),
+              }
+            : {}),
+          readOnly: true,
+        })
       : undefined;
   const menu = resolveCommandArgMenu({
     command,

@@ -807,6 +807,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  metadataSnapshot?: ProviderManifestLoadParams["metadataSnapshot"];
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const manifestRegistry = resolveManifestRegistry({

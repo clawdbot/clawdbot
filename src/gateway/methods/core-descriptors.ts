@@ -297,7 +297,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "conversations.turn.cancel", scope: "operator.admin", since: "<=2026.7" },
   { name: "send", scope: "operator.write", since: "<=2026.7" },
   // Params-aware: ordinary turns need write; /new and /reset mutate lifecycle state as admin.
-  { name: "agent", scope: "dynamic", since: "<=2026.7" },
+  { name: "agent", scope: "dynamic", since: "<=2026.7", startup: true },
   { name: "agent.identity.get", scope: "operator.read", since: "<=2026.7" },
   { name: "agent.wait", scope: "operator.write", since: "<=2026.7", startup: true },
   { name: "chat.history", scope: "operator.read", since: "<=2026.7", startup: true },
@@ -305,7 +305,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "chat.metadata", scope: "operator.read", since: "<=2026.7", startup: true },
   { name: "chat.message.get", scope: "operator.read", since: "<=2026.7", startup: true },
   { name: "chat.abort", scope: "operator.write", since: "<=2026.7" },
-  { name: "chat.send", scope: "operator.write", since: "<=2026.7" },
+  { name: "chat.send", scope: "operator.write", since: "<=2026.7", startup: true },
   // Operator terminal: admin-only PTY surface. Appended to the advertised block
   // so existing advertised method indices stay stable for older clients.
   { name: "terminal.open", scope: "operator.admin", since: "2026.7" },

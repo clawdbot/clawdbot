@@ -8,6 +8,16 @@ function createPolicy(cfg: OpenClawConfig, agentId?: string) {
     cfg,
     catalog: [
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      {
+        provider: "clawrouter",
+        id: "anthropic/claude-haiku-4-5",
+        name: "Claude Haiku via ClawRouter",
+      },
+      {
+        provider: "clawrouter",
+        id: "google/gemini-3.5-flash",
+        name: "Gemini Flash via ClawRouter",
+      },
       { provider: "external", id: "sensitive", name: "Sensitive external model" },
       { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },
       { provider: "openai", id: "gpt-5.6-sol", name: "GPT 5.6 Sol" },
@@ -85,6 +95,11 @@ describe("explicit model visibility policy", () => {
     expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(true);
     expect(policy.allows({ provider: "openai", model: "safe" })).toBe(true);
     expect(policy.allows({ provider: "external", model: "sensitive" })).toBe(false);
+    expect(
+      policy.allowedCatalog.some(
+        (entry) => entry.provider === "external" && entry.id === "sensitive",
+      ),
+    ).toBe(false);
     expect(policy.automaticFallbackKeys).toEqual(new Set(["external/sensitive"]));
   });
 
@@ -119,6 +134,47 @@ describe("explicit model visibility policy", () => {
       "openai/gpt-5.6-sol",
     ]);
     expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
+  });
+
+  it("matches nested prefix wildcards on canonical model-key segment boundaries", () => {
+    const policy = createPolicy({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["clawrouter/anthropic/*", "openai/gpt-5.5"] },
+        },
+      },
+    });
+
+    expect(policy.allowsKey("clawrouter/anthropic/claude-haiku-4-5")).toBe(true);
+    expect(
+      policy.allowsByWildcard({
+        provider: "clawrouter",
+        model: "anthropic/claude-haiku-4-5",
+      }),
+    ).toBe(true);
+    expect(policy.allowsKey("clawrouter/anthropicX/claude-haiku-4-5")).toBe(false);
+    expect(policy.allowsKey("clawrouter/google/gemini-3.5-flash")).toBe(false);
+    expect(policy.allowsKey("openai/gpt-5.5")).toBe(true);
+    expect(policy.allowsByWildcard({ provider: "openai", model: "gpt-5.5" })).toBe(false);
+    expect(policy.allowsKey("openai/gpt-5.6-sol")).toBe(false);
+    expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "clawrouter/anthropic/claude-haiku-4-5",
+      "openai/gpt-5.5",
+    ]);
+  });
+
+  it("keeps top-level provider wildcard behavior for nested model ids", () => {
+    const policy = createPolicy({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["clawrouter/*"] },
+        },
+      },
+    });
+
+    expect(policy.allowsKey("clawrouter/anthropic/claude-haiku-4-5")).toBe(true);
+    expect(policy.allowsKey("clawrouter/google/gemini-3.5-flash")).toBe(true);
+    expect(policy.allowsKey("openai/gpt-5.6-sol")).toBe(false);
   });
 
   it("resolves conflicting policy aliases in each agent's model map", () => {

@@ -44,7 +44,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { loadModelCatalog } from "../model-catalog.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -53,6 +53,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
+import { loadPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
 import {
   describeSessionStatusTool,
@@ -437,6 +438,8 @@ async function resolveModelOverride(params: {
   raw: string;
   sessionEntry?: SessionEntry;
   agentId: string;
+  agentDir: string;
+  workspaceDir: string;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -462,7 +465,15 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    agentId: params.agentId,
+    agentDir: params.agentDir,
+    readOnly: true,
+    ...(params.sessionEntry?.spawnedWorkspaceDir
+      ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
+      : {}),
+  });
   const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
     config: params.cfg,
     workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
@@ -814,6 +825,8 @@ export function createSessionStatusTool(opts?: {
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
+      const selectedAgentDir = resolveAgentDir(cfg, agentId);
+      const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const modelRaw = readStringParam(params, "model");
       let changedModel = false;
       if (typeof modelRaw === "string") {
@@ -822,6 +835,8 @@ export function createSessionStatusTool(opts?: {
           raw: modelRaw,
           sessionEntry: resolved.entry,
           agentId,
+          agentDir: selectedAgentDir,
+          workspaceDir: selectedWorkspaceDir,
         });
         const modelSelection =
           selection.kind === "reset"
@@ -949,7 +964,15 @@ export function createSessionStatusTool(opts?: {
         callerOwnerKey: visibilityRequesterKey,
       });
       // Tool status may read persisted/configured facts, but must not start provider discovery.
-      const thinkingCatalog = await loadModelCatalog({ config: cfg, readOnly: true });
+      const thinkingCatalog = await loadPreparedModelCatalog({
+        config: cfg,
+        agentId,
+        agentDir: selectedAgentDir,
+        readOnly: true,
+        ...(statusSessionEntry.spawnedWorkspaceDir
+          ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
+          : {}),
+      });
       const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
@@ -977,7 +1000,13 @@ export function createSessionStatusTool(opts?: {
             cfg,
             provider: providerForCard,
             model: defaultModelForCard,
-            loadModelCatalog: () => loadModelCatalog({ config: cfg }),
+            loadRuntimeCatalog: () =>
+              loadPreparedModelCatalog({
+                config: cfg,
+                agentId,
+                agentDir: selectedAgentDir,
+                readOnly: true,
+              }),
           }),
         isGroup,
         defaultGroupActivation: () => "mention",

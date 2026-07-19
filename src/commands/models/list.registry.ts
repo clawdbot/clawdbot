@@ -88,6 +88,8 @@ function loadAvailableModels(
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
   opts?: {
+    agentId?: string;
+    agentDir?: string;
     providerFilter?: string;
     normalizeModels?: boolean;
     loadAvailability?: boolean;
@@ -95,8 +97,11 @@ export async function loadModelRegistry(
   },
 ) {
   const runtimeSuppression = opts?.normalizeModels !== false;
-  const { registry } = loadAgentModelRegistry(cfg, {
-    skipCredentials: opts?.loadAvailability === false,
+  const skipDiscovery = opts?.loadAvailability === false;
+  const { config: runtimeConfig, registry } = await loadAgentModelRegistry(cfg, {
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts?.agentDir ? { agentDir: opts.agentDir } : {}),
+    skipCredentials: skipDiscovery,
     workspaceDir: opts?.workspaceDir,
     providerFilter: opts?.providerFilter,
     normalizeModels: opts?.normalizeModels,
@@ -107,13 +112,13 @@ export async function loadModelRegistry(
           provider: model.provider,
           id: model.id,
           baseUrl: model.baseUrl,
-          config: cfg,
+          config: runtimeConfig,
         })
       : !shouldSuppressBuiltInModelFromManifest({
           provider: model.provider,
           id: model.id,
           baseUrl: model.baseUrl,
-          config: cfg,
+          config: runtimeConfig,
         }),
   );
   let availableKeys: Set<string> | undefined;
@@ -121,7 +126,7 @@ export async function loadModelRegistry(
 
   if (opts?.loadAvailability !== false) {
     try {
-      const availableModels = loadAvailableModels(registry, cfg, { runtimeSuppression });
+      const availableModels = loadAvailableModels(registry, runtimeConfig, { runtimeSuppression });
       availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
     } catch (err) {
       if (!shouldFallbackToAuthHeuristics(err)) {

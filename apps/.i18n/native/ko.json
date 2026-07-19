@@ -16304,6 +16304,11 @@
       "translated": "OpenClaw를 사용할 수 없습니다"
     },
     {
+      "id": "native.apple.f4adf2762402e92a",
+      "source": "Confirmation needed",
+      "translated": "확인이 필요합니다"
+    },
+    {
       "id": "native.apple.f703391677039fa3",
       "source": "iOS Speech + TTS",
       "translated": "iOS 음성 인식 + TTS"
@@ -16367,6 +16372,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "OpenClaw 업데이트 중"
+    },
+    {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "확인이 필요합니다"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw을 사용할 수 없습니다"
     },
     {
       "id": "native.apple.8a944b06087fe8ef",

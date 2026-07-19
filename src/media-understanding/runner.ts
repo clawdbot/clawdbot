@@ -77,8 +77,9 @@ import type {
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type ModelCatalogApi = typeof import("../agents/model-catalog.js");
-type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
+type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
+  typeof import("../agents/prepared-model-catalog.js");
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadPreparedModelCatalog"]>>;
 
 type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
@@ -90,9 +91,10 @@ const loadHasAvailableAuthForProvider = createLazyRuntimeNamedExport(
   "hasAvailableAuthForProvider",
 );
 
-const loadModelCatalogApi = createLazyRuntimeModule(
-  async () => await import("../agents/model-catalog.js"),
-);
+const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
+  ...(await import("../agents/model-catalog.js")),
+  ...(await import("../agents/prepared-model-catalog.js")),
+}));
 
 function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
@@ -235,8 +237,11 @@ function resolveAutoMediaKeyProvidersFromRegistry(params: {
 
 async function explicitImageModelVisionStatus(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   providerId: string;
   model: string;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
   // Explicit model overrides should survive unknown catalog state, but known
   // text-only models must not be routed into image understanding.
@@ -250,8 +255,14 @@ async function explicitImageModelVisionStatus(params: {
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
-  const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+    await loadPreparedModelCatalogApi();
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   const entry = findModelInCatalog(catalog, params.providerId, params.model);
   if (!entry) {
     return "unknown";
@@ -261,17 +272,22 @@ async function explicitImageModelVisionStatus(params: {
 
 async function resolveAutoImageModelId(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   providerId: string;
   providerRegistry: ProviderRegistry;
   explicitModel?: string;
+  agentDir?: string;
   workspaceDir?: string;
 }): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
     const explicitStatus = await explicitImageModelVisionStatus({
       cfg: params.cfg,
+      agentId: params.agentId,
       providerId: params.providerId,
       model: explicit,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
     });
     if (explicitStatus !== "unsupported") {
       return explicit;
@@ -302,8 +318,13 @@ async function resolveAutoImageModelId(params: {
   if (bundledDefaultModel) {
     return bundledDefaultModel;
   }
-  const { loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const { loadPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   return resolveCatalogImageModelId({
     providerId: params.providerId,
     catalog,
@@ -499,13 +520,14 @@ async function resolveAntigravityCliEntry(
 
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
-  const { cfg, agentDir, workspaceDir, providerRegistry, capability } = params;
+  const { cfg, agentId, agentDir, workspaceDir, providerRegistry, capability } = params;
   const checkProvider = async (
     providerId: string,
     model?: string,
@@ -540,9 +562,11 @@ async function resolveKeyEntry(params: {
       capability === "image"
         ? await resolveAutoImageModelId({
             cfg,
+            agentId,
             providerId,
             providerRegistry,
             explicitModel: model,
+            agentDir,
             workspaceDir,
           })
         : capability === "audio"
@@ -655,7 +679,10 @@ function isMinimaxNativeVisionModel(params: { provider: string; model?: string }
 
 async function activeModelSupportsNativeVision(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   activeModel?: ActiveMediaModel;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<boolean> {
   const activeProvider = params.activeModel?.provider?.trim();
   if (!activeProvider) {
@@ -670,8 +697,14 @@ async function activeModelSupportsNativeVision(params: {
   ) {
     return false;
   }
-  const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+    await loadPreparedModelCatalogApi();
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
   return modelSupportsVision(entry);
 }
@@ -688,7 +721,10 @@ async function resolveAutoEntries(params: {
   if (params.capability === "image") {
     const activeSupportsVision = await activeModelSupportsNativeVision({
       cfg: params.cfg,
+      agentId: params.agentId,
       activeModel: params.activeModel,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
     });
     if (!activeSupportsVision) {
       const imageModelEntries = resolveImageModelFromAgentDefaults({
@@ -755,6 +791,7 @@ export async function resolveAutoImageModel(params: {
   }
   const activeEntry = await resolveActiveModelEntry({
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     providerRegistry,
@@ -767,6 +804,7 @@ export async function resolveAutoImageModel(params: {
   }
   const keyEntry = await resolveKeyEntry({
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     providerRegistry,
@@ -778,6 +816,7 @@ export async function resolveAutoImageModel(params: {
 
 async function resolveActiveModelEntry(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
@@ -819,9 +858,11 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "image") {
     model = await resolveAutoImageModelId({
       cfg: params.cfg,
+      agentId: params.agentId,
       providerId,
       providerRegistry: params.providerRegistry,
       explicitModel: params.activeModel?.model,
+      agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
   } else if (params.capability === "audio") {
@@ -854,6 +895,7 @@ async function runAttachmentEntries(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   attachmentIndex: number;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
@@ -888,6 +930,7 @@ async function runAttachmentEntries(params: {
               ctx: params.ctx,
               attachmentIndex: params.attachmentIndex,
               cache: params.cache,
+              agentId: params.agentId,
               agentDir: params.agentDir,
               workspaceDir: params.workspaceDir,
               providerRegistry: params.providerRegistry,
@@ -1012,7 +1055,15 @@ export async function runCapability(params: {
       config,
     })
   ) {
-    if (await activeModelSupportsNativeVision({ cfg, activeModel: params.activeModel })) {
+    if (
+      await activeModelSupportsNativeVision({
+        cfg,
+        agentId: params.agentId,
+        activeModel: params.activeModel,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      })
+    ) {
       if (shouldLogVerbose()) {
         logVerbose("Skipping image understanding: primary model supports vision natively");
       }
@@ -1081,6 +1132,7 @@ export async function runCapability(params: {
       cfg,
       ctx,
       attachmentIndex: attachment.index,
+      agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       providerRegistry: params.providerRegistry,

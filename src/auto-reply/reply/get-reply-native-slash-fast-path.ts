@@ -1,10 +1,10 @@
 // Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
@@ -97,14 +97,24 @@ function shouldRunInternalTextSlashCommandFastPath(
 
 async function resolveNativeSlashDefaultThinkingLevel(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   provider: string;
   model: string;
+  agentDir: string;
+  workspaceDir: string;
 }): Promise<ThinkLevel> {
   return resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+    loadRuntimeCatalog: () =>
+      loadPreparedModelCatalog({
+        config: params.cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        readOnly: true,
+      }),
   });
 }
 
@@ -182,14 +192,23 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const resolveDefaultThinkingLevel = async () => {
       resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
         cfg: params.cfg,
+        agentId: params.agentId,
         provider: params.provider,
         model: params.model,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
       });
       return resolvedDefaultThinkingLevel;
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
     // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
-    const thinkingCatalog = await loadModelCatalog({ config: params.cfg, readOnly: true });
+    const thinkingCatalog = await loadPreparedModelCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      readOnly: true,
+    });
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,

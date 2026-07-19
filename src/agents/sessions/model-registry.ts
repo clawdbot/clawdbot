@@ -264,7 +264,17 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 
 type ModelRegistryOptions = {
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
+  sourceSnapshot?: ModelRegistry;
   workspaceDir?: string;
+};
+
+type ModelRegistryCatalogSnapshot = {
+  models: Model[];
+  providerRequestConfigs: Map<string, ProviderRequestConfig>;
+  modelRequestHeaders: Map<string, Record<string, string>>;
+  loadError: string | undefined;
+  pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
+  oauthProviders: OAuthProviderInterface[];
 };
 
 function mergeCompat(
@@ -318,6 +328,8 @@ export class ModelRegistry {
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
+  private baseCatalogSnapshot: ModelRegistryCatalogSnapshot | undefined;
+  private sourceSnapshot: ModelRegistryCatalogSnapshot | undefined;
 
   private constructor(
     authStorage: AuthStorage,
@@ -326,6 +338,24 @@ export class ModelRegistry {
   ) {
     this.authStorage = authStorage;
     initializeModelRegistryRuntime(this);
+    if (options.sourceSnapshot) {
+      const source = options.sourceSnapshot;
+      const sourceSnapshot = source.baseCatalogSnapshot ?? source.captureCatalogSnapshot();
+      this.sourceSnapshot = sourceSnapshot;
+      this.baseCatalogSnapshot = sourceSnapshot;
+      this.restoreSourceCatalog(sourceSnapshot);
+      this.registeredProviders = new Map(
+        [...source.registeredProviders].map(([provider, config]) => [provider, { ...config }]),
+      );
+      getAuthStorageOAuthProviderRegistry(authStorage).reset();
+      for (const oauthProvider of sourceSnapshot.oauthProviders) {
+        getAuthStorageOAuthProviderRegistry(authStorage).register(oauthProvider);
+      }
+      for (const [providerName, config] of this.registeredProviders.entries()) {
+        this.applyProviderConfig(providerName, config);
+      }
+      return;
+    }
     this.modelsJsonPath = modelsJsonPath;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
       ...(options.pluginMetadataSnapshot
@@ -336,6 +366,34 @@ export class ModelRegistry {
       useRuntimeConfig: true,
     });
     this.loadModels();
+    this.baseCatalogSnapshot = this.captureCatalogSnapshot();
+  }
+
+  private captureCatalogSnapshot(): ModelRegistryCatalogSnapshot {
+    return {
+      models: structuredClone(this.models),
+      providerRequestConfigs: new Map(
+        [...this.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
+      ),
+      modelRequestHeaders: new Map(
+        [...this.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
+      ),
+      loadError: this.loadError,
+      pluginMetadataSnapshot: this.pluginMetadataSnapshot,
+      oauthProviders: [...this.authStorage.getOAuthProviders()],
+    };
+  }
+
+  private restoreSourceCatalog(source: ModelRegistryCatalogSnapshot): void {
+    this.models = structuredClone(source.models);
+    this.providerRequestConfigs = new Map(
+      [...source.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
+    );
+    this.modelRequestHeaders = new Map(
+      [...source.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
+    );
+    this.loadError = source.loadError;
+    this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
 
   static create(
@@ -350,6 +408,11 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined);
   }
 
+  /** Creates a request-isolated registry from this lifecycle-owned catalog snapshot. */
+  fork(authStorage: AuthStorage): ModelRegistry {
+    return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this });
+  }
+
   /**
    * Reload models from disk (models.json).
    */
@@ -362,7 +425,16 @@ export class ModelRegistry {
     resetModelRegistryRuntime(this);
     getAuthStorageOAuthProviderRegistry(this.authStorage).reset();
 
-    this.loadModels();
+    if (this.sourceSnapshot) {
+      this.restoreSourceCatalog(this.sourceSnapshot);
+      for (const oauthProvider of this.sourceSnapshot.oauthProviders) {
+        getAuthStorageOAuthProviderRegistry(this.authStorage).register(oauthProvider);
+      }
+    } else {
+      this.loadModels();
+      // Forks start from the latest disk-backed base, then replay this registry's dynamic providers.
+      this.baseCatalogSnapshot = this.captureCatalogSnapshot();
+    }
 
     for (const [providerName, config] of this.registeredProviders.entries()) {
       this.applyProviderConfig(providerName, config);

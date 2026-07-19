@@ -245,8 +245,8 @@ vi.mock("../commands/auth-choice.js", () => ({
   warnIfModelConfigLooksOff: vi.fn(),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: entries };
   },

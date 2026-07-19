@@ -1,5 +1,4 @@
 /** Loads manifest and installed-index contributions used to build plugin registry snapshots. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -61,10 +60,6 @@ type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions &
 
 type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
-};
-
-type ResolveProviderOwnersParams = PluginRegistryContributionOptions & {
-  providerId: string;
 };
 
 type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
@@ -367,33 +362,6 @@ export function resolvePluginContributionOwners(
       listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
     ),
   );
-}
-
-export function resolveProviderOwners(params: ResolveProviderOwnersParams): readonly string[] {
-  const providerId = normalizeProviderId(params.providerId);
-  if (!providerId) {
-    return [];
-  }
-  if (params.lookUpTable) {
-    const index = params.lookUpTable.index;
-    const owners: string[] = [];
-    for (const [contributionId, ownerIds] of params.lookUpTable.owners.providers.entries()) {
-      if (normalizeProviderId(contributionId) === providerId) {
-        owners.push(...ownerIds);
-      }
-    }
-    return filterContributionOwnerIds({
-      owners,
-      index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    });
-  }
-  return resolvePluginContributionOwners({
-    ...params,
-    contribution: "providers",
-    matches: (contributionId) => normalizeProviderId(contributionId) === providerId,
-  });
 }
 
 export function resolveManifestContractPluginIds(

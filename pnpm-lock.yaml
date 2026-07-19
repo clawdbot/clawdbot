@@ -296,6 +296,9 @@ importers:
       fast-glob:
         specifier: 3.3.3
         version: 3.3.3
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
       jscpd:
         specifier: 4.2.4
         version: 4.2.4

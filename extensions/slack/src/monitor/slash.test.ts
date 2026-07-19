@@ -17,7 +17,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog: vi.fn(async () => []),
+    loadPreparedModelCatalog: vi.fn(async () => []),
   };
 });
 

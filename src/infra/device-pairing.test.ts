@@ -552,6 +552,49 @@ describe("device pairing tokens", () => {
     ]);
   });
 
+  test("refuses trusted-proxy auto-approval for a merged node and operator request", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await requestDevicePairing(
+      {
+        deviceId: "mixed-role-device-1",
+        publicKey: "public-key-mixed-role-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    const browser = await requestDevicePairing(
+      {
+        deviceId: "mixed-role-device-1",
+        publicKey: "public-key-mixed-role-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    expect(browser.request.roles).toEqual(["node", "operator"]);
+
+    await expect(
+      approveDevicePairing(
+        browser.request.requestId,
+        {
+          callerScopes: ["operator.read"],
+          approvedVia: "trusted-proxy",
+          autoApproveNewDeviceScopes: ["operator.read"],
+        },
+        baseDir,
+      ),
+    ).resolves.toBeNull();
+
+    await expect(getPairedDevice("mixed-role-device-1", baseDir)).resolves.toBeNull();
+    expect((await listDevicePairing(baseDir)).pending).toContainEqual(
+      expect.objectContaining({
+        requestId: browser.request.requestId,
+        roles: ["node", "operator"],
+      }),
+    );
+  });
+
   test.each([
     {
       name: "node custom scope",

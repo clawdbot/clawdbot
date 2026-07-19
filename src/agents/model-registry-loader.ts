@@ -1,44 +1,20 @@
-/**
- * Shared model-registry loader for agent paths that need auth storage and
- * plugin metadata resolved together before model discovery.
- */
+/** Lifecycle-backed model-registry view for command paths. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
-import { resolveDefaultAgentDir } from "./agent-scope.js";
-import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
+import {
+  loadPreparedAgentModelRegistry,
+  type LoadPreparedAgentModelRegistryOptions,
+} from "./prepared-model-registry.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
-/** Options controlling model discovery, credential reads, and normalization. */
-type LoadAgentModelRegistryOptions = {
-  providerFilter?: string;
-  normalizeModels?: boolean;
+/** Options controlling the prepared registry view. */
+type LoadAgentModelRegistryOptions = LoadPreparedAgentModelRegistryOptions & {
   readOnly?: boolean;
-  skipCredentials?: boolean;
-  workspaceDir?: string;
 };
 
-/** Load the agent model registry with optional provider filtering/normalization. */
-export function loadAgentModelRegistry(
+/** Forks a registry from the generation prepared by the owning command lifecycle. */
+export async function loadAgentModelRegistry(
   config: OpenClawConfig,
   options: LoadAgentModelRegistryOptions = {},
-): { agentDir: string; registry: ModelRegistry } {
-  const agentDir = resolveDefaultAgentDir(config);
-  const authStorage = discoverAuthStorage(agentDir, {
-    readOnly: options.readOnly ?? true,
-    skipCredentials: options.skipCredentials,
-    config,
-    workspaceDir: options.workspaceDir,
-  });
-  const pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
-    config,
-    workspaceDir: options.workspaceDir,
-  });
-  const registry = discoverModels(authStorage, agentDir, {
-    config,
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    providerFilter: options.providerFilter,
-    ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-    normalizeModels: options.normalizeModels,
-  });
-  return { agentDir, registry };
+): Promise<{ agentDir: string; config: OpenClawConfig; registry: ModelRegistry }> {
+  return await loadPreparedAgentModelRegistry(config, options);
 }

@@ -173,6 +173,16 @@ const hoisted = vi.hoisted(() => ({
   reloadEvents: [] as string[],
   loadModelCatalog: vi.fn(async (_params: { config: OpenClawConfig }) => []),
   resetModelCatalogCache: vi.fn(() => {}),
+  markPreparedModelRuntimeSnapshotsStale: vi.fn(
+    (
+      _reason?: string,
+      _options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
+    ) => Symbol("prepared-model-runtime-replacement"),
+  ),
+  rejectPendingPreparedModelRuntimeReplacement: vi.fn(
+    (_gateId: symbol | undefined, _error: unknown) => {},
+  ),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(async (_cfg: OpenClawConfig) => {}),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
@@ -251,6 +261,22 @@ vi.mock("../agents/model-catalog.js", () => ({
   resetModelCatalogCache: () => {
     hoisted.reloadEvents.push("reset-model-catalog");
     hoisted.resetModelCatalogCache();
+  },
+}));
+
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  markPreparedModelRuntimeSnapshotsStale: (
+    reason?: string,
+    options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
+  ) => {
+    hoisted.reloadEvents.push("stale-prepared-model-runtime");
+    return hoisted.markPreparedModelRuntimeSnapshotsStale(reason, options);
+  },
+  rejectPendingPreparedModelRuntimeReplacement: (gateId: symbol | undefined, error: unknown) =>
+    hoisted.rejectPendingPreparedModelRuntimeReplacement(gateId, error),
+  refreshPreparedModelRuntimeSnapshots: (cfg: OpenClawConfig) => {
+    hoisted.reloadEvents.push("refresh-prepared-model-runtime");
+    return hoisted.refreshPreparedModelRuntimeSnapshots(cfg);
   },
 }));
 
@@ -739,8 +765,9 @@ afterEach(() => {
   hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.reloadEvents.length = 0;
-  hoisted.loadModelCatalog.mockClear();
-  hoisted.resetModelCatalogCache.mockClear();
+  hoisted.markPreparedModelRuntimeSnapshotsStale.mockClear();
+  hoisted.rejectPendingPreparedModelRuntimeReplacement.mockClear();
+  hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
@@ -1222,8 +1249,10 @@ describe("gateway hot reload model state", () => {
   });
 
   it("resets prepared model runtime state for every hot reload and rewarms after plugin reload", async () => {
-    const reloadPlugins = vi.fn(async (): Promise<GatewayPluginReloadResult> => {
-      hoisted.reloadEvents.push("reload-plugins");
+    const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
+      hoisted.reloadEvents.push("prepare-plugins");
+      await params.commitRuntime();
+      hoisted.reloadEvents.push("replace-plugins");
       return {
         restartChannels: new Set(),
         activeChannels: new Set(),
@@ -1275,20 +1304,24 @@ describe("gateway hot reload model state", () => {
       nextConfig,
     );
 
-    const firstResetIndex = hoisted.reloadEvents.indexOf("reset-model-catalog");
+    const firstResetIndex = hoisted.reloadEvents.indexOf("clear-provider-auth");
     expect(firstResetIndex).toBeGreaterThanOrEqual(0);
     expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
-      "reset-model-catalog",
       "clear-provider-auth",
-      "reload-plugins",
-      "reset-model-catalog",
+      "prepare-plugins",
+      "stale-prepared-model-runtime",
+      "replace-plugins",
       "clear-provider-auth",
+      "refresh-prepared-model-runtime",
       "refresh-context-window",
-      "load-model-catalog",
       "warm-provider-auth",
     ]);
     expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
-    expect(hoisted.loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig });
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
+      "prepared model runtime owner is stale before config publication",
+      { waitForReplacement: true },
+    );
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig);
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 

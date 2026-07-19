@@ -21,14 +21,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.Locale
@@ -92,7 +95,7 @@ internal class WearRealtimeTalkClient(
         val snapshot = repository.startRealtimeTalk(session.key, attemptId, language, nodeId)
         activeNodeId = nodeId
         activeAttemptId = attemptId
-        startReader(nodeId)
+        startReader(nodeId, attemptId)
         startCapture(nodeId)
         snapshot
       } catch (err: Throwable) {
@@ -154,14 +157,18 @@ internal class WearRealtimeTalkClient(
     throw WearProxyException("phone_unavailable", lastError?.message ?: "Unable to open Watch audio channel")
   }
 
-  private fun startReader(nodeId: String) {
+  private fun startReader(
+    nodeId: String,
+    attemptId: String,
+  ) {
     val input = checkNotNull(channelInput)
     readJob?.cancel()
     readJob =
       scope.launch {
         try {
-          while (activeNodeId == nodeId) {
+          while (activeNodeId == nodeId && activeAttemptId == attemptId) {
             val frame = WearRealtimeAudioFraming.read(input) ?: break
+            if (activeNodeId != nodeId || activeAttemptId != attemptId) break
             when (frame.type) {
               WearRealtimeAudioFrameType.OUTPUT_PCM -> writeOutput(frame.payload)
               WearRealtimeAudioFrameType.CLEAR_OUTPUT -> clearOutput(resumeCapture = true)
@@ -216,10 +223,20 @@ internal class WearRealtimeTalkClient(
       scope.launch {
         val buffer = ByteArray(frameBytes)
         try {
-          while (_isCapturing.value && activeNodeId == nodeId) {
+          while (
+            currentCoroutineContext().isActive &&
+            _isCapturing.value &&
+            audioRecord === recorder &&
+            activeNodeId == nodeId
+          ) {
             val read = recorder.read(buffer, 0, buffer.size)
             val evenBytes = read - (read and 1)
-            if (evenBytes <= 0) continue
+            if (!_isCapturing.value || audioRecord !== recorder) break
+            check(read >= 0) { "Watch microphone read failed: $read" }
+            if (evenBytes == 0) {
+              yield()
+              continue
+            }
             sendInputFrame(buffer.copyOf(evenBytes))
           }
         } catch (err: CancellationException) {

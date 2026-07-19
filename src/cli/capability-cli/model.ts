@@ -19,8 +19,8 @@ import {
 import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store.js";
 import { buildExplicitSessionIdSessionKey } from "../../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -60,7 +60,7 @@ async function canonicalizeModelRunRef(params: {
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => loadModelCatalog({ config: params.cfg, readOnly: true }),
+    loadCatalog: () => loadPreparedModelCatalog({ config: params.cfg, readOnly: true }),
     preserveAuthProfile: params.preserveAuthProfile,
   });
 }
@@ -324,7 +324,7 @@ async function runModelRun(params: {
 
 async function buildModelProviders() {
   const cfg = getRuntimeConfig();
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadPreparedModelCatalog({ config: cfg });
   const selectedProvider = resolveSelectedProviderFromModelRef(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
   );
@@ -458,7 +458,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalog({ config: getRuntimeConfig() });
+        const result = await loadPreparedModelCatalog({ config: getRuntimeConfig() });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -471,7 +471,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalog({ config: getRuntimeConfig() });
+        const catalog = await loadPreparedModelCatalog({ config: getRuntimeConfig() });
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);

@@ -1773,6 +1773,10 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps shared script library edits on owner tests", () => {
     const expectedTargets = new Map([
       [
+        "scripts/lib/local-heavy-check-runtime.d.mts",
+        ["test/scripts/local-heavy-check-runtime.test.ts"],
+      ],
+      [
         "scripts/lib/local-heavy-check-runtime.mjs",
         ["test/scripts/local-heavy-check-runtime.test.ts"],
       ],

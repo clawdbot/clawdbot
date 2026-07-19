@@ -135,7 +135,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
-  loadModelCatalogMock?: MockFn;
+  loadPreparedModelCatalogMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionEntryFromParentMock?: MockFn;
@@ -268,7 +268,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
-    loadModelCatalog: (...args: unknown[]) => params.loadModelCatalogMock?.(...args) ?? [],
+    loadPreparedModelCatalog: (...args: unknown[]) =>
+      params.loadPreparedModelCatalogMock?.(...args) ?? [],
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),

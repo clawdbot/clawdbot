@@ -752,6 +752,26 @@ export async function loadCompactHooksHarness(): Promise<{
     ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
+  vi.doMock("../prepared-model-runtime.js", () => ({
+    activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: Record<string, unknown>) => ({
+      snapshot: {
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
+    })),
+    prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+    loadPreparedModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+  }));
+
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
@@ -974,6 +994,7 @@ export async function loadCompactHooksHarness(): Promise<{
     listAgentEntries: vi.fn(() => []),
     resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),
     resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
     resolveDefaultAgentId: vi.fn(() => "main"),
     resolveAgentIdFromSessionKey: vi.fn(

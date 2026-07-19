@@ -36,10 +36,17 @@ describe("buildControlUiCspHeader", () => {
     expect(connectSrc?.split(" ")).not.toContain("https:");
   });
 
-  it("limits image loading to same-origin, data, and managed blob URLs", () => {
+  it("limits image loading to local sources and the Gravatar fallback origin", () => {
     const csp = buildControlUiCspHeader();
-    expect(csp).toContain("img-src 'self' data: blob:");
-    expect(csp).not.toContain("img-src 'self' data: blob: https:");
+    const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
+    expect(imgSrc?.split(" ")).toEqual([
+      "img-src",
+      "'self'",
+      "data:",
+      "blob:",
+      "https://gravatar.com",
+    ]);
+    expect(imgSrc?.split(" ")).not.toContain("https:");
   });
 
   it("allows same-origin and inline audio/video playback", () => {

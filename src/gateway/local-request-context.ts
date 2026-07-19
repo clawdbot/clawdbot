@@ -1,6 +1,9 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadManifestModelCatalog, loadModelCatalogSnapshot } from "../agents/model-catalog.js";
+import {
+  loadPreparedModelCatalog,
+  loadPreparedModelCatalogSnapshot,
+} from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -84,10 +87,22 @@ function createLocalGatewayRequestContext(
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
-    loadGatewayModelCatalog: async () =>
-      loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
-    loadGatewayModelCatalogSnapshot: async ({ readOnly } = {}) =>
-      loadModelCatalogSnapshot({ config: params.getRuntimeConfig(), readOnly }),
+    loadGatewayModelCatalog: async ({ agentId, agentDir, readOnly, workspaceDir } = {}) =>
+      loadPreparedModelCatalog({
+        ...(agentId ? { agentId } : {}),
+        ...(agentDir ? { agentDir } : {}),
+        config: params.getRuntimeConfig(),
+        readOnly: readOnly !== false,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      }),
+    loadGatewayModelCatalogSnapshot: async ({ agentId, agentDir, readOnly, workspaceDir } = {}) =>
+      loadPreparedModelCatalogSnapshot({
+        ...(agentId ? { agentId } : {}),
+        ...(agentDir ? { agentDir } : {}),
+        config: params.getRuntimeConfig(),
+        readOnly: readOnly !== false,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      }),
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,

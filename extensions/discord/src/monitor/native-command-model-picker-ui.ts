@@ -185,7 +185,12 @@ export async function resolveDiscordNativeChoiceContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
-}): Promise<{ provider?: string; model?: string; agentRuntime?: string } | null> {
+}): Promise<{
+  provider?: string;
+  model?: string;
+  agentRuntime?: string;
+  agentId: string;
+} | null> {
   try {
     const resolved = await resolveDiscordModelPickerRouteState({
       interaction: params.interaction,
@@ -217,6 +222,7 @@ export async function resolveDiscordNativeChoiceContext(params: {
     return {
       provider,
       model,
+      agentId: route.agentId,
       agentRuntime: resolveEffectiveAgentRuntime({
         cfg: params.cfg,
         provider,

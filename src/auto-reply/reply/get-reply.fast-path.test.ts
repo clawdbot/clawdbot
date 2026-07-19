@@ -30,7 +30,8 @@ import {
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
-type LoadModelCatalogFn = typeof import("../../agents/model-catalog.js").loadModelCatalog;
+type LoadModelCatalogFn =
+  typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
 type ModelAliasIndex = import("../../agents/model-selection.js").ModelAliasIndex;
 
 function emptyAliasIndex(): ModelAliasIndex {
@@ -62,15 +63,9 @@ vi.mock("./commands-status.js", () => ({
   buildStatusReply: (...args: unknown[]) => mocks.buildStatusReply(...args),
 }));
 
-vi.mock("../../agents/model-catalog.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/model-catalog.js")>(
-    "../../agents/model-catalog.js",
-  );
-  return {
-    ...actual,
-    loadModelCatalog: mocks.loadModelCatalog,
-  };
-});
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: mocks.loadModelCatalog,
+}));
 
 vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
@@ -472,7 +467,16 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     }
     expect(reply.text.includes("OpenClaw")).toBe(true);
     expect(reply.text.includes("Think: medium")).toBe(true);
-    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg });
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        agentId: "main",
+        agentDir: expect.any(String),
+      }),
+    );
+    expect(mocks.loadModelCatalog.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: "/tmp/workspace",
+    });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
@@ -524,7 +528,13 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       throw new Error("expected single reply payload");
     }
     expect(reply.text).toContain("Think: high");
-    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
+    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
+      config: cfg,
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
@@ -578,7 +588,13 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     }
     expect(reply.text).toContain("Think: xhigh");
     expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
+    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
+      config: cfg,
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();

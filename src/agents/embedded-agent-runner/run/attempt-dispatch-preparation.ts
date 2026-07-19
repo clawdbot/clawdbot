@@ -176,6 +176,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       workspaceDir,
       isCanonicalWorkspace,
       agentDir,
+      preparedModelRuntime: runInput.preparedModelRuntime,
       contextEngine: nativeModelOwned ? undefined : contextEngine,
       contextTokenBudget: runtime.contextTokenBudget,
       contextWindowInfo: runtime.contextWindowInfo,

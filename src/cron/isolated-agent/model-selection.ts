@@ -7,7 +7,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   getModelRefStatus,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
@@ -25,12 +25,15 @@ type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "pay
 /** Inputs used to resolve the model for one isolated cron run. */
 type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
+  catalogConfig: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
   agentId?: string;
+  agentDir: string;
+  workspaceDir: string;
 };
 
 /** Resolved provider/model pair plus the precedence source that selected it. */
@@ -83,10 +86,16 @@ export async function resolveCronModelSelection(
   let model = resolvedDefault.model;
   let modelSource: CronModelSelectionSource = "default";
 
-  let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
+  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>> | undefined;
   const loadCatalogOnce = async () => {
     if (!catalog) {
-      catalog = await loadModelCatalog({ config: params.cfgWithAgentDefaults });
+      catalog = await loadPreparedModelCatalog({
+        config: params.catalogConfig,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        readOnly: true,
+      });
     }
     return catalog;
   };

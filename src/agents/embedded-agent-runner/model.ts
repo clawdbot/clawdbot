@@ -17,7 +17,6 @@ import {
   normalizeProviderResolvedModelWithPlugin,
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
-import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
@@ -35,6 +34,10 @@ import {
   canonicalizeOpenAIModelId,
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../openai-routing.js";
+import {
+  getPreparedModelRuntimeSnapshot,
+  loadPreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
@@ -47,7 +50,6 @@ import {
   type AuthStorage,
   type ModelRegistry,
 } from "../sessions/index.js";
-import { discoverCachedAgentStores } from "./model-discovery-cache.js";
 import {
   mergeModelCompat,
   mergeModelMediaInput,
@@ -162,20 +164,29 @@ function resolveRuntimeHooks(params?: {
   return DEFAULT_PROVIDER_RUNTIME_HOOKS;
 }
 
-function discoverCachedAgentStoresForAgent(
+function resolvePreparedAgentSnapshot(
   resolvedAgentDir: string,
   cfg: OpenClawConfig | undefined,
-  workspaceDir: string | undefined,
-): {
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
-} {
-  return discoverCachedAgentStores({
+  explicitWorkspaceDir: string | undefined,
+  derivedWorkspaceDir: string | undefined,
+  agentId: string | undefined,
+): ReturnType<typeof getPreparedModelRuntimeSnapshot> {
+  const base = {
+    ...(agentId ? { agentId } : {}),
     agentDir: resolvedAgentDir,
-    ...(cfg ? { config: cfg } : {}),
+    config: cfg ?? {},
     inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
-    ...(workspaceDir ? { workspaceDir } : {}),
+  };
+  const published = getPreparedModelRuntimeSnapshot({
+    ...base,
+    ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
   });
+  if (published || explicitWorkspaceDir || !derivedWorkspaceDir) {
+    return published;
+  }
+  // Standalone runs publish an exact workspace owner. Gateway owners may instead carry an
+  // authoritative launch workspace, which the workspace-free lookup above resolves by agent.
+  return getPreparedModelRuntimeSnapshot({ ...base, workspaceDir: derivedWorkspaceDir });
 }
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
@@ -1593,6 +1604,7 @@ export function resolveModel(
   options?: {
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
+    agentId?: string;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
     workspaceDir?: string;
@@ -1606,27 +1618,35 @@ export function resolveModel(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
-  const workspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
-  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
-  const cachedStores =
-    !options?.authStorage && !options?.modelRegistry
-      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
+  const preparedSnapshot =
+    !options?.authStorage || !options?.modelRegistry
+      ? resolvePreparedAgentSnapshot(
+          resolvedAgentDir,
+          cfg,
+          options?.workspaceDir,
+          derivedWorkspaceDir,
+          options?.agentId,
+        )
       : undefined;
-  const authStorage =
-    options?.authStorage ??
-    cachedStores?.authStorage ??
-    discoverAuthStorage(resolvedAgentDir, {
-      ...(cfg ? { config: cfg } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
+  if ((!options?.authStorage || !options?.modelRegistry) && !preparedSnapshot) {
+    // Synchronous callers must enter through a lifecycle that already published discovery.
+    // Falling back to an empty registry turns a stale/pending generation into a false model miss.
+    throw new Error(
+      `prepared model runtime is not published for synchronous model resolution (${resolvedAgentDir}); use resolveModelAsync before lifecycle publication`,
+    );
+  }
+  const workspaceDir =
+    options?.workspaceDir ?? preparedSnapshot?.workspaceDir ?? derivedWorkspaceDir;
+  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+  const preparedStores = preparedSnapshot?.createStores();
+  const authStorage = options?.authStorage ?? preparedStores!.authStorage;
   const modelRegistry =
     options?.modelRegistry ??
-    cachedStores?.modelRegistry ??
-    discoverModels(authStorage, resolvedAgentDir, {
-      ...(cfg ? { config: cfg } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
+    (options?.authStorage
+      ? preparedStores!.modelRegistry.fork(authStorage)
+      : preparedStores!.modelRegistry);
   const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithPreparedRegistry({
     provider: normalizedRef.provider,
@@ -1667,6 +1687,7 @@ export async function resolveModelAsync(
   options?: {
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
+    agentId?: string;
     allowBundledStaticCatalogFallback?: boolean;
     preferBundledStaticCatalogTransport?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
@@ -1685,33 +1706,45 @@ export async function resolveModelAsync(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 }> {
-  const workspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
-  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
   const emptyDiscoveryStores =
     options?.skipAgentDiscovery && (!options.authStorage || !options.modelRegistry)
       ? createEmptyAgentDiscoveryStores()
       : undefined;
-  const cachedStores =
-    !emptyDiscoveryStores && !options?.authStorage && !options?.modelRegistry
-      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
+  const publishedSnapshot =
+    !emptyDiscoveryStores && (!options?.authStorage || !options?.modelRegistry)
+      ? resolvePreparedAgentSnapshot(
+          resolvedAgentDir,
+          cfg,
+          options?.workspaceDir,
+          derivedWorkspaceDir,
+          options?.agentId,
+        )
       : undefined;
-  const authStorage =
-    options?.authStorage ??
-    emptyDiscoveryStores?.authStorage ??
-    cachedStores?.authStorage ??
-    discoverAuthStorage(resolvedAgentDir, {
-      ...(cfg ? { config: cfg } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
+  const preparedSnapshot =
+    publishedSnapshot ??
+    (!emptyDiscoveryStores && (!options?.authStorage || !options?.modelRegistry)
+      ? await loadPreparedModelRuntimeSnapshot({
+          ...(options?.agentId ? { agentId: options.agentId } : {}),
+          agentDir: resolvedAgentDir,
+          config: cfg ?? {},
+          inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
+          ...(derivedWorkspaceDir ? { workspaceDir: derivedWorkspaceDir } : {}),
+        })
+      : undefined);
+  const workspaceDir =
+    options?.workspaceDir ?? preparedSnapshot?.workspaceDir ?? derivedWorkspaceDir;
+  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+  const preparedStores = preparedSnapshot?.createStores();
+  const fallbackStores =
+    emptyDiscoveryStores ?? preparedStores ?? createEmptyAgentDiscoveryStores();
+  const authStorage = options?.authStorage ?? fallbackStores.authStorage;
   const modelRegistry =
     options?.modelRegistry ??
-    emptyDiscoveryStores?.modelRegistry ??
-    cachedStores?.modelRegistry ??
-    discoverModels(authStorage, resolvedAgentDir, {
-      ...(cfg ? { config: cfg } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
+    (options?.authStorage
+      ? fallbackStores.modelRegistry.fork(authStorage)
+      : fallbackStores.modelRegistry);
   const runtimeHooks = resolveRuntimeHooks(options);
   if (normalizedRef.manifestAlias.ambiguous) {
     return {

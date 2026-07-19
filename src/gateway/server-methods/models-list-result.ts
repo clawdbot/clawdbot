@@ -19,7 +19,7 @@ import {
 import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
-  loadModelCatalogSnapshotForBrowse,
+  loadPreparedModelCatalogSnapshotForBrowse,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
 import {
@@ -448,7 +448,10 @@ export async function buildModelsListResult(params: {
   context: GatewayRequestContext;
   agentId?: string;
   params: Record<string, unknown>;
-  preloadedCatalog?: ModelCatalogSnapshot;
+  preloadedCatalog?: {
+    agentId: string;
+    snapshot: ModelCatalogSnapshot;
+  };
   catalogProjector?: ReturnType<typeof createGatewayAgentModelCatalogProjector>;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
@@ -456,15 +459,19 @@ export async function buildModelsListResult(params: {
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const view = resolveModelsListView(params.params);
-  const snapshot = await loadModelCatalogSnapshotForBrowse({
+  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
     view,
     loadCatalog: async (loadParams) => {
       const readOnlyLoad = loadParams.readOnly ?? true;
-      if (params.preloadedCatalog && readOnlyLoad) {
-        return params.preloadedCatalog;
+      if (params.preloadedCatalog?.agentId === agentId && readOnlyLoad) {
+        return params.preloadedCatalog.snapshot;
       }
-      return await params.context.loadGatewayModelCatalogSnapshot(loadParams);
+      return await params.context.loadGatewayModelCatalogSnapshot({
+        ...loadParams,
+        agentId,
+        agentDir: resolveAgentDir(cfg, agentId),
+      });
     },
     onTimeout: (timeoutMs) => {
       if (loggedSlowModelsListCatalog) {

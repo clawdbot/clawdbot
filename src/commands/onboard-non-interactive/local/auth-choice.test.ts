@@ -4,6 +4,13 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
 
+const formatAuthChoiceChoicesForCli = vi.hoisted(() =>
+  vi.fn(() => "custom-api-key|skip|demo-provider-api-key"),
+);
+vi.mock("../../auth-choice-options.js", () => ({
+  formatAuthChoiceChoicesForCli,
+}));
+
 const applyNonInteractivePluginProviderChoice = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("./auth-choice.plugin-providers.js", () => ({
   applyNonInteractivePluginProviderChoice,
@@ -20,6 +27,10 @@ vi.mock("../../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 }));
+const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
+vi.mock("../../../plugins/provider-install-catalog.js", () => ({
+  resolveDeprecatedProviderInstallCatalogEntry,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -30,6 +41,8 @@ beforeEach(() => {
   resolveManifestDeprecatedProviderAuthChoice.mockReturnValue(undefined);
   resolveManifestProviderAuthChoices.mockReset();
   resolveManifestProviderAuthChoices.mockReturnValue([]);
+  resolveDeprecatedProviderInstallCatalogEntry.mockReset();
+  resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue(undefined);
 });
 
 function createRuntime() {
@@ -41,6 +54,44 @@ function createRuntime() {
 }
 
 describe("applyNonInteractiveAuthChoice", () => {
+  it("rejects an unknown auth choice and lists the valid choices", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "definitely-not-a-provider",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key, oauth, setup-token, token, apiKey.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("continues to apply an enumerated provider auth choice", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const resolvedConfig = { auth: { profiles: { "demo-provider:default": { mode: "api_key" } } } };
+    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "demo-provider-api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result).toBe(resolvedConfig);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("resolves plugin provider auth before builtin custom-provider handling", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
@@ -79,7 +130,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       '"demo-provider-legacy" is no longer supported. Use --auth-choice "demo-provider-modern-api" instead.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
+    expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
   });
 
   it("escapes deprecated auth choice guidance for terminal output", async () => {
@@ -102,7 +153,30 @@ describe("applyNonInteractiveAuthChoice", () => {
       '"legacy\\u001b[31mchoice" is no longer supported. Use --auth-choice "modern\\nchoice" instead.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
+    expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
+  });
+
+  it("keeps replacement guidance for deprecated install-catalog choices", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveDeprecatedProviderInstallCatalogEntry.mockReturnValueOnce({
+      choiceId: "qwen-api-key",
+    } as never);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "modelstudio-api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      '"modelstudio-api-key" is no longer supported. Use --auth-choice "qwen-api-key" instead.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
   });
 
   it("stores custom provider env refs through the local auth-choice seam", async () => {

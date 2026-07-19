@@ -49,15 +49,17 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
-  canonicalizeManifestModelCatalogProviderAlias,
   createBundledProviderStaticCatalogContextResolver,
-  createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
   resolveManifestModelCatalogProviderAliasMetadata,
 } from "./model.static-catalog.js";
+
+const canonicalizeManifestModelCatalogProviderAlias = (
+  params: Parameters<typeof resolveManifestModelCatalogProviderAliasMetadata>[0],
+) => resolveManifestModelCatalogProviderAliasMetadata(params).provider;
 
 function setManifestPlugins(plugins: unknown[]) {
   // Static catalog resolution reads scan metadata first, then loads the manifest
@@ -882,10 +884,10 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       },
     });
 
-    const resolveModel = createBundledProviderStaticCatalogModelResolver();
+    const resolveModel = createBundledProviderStaticCatalogContextResolver();
     await expect(
       resolveModel({ provider: "google", modelId: "gemini-3.1-pro-preview" }),
-    ).resolves.toMatchObject({ contextWindow: 1_048_576 });
+    ).resolves.toEqual({ contextWindow: 1_048_576 });
     await expect(
       resolveModel({ provider: "google", modelId: "missing-model" }),
     ).resolves.toBeUndefined();
@@ -940,9 +942,8 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockClear();
     providerMocks.runProviderStaticCatalog.mockClear();
-    const resolveModel = createBundledProviderStaticCatalogModelResolver();
     await expect(
-      resolveModel({
+      resolveBundledProviderStaticCatalogModel({
         provider: "google-gemini-cli",
         modelId: "google/gemini-3.1-pro-preview",
       }),

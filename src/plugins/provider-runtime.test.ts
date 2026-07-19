@@ -1035,11 +1035,17 @@ describe("provider-runtime", () => {
       ...baseConfig,
       agents: { defaults: { model: "anthropic/claude-sonnet-4-5" } },
     } as OpenClawConfig;
+    const metadataSnapshot = {
+      index: {},
+      manifestRegistry: {},
+      workspaceDir: "/tmp/snapshot-workspace",
+    } as never;
 
     expect(
       await augmentModelCatalogWithProviderPlugins({
         config: firstConfig,
         env: process.env,
+        metadataSnapshot,
         context: { config: firstConfig, env: process.env, entries: [] },
       }),
     ).toEqual([{ provider: "demo", id: "demo-model", name: "Demo Model" }]);
@@ -1047,11 +1053,24 @@ describe("provider-runtime", () => {
       await augmentModelCatalogWithProviderPlugins({
         config: secondConfig,
         env: process.env,
+        metadataSnapshot,
         context: { config: secondConfig, env: process.env, entries: [] },
       }),
     ).toEqual([{ provider: "demo", id: "demo-model", name: "Demo Model" }]);
 
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+    expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        metadataSnapshot,
+        workspaceDir: "/tmp/snapshot-workspace",
+      }),
+    );
+    expect(resolvePluginProvidersMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pluginMetadataSnapshot: metadataSnapshot,
+        workspaceDir: "/tmp/snapshot-workspace",
+      }),
+    );
   });
 
   it("resolves catalog hook provider loads when unrelated plugin config changes", async () => {

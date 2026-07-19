@@ -86,7 +86,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 45000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:
-            expr: "pendingQuestion.questions.length === 3 && pendingQuestion.questions[0].id === 'deploy_target' && pendingQuestion.questions[1].multiSelect === true && pendingQuestion.questions.every((question) => question.isOther === true)"
+            expr: "pendingQuestion.questions.length === 3 && pendingQuestion.questions[0].questionId === 'deploy_target' && pendingQuestion.questions[1].multiSelect === true && pendingQuestion.questions.every((question) => question.isOther === true)"
             message:
               expr: "`ask_user question shape drifted: ${JSON.stringify(pendingQuestion.questions)}`"
         - set: resolution
@@ -96,9 +96,9 @@ flow:
                 id: pendingQuestion.id,
                 answers: {
                   answers: {
-                    deploy_target: { answers: ['Production'] },
-                    checks: { answers: ['Unit (Recommended)', 'E2E'] },
-                    release_note: { answers: ['night-shift'] },
+                    deploy_target: ['Production'],
+                    checks: ['Unit (Recommended)', 'E2E'],
+                    release_note: ['night-shift'],
                   },
                 },
                 resolvedBy: 'qa-lab',

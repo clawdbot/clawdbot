@@ -292,7 +292,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +9: outbound echo identity type and record/query helpers across
       // channel-outbound and its two compatibility barrels.
       // Net +1: public session catalog locator types after the protocol cleanup harvest.
-      8207,
+      // +2: lifecycle-owned prepared model catalog sync and async readers.
+      8209,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -342,7 +343,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: upstream-link registry write/delete for harness-owned session forks.
       // +1: config-backed main-session resolver for Gateway-hosted plugin services.
       // +6: outbound echo record/query helpers across channel-outbound and mirrors.
-      4560,
+      // +2: lifecycle-owned prepared model catalog sync and async readers.
+      4562,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -367,7 +369,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: AgentThinkingLevel mirrored by deprecated config-types.
       // +1: SwarmConfig mirrored by deprecated config-types.
       // +2: outbound echo helpers inherited by deprecated channel barrels.
-      3023,
+      // +1: lifecycle-owned prepared model catalog contract mirrored by agent-runtime compat.
+      3024,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

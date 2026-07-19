@@ -174,7 +174,9 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
   })
     ? createImageTool({
         config: availabilityConfig ?? options?.config,
+        agentId: sessionAgentId,
         agentDir: imageToolAgentDir!,
+        preparedModelRuntime: options?.preparedModelRuntime,
         authProfileStore: options?.authProfileStore,
         workspaceDir,
         sandbox,
@@ -233,7 +235,9 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
     optionalMediaTools.pdf && options?.agentDir?.trim()
       ? createPdfTool({
           config: options?.config,
+          agentId: sessionAgentId,
           agentDir: options.agentDir,
+          preparedModelRuntime: options?.preparedModelRuntime,
           authProfileStore: options?.authProfileStore,
           workspaceDir,
           sandbox,

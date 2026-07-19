@@ -6,6 +6,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   lookupCachedContextTokens,
   lookupCachedContextWindow,
@@ -48,9 +49,7 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0,
 };
-const loadModelCatalogRuntime = () => import("./model-catalog.runtime.js");
-const loadStaticModelCatalogRuntime = () =>
-  import("./embedded-agent-runner/model.static-catalog.js");
+const loadPreparedModelCatalogRuntime = () => import("./prepared-model-catalog.js");
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -209,26 +208,33 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
         return;
       }
       try {
-        // Read-only catalog loading overlays current config and manifest rows
-        // onto persisted discovery without rewriting models.json.
-        const [{ loadModelCatalog }, { loadBundledProviderStaticCatalogContextModels }] =
-          await Promise.all([loadModelCatalogRuntime(), loadStaticModelCatalogRuntime()]);
-        const [modelsResult, providerStaticModelsResult] = await Promise.allSettled([
-          loadModelCatalog({ config: cfg, readOnly: true }),
-          loadBundledProviderStaticCatalogContextModels({ cfg }),
-        ]);
+        const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
+        const defaultAgentId = resolveDefaultAgentId(cfg);
+        const catalogResult = await loadPreparedModelCatalogOwnerSnapshot({
+          config: cfg,
+          agentId: defaultAgentId,
+          agentDir: resolveAgentDir(cfg, defaultAgentId),
+          readOnly: true,
+        }).then(
+          (value) => ({ status: "fulfilled" as const, value }),
+          (reason: unknown) => ({ status: "rejected" as const, reason }),
+        );
         if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
           return;
         }
-        const models = modelsResult.status === "fulfilled" ? modelsResult.value : [];
+        const models =
+          catalogResult.status === "fulfilled" ? catalogResult.value.modelCatalog.entries : [];
         const providerStaticModels =
-          providerStaticModelsResult.status === "fulfilled" ? providerStaticModelsResult.value : [];
+          catalogResult.status === "fulfilled"
+            ? (catalogResult.value.modelCatalog.staticEntries ?? [])
+            : [];
         applyDiscoveredContextWindows({
           cache: stagedTokenCache,
           models: [...models, ...providerStaticModels],
         });
       } catch {
-        // If model discovery fails, continue with config overrides only.
+        // Static and discovered rows belong to one atomic generation. If its owner fails, keep
+        // config overrides only instead of mixing in independently rediscovered static metadata.
       }
 
       if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {

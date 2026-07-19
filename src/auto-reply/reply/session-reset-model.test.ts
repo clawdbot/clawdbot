@@ -2,13 +2,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
+
+const loadPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
+
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog,
+}));
+
 import { applyResetModelOverride } from "./session-reset-model.js";
 
 const modelCatalog: ModelCatalogEntry[] = [
@@ -57,6 +64,32 @@ async function applyResetFixture(params: {
 }
 
 describe("applyResetModelOverride", () => {
+  it("loads the reset catalog for the active agent owner", async () => {
+    const fixture = createResetFixture();
+
+    await applyResetModelOverride({
+      cfg: fixture.cfg,
+      agentId: "worker",
+      agentDir: "/tmp/shared-agent",
+      workspaceDir: "/tmp/shared-workspace",
+      resetTriggered: true,
+      bodyStripped: "minimax summarize",
+      sessionCtx: fixture.sessionCtx,
+      ctx: fixture.ctx,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: fixture.aliasIndex,
+    });
+
+    expect(loadPreparedModelCatalog).toHaveBeenCalledWith({
+      config: fixture.cfg,
+      agentId: "worker",
+      agentDir: "/tmp/shared-agent",
+      workspaceDir: "/tmp/shared-workspace",
+      readOnly: true,
+    });
+  });
+
   it("selects a model hint and strips it from the body", async () => {
     const { sessionEntry, sessionCtx } = await applyResetFixture({
       resetTriggered: true,

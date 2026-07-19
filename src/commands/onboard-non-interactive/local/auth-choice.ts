@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
+import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import {
@@ -17,6 +18,7 @@ import {
   isDeprecatedAuthChoice,
   resolveDeprecatedAuthChoiceReplacement,
 } from "../../auth-choice-legacy.js";
+import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import {
@@ -33,6 +35,8 @@ type ResolvedNonInteractiveApiKey = NonNullable<
   Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
 >;
 
+const GENERIC_NON_INTERACTIVE_AUTH_CHOICES = ["oauth", "setup-token", "token", "apiKey"];
+
 /** Applies a local non-interactive auth choice to the pending OpenClaw config. */
 export async function applyNonInteractiveAuthChoice(params: {
   nextConfig: OpenClawConfig;
@@ -40,6 +44,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  workspaceDir?: string;
 }): Promise<OpenClawConfig | null> {
   const { opts, runtime, baseConfig } = params;
   let authChoice = normalizeApiKeyTokenProviderAuthChoice({
@@ -133,11 +138,18 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
   };
-  if (isDeprecatedAuthChoice(authChoice, { config: nextConfig, env: process.env })) {
+  if (
+    isDeprecatedAuthChoice(authChoice, {
+      config: nextConfig,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+    })
+  ) {
     // Keep deprecated aliases out of the config by normalizing them before
     // either plugin dispatch or built-in setup handling.
     const replacement = resolveDeprecatedAuthChoiceReplacement(authChoice, {
       config: nextConfig,
+      workspaceDir: params.workspaceDir,
       env: process.env,
     });
     if (replacement) {
@@ -147,12 +159,55 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.error(
         formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
           config: nextConfig,
+          workspaceDir: params.workspaceDir,
           env: process.env,
         })!,
       );
       runtime.exit(1);
       return null;
     }
+  }
+
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
+    config: nextConfig,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+  });
+  const deprecatedInstallChoice = deprecatedChoice
+    ? undefined
+    : resolveDeprecatedProviderInstallCatalogEntry(authChoice as string, {
+        config: nextConfig,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        includeUntrustedWorkspacePlugins: false,
+      });
+  const replacementChoiceId = deprecatedChoice?.choiceId ?? deprecatedInstallChoice?.choiceId;
+  if (replacementChoiceId) {
+    runtime.error(
+      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(replacementChoiceId)} instead.`,
+    );
+    runtime.exit(1);
+    return null;
+  }
+
+  const validAuthChoices = Array.from(
+    new Set([
+      ...formatAuthChoiceChoicesForCli({
+        includeLegacyAliases: false,
+        includeSkip: true,
+        config: nextConfig,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+      }).split("|"),
+      ...GENERIC_NON_INTERACTIVE_AUTH_CHOICES,
+    ]),
+  );
+  if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
+    runtime.error(
+      `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
+    );
+    runtime.exit(1);
+    return null;
   }
 
   const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
@@ -181,18 +236,6 @@ export async function applyNonInteractiveAuthChoice(params: {
         `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
         'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
       ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
-  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
-    config: nextConfig,
-    env: process.env,
-  });
-  if (deprecatedChoice) {
-    runtime.error(
-      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(deprecatedChoice.choiceId)} instead.`,
     );
     runtime.exit(1);
     return null;

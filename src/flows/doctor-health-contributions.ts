@@ -82,7 +82,9 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
-const loadModelCatalogModule = async () => await import("../agents/model-catalog.js");
+const loadCatalogLookupModule = async () => await import("../agents/model-catalog.js");
+const loadPreparedModelCatalogModule = async () =>
+  await import("../agents/prepared-model-catalog.js");
 const loadModelSelectionModule = async () => await import("../agents/model-selection.js");
 const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
 const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
@@ -795,7 +797,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
     return;
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await loadAgentDefaultsModule();
-  const { loadModelCatalog } = await loadModelCatalogModule();
+  const { loadPreparedModelCatalog } = await loadPreparedModelCatalogModule();
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await loadModelSelectionModule();
   const { note } = await loadNoteModule();
@@ -812,7 +814,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadModelCatalog({ config: ctx.cfg, readOnly: true });
+  const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,
@@ -912,10 +914,11 @@ async function collectToolResultCapTargetAdvice(params: {
   }>
 > {
   const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
-  const { loadModelCatalog, findModelCatalogEntry } = await loadModelCatalogModule();
+  const { findModelCatalogEntry } = await loadCatalogLookupModule();
+  const { loadPreparedModelCatalog } = await loadPreparedModelCatalogModule();
   const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
   const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
-  const catalog = await loadModelCatalog({
+  const catalog = await loadPreparedModelCatalog({
     config: params.cfg,
     ...(params.readOnlyCatalog ? { readOnly: true } : {}),
   });

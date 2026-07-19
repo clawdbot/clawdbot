@@ -2,6 +2,8 @@
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
+  resolveAgentDir,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -9,7 +11,6 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   buildConfiguredModelCatalog,
@@ -125,7 +126,7 @@ function normalizeRuntimeModelRef(provider: string, model: string) {
   return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
 }
 
-function loadModelCatalogRuntime() {
+function loadPreparedModelCatalogRuntime() {
   return modelCatalogRuntimeLoader.load();
 }
 
@@ -189,6 +190,12 @@ export async function createModelSelectionState(params: {
     defaultProvider,
     defaultModel,
   } = params;
+  const catalogAgentId = params.agentId ?? resolveDefaultAgentId(cfg);
+  const catalogScope = {
+    config: cfg,
+    agentId: catalogAgentId,
+    agentDir: resolveAgentDir(cfg, catalogAgentId),
+  };
 
   let provider = params.provider;
   let model = params.model;
@@ -209,14 +216,14 @@ export async function createModelSelectionState(params: {
   const hasConfiguredModels =
     Object.keys(agentCfg?.models ?? {}).length > 0 ||
     Object.keys(agentEntry?.models ?? {}).length > 0;
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg, agentId: params.agentId });
-  const defaultProviderVisibleByWildcard = visibility.providerWildcards.has(
-    normalizeProviderId(defaultProvider),
-  );
+  const defaultModelVisibleByWildcard = visibilityPolicy.allowsByWildcard({
+    provider: defaultProvider,
+    model: defaultModel,
+  });
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
   const needsModelCatalog =
     params.hasModelDirective ||
-    (hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard);
+    (hasAllowlist && visibilityPolicy.hasProviderWildcards && !defaultModelVisibleByWildcard);
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
@@ -284,8 +291,8 @@ export async function createModelSelectionState(params: {
 
   if (needsModelCatalog) {
     const catalogSnapshot = await (
-      await loadModelCatalogRuntime()
-    ).loadModelCatalogSnapshot({ config: cfg });
+      await loadPreparedModelCatalogRuntime()
+    ).loadPreparedModelCatalogSnapshot(catalogScope);
     modelCatalog = catalogSnapshot.entries;
     // Only an explicit false is degraded; absent means authoritative.
     catalogAuthoritative = catalogSnapshot.authoritative !== false;
@@ -513,7 +520,7 @@ export async function createModelSelectionState(params: {
     if (manifestModelCatalog) {
       return manifestModelCatalog;
     }
-    const { loadManifestModelCatalog } = await loadModelCatalogRuntime();
+    const { loadManifestModelCatalog } = await loadPreparedModelCatalogRuntime();
     manifestModelCatalog = loadManifestModelCatalog({
       config: cfg,
       fallbackToMetadataScan: false,
@@ -554,7 +561,9 @@ export async function createModelSelectionState(params: {
     const shouldHydrateRuntimeCatalog =
       !modelCatalog && (!selectedCatalogEntry || selectedCatalogEntry.reasoning === undefined);
     if (shouldHydrateRuntimeCatalog) {
-      modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+      modelCatalog = await (
+        await loadPreparedModelCatalogRuntime()
+      ).loadPreparedModelCatalog(catalogScope);
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
       const runtimeCatalog = buildThinkingCatalog(modelCatalog);
       const runtimeSelectedEntry = findSelectedCatalogEntry({
@@ -649,7 +658,9 @@ export async function createModelSelectionState(params: {
       (!catalogForReasoning || catalogForReasoning.length === 0) &&
       selectedReasoningEntry?.reasoning === undefined
     ) {
-      modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+      modelCatalog = await (
+        await loadPreparedModelCatalogRuntime()
+      ).loadPreparedModelCatalog(catalogScope);
       logStage("catalog-loaded-for-reasoning", `entries=${modelCatalog.length}`);
       catalogForReasoning = modelCatalog;
     }

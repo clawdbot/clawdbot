@@ -114,9 +114,7 @@ type ManifestModelCatalogAliasPlugin = Pick<
   | "modelCatalog"
 >;
 
-export type ManifestModelCatalogProviderTransport = Readonly<
-  Pick<ModelCatalogAlias, "api" | "baseUrl">
->;
+type ManifestModelCatalogProviderTransport = Readonly<Pick<ModelCatalogAlias, "api" | "baseUrl">>;
 
 export type ManifestModelCatalogProviderAliasMetadata = {
   readonly ambiguous?: true;
@@ -338,26 +336,4 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
       return exhaustive;
     }
   }
-}
-
-/** Resolves a provider alias from plugin model-catalog metadata when the alias is unambiguous. */
-export function canonicalizeManifestModelCatalogProviderAlias(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return resolveManifestModelCatalogProviderAliasMetadata(params).provider;
-}
-
-/** Resolves transport defaults owned by a retained manifest provider alias. */
-export function resolveManifestModelCatalogProviderTransport(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ManifestModelCatalogProviderTransport | undefined {
-  return resolveManifestModelCatalogProviderAliasMetadata(params).transport;
 }

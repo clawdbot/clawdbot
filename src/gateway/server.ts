@@ -35,8 +35,8 @@ export async function startGatewayServer(
   return await mod.startGatewayServer(...args);
 }
 
-/** Clears the server implementation's model-catalog cache between tests. */
-export async function resetModelCatalogCacheForTest(): Promise<void> {
+/** Clears prepared model-catalog generations between tests. */
+export async function resetPreparedModelCatalogForTest(): Promise<void> {
   const mod = await loadServerImpl();
-  await mod.resetModelCatalogCacheForTest();
+  await mod.resetPreparedModelCatalogForTest();
 }

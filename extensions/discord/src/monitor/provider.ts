@@ -1,4 +1,3 @@
-import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
@@ -294,11 +293,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
-    if (nativeEnabled && commandSpecs.some((command) => command.name === "think")) {
-      // Autocomplete cannot defer. Warm opportunistically before interactions begin,
-      // but never let provider discovery block Discord startup.
-      void loadModelCatalog({ config: cfg });
-    }
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
       cfg,
       discordConfig: discordCfg,

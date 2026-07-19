@@ -12,7 +12,7 @@ import {
 } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { CONTROL_UI_CLIENT } from "./server.auth.test-helpers.js";
+import { CONTROL_UI_CLIENT, NODE_CLIENT } from "./server.auth.test-helpers.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -228,6 +228,43 @@ describe("trusted-proxy browser device auto-approval", () => {
       "operator.approvals",
       "operator.read",
     ]);
+  });
+
+  test("leaves mixed node and operator requests pending for manual approval", async () => {
+    await writeGatewayAuthConfig({
+      mode: "trusted-proxy",
+      deviceAutoApprove: { enabled: true, scopes: ["operator.read"] },
+    });
+    const identityPath = deviceIdentityPath("trusted-proxy-mixed-role");
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+
+    await withGatewayServer(async ({ port }) => {
+      const nodeWs = await openBrowserWs(port, trustedProxyHeaders());
+      try {
+        const nodeRes = await connectReq(nodeWs, {
+          skipDefaultAuth: true,
+          client: NODE_CLIENT,
+          role: "node",
+          scopes: [],
+          deviceIdentityPath: identityPath,
+        });
+        expect(nodeRes.ok).toBe(false);
+      } finally {
+        nodeWs.close();
+      }
+
+      const browserRes = await connectBrowser({
+        port,
+        identityPath,
+        scopes: ["operator.read"],
+      });
+      expect(browserRes.ok).toBe(false);
+    });
+
+    await expect(getPairedDevice(identity.deviceId)).resolves.toBeNull();
+    expect(
+      (await listDevicePairing()).pending.find((entry) => entry.deviceId === identity.deviceId),
+    ).toMatchObject({ roles: ["node", "operator"] });
   });
 
   test("caps omitted scopes to the declared proxy scopes", async () => {

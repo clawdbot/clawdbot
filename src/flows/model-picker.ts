@@ -9,7 +9,6 @@ import {
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../agents/model-catalog-visibility.js";
-import { loadModelCatalogSnapshot } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { createModelPickerVisibleProviderPredicate } from "../agents/model-picker-visibility.js";
@@ -29,6 +28,7 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { openAIModelCatalogRoutePolicy } from "../agents/openai-model-routes.js";
+import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
@@ -195,7 +195,7 @@ function loadPickerModelCatalog(
         }
         return opts.providerScoped
           ? snapshot([])
-          : loadModelCatalogSnapshot({
+          : loadPreparedModelCatalogSnapshot({
               config: cfg,
             });
       });
@@ -212,7 +212,7 @@ function loadPickerModelCatalog(
       return Promise.resolve(snapshot([]));
     }
   }
-  return loadModelCatalogSnapshot({
+  return loadPreparedModelCatalogSnapshot({
     config: cfg,
   });
 }

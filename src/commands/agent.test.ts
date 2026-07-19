@@ -12,8 +12,9 @@ import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -357,7 +358,7 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
   vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
-  vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
+  vi.mocked(loadPreparedModelCatalog).mockResolvedValueOnce(entries);
 }
 
 function installThinkingTestProviders(channels: Parameters<typeof createTestRegistry>[0] = []) {
@@ -390,7 +391,7 @@ beforeEach(() => {
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
-  vi.mocked(loadModelCatalog).mockResolvedValue([]);
+  vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
@@ -990,7 +991,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(loadModelCatalog).not.toHaveBeenCalled();
+      expect(loadPreparedModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
       const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
         .calls[0]?.[0];

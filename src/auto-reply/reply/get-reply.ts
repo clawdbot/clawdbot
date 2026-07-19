@@ -585,6 +585,8 @@ export async function getReplyFromConfig(
       await applyResetModelOverride({
         cfg,
         agentId,
+        agentDir,
+        workspaceDir,
         resetTriggered,
         bodyStripped,
         sessionCtx,

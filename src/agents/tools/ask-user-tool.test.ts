@@ -252,7 +252,7 @@ describe("ask_user prompt delivery", () => {
     settleAskUserPromptDelivery(reservation.questionId);
     finishWait?.({
       status: "answered",
-      answers: { answers: { deploy_target: { answers: ["Production"] } } },
+      answers: { answers: { deploy_target: ["Production"] } },
     });
     await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
   });

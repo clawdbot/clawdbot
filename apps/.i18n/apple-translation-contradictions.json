@@ -1282,6 +1282,38 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Confirmation needed",
+      "translations": [
+        "التأكيد مطلوب",
+        "يلزم التأكيد"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Confirmation needed",
+      "translations": [
+        "تأیید لازم است",
+        "نیاز به تأیید"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Confirmation needed",
+      "translations": [
+        "ต้องการการยืนยัน",
+        "ต้องยืนยัน"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Confirmation needed",
+      "translations": [
+        "Onay gerekiyor",
+        "Onay gerekli"
+      ]
+    },
+    {
       "locale": "fr",
       "source": "Connect",
       "translations": [
@@ -6194,6 +6226,14 @@
       "translations": [
         "OpenClaw не може визначити поточний дозвіл iOS на геолокацію.",
         "OpenClaw не може визначити поточний дозвіл iOS на доступ до геолокації."
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "OpenClaw unavailable",
+      "translations": [
+        "OpenClaw를 사용할 수 없습니다",
+        "OpenClaw을 사용할 수 없습니다"
       ]
     },
     {

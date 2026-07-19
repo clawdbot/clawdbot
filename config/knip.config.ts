@@ -254,6 +254,9 @@ const rootToolingAndWorkspaceDependencies = [
   // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
+  // Root typecheck/test projects compile @openclaw/net-policy source directly.
+  // Keep its exact dependency available without externalizing it from packaged builds.
+  "ipaddr.js",
   "jscpd",
   "lit",
   "oxlint",

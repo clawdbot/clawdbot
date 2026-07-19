@@ -586,22 +586,34 @@ describe("ExecApprovalManager", () => {
   });
 
   it.each([
-    ["UUID", "12345678-1234-1234-1234-123456789abc"],
-    ["plugin UUID", "plugin:12345678-1234-1234-1234-123456789abc"],
-    ["system-agent UUID", "system-agent:12345678-1234-1234-1234-123456789abc"],
-    ["node id", "node:mac-studio_1.local"],
+    ["two-phase exec UUID", "12345678-1234-1234-1234-123456789abc"],
+    ["plugin approval UUID", "plugin:12345678-1234-1234-1234-123456789abc"],
+    ["system-agent approval UUID", "system-agent:12345678-1234-1234-1234-123456789abc"],
+    ["node system.run replay UUID", "abcdefab-1234-5678-9abc-123456789abc"],
+    ["leading dash", "-approval-123"],
+    ["128-character id", "a".repeat(128)],
   ])("preserves a safe explicit %s byte-for-byte", (_label, id) => {
     const manager = new ExecApprovalManager();
 
     expect(manager.create({ command: "echo exact" }, 60_000, id).id).toBe(id);
   });
 
+  it.each([[undefined], [null], [""]])("generates an id for an empty id sentinel (%s)", (id) => {
+    const manager = new ExecApprovalManager();
+
+    expect(manager.create({ command: "echo generated" }, 60_000, id).id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
   it.each([
-    ["empty value", ""],
     ["URL dot segment", "."],
     ["URL parent segment", ".."],
     ["ANSI escape", "approval-\u001b[31mred"],
+    ["ASCII control", "approval-\u0000hidden"],
     ["Unicode control", "approval-\u202Ehidden"],
+    ["lone surrogate", "approval-\ud800hidden"],
+    ["whitespace", "approval unsafe"],
     ["trailing line feed", "approval-safe\n"],
     ["trailing carriage return", "approval-safe\r"],
     ["trailing line separator", "approval-safe\u2028"],

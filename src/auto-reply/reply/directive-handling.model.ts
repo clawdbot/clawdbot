@@ -7,7 +7,6 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
-  expandModelCatalogProviderWildcards,
   isModelKeyAllowedBySet,
   parseConfiguredModelVisibilityEntries,
 } from "../../agents/model-selection-shared.js";
@@ -269,9 +268,11 @@ function buildModelPickerCatalog(params: {
 
   // Expand wildcard policy entries through the same discovered-catalog path as
   // the main model selection policy.
-  for (const entry of expandModelCatalogProviderWildcards(
-    params.allowedModelCatalog,
-    visibility.providerWildcards,
+  for (const entry of params.allowedModelCatalog.filter((candidate) =>
+    isModelKeyAllowedBySet(
+      params.allowedModelKeys,
+      modelKey(candidate.provider, candidate.id ?? ""),
+    ),
   )) {
     push({
       provider: entry.provider,

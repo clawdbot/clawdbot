@@ -199,7 +199,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog: agentRuntimeMocks.loadModelCatalog,
+    loadPreparedModelCatalog: agentRuntimeMocks.loadModelCatalog,
     resolveDefaultModelForAgent: agentRuntimeMocks.resolveDefaultModelForAgent,
   };
 });
@@ -1070,10 +1070,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(createTelegramPrivateCommandContext());
 
-    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      readOnly: true,
-    });
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        agentDir: expect.any(String),
+        readOnly: true,
+      }),
+    );
+    expect(agentRuntimeMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
+    );
     expectSendMessageCall({
       sendMessage,
       chatId: 100,

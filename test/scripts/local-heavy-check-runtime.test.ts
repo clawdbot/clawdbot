@@ -8,6 +8,7 @@ import {
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
   resolveLocalHeavyCheckEnv,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "../../scripts/lib/local-heavy-check-runtime.mjs";
@@ -40,6 +41,29 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("local-heavy-check-runtime", () => {
+  it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
+    const primaryRoot = createTempDir("openclaw-primary-checkout-");
+    const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+    const commonDir = path.join(primaryRoot, ".git");
+    const localPath = path.resolve(cwd, "node_modules", ".bin", "oxlint");
+    const primaryPath = path.join(primaryRoot, "node_modules", ".bin", "oxlint");
+
+    expect(
+      resolveRepoToolBinPath("oxlint", {
+        cwd,
+        fileExists: (candidate) => candidate === primaryPath,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(primaryPath);
+    expect(
+      resolveRepoToolBinPath("oxlint", {
+        cwd,
+        fileExists: (candidate) => candidate === localPath || candidate === primaryPath,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localPath);
+  });
+
   it("reenables local heavy-check policy for local wrapper entrypoints", () => {
     expect(resolveLocalHeavyCheckEnv({ OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" })).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",

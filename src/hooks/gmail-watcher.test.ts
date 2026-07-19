@@ -32,7 +32,7 @@ vi.mock("../process/exec.js", () => ({
 
 const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
 
-function createGmailConfig(account = "me@example.com") {
+function createGmailConfig(account = "me@example.com", renewEveryMinutes?: number) {
   return {
     hooks: {
       enabled: true,
@@ -41,6 +41,7 @@ function createGmailConfig(account = "me@example.com") {
         account,
         topic: "projects/demo/topics/gmail",
         pushToken: "push-token",
+        renewEveryMinutes,
       },
     },
   } as never;
@@ -277,6 +278,65 @@ describe("startGmailWatcher", () => {
 
       // Only ONE renewal should have fired (the latest interval).
       expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a stalled periodic renewal single-flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const renewal = deferredCommandResult();
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockImplementation(async () => await renewal.promise);
+
+      await startGmailWatcher(createGmailConfig("me@example.com", 1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhileStalled = mocks.runCommandWithTimeout.mock.calls.length;
+      renewal.resolve({ code: 0, stdout: "", stderr: "" });
+      await Promise.resolve();
+
+      expect(callsWhileStalled).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stalled renewal survive stop and suppress a replacement watcher", async () => {
+    vi.useFakeTimers();
+    try {
+      let stalledSignal: AbortSignal | undefined;
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockImplementationOnce(
+          async (_args, options: { signal?: AbortSignal }) =>
+            await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+              stalledSignal = options.signal;
+              options.signal?.addEventListener(
+                "abort",
+                () => resolve({ code: 1, stdout: "", stderr: "aborted" }),
+                { once: true },
+              );
+            }),
+        )
+        .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+
+      await startGmailWatcher(createGmailConfig("old@example.com", 1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(stalledSignal?.aborted).toBe(false);
+
+      await stopGmailWatcher();
+      expect(stalledSignal?.aborted).toBe(true);
+
+      await startGmailWatcher(createGmailConfig("new@example.com", 1));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(4);
+      expect(mocks.runCommandWithTimeout.mock.calls[3]?.[0]).toContain("new@example.com");
     } finally {
       vi.useRealTimers();
     }

@@ -55,6 +55,47 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("rejects malformed model policy refs during config validation", () => {
+    for (const entry of ["", "///", "provider//model", "nogarbageprovider"]) {
+      const result = validateConfigObject({
+        agents: { defaults: { modelPolicy: { allow: [entry] } } },
+      });
+
+      expect(result.ok, entry || "empty entry").toBe(false);
+      if (result.ok) {
+        continue;
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: "agents.defaults.modelPolicy.allow.0" }),
+      );
+    }
+  });
+
+  it("accepts exact refs, nested wildcards, configured aliases, and compat selectors", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            "openrouter/openai/gpt-oss-120b:free": {},
+          },
+          modelPolicy: {
+            allow: [
+              "openai/gpt-5.6-sol",
+              "provider/a/b/c/d/e/f",
+              "clawrouter/anthropic/*",
+              "provider/a/b/c/d/*",
+              "sonnet",
+              "openrouter:free",
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({

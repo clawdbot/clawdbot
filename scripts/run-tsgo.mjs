@@ -7,6 +7,7 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
   resolveLocalHeavyCheckEnv,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
@@ -20,7 +21,7 @@ const { args: finalArgs, env } = applyLocalTsgoPolicy(
   resolveLocalHeavyCheckEnv(process.env),
 );
 
-const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
+const tsgoPath = resolveRepoToolBinPath("tsgo");
 const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
 if (tsBuildInfoFile) {
   fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });

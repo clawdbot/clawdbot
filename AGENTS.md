@@ -167,10 +167,12 @@ Skills own workflows; root owns hard policy and routing.
 - Before handoff/push: prove touched surface. Before landing to `main`: proof matches actual risk. Bounded behavior-neutral refactor: focused tests/checks enough; no issue proof or full/broad suite by default.
 - Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
+- Before landing any PR: read the latest ClawSweeper comment and its `Rank-up moves:` list. Apply each move, or state in the PR why it is skipped; never merge past them silently. No `@clawsweeper re-review` round-trip is required — the moves are already in the existing comment; re-review only refreshes the rating.
 - Autoreview uncommitted changes: `--mode uncommitted`; no `dirty` mode.
 - Autoreview staged/uncommitted diff: use `--mode uncommitted`; no `staged` mode.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
+- Landing PR onto red `main` (unrelated breakage blocks the merge gate): fix the breakage in the same landing PR; note it in the PR body; never land onto red or bypass the gate. Prefer the smallest correct fix (e.g. register a missing source file, add a dropped export).
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.
 - Prompt snapshots: CI truth is Linux Node 24. If macOS local passes but CI drifts, reproduce/generate in Linux before rerun.
 

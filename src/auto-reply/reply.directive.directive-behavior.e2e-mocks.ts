@@ -104,8 +104,8 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 
 vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {

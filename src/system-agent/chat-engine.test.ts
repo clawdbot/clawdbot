@@ -1843,6 +1843,60 @@ describe("SystemAgentChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(true);
   });
 
+  it("rebinds the live conversation after changing its default model", async () => {
+    useTempStateDir();
+    const baseConfig = structuredClone(sharedVerifiedInferenceConfig);
+    const changedConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        list: baseConfig.agents.list.map((agent) => ({ ...agent, model: "openai/gpt-5.6-sol" })),
+      },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    const reboundInference = await createAmbientVerifiedBinding(changedConfig);
+    let currentConfig: OpenClawConfig = baseConfig;
+    const executeOperation = vi.fn(async (_operation, runtime, options) => {
+      currentConfig = changedConfig;
+      options.onVerifiedInferenceChanged?.(reboundInference);
+      runtime.log("Default model: openai/gpt-5.6-sol");
+      return { applied: true };
+    });
+    const runAgentTurn = vi.fn(async (params) => {
+      if (currentConfig === baseConfig) {
+        return null;
+      }
+      return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
+    });
+    const engine = new SystemAgentChatEngine({
+      yes: true,
+      verifiedInference,
+      executeOperation,
+      runAgentTurn,
+      planWithAssistant: async () => ({
+        reply: "Switching models.",
+        command: "set default model openai/gpt-5.6-sol",
+        modelLabel: "openai/gpt-5.5",
+      }),
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+
+    const changed = await engine.handle("switch models");
+    const next = await engine.handle("which model is active now?");
+
+    expect(changed.text).toContain("Default model: openai/gpt-5.6-sol");
+    expect(next.text).toBe("using openai/gpt-5.6-sol");
+    expect(executeOperation).toHaveBeenCalledOnce();
+    expect(runAgentTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ verifiedInference: reboundInference }),
+      }),
+    );
+  });
+
   it("keeps a pending proposal when the user asks a question instead of yes/no", async () => {
     const planner = vi.fn(async (_params: { input: string; pendingOperation?: string }) => ({
       reply: "A workspace is where your agent keeps its files.",

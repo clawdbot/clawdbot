@@ -16304,6 +16304,11 @@
       "translated": "OpenClaw non disponibile"
     },
     {
+      "id": "native.apple.f4adf2762402e92a",
+      "source": "Confirmation needed",
+      "translated": "Conferma necessaria"
+    },
+    {
       "id": "native.apple.f703391677039fa3",
       "source": "iOS Speech + TTS",
       "translated": "Riconoscimento vocale iOS + TTS"
@@ -16367,6 +16372,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "Aggiornamento di OpenClaw"
+    },
+    {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "Conferma necessaria"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw non disponibile"
     },
     {
       "id": "native.apple.8a944b06087fe8ef",

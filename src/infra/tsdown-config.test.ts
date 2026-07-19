@@ -82,11 +82,8 @@ function readGatewayRunLoopSource(): string {
   return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
-function readAgentModelDiscoveryCacheSource(): string {
-  return readFileSync(
-    new URL("../agents/embedded-agent-runner/model-discovery-cache.ts", import.meta.url),
-    "utf8",
-  );
+function readAgentAuthDiscoverySource(): string {
+  return readFileSync(new URL("../agents/agent-auth-discovery.ts", import.meta.url), "utf8");
 }
 
 describe("tsdown config", () => {
@@ -174,12 +171,12 @@ describe("tsdown config", () => {
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
-      ...readAgentModelDiscoveryCacheSource().matchAll(
+      ...readAgentAuthDiscoverySource().matchAll(
         /from ["']([^"']*synthetic-auth\.runtime\.js)["']/gu,
       ),
     ].map((match) => match[1]);
 
-    expect(importSpecifiers).toEqual(["../../plugins/synthetic-auth.runtime.js"]);
+    expect(importSpecifiers).toEqual(["../plugins/synthetic-auth.runtime.js"]);
     expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
       "src/plugins/synthetic-auth.runtime.ts",
     );

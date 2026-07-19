@@ -55,13 +55,38 @@ vi.mock("../model-suppression.js", () => ({
   },
 }));
 
+vi.mock("../prepared-model-runtime.js", async () => {
+  const discovery = await import("../agent-model-discovery.js");
+  const createSnapshot = (input: {
+    agentDir: string;
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+  }) => ({
+    createStores: () => {
+      const authStorage = discovery.discoverAuthStorage(input.agentDir);
+      const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
+        ...(input.config ? { config: input.config } : {}),
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      });
+      if (!("fork" in modelRegistry)) {
+        Object.assign(modelRegistry, { fork: () => modelRegistry });
+      }
+      return { authStorage, modelRegistry };
+    },
+  });
+  return {
+    getPreparedModelRuntimeSnapshot: createSnapshot,
+    loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
+      createSnapshot(input),
+  };
+});
+
 vi.mock("../agent-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.test-support.js";
 import {
   expectResolvedForwardCompatFallbackResult,
   expectUnknownModelErrorResult,
@@ -76,7 +101,6 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
-  resetModelDiscoveryCacheForTest();
   resetMockDiscoverModels(discoverModels);
 });
 

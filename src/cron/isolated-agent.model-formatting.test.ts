@@ -36,7 +36,7 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "claude-opus-4-6",
   DEFAULT_PROVIDER: "anthropic",
   getModelRefStatus: getModelRefStatusMock,
-  loadModelCatalog: loadModelCatalogMock,
+  loadPreparedModelCatalog: loadModelCatalogMock,
   normalizeModelSelection: normalizeModelSelectionMock,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
@@ -138,12 +138,15 @@ async function selectModel(options: SelectModelOptions = {}) {
   const cfg = options.cfg ?? {};
   return resolveCronModelSelection({
     cfg: cfg as never,
+    catalogConfig: cfg as never,
     cfgWithAgentDefaults: (options.cfgWithAgentDefaults ?? cfg) as never,
     agentConfigOverride: options.agentConfigOverride,
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
     isGmailHook: options.isGmailHook ?? false,
     agentId: options.agentId,
+    agentDir: "/tmp/agent",
+    workspaceDir: "/tmp/workspace",
   });
 }
 

@@ -338,14 +338,14 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
-vi.mock("../../agents/model-catalog.js", () => {
+vi.mock("../../agents/prepared-model-catalog.js", () => {
   const loadModelCatalog = vi.fn(async () => [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
   ]);
   return {
-    loadModelCatalog,
-    loadModelCatalogSnapshot: async () => {
+    loadPreparedModelCatalog: loadModelCatalog,
+    loadPreparedModelCatalogSnapshot: async () => {
       const entries = await loadModelCatalog();
       return { entries, routeVariants: entries };
     },

@@ -25,7 +25,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataRegistryView,
+  PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.types.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   clearProviderRuntimePluginCacheForTest,
@@ -187,13 +190,18 @@ function resolveProviderPluginsForCatalogHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): ProviderPlugin[] {
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const workspaceDir =
+    params.workspaceDir ??
+    params.metadataSnapshot?.workspaceDir ??
+    getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
   const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
     env,
+    metadataSnapshot: params.metadataSnapshot,
   });
   if (onlyPluginIds.length === 0) {
     return [];
@@ -203,6 +211,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
     workspaceDir,
     env,
     onlyPluginIds,
+    pluginMetadataSnapshot: params.metadataSnapshot,
   });
 }
 
@@ -1111,6 +1120,7 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
   context: ProviderAugmentModelCatalogContext;
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];

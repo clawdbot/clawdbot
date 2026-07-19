@@ -4,6 +4,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Agent-owned runtime handle carried opaquely through media provider requests. */
+type MediaPreparedModelRuntime = Readonly<{
+  agentDir: string;
+  workspaceDir?: string;
+  config: OpenClawConfig;
+  createStores: () => unknown;
+}>;
+
 type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
@@ -148,8 +156,10 @@ export type ImageDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
   model: string;
   provider: string;
@@ -171,8 +181,10 @@ export type ImagesDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
 };
 

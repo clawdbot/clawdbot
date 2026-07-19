@@ -45,6 +45,34 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar viewer presence", () => {
+  it("renders the self user's Gravatar in the footer identity chip", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    sidebar.connected = true;
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          user: { id: "00-self", email: "test@example.com", name: "Self User" },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      const avatar = sidebar.querySelector<HTMLImageElement>(
+        ".sidebar-footer-bar__identity openclaw-viewer-avatar img",
+      );
+      expect(avatar?.src).toBe(
+        "https://gravatar.com/avatar/973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b?d=404&s=128",
+      );
+    });
+  });
+
   it("groups identified viewers for session rows and the footer", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);

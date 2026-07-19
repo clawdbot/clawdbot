@@ -178,7 +178,7 @@ vi.mock("./run-context.runtime.js", () => ({
 }));
 
 vi.mock("./run-model-catalog.runtime.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
@@ -230,7 +230,7 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
 vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
-  loadModelCatalog: loadModelCatalogMock,
+  loadPreparedModelCatalog: loadModelCatalogMock,
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRef: resolveAllowedModelRefMock,

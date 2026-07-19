@@ -1427,6 +1427,7 @@
                   "tools/goal",
                   "tools/steer",
                   "tools/subagents",
+                  "tools/swarm",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"

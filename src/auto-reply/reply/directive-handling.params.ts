@@ -26,7 +26,7 @@ type HandleDirectiveOnlyCoreParams = {
   policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+    ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
   >;
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
@@ -68,7 +68,7 @@ export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams 
     resolveThinkingCatalog: () => Promise<ModelCatalogEntry[] | undefined>;
     allowedModelKeys: Set<string>;
     allowedModelCatalog: Awaited<
-      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+      ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
     >;
     policyAliasIndex?: ModelAliasIndex;
     resetModelOverride: boolean;

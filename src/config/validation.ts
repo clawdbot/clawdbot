@@ -54,6 +54,11 @@ import {
 } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import {
+  isModelPolicyCompatSelector,
+  isValidExactModelPolicyRef,
+  parseModelPolicyWildcardRef,
+} from "./model-policy-ref.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import {
@@ -1047,6 +1052,61 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const defaultModels = config.agents?.defaults?.models;
+  const collectAliases = (...modelMaps: Array<typeof defaultModels | undefined>): Set<string> => {
+    const aliases = new Set<string>();
+    for (const models of modelMaps) {
+      for (const entry of Object.values(models ?? {})) {
+        const alias = normalizeLowercaseStringOrEmpty(entry?.alias);
+        if (alias) {
+          aliases.add(alias);
+        }
+      }
+    }
+    return aliases;
+  };
+  const validateRefs = (
+    refs: readonly string[] | undefined,
+    configPath: string,
+    aliases: Set<string>,
+  ) => {
+    for (const [index, raw] of (refs ?? []).entries()) {
+      const trimmed = raw.trim();
+      if (
+        aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+        isModelPolicyCompatSelector(trimmed) ||
+        isValidExactModelPolicyRef(trimmed) ||
+        parseModelPolicyWildcardRef(trimmed)
+      ) {
+        continue;
+      }
+      issues.push({
+        path: `${configPath}.${index}`,
+        message:
+          `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".',
+      });
+    }
+  };
+
+  const defaultAliases = collectAliases(defaultModels);
+  validateRefs(
+    config.agents?.defaults?.modelPolicy?.allow,
+    "agents.defaults.modelPolicy.allow",
+    defaultAliases,
+  );
+  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
+    validateRefs(
+      agent.modelPolicy?.allow,
+      `agents.list.${index}.modelPolicy.allow`,
+      collectAliases(defaultModels, agent.models),
+    );
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -1110,6 +1170,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
   if (gatewayTailscaleAuthIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleAuthIssues };
+  }
+  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
+  if (modelPolicyAllowIssues.length > 0) {
+    return { ok: false, issues: modelPolicyAllowIssues };
   }
   return {
     ok: true,

@@ -88,6 +88,7 @@ export type AgentCapability = {
   ensureList: () => Promise<AgentsListResult | null>;
   refreshList: () => Promise<AgentsListResult | null>;
   files: (agentId: string | null | undefined) => AgentFilesStatus;
+  invalidateFiles: (agentIds: readonly (string | null | undefined)[]) => void;
   ensureFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
   refreshFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
   subscribe: (listener: (state: AgentCapabilityState) => void) => () => void;
@@ -416,6 +417,20 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
       return normalized
         ? (files.get(normalized) ?? emptyAgentFilesStatus())
         : emptyAgentFilesStatus();
+    },
+    invalidateFiles(agentIds) {
+      let changed = false;
+      const normalizedIds = new Set(
+        agentIds.map(normalizeAgentId).filter((agentId): agentId is string => agentId !== null),
+      );
+      for (const agentId of normalizedIds) {
+        changed = files.delete(agentId) || changed;
+        changed = fileRequests.delete(agentId) || changed;
+        changed = fileRequestOwners.delete(agentId) || changed;
+      }
+      if (changed) {
+        publish();
+      }
     },
     ensureFiles: (agentId) => loadFiles(agentId, false),
     refreshFiles: (agentId) => loadFiles(agentId, true),

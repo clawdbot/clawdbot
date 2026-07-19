@@ -57,6 +57,7 @@ const EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN = /[^A-Za-z0-9._:-]/;
 
 /** Typed creation failure for an explicit approval id outside the shared safe format. */
 export class InvalidApprovalIdError extends Error {
+  readonly code = "EXEC_APPROVAL_ID_INVALID";
   readonly reason = "INVALID_APPROVAL_ID";
 
   constructor() {
@@ -237,11 +238,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (expiresAtMs === undefined) {
       throw new Error("approval expiry is unavailable");
     }
-    const hasExplicitId = id !== null && id !== undefined;
+    // Empty remains the caller-facing sentinel for manager-generated ids.
+    const hasExplicitId = id !== null && id !== undefined && id.length > 0;
     if (
       hasExplicitId &&
-      (id.length === 0 ||
-        id.length > 128 ||
+      (id.length > 128 ||
         id === "." ||
         id === ".." ||
         EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN.test(id))

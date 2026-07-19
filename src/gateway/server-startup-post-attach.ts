@@ -36,8 +36,6 @@ import {
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
-const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
-const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
@@ -525,21 +523,6 @@ function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlug
   return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
 }
 
-function isConfiguredCliBackendPrimary(params: {
-  cfg: OpenClawConfig;
-  explicitPrimary: string;
-  normalizeProviderId: (provider: string) => string;
-}): boolean {
-  const slashIndex = params.explicitPrimary.indexOf("/");
-  if (slashIndex <= 0) {
-    return false;
-  }
-  const provider = params.normalizeProviderId(params.explicitPrimary.slice(0, slashIndex));
-  return Object.keys(params.cfg.agents?.defaults?.cliBackends ?? {}).some(
-    (backend) => params.normalizeProviderId(backend) === provider,
-  );
-}
-
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await loadInternalHooksModule();
   return hasInternalHookListeners("gateway", "startup");
@@ -577,108 +560,34 @@ async function prewarmConfiguredPrimaryModel(params: {
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
-  const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
-  const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
-  if (!explicitPrimary) {
-    return;
-  }
-  const { normalizeProviderId } = await import("@openclaw/model-catalog-core/provider-id");
-  if (
-    isConfiguredCliBackendPrimary({
-      cfg: params.cfg,
-      explicitPrimary,
-      normalizeProviderId,
-    })
-  ) {
-    return;
-  }
-  const [
-    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
-    { DEFAULT_MODEL, DEFAULT_PROVIDER },
-    { isCliProvider, resolveConfiguredModelRef },
-  ] = await Promise.all([
-    import("../agents/agent-scope.js"),
-    loadAgentDefaultsModule(),
-    loadAgentModelSelectionModule(),
-  ]);
-  const { provider, model } = resolveConfiguredModelRef({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  if (isCliProvider(provider, params.cfg)) {
-    return;
-  }
-  // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
-  const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
-  const agentDir = resolveDefaultAgentDir(params.cfg);
-  const workspaceDir =
-    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
-  try {
-    await ensureOpenClawModelsJson(params.cfg, agentDir, {
-      workspaceDir,
-      providerDiscoveryProviderIds: [provider],
-      providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
-      providerDiscoveryEntriesOnly: true,
-    });
-  } catch (err) {
-    params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
-  }
+  await publishConfiguredModelRuntimeSnapshots(params);
 }
 
-async function prewarmConfiguredPrimaryModelWithTimeout(
+async function publishConfiguredModelRuntimeSnapshots(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  log: { warn: (msg: string) => void };
+}): Promise<void> {
+  const { refreshPreparedModelRuntimeSnapshots } =
+    await import("../agents/prepared-model-runtime.js");
+  await refreshPreparedModelRuntimeSnapshots(params.cfg, {
+    gatewayLifecycle: true,
+    ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
+  });
+}
+
+async function publishStartupModelRuntime(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
-    timeoutMs?: number;
+    log: { warn: (msg: string) => void };
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
 ): Promise<void> {
-  let settled = false;
-  const warmup = prewarm(params)
-    .catch((err: unknown) => {
-      params.log.warn(`startup model warmup failed: ${String(err)}`);
-    })
-    .finally(() => {
-      settled = true;
-    });
-  const timeout = sleep(params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS, undefined, {
-    ref: false,
-  }).then(() => {
-    if (!settled) {
-      params.log.debug?.(
-        `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
-      );
-    }
-  });
-  await Promise.race([warmup, timeout]);
-}
-
-function schedulePrimaryModelPrewarm(
-  params: {
-    cfg: OpenClawConfig;
-    workspaceDir?: string;
-    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
-    startupTrace?: GatewayStartupTrace;
-  },
-  prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
-): void {
-  if (shouldSkipStartupModelPrewarm()) {
-    return;
-  }
-  void measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
-    prewarmConfiguredPrimaryModelWithTimeout(
-      {
-        cfg: params.cfg,
-        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-        log: params.log,
-      },
-      prewarm,
-    ),
-  ).catch((err: unknown) => {
-    params.log.warn(`startup model warmup failed: ${String(err)}`);
-  });
+  const publication = shouldSkipStartupModelPrewarm()
+    ? publishConfiguredModelRuntimeSnapshots
+    : prewarm;
+  await publication(params);
 }
 
 /** Start post-ready sidecars such as channels, hooks, plugin services, and cleanup tasks. */
@@ -741,16 +650,17 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
-  // Agent RPC remains available when transport startup is disabled, so its model metadata must
-  // warm independently instead of leaving the first headless request on the cold path.
-  schedulePrimaryModelPrewarm(
-    {
-      cfg: params.cfg,
-      workspaceDir: params.defaultWorkspaceDir,
-      log: params.log,
-      startupTrace: params.startupTrace,
-    },
-    params.prewarmPrimaryModel,
+  // Agent RPC remains available when transports are disabled. Publish its mandatory lifecycle
+  // owner before accepting work so request paths can only observe pending or ready snapshots.
+  await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
+    publishStartupModelRuntime(
+      {
+        cfg: params.cfg,
+        workspaceDir: params.defaultWorkspaceDir,
+        log: params.log,
+      },
+      params.prewarmPrimaryModel,
+    ),
   );
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
@@ -941,11 +851,11 @@ export async function startGatewaySidecars(params: {
         run: async (isStopped) => {
           const [
             { DEFAULT_MODEL, DEFAULT_PROVIDER },
-            { loadModelCatalog },
+            { loadPreparedModelCatalog },
             { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
           ] = await Promise.all([
             loadAgentDefaultsModule(),
-            import("../agents/model-catalog.js"),
+            import("../agents/prepared-model-catalog.js"),
             loadAgentModelSelectionModule(),
           ]);
           if (isStopped()) {
@@ -962,7 +872,7 @@ export async function startGatewaySidecars(params: {
                 defaultProvider: DEFAULT_PROVIDER,
                 defaultModel: DEFAULT_MODEL,
               });
-            const catalog = await loadModelCatalog({ config: params.cfg });
+            const catalog = await loadPreparedModelCatalog({ config: params.cfg });
             const status = getModelRefStatus({
               cfg: params.cfg,
               catalog,
@@ -1463,12 +1373,12 @@ export const testing = {
   providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,
-  prewarmConfiguredPrimaryModelWithTimeout,
+  publishConfiguredModelRuntimeSnapshots,
+  publishStartupModelRuntime,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
   cleanupStaleSessionLocks,
   scheduleProviderAuthStatePrewarm,
-  schedulePrimaryModelPrewarm,
   scheduleRestartSentinelWakeAfterReady,
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,

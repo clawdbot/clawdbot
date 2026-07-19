@@ -247,9 +247,9 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentModelFallbacksOverride: () => [],
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog:
-    mocks.loadModelCatalog as typeof import("../agents/model-catalog.js").loadModelCatalog,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog:
+    mocks.loadModelCatalog as typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog,
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({

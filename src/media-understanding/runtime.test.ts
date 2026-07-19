@@ -175,6 +175,30 @@ describe("media-understanding runtime", () => {
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the agent directory for agent-scoped file media", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability: "audio", outcome: "skipped", attachments: [] },
+    });
+
+    await runMediaUnderstandingFile({
+      capability: "audio",
+      filePath: "/tmp/sample.ogg",
+      mime: "audio/ogg",
+      cfg: {
+        agents: { list: [{ id: "worker", agentDir: "/tmp/worker-agent" }] },
+      } as OpenClawConfig,
+      agentId: "worker",
+    });
+
+    expect(mocks.runCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
+    );
+  });
+
   it("returns the matching capability output", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",
@@ -749,6 +773,26 @@ describe("media-understanding runtime", () => {
     expect(describeImageOptions?.model).toBe("vision-v1");
     expect(describeImageOptions?.prompt).toBe("Describe the sample.");
     expect(describeImageOptions?.agentDir).toBe("/tmp/agent");
+  });
+
+  it("resolves the agent directory when direct image description only names an agent", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image-bytes") });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      provider: "gemini",
+      model: "vision-v1",
+      prompt: "Describe the sample.",
+      cfg: {
+        agents: { list: [{ id: "worker", agentDir: "/tmp/worker-agent" }] },
+      } as OpenClawConfig,
+      agentId: "worker",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
+    );
   });
 
   it("routes structured extraction to a provider by id and model", async () => {

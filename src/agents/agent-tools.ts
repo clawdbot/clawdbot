@@ -77,6 +77,7 @@ import {
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
@@ -326,6 +327,7 @@ type OpenClawCodingToolsOptions = {
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
   agentDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
@@ -982,6 +984,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentGroupSpace: options?.groupSpace ?? null,
             agentMemberRoleIds: options?.memberRoleIds,
             agentDir: options?.agentDir,
+            preparedModelRuntime: options?.preparedModelRuntime,
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,

@@ -56,6 +56,28 @@ describe("renderIdentitySection", () => {
     expect(container.textContent).toContain("ada@example.test, ada@work.test");
   });
 
+  it("uses the linked email fallback when the profile has no upload", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderIdentitySection(
+        createProps({
+          avatarUrl: null,
+          profile: { ...PROFILE, emails: ["profile-preview@example.test"], hasAvatar: false },
+        }),
+      ),
+      container,
+    );
+    const avatar = container.querySelector<HTMLElement>("openclaw-viewer-avatar") as
+      | (HTMLElement & { updateComplete: Promise<unknown> })
+      | null;
+
+    await vi.waitFor(() => expect(avatar?.querySelector("img")).not.toBeNull());
+    expect(avatar?.querySelector("img")?.getAttribute("src")).toMatch(
+      /^https:\/\/gravatar\.com\/avatar\/[a-f0-9]{64}\?d=404&s=128$/u,
+    );
+  });
+
   it("edits and saves the display name with the standard input pattern", () => {
     const onDisplayNameInput = vi.fn();
     const onSaveDisplayName = vi.fn();

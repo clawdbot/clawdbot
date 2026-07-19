@@ -9,9 +9,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { OpenClawContinuationToolOptions } from "./openclaw-tools.continuation.js";
+import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -39,7 +39,6 @@ export type CreateOpenClawToolsOptions = {
   nativeChannelId?: string;
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
-  agentDir?: string;
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
   sandboxFsBridge?: SandboxFsBridge;
@@ -72,20 +71,12 @@ export type CreateOpenClawToolsOptions = {
   hasRepliedRef?: { value: boolean };
   /** Fail closed instead of posting same-channel thread-originated replies at the root. */
   sameChannelThreadRequired?: boolean;
-  /** If true, the model has native vision capability */
-  modelHasVision?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
-  /** Active model provider for provider-specific tool gating. */
-  modelProvider?: string;
-  /** Active model id for provider/model-specific tool gating. */
-  modelId?: string;
   /** Internal review-run restrictions and proposal provenance. */
   skillWorkshop?: SkillWorkshopRunOptions;
   /** If true, nodes action="invoke" can call media-returning commands directly. */
   allowMediaInvokeCommands?: boolean;
-  /** Explicit agent ID override for cron/hook sessions. */
-  requesterAgentIdOverride?: string;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
   /** Server-owned operation-local origin for conversation-read visibility policy. */
@@ -119,8 +110,6 @@ export type CreateOpenClawToolsOptions = {
   recordToolPrepStage?: (name: string) => void;
   /** Trusted sender id from inbound context (not tool args). */
   requesterSenderId?: string | null;
-  /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
-  authProfileStore?: AuthProfileStore;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
@@ -144,4 +133,5 @@ export type CreateOpenClawToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
 } & SpawnedToolContext &
+  ModelAwareToolContext &
   OpenClawContinuationToolOptions;

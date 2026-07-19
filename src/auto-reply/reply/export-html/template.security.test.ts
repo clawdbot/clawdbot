@@ -792,3 +792,95 @@ describe("export html security hardening", () => {
     }
   });
 });
+
+describe("export html tool call previews", () => {
+  it("truncates tool previews without splitting emoji", async () => {
+    const bashPrefix = "a".repeat(49);
+    const genericPrefix = "b".repeat(29);
+    const bashExecutionPrefix = "c".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-tool-preview-emoji", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "run tools" },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-bash",
+                name: "bash",
+                arguments: { command: `${bashPrefix}😀tail` },
+              },
+              {
+                type: "toolCall",
+                id: "call-custom",
+                name: "custom",
+                arguments: { value: `${genericPrefix}😀tail` },
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-bash",
+            content: "bash output",
+          },
+        },
+        {
+          id: "4",
+          parentId: "3",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-custom",
+            content: "custom output",
+          },
+        },
+        {
+          id: "5",
+          parentId: "4",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "bashExecution",
+            command: `${bashExecutionPrefix}😀tail`,
+          },
+        },
+      ],
+      leafId: "5",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const previews = ["3", "4", "5"].map((id) =>
+      requireElement(
+        document.querySelector(`.tree-node[data-id="${id}"] .tree-content`),
+        `tool preview ${id} missing`,
+      ).textContent,
+    );
+
+    expect(previews).toEqual([
+      `[bash: ${bashPrefix}...]`,
+      `[custom: {"value":"${genericPrefix}...]`,
+      `[bash]: ${bashExecutionPrefix}...`,
+    ]);
+  });
+});

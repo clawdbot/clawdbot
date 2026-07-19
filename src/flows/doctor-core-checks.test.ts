@@ -28,8 +28,8 @@ const mocks = vi.hoisted(() => ({
   extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: mocks.loadModelCatalog,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../commands/doctor-gateway-services.js", () => ({

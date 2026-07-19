@@ -4,11 +4,16 @@ import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.j
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
-import { loadModelCatalog, resetModelCatalogCache } from "../agents/model-catalog.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../agents/model-provider-auth.js";
+import {
+  markPreparedModelRuntimeSnapshotsStale,
+  rejectPendingPreparedModelRuntimeReplacement,
+  refreshPreparedModelRuntimeSnapshots,
+  type PreparedModelRuntimeReplacementGateId,
+} from "../agents/prepared-model-runtime.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -68,7 +73,6 @@ import { resolveHooksConfig } from "./hooks.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
-import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
 import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
 import {
   type GatewayChannelManager,
@@ -295,9 +299,7 @@ function restoreCanonicalSecretRefs(
 }
 
 function resetPreparedModelRuntimeStateForHotReload(): void {
-  resetModelCatalogCache();
   clearCurrentProviderAuthState();
-  markGatewayModelCatalogStaleForReload();
 }
 
 function assertIrreversibleReloadPlanHasRecoveryOwner(
@@ -608,6 +610,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const isPluginReloadAborted = () =>
       pluginReloadAborted || !isTransactionCurrent() || isLifecycleReloadAborted();
     let runtimeCommitted = false;
+    let preparedModelRuntimeReplacementGateId: PreparedModelRuntimeReplacementGateId | undefined;
     let recoveryRestartScheduled = false;
     const laneConcurrency = resolveGatewayLaneConcurrency(nextConfig);
     const candidateEnv = publication?.runtimeEnv ?? process.env;
@@ -639,6 +642,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
+        // Config, plugin hooks, and prepared stores publish as one generation. Synchronously
+        // retire the prior stores at the commit edge so no request can mix generations.
+        preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
+          "prepared model runtime owner is stale before config publication",
+          { waitForReplacement: true },
+        );
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
         // the final synchronous commit edge, alongside the accepted state.
@@ -692,6 +701,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     };
     const scheduleRecoveryRestart = (surface: string, err?: unknown) => {
       const detail = err === undefined ? "" : `: ${formatErrorMessage(err)}`;
+      if (runtimeCommitted) {
+        rejectPendingPreparedModelRuntimeReplacement(
+          preparedModelRuntimeReplacementGateId,
+          err ?? new Error(`prepared model runtime replacement stopped during ${surface}`),
+        );
+      }
       if (restartRetryStopped) {
         params.logReload.warn(`${surface} failed during gateway shutdown${detail}`);
         return;
@@ -920,7 +935,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (pluginReloadAborted) {
       params.logChannels.info("channel restart cancelled by config supersession or restart");
-      throw new GatewayHotReloadCancelledError();
+      const error = new GatewayHotReloadCancelledError();
+      if (runtimeCommitted) {
+        rejectPendingPreparedModelRuntimeReplacement(preparedModelRuntimeReplacementGateId, error);
+      }
+      throw error;
     }
     try {
       await commitRuntime();
@@ -929,6 +948,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         throw err;
       }
       scheduleRecoveryRestart("runtime commit", err);
+      return;
+    }
+
+    try {
+      await refreshPreparedModelRuntimeSnapshots(nextConfig);
+    } catch (err) {
+      scheduleRecoveryRestart("prepared model runtime reload", err);
       return;
     }
 
@@ -1139,10 +1165,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       } catch (err) {
         scheduleRecoveryRestart("context window cache reload", err);
       }
-      // Provider discovery is best-effort; a slow hook must not hold hot reload open.
-      void loadModelCatalog({ config: nextConfig }).catch((err: unknown) => {
-        params.logReload.warn(`model catalog rewarm failed: ${String(err)}`);
-      });
     }
     void warmCurrentProviderAuthStateOffMainThread(nextConfig, {
       isCancelled: () => !isTransactionCurrent(),
@@ -1151,7 +1173,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
       }
     });
-
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -8,6 +7,11 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -25,17 +29,28 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("SQLite historical session disk budget", () => {
+  let testState: OpenClawTestState;
   let tempDir: string;
   let storePath: string;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-history-budget-"));
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      prefix: "openclaw-session-history-budget-",
+      layout: "state-only",
+    });
+    tempDir = testState.sessionsDir();
+    fs.mkdirSync(tempDir, { recursive: true });
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      maintenance: { maxDiskBytes: null, highWaterBytes: null },
+    });
     closeOpenClawAgentDatabasesForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await testState.cleanup();
   });
 
   it("evicts the oldest historical session and stops after reaching high water", async () => {
@@ -291,41 +306,47 @@ function createTrajectoryEvent(sessionId: string, sessionKey: string): Trajector
 
 describe("kickSessionHistoryDiskBudgetMaintenance", () => {
   it("throttles repeat kicks and skips warn mode entirely", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-history-kick-"));
-    const storePath = path.join(tempDir, "sessions.json");
-    const maintenance = {
-      mode: "warn",
-      maxDiskBytes: 1,
-      highWaterBytes: 0,
-    } as never;
-    // Warn mode must not schedule background enforcement at all.
-    kickSessionHistoryDiskBudgetMaintenance({
-      storePath,
-      maintenanceConfig: maintenance,
-    });
-    const enforceMaintenance = {
-      mode: "enforce",
-      maxDiskBytes: Number.MAX_SAFE_INTEGER,
-      highWaterBytes: Number.MAX_SAFE_INTEGER - 1,
-    } as never;
-    const first = Date.now();
-    kickSessionHistoryDiskBudgetMaintenance({
-      storePath,
-      maintenanceConfig: enforceMaintenance,
-      now: first,
-    });
-    // Second kick inside the throttle window is a no-op (single-slot state).
-    kickSessionHistoryDiskBudgetMaintenance({
-      storePath,
-      maintenanceConfig: enforceMaintenance,
-      now: first + 1_000,
-    });
-    // Give the fire-and-forget pass a tick to settle; an under-budget store
-    // must leave every session untouched.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    closeOpenClawAgentDatabasesForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-history-kick-", layout: "state-only" },
+      async (testState) => {
+        const tempDir = testState.sessionsDir();
+        fs.mkdirSync(tempDir, { recursive: true });
+        const storePath = path.join(tempDir, "sessions.json");
+        const maintenance = {
+          mode: "warn",
+          maxDiskBytes: 1,
+          highWaterBytes: 0,
+        } as never;
+        // Warn mode must not schedule background enforcement at all.
+        kickSessionHistoryDiskBudgetMaintenance({
+          storePath,
+          maintenanceConfig: maintenance,
+        });
+        const enforceMaintenance = {
+          mode: "enforce",
+          maxDiskBytes: Number.MAX_SAFE_INTEGER,
+          highWaterBytes: Number.MAX_SAFE_INTEGER - 1,
+        } as never;
+        const first = Date.now();
+        kickSessionHistoryDiskBudgetMaintenance({
+          storePath,
+          maintenanceConfig: enforceMaintenance,
+          now: first,
+        });
+        // Second kick inside the throttle window is a no-op (single-slot state).
+        kickSessionHistoryDiskBudgetMaintenance({
+          storePath,
+          maintenanceConfig: enforceMaintenance,
+          now: first + 1_000,
+        });
+        // A queued no-op pass is a deterministic barrier behind the fire-and-forget kick.
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "warn",
+          maintenance: { maxDiskBytes: null, highWaterBytes: null },
+        });
+        closeOpenClawAgentDatabasesForTest();
+      },
+    );
   });
 });
