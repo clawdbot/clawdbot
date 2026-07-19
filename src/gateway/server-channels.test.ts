@@ -2974,6 +2974,44 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("lets manual stops cancel pending hot-reload handoffs before paired starts", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.restartPending,
+    ).toBe(true);
+
+    await manager.stopChannel("discord", "account-a");
+
+    let snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.restartPending).not.toBe(true);
+    expect(manager.isManuallyStopped("discord", "account-a")).toBe(true);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+    snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+  });
+
   it("does not mark inactive listed accounts as restart candidates during hot reload", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
