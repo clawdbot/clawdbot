@@ -160,6 +160,27 @@ describe("ClawHub published artifact verification", () => {
     expect(source).toContain("AbortSignal.timeout(timeoutMs)");
   });
 
+  it("supports the longer retry horizon required by asynchronous package promotion", async () => {
+    const artifact = new TextEncoder().encode("exact oidc tgz bytes");
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ package: { tags: { beta: "2026.7.1-beta.2" } } }),
+    );
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      verifyPublishedClawHubPackage({
+        expectedArtifactDir: writeExpectedArtifact(artifact),
+        packageName: "@openclaw/meta",
+        packageVersion: "2026.7.1-beta.3",
+        publishTag: "beta",
+        registry: "https://clawhub.example",
+        retryOptions: { fetchImpl, attempts: 13, delayMs: 1, sleep },
+      }),
+    ).rejects.toThrow("did not stabilize after 13 attempts");
+    expect(fetchImpl).toHaveBeenCalledTimes(13);
+    expect(sleep).toHaveBeenCalledTimes(12);
+  });
+
   it("verifies normal OIDC publication against the exact prepared artifact bytes", async () => {
     const artifact = new TextEncoder().encode("exact oidc tgz bytes");
     const fetchImpl = registryFetch(artifact);
