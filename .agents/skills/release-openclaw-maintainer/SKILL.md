@@ -917,9 +917,11 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `release/YYYY.M.PATCH`. Tideclaw alpha publish runs remain on their matching
   alpha branch. Reuse the successful preflight for that exact release SHA.
 - Prerelease core npm and the draft GitHub release start concurrently with
-  plugin npm. Plugin npm or ClawHub failure leaves a `beta-live` release plus an
-  asynchronous ecosystem repair; it never blocks beta core publication. Stable
-  and plugin-only publication keep plugin npm and ClawHub blocking.
+  plugin npm. Default beta hands the ordered plugin npm-to-ClawHub work to
+  `Plugin Release Continue`; plugin npm or ClawHub failure leaves a `beta-live`
+  release plus asynchronous ecosystem repair and never blocks beta core
+  publication. Stable, explicit ecosystem-wait, and plugin-only publication keep
+  plugin npm and ClawHub blocking.
 - The release workflows stay tag-based; rely on the documented release sequence
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
