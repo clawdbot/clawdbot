@@ -2144,7 +2144,9 @@ jobs:
             `- full release validation: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.FULL_RELEASE_VALIDATION_RUN_ID}`,
             process.env.PLUGIN_NPM_SUCCEEDED === "true"
               ? `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`
-              : `- plugin ecosystem: asynchronous repair required (https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID})`,
+              : process.env.PLUGIN_NPM_RUN_ID
+                ? `- plugin ecosystem: asynchronous repair required (https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID})`
+                : `- plugin ecosystem: no plugin npm child dispatched; repair from the release publish run (https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID})`,
             process.env.CLAWHUB_LINE,
             process.env.CLAWHUB_BOOTSTRAP_LINE,
             ...(process.env.PLUGIN_ECOSYSTEM_CONTINUATION_LINE
