@@ -592,13 +592,15 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(entryAfterReset?.lastAccountId).toBe("work");
   expect(entryAfterReset?.lastThreadId).toBe("1737500000.123456");
+  // Retained history: reset rotates the live session id but keeps the old
+  // generation's transcript rows in SQLite.
   await expect(
     loadTranscriptRows({
       sessionId: "sess-main",
       sessionKey: "agent:main:main",
       storePath,
     }),
-  ).resolves.toEqual([]);
+  ).resolves.toHaveLength(3);
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",

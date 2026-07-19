@@ -23,9 +23,8 @@ const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
-// Archived transcripts are the user's conversation history: retention keeps
-// them until the disk budget evicts oldest-first, never on a wall-clock timer.
-// The budget default below is what makes "keep archives" still bounded.
+// Conversation history stays in SQLite until physical main-file + WAL + artifact usage crosses
+// this budget. Cleanup then extracts historical sessions oldest-first before reclaiming rows.
 const DEFAULT_SESSION_MAX_DISK_BYTES = 10 * 1024 * 1024 * 1024;
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
@@ -73,8 +72,8 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
 function resolveResetArchiveRetentionMs(
   maintenance: SessionMaintenanceConfig | undefined,
 ): number | null {
-  // null = keep archived transcripts indefinitely (disk budget still evicts
-  // oldest-first under pressure). An explicit duration opts back into
+  // null = keep extracted transcripts indefinitely (the disk budget still removes
+  // old archive artifacts under pressure). An explicit duration opts back into
   // wall-clock deletion; parse failures stay on the keep side because losing
   // history is the worse failure mode.
   const raw = maintenance?.resetArchiveRetention;

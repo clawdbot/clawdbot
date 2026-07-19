@@ -159,7 +159,6 @@ export {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle,
   preserveTemporarySessionMapping,
-  previewSessionDiskBudget,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
   restoreSessionFromCompactionCheckpoint,

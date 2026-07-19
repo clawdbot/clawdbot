@@ -19,10 +19,13 @@ import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
   loadTranscriptEventsSync,
-  previewSessionDiskBudget,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
+import {
+  enforceSqliteSessionHistoryDiskBudget,
+  inspectSqliteSessionHistoryDiskBudget,
+} from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
@@ -435,15 +438,13 @@ async function previewStoreCleanup(params: {
     keys: dmScopeRetiredKeys,
   });
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
-    ? previewSessionDiskBudget({
+    ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
-        store: previewStore,
         storePath: params.target.storePath,
-        activeSessionKey: params.activeKey,
-        preserveKeys: preserveSessionKeys,
+        mode: params.mode,
         maintenance: params.maintenance,
       })
-    : { diskBudget: null, removedKeys: new Set<string>() };
+    : { diskBudget: null, wouldMutate: false };
   const diskBudget = diskBudgetPreview.diskBudget;
   const unreferencedArtifacts = await pruneUnreferencedSessionArtifacts({
     store: previewStore,
@@ -452,7 +453,7 @@ async function previewStoreCleanup(params: {
     dryRun: true,
     excludeCanonicalPaths: entryCleanupArtifactPaths,
   });
-  const budgetEvictedKeys = diskBudgetPreview.removedKeys;
+  const budgetEvictedKeys = new Set<string>();
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
@@ -463,7 +464,8 @@ async function previewStoreCleanup(params: {
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
     (diskBudget?.removedEntries ?? 0) > 0 ||
-    (diskBudget?.removedFiles ?? 0) > 0;
+    (diskBudget?.removedFiles ?? 0) > 0 ||
+    diskBudgetPreview.wouldMutate;
 
   const summary: SessionCleanupSummary = {
     agentId: params.target.agentId,
@@ -606,6 +608,12 @@ export async function runSessionsCleanup(params: {
               freedBytes: 0,
               olderThanMs: maintenance.pruneAfterMs,
             });
+      const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        mode,
+        maintenance,
+      });
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );
@@ -631,8 +639,16 @@ export async function runSessionsCleanup(params: {
               }),
               dryRun: false,
               unreferencedArtifacts,
+              diskBudget: appliedDiskBudget,
               wouldMutate:
-                (preview?.summary.wouldMutate ?? false) || unreferencedArtifacts.removedFiles > 0,
+                removedSessionKeys.size > 0 ||
+                unreferencedArtifacts.removedFiles > 0 ||
+                (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
+                (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
+                // Checkpoint/incremental-vacuum reclamation mutates the store
+                // even when no session or archive was removed.
+                (appliedDiskBudget != null &&
+                  appliedDiskBudget.totalBytesAfter < appliedDiskBudget.totalBytesBefore),
               applied: true,
               appliedCount: lifecycleResult.afterCount,
             }
@@ -649,7 +665,7 @@ export async function runSessionsCleanup(params: {
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
-              diskBudget: appliedReport.diskBudget,
+              diskBudget: appliedDiskBudget,
               wouldMutate:
                 missingApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
@@ -657,8 +673,12 @@ export async function runSessionsCleanup(params: {
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
-                (appliedReport.diskBudget?.removedEntries ?? 0) > 0 ||
-                (appliedReport.diskBudget?.removedFiles ?? 0) > 0,
+                (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
+                (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
+                // Checkpoint/incremental-vacuum reclamation mutates the store
+                // even when no session or archive was removed.
+                (appliedDiskBudget != null &&
+                  appliedDiskBudget.totalBytesAfter < appliedDiskBudget.totalBytesBefore),
               applied: true,
               appliedCount: lifecycleResult.afterCount,
             };

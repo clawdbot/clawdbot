@@ -22,7 +22,6 @@ import {
   applySqliteSessionStoreProjection,
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
-  previewSqliteSessionDiskBudget,
   purgeSqliteDeletedAgentSessionEntries,
   rollbackSqliteAgentHarnessSessionEntryLifecycle,
   rollbackSqlitePluginOwnedSessionEntryLifecycle,
@@ -379,13 +378,6 @@ export async function applySessionEntryLifecycleMutation(params: {
   captureArtifactCleanupError?: boolean;
 }): Promise<SessionEntryLifecycleMutationResult> {
   return await applySqliteSessionEntryLifecycleMutation(params);
-}
-
-/** Previews SQLite row-byte disk-budget cleanup without mutating persisted rows. */
-export function previewSessionDiskBudget(
-  params: Parameters<typeof previewSqliteSessionDiskBudget>[0],
-) {
-  return previewSqliteSessionDiskBudget(params);
 }
 
 /** Purges session entries owned by a deleted agent at the storage boundary. */

@@ -554,13 +554,10 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionId).toBe("sess-main");
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
-  expect(endEvent.transcriptArchived).toBe(true);
-  const archivedSessionFile = expectStringWithPrefix(
-    path.basename(expectStringValue(endEvent.sessionFile, "archived session file")),
-    "sess-main.jsonl.reset.",
-    "archived session file",
-  );
-  expect(archivedSessionFile).toContain(".jsonl.reset.");
+  // Retained history: reset keeps the SQLite transcript searchable under the
+  // same key, so nothing is archived and no reset artifact file exists.
+  expect(endEvent.transcriptArchived).toBeUndefined();
+  expect(endEvent.sessionFile).toBeUndefined();
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expectMainHookContext(endContext, "sess-main");
   expect(startEvent.sessionKey).toBe("agent:main:main");

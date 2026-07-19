@@ -2493,7 +2493,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Home
   - H2: What flows into the main session
   - H2: Memory across resets and conversations
-  - H2: A rolling session, not an immortal one
+  - H2: A rolling session with durable history
   - H2: When you want isolation instead
   - H2: Related
 

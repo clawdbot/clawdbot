@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -17,6 +18,7 @@ import {
   applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle,
+  listSessionEntries,
   loadTranscriptEvents,
   loadSessionEntry,
   replaceSessionEntry,
@@ -24,6 +26,7 @@ import {
 } from "./session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { searchSessionTranscripts } from "./session-transcript-search.js";
 import type { SessionEntry } from "./types.js";
 
 type TestTranscriptEvent = Parameters<typeof replaceSqliteTranscriptEvents>[1][number];
@@ -42,7 +45,7 @@ describe("session store lifecycle mutations", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("resets an entry in SQLite while archiving the previous transcript rows", async () => {
+  it("resets the live entry while keeping previous SQLite history searchable", async () => {
     const now = Date.now();
     await replaceSessionEntry(
       { sessionKey: "agent:main:room", storePath },
@@ -71,7 +74,9 @@ describe("session store lifecycle mutations", () => {
       "post-compaction-session",
     ]) {
       await replaceSqliteTranscriptEvents({ sessionKey: "agent:main:room", sessionId, storePath }, [
-        createTranscriptEvent(sessionId, `before reset ${sessionId}`),
+        sessionId === "old-session"
+          ? createSearchableTranscriptEvent(sessionId, "foreverneedle before reset")
+          : createTranscriptEvent(sessionId, `before reset ${sessionId}`),
       ]);
     }
     const transcriptUpdates = recordTranscriptUpdateFiles();
@@ -102,53 +107,51 @@ describe("session store lifecycle mutations", () => {
     const stored = loadSessionEntry({ sessionKey: "agent:main:room", storePath });
     expect(stored?.sessionId).toBe("next-session");
     expect(result.previousSessionId).toBe("old-session");
-    expect(result.archivedTranscripts).toHaveLength(5);
-    expect(result.archivedTranscripts.map((transcript) => transcript.archivedPath)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("old-session.jsonl.reset."),
-        expect.stringContaining("usage-family-session.jsonl.reset."),
-        expect.stringContaining("checkpoint-session.jsonl.reset."),
-        expect.stringContaining("pre-compaction-session.jsonl.reset."),
-        expect.stringContaining("post-compaction-session.jsonl.reset."),
-      ]),
-    );
-    expect(transcriptUpdates.files).toContain(result.archivedTranscripts[0]?.archivedPath);
-    expect(callbackTranscriptEvents).toEqual([]);
-    expect(readArchiveLinesForSession(result, "old-session")).toEqual([
-      createTranscriptEventLine("old-session", "before reset old-session"),
+    expect(result.archivedTranscripts).toEqual([]);
+    expect(transcriptUpdates.files).toEqual([]);
+    expect(callbackTranscriptEvents).toEqual([
+      createSearchableTranscriptEvent("old-session", "foreverneedle before reset"),
     ]);
-    expect(readArchiveLinesForSession(result, "usage-family-session")).toEqual([
-      createTranscriptEventLine("usage-family-session", "before reset usage-family-session"),
+    expect(listSessionEntries({ storePath })).toEqual([
+      {
+        sessionKey: "agent:main:room",
+        entry: expect.objectContaining({ sessionId: "next-session" }),
+      },
     ]);
-    expect(readArchiveLinesForSession(result, "checkpoint-session")).toEqual([
-      createTranscriptEventLine("checkpoint-session", "before reset checkpoint-session"),
-    ]);
-    expect(readArchiveLinesForSession(result, "pre-compaction-session")).toEqual([
-      createTranscriptEventLine("pre-compaction-session", "before reset pre-compaction-session"),
-    ]);
-    expect(readArchiveLinesForSession(result, "post-compaction-session")).toEqual([
-      createTranscriptEventLine("post-compaction-session", "before reset post-compaction-session"),
+    expect(readArchiveNames(path.dirname(storePath), "old-session.jsonl.reset.")).toEqual([]);
+    expect(
+      searchSessionTranscripts({
+        agentId: "main",
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        query: "foreverneedle",
+        sessionKeys: ["agent:main:room"],
+      }).hits,
+    ).toEqual([
+      expect.objectContaining({
+        sessionId: "old-session",
+        sessionKey: "agent:main:room",
+      }),
     ]);
     await expect(
       loadTranscriptEvents({ sessionKey: "agent:main:room", sessionId: "old-session", storePath }),
-    ).resolves.toEqual([]);
+    ).resolves.toHaveLength(1);
     await expect(
       loadTranscriptEvents({
         sessionKey: "agent:main:room",
         sessionId: "usage-family-session",
         storePath,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toHaveLength(1);
     await expect(
       loadTranscriptEvents({
         sessionKey: "agent:main:room",
         sessionId: "pre-compaction-session",
         storePath,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toHaveLength(1);
   });
 
-  it("archives old SQLite transcript rows before reset callbacks can fail", async () => {
+  it("keeps old SQLite rows when a post-reset callback fails", async () => {
     const now = Date.now();
     await replaceSessionEntry(
       { sessionKey: "agent:main:callback-failure", storePath },
@@ -189,12 +192,108 @@ describe("session store lifecycle mutations", () => {
         sessionId: "callback-old-session",
         storePath,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toHaveLength(1);
     expect(
-      fs
-        .readdirSync(path.dirname(storePath))
-        .filter((file) => file.startsWith("callback-old-session.jsonl.reset.")),
-    ).toHaveLength(1);
+      readArchiveNames(path.dirname(storePath), "callback-old-session.jsonl.reset."),
+    ).toHaveLength(0);
+  });
+
+  it("explicit delete archives and removes every retained reset generation", async () => {
+    const sessionKey = "agent:main:delete-history";
+    const sessionIds = ["delete-history-one", "delete-history-two", "delete-history-three"];
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "delete-history-one", updatedAt: 1 },
+    );
+    for (const [index, sessionId] of sessionIds.entries()) {
+      await replaceSqliteTranscriptEvents({ sessionId, sessionKey, storePath }, [
+        createSearchableTranscriptEvent(sessionId, `deleteforever generation ${index + 1}`),
+      ]);
+      const nextSessionId = sessionIds[index + 1];
+      if (nextSessionId) {
+        await resetSessionEntryLifecycle({
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          buildNextEntry: () => ({ sessionId: nextSessionId, updatedAt: index + 2 }),
+        });
+      }
+    }
+    expect(
+      searchSessionTranscripts({
+        agentId: "main",
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        query: "deleteforever",
+        sessionKeys: [sessionKey],
+      }).hits,
+    ).toHaveLength(3);
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(result.archivedTranscripts).toHaveLength(3);
+    expect(listSessionEntries({ storePath })).toEqual([]);
+    for (const sessionId of sessionIds) {
+      await expect(loadTranscriptEvents({ sessionId, sessionKey, storePath })).resolves.toEqual([]);
+      expect(readArchiveNames(path.dirname(storePath), `${sessionId}.jsonl.deleted.`)).toHaveLength(
+        1,
+      );
+    }
+    expect(
+      searchSessionTranscripts({
+        agentId: "main",
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        query: "deleteforever",
+        sessionKeys: [sessionKey],
+      }).hits,
+    ).toEqual([]);
+  });
+
+  it("explicit delete aborts while admitted work owns a retained generation", async () => {
+    const sessionKey = "agent:main:delete-admitted-history";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "admit-old", updatedAt: 1 });
+    await replaceSqliteTranscriptEvents({ sessionId: "admit-old", sessionKey, storePath }, [
+      createSearchableTranscriptEvent("admit-old", "admitted generation"),
+    ]);
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId: "admit-live", updatedAt: 2 }),
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["admit-old"],
+      assertAllowed: () => {},
+    });
+    try {
+      await expect(
+        deleteSessionEntryLifecycle({
+          archiveTranscript: true,
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        }),
+      ).rejects.toThrow(/work is in flight/);
+      expect(listSessionEntries({ storePath })).toHaveLength(1);
+      await expect(
+        loadTranscriptEvents({ sessionId: "admit-old", sessionKey, storePath }),
+      ).resolves.toHaveLength(1);
+    } finally {
+      admission.release();
+    }
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    expect(result.deleted).toBe(true);
+    // Only admit-old carries transcript events; admit-live never wrote any.
+    expect(result.archivedTranscripts).toHaveLength(1);
+    expect(readArchiveNames(path.dirname(storePath), "admit-old.jsonl.deleted.")).toHaveLength(1);
+    expect(listSessionEntries({ storePath })).toEqual([]);
   });
 
   it("deletes an entry from SQLite while archiving unreferenced transcript rows", async () => {
@@ -362,7 +461,9 @@ describe("session store lifecycle mutations", () => {
       expect(result.archivedTranscripts).toHaveLength(1);
       expect(entryObservedDuringArchiveRename).toEqual([true]);
       const archiveTempOpenIndexes = openSpy.mock.calls.flatMap((args, index) =>
-        String(args[0]).includes("durable-delete-session.jsonl.deleted.") ? [index] : [],
+        String(args[0]).includes("durable-delete-session.jsonl.deleted.") && args[1] === "wx"
+          ? [index]
+          : [],
       );
       expect(archiveTempOpenIndexes).toHaveLength(1);
       const archiveTempOpenIndex = archiveTempOpenIndexes[0] ?? -1;
@@ -739,6 +840,15 @@ describe("session store lifecycle mutations", () => {
 
 function createTranscriptEvent(sessionId: string, content: string): TestTranscriptEvent {
   return JSON.parse(createTranscriptEventLine(sessionId, content)) as TestTranscriptEvent;
+}
+
+function createSearchableTranscriptEvent(sessionId: string, content: string): TestTranscriptEvent {
+  return {
+    id: `message-${sessionId}`,
+    message: { role: "user", content },
+    timestamp: "2026-07-18T00:00:00.000Z",
+    type: "message",
+  } as TestTranscriptEvent;
 }
 
 function createTranscriptEventLine(sessionId: string, content: string): string {

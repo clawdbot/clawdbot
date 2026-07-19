@@ -10,7 +10,12 @@ import {
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import { enforceSessionDiskBudget, pruneUnreferencedSessionArtifacts } from "./disk-budget.js";
+import {
+  enforceSessionDiskBudget,
+  measureSessionPhysicalDiskUsage,
+  pruneUnreferencedSessionArtifacts,
+} from "./disk-budget.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -54,6 +59,47 @@ function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.s
 }
 
 describe("enforceSessionDiskBudget", () => {
+  it("counts the SQLite main file and WAL as physical session usage", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+      if (!databasePath) {
+        throw new Error("expected a SQLite database path");
+      }
+      await fs.writeFile(databasePath, Buffer.alloc(321));
+      await fs.writeFile(`${databasePath}-wal`, Buffer.alloc(654));
+
+      const usage = await measureSessionPhysicalDiskUsage(storePath);
+
+      expect(usage).toEqual({
+        databaseMainBytes: 321,
+        databaseWalBytes: 654,
+        sessionFilesBytes: 0,
+        totalBytes: 975,
+      });
+    });
+  });
+
+  it("excludes migration archives from physical SQLite usage (#106875)", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+      if (!databasePath) {
+        throw new Error("expected a SQLite database path");
+      }
+      await fs.writeFile(databasePath, Buffer.alloc(100));
+      // Rollback archives are recovery artifacts outside the session budget;
+      // counting them would evict live history to pay for unreclaimable bytes.
+      await fs.writeFile(path.join(dir, "legacy.jsonl.migrated"), Buffer.alloc(4096));
+      await fs.writeFile(path.join(dir, "legacy.jsonl.migrated.2"), Buffer.alloc(4096));
+
+      const usage = await measureSessionPhysicalDiskUsage(storePath);
+
+      expect(usage.totalBytes).toBe(100);
+      expect(usage.sessionFilesBytes).toBe(0);
+    });
+  });
+
   it("excludes migration archives from the session disk budget (#106875)", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

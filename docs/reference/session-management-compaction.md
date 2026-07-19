@@ -53,19 +53,15 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false` disables                                            |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
 
-Archived transcripts are kept by default and compressed with zstd (`*.jsonl.<reason>.<timestamp>.zst`) when the runtime supports it, so deleting or resetting a session never silently discards conversation history. The disk budget evicts the oldest archives first, before touching live sessions.
+Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
 
-Active SQLite enforcement of `maxDiskBytes` measures session-row JSON plus transcript-event JSON bytes per session; legacy offline-maintenance enforcement measures files in the selected sessions directory.
+`maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total.
 
 Gateway model-run probe sessions (keys matching `agent:*:explicit:model-run-<uuid>`) get a separate, fixed `24h` retention. This pruning is pressure-gated: it only runs when session-entry maintenance/cap pressure is reached, and only before the global stale-entry cleanup/cap step. Other explicit sessions do not use this retention.
 
-Enforcement order for disk-budget cleanup (`mode: "enforce"`):
+When combined physical usage exceeds `maxDiskBytes`, `mode: "enforce"` first reclaims checkpointable database space, then removes the oldest retained reset/delete archives. If usage is still above `highWaterBytes`, it walks historical SQLite sessions by `sessions.updated_at`, oldest first. Historical means the session id is not referenced by a live session entry, a route target, or an admitted/in-flight run. For each victim, cleanup writes, fsyncs, and reads back the compressed archive before a write transaction removes the session row and its transcript, trajectory, active, index, and FTS projections. This includes sessions that contain trajectory events but no transcript events. Cleanup rechecks route, entry, and admission references at deletion time, remeasures physical usage after each archive or session victim, and stops at `highWaterBytes`.
 
-1. Remove oldest archived transcript artifacts, orphan legacy artifacts, or orphan trajectory artifacts first.
-2. If still above target, evict oldest session entries and their transcript rows or trajectory artifacts.
-3. Repeat until usage is at or below `highWaterBytes`.
-
-`mode: "warn"` reports potential evictions without mutating the store or files.
+Committed writes and deletion first land in the WAL. Cleanup checkpoints it so the WAL can shrink immediately, then uses incremental vacuum to return eligible free tail pages from the main file; pages that are not yet reclaimable stay in the main file and therefore remain counted on the next physical measurement. `mode: "warn"` reports the current physical overage without checkpointing, writing an archive, or deleting rows.
 
 Run maintenance on demand:
 

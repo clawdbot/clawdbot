@@ -63,6 +63,8 @@ import {
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -300,6 +302,11 @@ export async function patchSqliteSessionEntry(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }
@@ -370,6 +377,11 @@ export async function patchSqliteSessionEntryTarget(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }
