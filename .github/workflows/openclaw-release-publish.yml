@@ -2078,7 +2078,7 @@ jobs:
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"
-            echo "- Plugin npm and ClawHub publish: dispatched in parallel"
+            echo "- Plugin npm publish: completes before ClawHub dispatch"
             if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- OpenClaw npm publish: starts after plugin npm succeeds"
             else
@@ -2122,6 +2122,15 @@ jobs:
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
           plugin_clawhub_run_id=""
+          plugin_clawhub_bootstrap_run_id=""
+          plugin_clawhub_bootstrap_completed="false"
+          echo "- Plugin npm run ID: \`${plugin_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
+            echo "Plugin npm publish failed; ClawHub publish was not dispatched." >&2
+            exit 1
+          fi
+
           if [[ "$(jq -r '.normal.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
             append_clawhub_dispatch_args normal
@@ -2133,8 +2142,6 @@ jobs:
           else
             echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
-          plugin_clawhub_bootstrap_run_id=""
-          plugin_clawhub_bootstrap_completed="false"
           if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
             append_clawhub_dispatch_args bootstrap
@@ -2147,21 +2154,9 @@ jobs:
             echo "- plugin-clawhub-new.yml: no bootstrap candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
           {
-            echo "- Plugin npm run ID: \`${plugin_npm_run_id}\`"
             echo "- Plugin ClawHub run ID: \`${plugin_clawhub_run_id:-none}\`"
             echo "- Plugin ClawHub bootstrap run ID: \`${plugin_clawhub_bootstrap_run_id:-none}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-
-          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
-            echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
-            if [[ -n "${plugin_clawhub_run_id}" ]]; then
-              gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_run_id}" >/dev/null 2>&1 || true
-            fi
-            if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
-              gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_bootstrap_run_id}" >/dev/null 2>&1 || true
-            fi
-            exit 1
-          fi
 
           if [[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
             echo "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish."

@@ -416,13 +416,18 @@ jobs:
     needs: [preview_plugins_clawhub, publish_plugins_clawhub]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      # ClawHub accepts uploads before its asynchronous security queue promotes
+      # public versions. Cover one full queue cycle without operator reruns.
+      OPENCLAW_CLAWHUB_VERIFY_ATTEMPTS: "54"
+      OPENCLAW_CLAWHUB_VERIFY_DELAY_MS: "30000"
     permissions:
       actions: read
       contents: read
     strategy:
       fail-fast: false
-      max-parallel: 32
+      max-parallel: 8
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:

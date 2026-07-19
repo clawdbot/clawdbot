@@ -103,6 +103,7 @@ type WorkflowJob = {
   "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
+    "max-parallel"?: number | string;
     matrix?: {
       include?: WorkflowMatrixEntry[];
       lane?: string;
@@ -595,6 +596,36 @@ describe("package acceptance workflow", () => {
       "plugin-clawhub-release.yml: detached; approval and publish not awaited",
       "plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited",
     ]);
+  });
+
+  it("dispatches ClawHub only after plugin npm succeeds", () => {
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const orchestration = workflowStep(publishJob, "Dispatch publish workflows").run;
+    if (!orchestration) {
+      throw new Error("Expected release publish orchestration script");
+    }
+
+    const pluginNpmDispatch = orchestration.indexOf(
+      'plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml',
+    );
+    const pluginNpmWait = orchestration.indexOf(
+      'if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"',
+    );
+    const clawHubDispatch = orchestration.indexOf(
+      'plugin_clawhub_run_id="$(dispatch_workflow_at_ref',
+    );
+    const clawHubBootstrapDispatch = orchestration.indexOf(
+      'plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref',
+    );
+
+    expect(pluginNpmDispatch).toBeGreaterThan(-1);
+    expect(pluginNpmWait).toBeGreaterThan(pluginNpmDispatch);
+    expect(clawHubDispatch).toBeGreaterThan(pluginNpmWait);
+    expect(clawHubBootstrapDispatch).toBeGreaterThan(pluginNpmWait);
+    expect(orchestration).toContain(
+      "Plugin npm publish failed; ClawHub publish was not dispatched.",
+    );
+    expect(orchestration).not.toContain("cancelling dispatched ClawHub child workflows");
   });
 
   it("compares dependency evidence zip contents independently of archive timestamps", () => {
@@ -4143,7 +4174,12 @@ describe("package artifact reuse", () => {
       PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
       "verify_published_clawhub_package",
     );
-    expect(clawHubVerifier["timeout-minutes"]).toBe(45);
+    expect(clawHubVerifier["timeout-minutes"]).toBe(60);
+    expect(clawHubVerifier.strategy?.["max-parallel"]).toBe(8);
+    expect(clawHubVerifier.env).toMatchObject({
+      OPENCLAW_CLAWHUB_VERIFY_ATTEMPTS: "54",
+      OPENCLAW_CLAWHUB_VERIFY_DELAY_MS: "30000",
+    });
     expect(clawHubVerifier.permissions).toMatchObject({ actions: "read", contents: "read" });
     expect(workflowStep(clawHubVerifier, "Download published package input")).toMatchObject({
       uses: DOWNLOAD_ARTIFACT_V8,

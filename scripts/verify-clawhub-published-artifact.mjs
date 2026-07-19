@@ -11,7 +11,8 @@ import { readBoundedRegularFile } from "./plugin-publication-artifact.mjs";
 const DEFAULT_ATTEMPTS = 12;
 const DEFAULT_DELAY_MS = 5_000;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 120_000;
-const MAX_ATTEMPTS = 12;
+// Release workflows override the short default to cover asynchronous promotion.
+const MAX_ATTEMPTS = 60;
 const MAX_DELAY_MS = 60_000;
 const MAX_ARTIFACT_BYTES = 130 * 1024 * 1024;
 const MAX_JSON_BYTES = 1024 * 1024;
