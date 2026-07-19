@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ACTIONLINT_VERSION = "1.7.12";
+const ACTIONLINT_ARGS = ["-shellcheck="];
 const PRE_COMMIT_VERSION = "4.2.0";
 const WORKFLOW_DIR = ".github/workflows";
 
@@ -116,9 +117,13 @@ function runPreCommitHook(hook, files) {
 const workflows = workflowFiles();
 
 if (commandExists("actionlint")) {
-  run("actionlint", workflows);
+  run("actionlint", [...ACTIONLINT_ARGS, ...workflows]);
 } else if (commandExists("go", ["version"])) {
-  run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`]);
+  run("go", [
+    "run",
+    `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`,
+    ...ACTIONLINT_ARGS,
+  ]);
 } else if (
   commandExists("pre-commit") ||
   commandExists("python3", ["-m", "pre_commit", "--version"]) ||

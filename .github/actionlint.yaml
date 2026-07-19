@@ -23,8 +23,6 @@ self-hosted-runner:
 paths:
   .github/workflows/**/*.yml:
     ignore:
-      # Ignore shellcheck warnings (we run shellcheck separately)
-      - "shellcheck reported issue.+"
       # Ignore intentional if: false for disabled jobs
       - 'constant expression "false" in condition'
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
