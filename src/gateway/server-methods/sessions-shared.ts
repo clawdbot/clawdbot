@@ -161,27 +161,39 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
   return normalized;
 }
 
-export function rejectPluginRuntimeDeleteMismatch(params: {
+export function pluginRuntimeSessionMismatchError(params: {
+  client: GatewayClient | null;
+  key: string;
+  entry: SessionEntry | undefined;
+  action: "patch" | "delete";
+}): ReturnType<typeof errorShape> | undefined {
+  const pluginOwnerId = normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId);
+  if (!pluginOwnerId || !params.entry) {
+    return undefined;
+  }
+  // Fail closed: plugin-runtime callers may only mutate rows they created.
+  // Legacy ownerless rows have no safe plugin authority and are rejected.
+  if (normalizeOptionalString(params.entry.pluginOwnerId) === pluginOwnerId) {
+    return undefined;
+  }
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    `Plugin "${pluginOwnerId}" cannot ${params.action} session "${params.key}" because it did not create it.`,
+  );
+}
+
+export function rejectPluginRuntimeSessionMismatch(params: {
   client: GatewayClient | null;
   key: string;
   entry: SessionEntry | undefined;
   respond: RespondFn;
+  action: "patch" | "delete";
 }): boolean {
-  const pluginOwnerId = normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId);
-  if (!pluginOwnerId || !params.entry) {
+  const mismatchError = pluginRuntimeSessionMismatchError(params);
+  if (!mismatchError) {
     return false;
   }
-  if (normalizeOptionalString(params.entry.pluginOwnerId) === pluginOwnerId) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Plugin "${pluginOwnerId}" cannot delete session "${params.key}" because it did not create it.`,
-    ),
-  );
+  params.respond(false, undefined, mismatchError);
   return true;
 }
 

@@ -141,6 +141,8 @@ export async function projectSessionsPatchEntry(params: {
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
+  /** Owner to stamp on a newly created session row. */
+  pluginOwnerId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch } = params;
   const authorizedHarnessCreation =
@@ -198,6 +200,7 @@ export async function projectSessionsPatchEntry(params: {
   };
 
   const existing = params.existingEntry;
+  const pluginOwnerId = normalizeOptionalString(params.pluginOwnerId);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
@@ -209,6 +212,7 @@ export async function projectSessionsPatchEntry(params: {
         sessionId: randomUUID(),
         sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+        ...(pluginOwnerId ? { pluginOwnerId } : {}),
       };
   if (existing && !existing.sessionId) {
     delete next.label;
@@ -666,6 +670,8 @@ export async function applySessionsPatchToStore(params: {
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
+  /** Owner to stamp on a newly created session row. */
+  pluginOwnerId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const projected = await projectSessionsPatchEntry({
     cfg: params.cfg,
@@ -677,6 +683,7 @@ export async function applySessionsPatchToStore(params: {
     archivedBy: params.archivedBy,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     authorizedAgentHarnessId: params.authorizedAgentHarnessId,
+    pluginOwnerId: params.pluginOwnerId,
   });
   if (projected.ok) {
     params.store[params.storeKey] = projected.entry;

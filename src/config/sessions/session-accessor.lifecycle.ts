@@ -212,6 +212,9 @@ export async function applySessionPatchProjection<
   assertCurrent?: () => void;
   storePath: string;
   resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
+  authorize?: (
+    context: SessionPatchProjectionContext,
+  ) => Promise<TFailure | undefined> | TFailure | undefined;
   project: (
     context: SessionPatchProjectionContext,
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
@@ -224,11 +227,18 @@ export async function applySessionPatchProjection<
   );
   const target = params.resolveTarget({ entries });
   const existingEntry = resolveProjectionExistingEntry(entries, target);
-  const projected = await params.project({
+  const context: SessionPatchProjectionContext = {
     ...target,
     entries,
     ...(existingEntry ? { existingEntry } : {}),
-  });
+  };
+  if (params.authorize) {
+    const authorizationFailure = await params.authorize(context);
+    if (authorizationFailure) {
+      return authorizationFailure;
+    }
+  }
+  const projected = await params.project(context);
   if (!projected.ok) {
     return projected;
   }
