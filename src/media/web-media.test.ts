@@ -287,6 +287,16 @@ describe("loadWebMedia", () => {
     });
   }
 
+  async function makeApkZip(opts: { signed?: boolean } = {}): Promise<Buffer> {
+    const zip = new JSZip();
+    if (opts.signed) {
+      zip.file("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n");
+    }
+    zip.file("AndroidManifest.xml", "manifest");
+    zip.file("classes.dex", "dex");
+    return await zip.generateAsync({ type: "nodebuffer" });
+  }
+
   it.each([
     {
       name: "allows localhost file URLs for local files",
@@ -1087,12 +1097,6 @@ describe("loadWebMedia", () => {
       contentType: "application/x-7z-compressed",
     },
     {
-      label: "APK",
-      fileName: "archive.apk",
-      body: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
-      contentType: "application/vnd.android.package-archive",
-    },
-    {
       label: "JSON",
       fileName: "data.json",
       body: '{"ok":true}\n',
@@ -1114,6 +1118,22 @@ describe("loadWebMedia", () => {
     const result = await loadDocumentWithHostRead(fileName, body);
     expect(result.kind).toBe("document");
     expect(result.contentType).toBe(contentType);
+  });
+
+  it("allows a buffer-verified signed APK through the host-read gate", async () => {
+    const result = await loadDocumentWithHostRead("signed.apk", await makeApkZip({ signed: true }));
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/vnd.android.package-archive");
+  });
+
+  it("rejects an ordinary JAR renamed to APK", async () => {
+    const jar = new JSZip();
+    jar.file("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n");
+    jar.file("Example.class", "bytecode");
+    await expectLoadWebMediaErrorCode(
+      loadDocumentWithHostRead("renamed.apk", await jar.generateAsync({ type: "nodebuffer" })),
+      "path-not-allowed",
+    );
   });
 
   it("rejects binary data disguised as a CSV file", async () => {
