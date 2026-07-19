@@ -249,15 +249,19 @@ jobs:
                  .bootstrap.inputs.ref == $release_sha))
             ' "${PLAN_PATH}" >/dev/null
 
-          target_correlation() {
+          target_base_correlation() {
             local target="$1"
             echo "${RELEASE_PUBLISH_RUN_ID}-${RELEASE_SHA}-${target}"
           }
 
-          target_title() {
+          target_correlation() {
             local target="$1"
-            local continuation_id
-            continuation_id="$(target_correlation "${target}")"
+            echo "$(target_base_correlation "${target}")-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          }
+
+          target_title_for_correlation() {
+            local target="$1"
+            local continuation_id="$2"
             if [[ "${target}" == "normal" ]]; then
               echo "ClawHub OIDC continuation ${continuation_id}"
             else
@@ -265,12 +269,14 @@ jobs:
             fi
           }
 
-          reconcile_target() {
+          find_target_run() {
             local target="$1"
             local max_attempts="$2"
+            local correlation="$3"
+            local match_mode="$4"
             local workflow expected_title runs_json run_id attempt api_status parse_status successful_queries=0
             workflow="$(jq -er --arg target "${target}" '.[$target].workflow' "${PLAN_PATH}")"
-            expected_title="$(target_title "${target}")"
+            expected_title="$(target_title_for_correlation "${target}" "${correlation}")"
             for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
               set +e
               runs_json="$(gh api --paginate \
@@ -280,10 +286,14 @@ jobs:
               if [[ "${api_status}" -eq 0 ]]; then
                 set +e
                 run_id="$(jq -sr \
-                    --arg expected_title "${expected_title}" '
+                    --arg expected_title "${expected_title}" \
+                    --arg match_mode "${match_mode}" '
                     [.[].workflow_runs[]
                      | select(.event == "workflow_dispatch" and
-                              .display_title == $expected_title)]
+                              (if $match_mode == "prefix"
+                               then (.display_title | startswith($expected_title))
+                               else .display_title == $expected_title
+                               end))]
                     | sort_by(.id)
                     | last
                     | .id // empty
@@ -306,6 +316,139 @@ jobs:
             # 1 means lookup itself stayed indeterminate; callers must fail closed.
             [[ "${successful_queries}" -gt 0 ]] && return 2
             return 1
+          }
+
+          reconcile_target() {
+            find_target_run "$1" "$2" "$(target_correlation "$1")" exact
+          }
+
+          reconcile_latest_target() {
+            find_target_run "$1" "$2" "$(target_base_correlation "$1")-" prefix
+          }
+
+          authenticate_target_run() {
+            local target="$1"
+            local run_id="$2"
+            local expected_correlation="$3"
+            local expected_sha workflow artifact_name run_attempt run_state run_status attempt_dir identity_path artifacts_json artifact_status attempt
+            workflow="$(jq -er --arg target "${target}" '.[$target].workflow' "${PLAN_PATH}")"
+            if [[ "${target}" == "normal" ]]; then
+              expected_sha="${RELEASE_SHA}"
+            else
+              expected_sha="$(jq -er '.bootstrapWorkflowSha' "${PLAN_PATH}")"
+            fi
+            for attempt in {1..1800}; do
+              run_state="$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" \
+                --json attempt,conclusion,status 2>/dev/null || true)"
+              run_attempt="$(jq -r '.attempt // empty' <<<"${run_state}" 2>/dev/null || true)"
+              run_status="$(jq -r '.status // empty' <<<"${run_state}" 2>/dev/null || true)"
+              if [[ ! "${run_attempt}" =~ ^[1-9][0-9]*$ || -z "${run_status}" ]]; then
+                [[ "${attempt}" == "1800" ]] || sleep 10
+                continue
+              fi
+              artifact_name="clawhub-continuation-identity-${run_id}-${run_attempt}"
+              attempt_dir="$(mktemp -d "${RUNNER_TEMP}/clawhub-identity.XXXXXX")"
+              if gh run download --repo "${GITHUB_REPOSITORY}" "${run_id}" \
+                --name "${artifact_name}" --dir "${attempt_dir}" >/dev/null 2>&1; then
+                identity_path="${attempt_dir}/identity.json"
+                if jq -e \
+                  --arg continuation_id "${expected_correlation}" \
+                  --arg repository "${GITHUB_REPOSITORY}" \
+                  --arg run_attempt "${run_attempt}" \
+                  --arg run_id "${run_id}" \
+                  --arg workflow "${workflow}" \
+                  --arg workflow_sha "${expected_sha}" \
+                  --arg target "${target}" \
+                  --slurpfile plan "${PLAN_PATH}" '
+                    .schemaVersion == 1 and
+                    .kind == "openclaw-clawhub-continuation-identity" and
+                    .repository == $repository and
+                    .workflow == $workflow and
+                    .workflowSha == $workflow_sha and
+                    .runId == $run_id and
+                    .runAttempt == $run_attempt and
+                    .continuationId == $continuation_id and
+                    (if $target == "normal" then
+                       .inputs == ($plan[0].normal.inputs + {
+                         continuation_id: $continuation_id,
+                         dry_run: false,
+                         ref: ""
+                       })
+                     else
+                       .inputs == ($plan[0].bootstrap.inputs + {
+                         continuation_id: $continuation_id,
+                         dry_run: false,
+                         pretag_validation: false
+                       })
+                     end)
+                  ' "${identity_path}" >/dev/null; then
+                  echo "${run_attempt}"
+                  return 0
+                fi
+                echo "ClawHub ${target} run ${run_id} identity did not match the immutable parent plan." >&2
+                return 3
+              fi
+              if [[ "${run_status}" == "completed" ]]; then
+                set +e
+                artifacts_json="$(gh api --paginate \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" 2>/dev/null)"
+                artifact_status=$?
+                set -e
+                if [[ "${artifact_status}" -eq 0 ]] && jq -se \
+                  --arg artifact_name "${artifact_name}" '
+                    all(.[]; .artifacts | type == "array") and
+                    ([.[].artifacts[] | select(.name == $artifact_name)] | length == 0)
+                  ' <<<"${artifacts_json}" >/dev/null 2>&1; then
+                  echo "ClawHub ${target} run ${run_id} completed before publishing its continuation identity." >&2
+                  echo "${run_attempt}"
+                  return 2
+                fi
+                echo "ClawHub ${target} run ${run_id} identity lookup was indeterminate." >&2
+                return 1
+              fi
+              [[ "${attempt}" == "1800" ]] || sleep 10
+            done
+            echo "ClawHub ${target} run ${run_id} did not publish a verifiable continuation identity." >&2
+            return 1
+          }
+
+          authenticated_target_state() {
+            local target="$1"
+            local run_id="$2"
+            local expected_correlation="$3"
+            local authenticated_attempt authentication_status child_state attempt
+            for attempt in {1..6}; do
+              set +e
+              authenticated_attempt="$(authenticate_target_run \
+                "${target}" "${run_id}" "${expected_correlation}")"
+              authentication_status=$?
+              set -e
+              if [[ "${authentication_status}" -eq 2 ]]; then
+                echo "${authenticated_attempt}"
+                return 2
+              fi
+              [[ "${authentication_status}" -eq 0 ]] || return "${authentication_status}"
+              child_state="$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" \
+                --json attempt,conclusion,headSha,status 2>/dev/null || true)"
+              if jq -e --argjson authenticated_attempt "${authenticated_attempt}" \
+                '.attempt == $authenticated_attempt' <<<"${child_state}" >/dev/null 2>&1; then
+                echo "${child_state}"
+                return 0
+              fi
+            done
+            echo "ClawHub ${target} run ${run_id} changed attempts during authentication." >&2
+            return 1
+          }
+
+          correlation_for_run() {
+            local target="$1"
+            local run_id="$2"
+            local title prefix expected_prefix
+            title="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.display_title' 2>/dev/null || true)"
+            prefix="$(target_title_for_correlation "${target}" "")"
+            expected_prefix="${prefix}$(target_base_correlation "${target}")-"
+            [[ "${title}" == "${expected_prefix}"* ]] || return 1
+            echo "${title#"${prefix}"}"
           }
 
           mark_target_pending() {
@@ -332,8 +475,8 @@ jobs:
 
           dispatch_target() {
             local target="$1"
-            local expected_sha ref workflow encoded_ref resolved_sha inputs_json dispatch_body response run_id child_sha attempt
-            local continuation_id dispatch_status reconciliation_status
+            local expected_sha ref workflow encoded_ref resolved_sha inputs_json dispatch_body response run_id child_sha child_state="" attempt
+            local continuation_id existing_correlation authenticated_state authentication_status absence_attempt dispatch_status reconciliation_status
             if [[ "$(jq -r --arg target "${target}" '.[$target].shouldDispatch' "${PLAN_PATH}")" != "true" ]]; then
               return
             fi
@@ -345,19 +488,72 @@ jobs:
               expected_sha="$(jq -er '.bootstrapWorkflowSha' "${PLAN_PATH}")"
             fi
             set +e
-            run_id="$(reconcile_target "${target}" 12)"
+            run_id="$(reconcile_latest_target "${target}" 12)"
             reconciliation_status=$?
             set -e
             if [[ "${run_id}" =~ ^[1-9][0-9]*$ ]]; then
-              child_sha="$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" --json headSha --jq '.headSha' 2>/dev/null || true)"
+              existing_correlation="$(correlation_for_run "${target}" "${run_id}" || true)"
+              [[ -n "${existing_correlation}" ]] || {
+                echo "Existing ClawHub ${target} run ${run_id} lacked a current correlation." >&2
+                echo "${run_id}"
+                return 1
+              }
+              set +e
+              authenticated_state="$(authenticated_target_state \
+                "${target}" "${run_id}" "${existing_correlation}")"
+              authentication_status=$?
+              set -e
+              if [[ "${authentication_status}" -eq 0 ]]; then
+                child_state="${authenticated_state}"
+              elif [[ "${authentication_status}" -eq 2 && "${authenticated_state}" =~ ^[1-9][0-9]*$ ]]; then
+                absence_attempt="${authenticated_state}"
+                child_state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" 2>/dev/null | \
+                  jq -c '{
+                    attempt: .run_attempt,
+                    actor: (.actor.login // ""),
+                    conclusion,
+                    headSha: .head_sha,
+                    status
+                  }' 2>/dev/null || true)"
+                jq -e --argjson absence_attempt "${absence_attempt}" '
+                  .attempt == $absence_attempt and
+                  .actor == "github-actions[bot]" and
+                  .status == "completed" and
+                  .conclusion != "success" and
+                  (.conclusion | type == "string")
+                ' <<<"${child_state}" >/dev/null 2>&1 || {
+                  echo "Terminal ClawHub ${target} run ${run_id} identity-absence proof was stale or untrusted." >&2
+                  echo "${run_id}"
+                  return 1
+                }
+              else
+                echo "Existing ClawHub ${target} run ${run_id} could not be authenticated." >&2
+                echo "${run_id}"
+                return 1
+              fi
+              child_sha="$(jq -r '.headSha // empty' <<<"${child_state}" 2>/dev/null || true)"
               [[ "${child_sha}" == "${expected_sha}" ]] || {
                 echo "Existing ClawHub ${target} run ${run_id} used ${child_sha}, expected ${expected_sha}." >&2
                 echo "${run_id}"
                 return 1
               }
-              echo "Reusing ClawHub ${target} run ${run_id} for immutable release identity." >&2
-              echo "${run_id}"
-              return 0
+              if jq -e '.status != "completed" or .conclusion == "success"' \
+                <<<"${child_state}" >/dev/null 2>&1; then
+                echo "Reusing successful or active ClawHub ${target} run ${run_id}." >&2
+                echo "${run_id}"
+                return 0
+              fi
+              if jq -e '.status == "completed" and .conclusion != "success" and (.conclusion | type == "string")' \
+                <<<"${child_state}" >/dev/null 2>&1; then
+                # Identity upload is first. Confirmed absence proves no publish
+                # step ran; a valid identity permits the normal repair path.
+                echo "Prior ClawHub ${target} run ${run_id} failed before or after identity; dispatching an authenticated repair." >&2
+                reconciliation_status=2
+              else
+                echo "Existing ClawHub ${target} run ${run_id} state was indeterminate." >&2
+                echo "${run_id}"
+                return 1
+              fi
             fi
             if [[ "${reconciliation_status}" -ne 2 ]]; then
               echo "Existing ClawHub ${target} lookup was indeterminate; refusing a duplicate dispatch." >&2
@@ -410,6 +606,10 @@ jobs:
             [[ "${child_sha}" == "${expected_sha}" ]] || {
               echo "ClawHub ${target} run ${run_id} used ${child_sha}, expected ${expected_sha}." >&2
               # Preserve the discovered id for the caller's verified cleanup.
+              echo "${run_id}"
+              return 1
+            }
+            authenticated_target_state "${target}" "${run_id}" "${continuation_id}" >/dev/null || {
               echo "${run_id}"
               return 1
             }
