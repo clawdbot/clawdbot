@@ -240,6 +240,11 @@ export class UrbitSSEClient {
 
     if (!response.ok) {
       this.streamRelease = null;
+      // Failed connects never read the body; cancel before release so undici
+      // does not keep the socket pinned (release alone is not enough).
+      if (!response.bodyUsed) {
+        await response.body?.cancel().catch(() => undefined);
+      }
       await release();
       throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
     }

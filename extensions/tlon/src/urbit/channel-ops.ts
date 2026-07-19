@@ -85,7 +85,7 @@ export async function pokeUrbitChannel(
     }
     return pokeId;
   } finally {
-    await release();
+    await releaseChannelResponse(response, release);
   }
 }
 
