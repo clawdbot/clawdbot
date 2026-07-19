@@ -32,6 +32,18 @@ type DoctorSqliteMaintenanceLockDeps = {
   lockOptions?: MaintenanceLockOptions;
 };
 
+export class DoctorSqliteMaintenanceLockUnavailableError extends Error {
+  constructor(
+    operation: string,
+    public override readonly cause: GatewayLockError,
+  ) {
+    super(
+      `Cannot run ${operation} while the Gateway or another SQLite maintenance command owns this OpenClaw state directory. Stop the Gateway and retry.`,
+    );
+    this.name = "DoctorSqliteMaintenanceLockUnavailableError";
+  }
+}
+
 function assertMaintenancePathsOwnedByStateDir(
   env: NodeJS.ProcessEnv,
   operation: string,
@@ -102,10 +114,7 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     });
   } catch (error) {
     if (error instanceof GatewayLockError) {
-      throw new Error(
-        `Cannot run ${params.operation} while the Gateway or another SQLite maintenance command owns this OpenClaw state directory. Stop the Gateway and retry.`,
-        { cause: error },
-      );
+      throw new DoctorSqliteMaintenanceLockUnavailableError(params.operation, error);
     }
     throw error;
   }

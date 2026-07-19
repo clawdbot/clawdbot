@@ -1,3 +1,4 @@
+import AVFAudio
 import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
@@ -499,10 +500,32 @@ struct ChatProTab: View {
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
             level: self.talkLevel,
+            inputDevices: self.talkInputDevices,
+            selectedInputDeviceID: self.selectedTalkInputDeviceID,
+            selectInputDevice: { deviceID in
+                self.appModel.talkMode.selectInputDevice(deviceID)
+            },
+            cameraFacing: self.appModel.preferredCameraFacing == .front ? .front : .back,
+            flipCamera: {
+                self.appModel.flipPreferredCameraFacing()
+            },
             toggle: { sessionKey in
                 self.appModel.focusChatSession(sessionKey)
                 self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
             })
+    }
+
+    private var talkInputDevices: [OpenClawChatAudioInputDevice] {
+        (AVAudioSession.sharedInstance().availableInputs ?? []).map { input in
+            OpenClawChatAudioInputDevice(id: input.uid, name: input.portName)
+        }
+    }
+
+    private var selectedTalkInputDeviceID: String? {
+        guard let preferredID = self.appModel.talkMode.preferredInputDeviceID,
+              self.talkInputDevices.contains(where: { $0.id == preferredID })
+        else { return nil }
+        return preferredID
     }
 
     private var dictationControl: OpenClawChatDictationControl {

@@ -252,6 +252,11 @@ function createDirectChatContext(): GatewayRequestContext {
 
 async function sendControlUiChat(params: {
   authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+  };
   context: GatewayRequestContext;
   expectedSessionRoutingContract?: string;
   idempotencyKey: string;
@@ -280,6 +285,9 @@ async function sendControlUiChat(params: {
     params: requestParams,
     client: {
       ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
+      ...(params.authenticatedUserProfile
+        ? { authenticatedUserProfile: params.authenticatedUserProfile }
+        : {}),
       connect: {
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -2495,6 +2503,11 @@ describe("gateway server chat", () => {
       const context = createDirectChatContext();
       const send = async (params: {
         authenticatedUserId?: string;
+        authenticatedUserProfile?: {
+          profileId: string;
+          displayName: string | null;
+          hasAvatar: boolean;
+        };
         idempotencyKey: string;
         message: string;
       }) => {
@@ -2512,11 +2525,21 @@ describe("gateway server chat", () => {
 
       await send({
         authenticatedUserId: "alice@example.com",
+        authenticatedUserProfile: {
+          profileId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
+          displayName: "Alice",
+          hasAvatar: false,
+        },
         idempotencyKey: "idem-attributed-alice",
         message: "prompt from alice",
       });
       await send({
         authenticatedUserId: "bob@example.com",
+        authenticatedUserProfile: {
+          profileId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
+          displayName: "Bob",
+          hasAvatar: true,
+        },
         idempotencyKey: "idem-attributed-bob",
         message: "prompt from bob",
       });
@@ -2538,7 +2561,10 @@ describe("gateway server chat", () => {
             message: expect.objectContaining({
               role: "user",
               content: "prompt from alice",
-              __openclaw: expect.objectContaining({ senderId: "alice@example.com" }),
+              __openclaw: expect.objectContaining({
+                senderId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
+                senderName: "Alice",
+              }),
             }),
           }),
           expect.objectContaining({
@@ -2546,7 +2572,10 @@ describe("gateway server chat", () => {
             message: expect.objectContaining({
               role: "user",
               content: "prompt from bob",
-              __openclaw: expect.objectContaining({ senderId: "bob@example.com" }),
+              __openclaw: expect.objectContaining({
+                senderId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
+                senderName: "Bob",
+              }),
             }),
           }),
           expect.objectContaining({

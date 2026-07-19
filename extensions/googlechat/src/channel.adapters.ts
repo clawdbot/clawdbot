@@ -86,8 +86,8 @@ const collectGoogleChatSecurityWarnings = composeAccountWarningCollectors<
 >(
   collectGoogleChatGroupPolicyWarnings,
   (account) =>
-    account.config.dm?.policy === "open" &&
-    '- Google Chat DMs are open to anyone. Set channels.googlechat.dm.policy="pairing" or "allowlist".',
+    account.config.dmPolicy === "open" &&
+    '- Google Chat DMs are open to anyone. Set channels.googlechat.dmPolicy="pairing" or "allowlist".',
 );
 
 export const googlechatGroupsAdapter = {
@@ -99,7 +99,7 @@ export const googlechatDirectoryAdapter = createChannelDirectoryAdapter({
     listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedGoogleChatAccount>({
       ...params,
       resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
-      resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+      resolveAllowFrom: (account) => account.config.allowFrom,
       normalizeId: (entry) => normalizeGoogleChatTarget(entry) ?? entry,
     }),
   listGroups: async (params) =>
@@ -113,9 +113,9 @@ export const googlechatDirectoryAdapter = createChannelDirectoryAdapter({
 export const googlechatSecurityAdapter = {
   dm: {
     channelKey: "googlechat",
-    resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dm?.policy,
-    resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
-    allowFromPathSuffix: "dm.",
+    resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dmPolicy,
+    resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.allowFrom,
+    allowFromPathSuffix: "",
     normalizeEntry: (raw: string) => formatGoogleChatAllowFromEntry(raw),
   },
   collectWarnings: collectGoogleChatSecurityWarnings,

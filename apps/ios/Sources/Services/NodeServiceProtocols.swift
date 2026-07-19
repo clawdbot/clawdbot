@@ -8,8 +8,12 @@ typealias OpenClawCameraClipResult = (format: String, base64: String, durationMs
 
 protocol CameraServicing: Sendable {
     func listDevices() async -> [CameraController.CameraDeviceInfo]
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult
+    func snap(
+        params: OpenClawCameraSnapParams,
+        defaultFacing: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
+    func clip(
+        params: OpenClawCameraClipParams,
+        defaultFacing: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
 }
 
 protocol ScreenRecordingServicing: Sendable {

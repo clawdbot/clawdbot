@@ -13,6 +13,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 import type { ContextUsage } from "../usage.js";
@@ -204,6 +205,7 @@ export type EmbeddedAgentRunMeta = {
 };
 
 export type EmbeddedAgentRunResult = {
+  latestMcpAppChannelView?: McpAppChannelView;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;

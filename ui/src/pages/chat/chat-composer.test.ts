@@ -547,6 +547,26 @@ describe("renderChatComposer controls", () => {
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
   });
 
+  it("renders the queued author's avatar before the turn is submitted", async () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+          sender: { id: "profile_123", name: "Alice Example" },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-queue__item .chat-author-avatar__initials")?.textContent,
+      ).toContain("AE");
+    });
+  });
+
   it("renders failed sends as retryable and running commands as inert", () => {
     const onQueueRetry = vi.fn();
     let view = renderComposer({

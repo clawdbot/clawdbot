@@ -157,8 +157,8 @@ describe("mcp cli", () => {
         auth: "oauth",
         oauth: { scope: "docs.read" },
         toolFilter: { include: ["search", "read_*"] },
-        timeout: 12,
-        connectTimeout: 3,
+        requestTimeoutMs: 12_000,
+        connectionTimeoutMs: 3_000,
         supportsParallelToolCalls: true,
       });
     });
@@ -185,7 +185,12 @@ describe("mcp cli", () => {
       expect(lastErrorLine()).toBe("--timeout must be a positive number.");
       await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
-      await runMcpCommand(["mcp", "set", "docs", '{"url":"https://mcp.example.com","timeout":12}']);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","requestTimeoutMs":12000}',
+      ]);
       mockError.mockClear();
 
       await expect(
@@ -197,7 +202,7 @@ describe("mcp cli", () => {
       await runMcpCommand(["mcp", "show", "docs", "--json"]);
       expect(JSON.parse(lastLogLine())).toEqual({
         url: "https://mcp.example.com",
-        timeout: 12,
+        requestTimeoutMs: 12_000,
       });
     });
   });
@@ -788,27 +793,6 @@ describe("mcp cli", () => {
       expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
         serverName: "docs",
         serverUrl: "https://mcp.example.com",
-      });
-    });
-  });
-
-  it("clears timeout and parallel aliases when reconfiguring MCP servers", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","connect_timeout":7,"supports_parallel_tool_calls":true}',
-      ]);
-      await runMcpCommand(["mcp", "configure", "docs", "--clear-timeouts", "--no-parallel"]);
-
-      mockLog.mockClear();
-      await runMcpCommand(["mcp", "show", "docs", "--json"]);
-      expect(JSON.parse(lastLogLine())).toEqual({
-        url: "https://mcp.example.com",
       });
     });
   });

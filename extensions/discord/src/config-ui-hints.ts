@@ -9,11 +9,7 @@ export const discordChannelConfigUiHints = {
   },
   ...createChannelConfigUiHints({
     channelLabel: "Discord",
-    dmPolicy: {
-      channelKey: "discord",
-      includeLegacyNestedPolicy: true,
-      legacyNestedPolicyOrder: "after",
-    },
+    dmPolicy: { channelKey: "discord" },
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Discord channel IDs",
@@ -194,10 +190,6 @@ export const discordChannelConfigUiHints = {
   "voice.realtime.speakerVoiceId": {
     label: "Discord Realtime Speaker Voice ID",
     help: "Provider realtime output voice id.",
-  },
-  "voice.realtime.voice": {
-    label: "Discord Realtime Voice",
-    help: "Deprecated provider realtime output voice. Use voice.realtime.speakerVoice.",
   },
   "voice.realtime.toolPolicy": {
     label: "Discord Realtime Tool Policy",

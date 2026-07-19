@@ -3,41 +3,30 @@ import type {
   ChannelStreamingBlockConfig,
   ChannelStreamingProgressConfig,
   ChannelStreamingPreviewConfig,
-  ContextVisibilityMode,
-  DmPolicy,
-  GroupPolicy,
-  MarkdownConfig,
   ReplyToMode,
   StreamingMode,
   TextChunkMode,
 } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
-  ChannelHealthMonitorConfig,
-  ChannelHeartbeatVisibilityConfig,
-} from "./types.channel-health.js";
+  ChannelBotInteractionConfig,
+  ChannelExecApprovalConfig,
+  ChannelExecApprovalTarget,
+  ChannelReactionConfig,
+  CommonChannelMessagingConfig,
+} from "./types.channel-messaging-common.js";
 import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
-import type {
-  DmConfig,
-  MentionPatternsPolicyConfig,
-  ProviderCommandsConfig,
-} from "./types.messages.js";
+import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
   enabled?: boolean;
-  /** Direct message access policy (default: pairing). */
-  policy?: DmPolicy;
-  /** Allowlist for DM senders (ids). */
-  allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
   groupChannels?: Array<string | number>;
-  /** @deprecated Prefer channels.slack.replyToModeByChatType.direct. */
-  replyToMode?: ReplyToMode;
 };
 
 export type SlackChannelConfig = {
@@ -90,19 +79,8 @@ export type SlackChannelStreamingConfig = {
   progress?: SlackStreamingProgressConfig;
   block?: ChannelStreamingBlockConfig;
 };
-export type SlackExecApprovalTarget = "dm" | "channel" | "both";
-export type SlackExecApprovalConfig = {
-  /** Enable mode for Slack exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
-  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
-  /** Slack user IDs allowed to approve exec requests. Optional: falls back to commands.ownerAllowFrom when possible. */
-  approvers?: Array<string | number>;
-  /** Only forward approvals for these agent IDs. Omit = all agents. */
-  agentFilter?: string[];
-  /** Only forward approvals matching these session key patterns (substring or regex). */
-  sessionFilter?: string[];
-  /** Where to send approval prompts. Default: "dm". */
-  target?: SlackExecApprovalTarget;
-};
+export type SlackExecApprovalTarget = ChannelExecApprovalTarget;
+export type SlackExecApprovalConfig = ChannelExecApprovalConfig;
 export type SlackCapabilitiesConfig =
   | string[]
   | {
@@ -158,127 +136,68 @@ export type SlackRelayConfig = {
   gatewayId?: string;
 };
 
-export type SlackAccountConfig = {
-  /** Optional display name for this account (used in CLI/UI lists). */
-  name?: string;
-  /** Slack author identity. Default: bot. */
-  identity?: "bot" | "user";
-  /** Slack connection mode (socket|http|relay). Default: socket. */
-  mode?: "socket" | "http" | "relay";
-  /**
-   * Treat this account as one Slack Enterprise Grid org-wide installation.
-   * The declaration is verified against auth.test during monitor startup.
-   * DMs must be disabled or use dmPolicy="open" with effective allowFrom containing "*".
-   */
-  enterpriseOrgInstall?: boolean;
-  /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
-  socketMode?: SlackSocketModeConfig;
-  /** Relay-delivered Slack event source. Used when mode is "relay". */
-  relay?: SlackRelayConfig;
-  /** Slack signing secret (required for HTTP mode). */
-  signingSecret?: SecretInput;
-  /** Slack Events API webhook path (default: /slack/events). */
-  webhookPath?: string;
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: SlackCapabilitiesConfig;
-  /** Slack-native exec approval delivery + approver authorization. */
-  execApprovals?: SlackExecApprovalConfig;
-  /** Markdown formatting overrides (tables). */
-  markdown?: MarkdownConfig;
-  /** Override native command registration for Slack (bool or "auto"). */
-  commands?: ProviderCommandsConfig;
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /** If false, do not start this Slack account. Default: true. */
-  enabled?: boolean;
-  botToken?: SecretInput;
-  appToken?: SecretInput;
-  userToken?: SecretInput;
-  /** If true, restrict user token to read operations only. Default: true. */
-  userTokenReadOnly?: boolean;
-  /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */
-  allowBots?: boolean | "mentions";
-  /** Sliding-window bot-pair loop guard for accepted bot-authored Slack messages. */
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-  /**
-   * Break-glass override: allow mutable identity matching (name/slug) in allowlists.
-   * Default behavior is ID-only matching.
-   */
-  dangerouslyAllowNameMatching?: boolean;
-  /** Default mention requirement for channel messages (default: true). */
-  requireMention?: boolean;
-  /** Implicit mention policy for replies, quotes, and participated threads. */
-  implicitMentions?: ChannelImplicitMentionsConfig;
-  /**
-   * Controls how channel messages are handled:
-   * - "open": channels bypass allowlists; mention-gating applies
-   * - "disabled": block all channel messages
-   * - "allowlist": only allow channels present in channels.slack.channels
-   */
-  groupPolicy?: GroupPolicy;
-  /** Scope configured groupChat mentionPatterns to selected Slack channel IDs. */
-  mentionPatterns?: MentionPatternsPolicyConfig;
-  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
-  contextVisibility?: ContextVisibilityMode;
-  /** Max channel messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
-  dms?: Record<string, DmConfig>;
-  textChunkLimit?: number;
-  /** Pass through Slack chat.postMessage link unfurl control. Default: false. */
-  unfurlLinks?: boolean;
-  /** Pass through Slack chat.postMessage media unfurl control. Omitted by default. */
-  unfurlMedia?: boolean;
-  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: SlackChannelStreamingConfig;
-  mediaMaxMb?: number;
-  /** Reaction notification mode (off|own|all|allowlist). Default: own. */
-  reactionNotifications?: SlackReactionNotificationMode;
-  /** Allowlist for reaction notifications when mode is allowlist. */
-  reactionAllowlist?: Array<string | number>;
-  /** Control reply threading when reply tags are present (off|first|all|batched). */
-  replyToMode?: ReplyToMode;
-  /**
-   * Optional per-chat-type reply threading overrides.
-   * Example: { direct: "all", group: "first", channel: "off" }.
-   */
-  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
-  /** Thread session behavior. */
-  thread?: SlackThreadConfig;
-  /** Poll Slack presence and wake the routed agent on away-to-active transitions. Default: off. */
-  presenceEvents?: SlackPresenceEventsConfig;
-  actions?: SlackActionConfig;
-  slashCommand?: SlackSlashCommandConfig;
-  /**
-   * Canonical DM policy key. Doctor migrates legacy channels.slack.dm.policy here.
-   * Legacy key: channels.slack.dm.policy.
-   */
-  dmPolicy?: DmPolicy;
-  /**
-   * Canonical DM allowlist. Doctor migrates legacy channels.slack.dm.allowFrom here.
-   * Legacy key: channels.slack.dm.allowFrom.
-   */
-  allowFrom?: Array<string | number>;
-  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
-  defaultTo?: string;
-  dm?: SlackDmConfig;
-  channels?: Record<string, SlackChannelConfig>;
-  /** Heartbeat visibility settings for this channel. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
-  /** Channel health monitor overrides for this channel/account. */
-  healthMonitor?: ChannelHealthMonitorConfig;
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
-  /**
-   * Per-channel ack reaction override.
-   * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
-   */
-  ackReaction?: string;
-  /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
-  typingReaction?: string;
-};
+export type SlackAccountConfig = Omit<
+  CommonChannelMessagingConfig<
+    SlackCapabilitiesConfig,
+    string | number,
+    string,
+    SlackChannelStreamingConfig
+  >,
+  "groupAllowFrom"
+> &
+  ChannelBotInteractionConfig &
+  ChannelReactionConfig<SlackReactionNotificationMode, never, string, true> & {
+    /** Slack author identity. Default: bot. */
+    identity?: "bot" | "user";
+    /** Slack connection mode (socket|http|relay). Default: socket. */
+    mode?: "socket" | "http" | "relay";
+    /**
+     * Treat this account as one Slack Enterprise Grid org-wide installation.
+     * The declaration is verified against auth.test during monitor startup.
+     * DMs must be disabled or use dmPolicy="open" with effective allowFrom containing "*".
+     */
+    enterpriseOrgInstall?: boolean;
+    /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
+    socketMode?: SlackSocketModeConfig;
+    /** Relay-delivered Slack event source. Used when mode is "relay". */
+    relay?: SlackRelayConfig;
+    /** Slack signing secret (required for HTTP mode). */
+    signingSecret?: SecretInput;
+    /** Slack Events API webhook path (default: /slack/events). */
+    webhookPath?: string;
+    /** Slack-native exec approval delivery + approver authorization. */
+    execApprovals?: SlackExecApprovalConfig;
+    /** Override native command registration for Slack (bool or "auto"). */
+    commands?: ProviderCommandsConfig;
+    botToken?: SecretInput;
+    appToken?: SecretInput;
+    userToken?: SecretInput;
+    /** If true, restrict user token to read operations only. Default: true. */
+    userTokenReadOnly?: boolean;
+    /** Default mention requirement for channel messages (default: true). */
+    requireMention?: boolean;
+    /** Implicit mention policy for replies, quotes, and participated threads. */
+    implicitMentions?: ChannelImplicitMentionsConfig;
+    /** Pass through Slack chat.postMessage link unfurl control. Default: false. */
+    unfurlLinks?: boolean;
+    /** Pass through Slack chat.postMessage media unfurl control. Omitted by default. */
+    unfurlMedia?: boolean;
+    /**
+     * Optional per-chat-type reply threading overrides.
+     * Example: { direct: "all", group: "first", channel: "off" }.
+     */
+    replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+    /** Thread session behavior. */
+    thread?: SlackThreadConfig;
+    /** Poll Slack presence and wake the routed agent on away-to-active transitions. Default: off. */
+    presenceEvents?: SlackPresenceEventsConfig;
+    actions?: SlackActionConfig;
+    slashCommand?: SlackSlashCommandConfig;
+    dm?: SlackDmConfig;
+    channels?: Record<string, SlackChannelConfig>;
+    /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
+    typingReaction?: string;
+  };
 
 export type SlackConfig = {
   /** Optional per-account Slack configuration (multi-account). */

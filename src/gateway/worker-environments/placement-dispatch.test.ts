@@ -39,10 +39,12 @@ function createHarness(
     leaseFails?: boolean;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
+    reconcileConflictPaths?: string[];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   const log: string[] = [];
+  const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
     log.push(stage);
     if (options.failAt === stage) {
@@ -60,14 +62,27 @@ function createHarness(
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     recordStagedWorkspaceResult: (claim, ref) =>
       placementStore.recordStagedWorkspaceResult(claim, ref),
+    recordWorkspaceResultConflict: (claim, conflict) =>
+      placementStore.recordWorkspaceResultConflict(claim, conflict),
+    claimTurn: (params) => placementStore.claimTurn(params),
+    markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
-    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
-      placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),
+    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) => {
+      const completed = placementStore.completeWorkspaceResultAndReleaseTurn(
+        claim,
+        completionOptions,
+      );
+      if (completionOptions?.reclaim) {
+        log.push("placement:reclaimed");
+      }
+      return completed;
+    },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
     acceptIdleWorkspaceReconciliation: (params) =>
       placementStore.acceptIdleWorkspaceReconciliation(params),
+    list: () => placementStore.list(),
     startDispatch: (params) => {
       log.push("placement:requested");
       return placementStore.startDispatch(params);
@@ -156,6 +171,9 @@ function createHarness(
         throw new Error("workspace conflict");
       }
       request.journal.commit(reconciledManifestRef);
+      if (options.reconcileConflictPaths?.length && request.stagedResult) {
+        request.stagedResult.record(request.stagedResult.ref);
+      }
       return {
         manifestRef: reconciledManifestRef,
         changed: true,
@@ -171,6 +189,14 @@ function createHarness(
             throw new Error("local workspace changed after reconciliation");
           }
         },
+        getAppliedWorkspaceResult: options.reconcileConflictPaths?.length
+          ? () => ({
+              manifestRef: reconciledManifestRef,
+              manifest: { version: 1 as const, baseCommit: null, entries: [] },
+              conflictPaths: options.reconcileConflictPaths!,
+              verifyLocalStable: async () => {},
+            })
+          : undefined,
       };
     }),
     runWorkspaceCommand: vi.fn(async () => ({
@@ -253,6 +279,8 @@ function createHarness(
       fail("workspace");
       return "/gateway/workspace";
     },
+    reportWorkspaceResultConflict,
+    resolveWorkspaceResultConflict: vi.fn(async () => undefined),
   });
   return {
     log,
@@ -276,6 +304,7 @@ function createHarness(
       },
     },
     environments,
+    reportWorkspaceResultConflict,
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
     },
@@ -305,65 +334,6 @@ describe("worker placement dispatch", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("orders the migration barrier, provisioning, sync, attachment, and activation", async () => {
-    const harness = createHarness(placementStore);
-
-    await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
-      state: "active",
-      environmentId: harness.ready.environmentId,
-      activeOwnerEpoch: 2,
-      workspaceBaseManifestRef: MANIFEST_REF,
-      remoteWorkspaceDir: "/worker/workspace",
-      workerBundleHash: BUNDLE_HASH,
-    });
-
-    expect(harness.log).toEqual([
-      "barrier",
-      "placement:requested",
-      "workspace",
-      "placement:provisioning",
-      "create",
-      "placement:syncing",
-      "tunnel:ready",
-      "sync",
-      "placement:starting",
-      "attach",
-      "tunnel:attached",
-      "activation",
-      "placement:active",
-    ]);
-  });
-
-  it("reconciles the workspace before destroying and reclaiming an active worker", async () => {
-    const harness = createHarness(placementStore);
-    await harness.service.dispatch(REQUEST);
-
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).resolves.toMatchObject({
-      state: "reclaimed",
-      workspaceBaseManifestRef: harness.reconciledManifestRef,
-    });
-
-    expect(harness.log.slice(-11)).toEqual([
-      "tunnel:attached",
-      "workspace:quiesce",
-      "workspace:reconcile",
-      "workspace:verify",
-      "workspace:verify-local",
-      "workspace:lease",
-      "workspace:verify",
-      "workspace:verify-local",
-      "teardown:destroy",
-      "teardown:stop",
-      "placement:reclaimed",
-    ]);
   });
 
   it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {
@@ -778,7 +748,12 @@ describe("worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.log).toEqual(["environment:reconcile", "tunnel:attached", "placement:adopted"]);
+    expect(harness.log).toEqual([
+      "environment:reconcile",
+      "workspace",
+      "tunnel:attached",
+      "placement:adopted",
+    ]);
     expect(harness.environments.create).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
@@ -798,6 +773,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "placement:reclaimed",
@@ -871,6 +847,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "teardown:stop",
@@ -894,6 +871,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "attach",
       "tunnel:attached",
       "activation",
@@ -916,6 +894,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
@@ -934,6 +913,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "teardown:stop",

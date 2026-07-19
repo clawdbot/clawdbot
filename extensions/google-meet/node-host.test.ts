@@ -163,6 +163,93 @@ describe("google-meet node host bridge sessions", () => {
     }
   });
 
+  it("rejects Chrome launch when the command exits by signal", async () => {
+    const originalPlatform = process.platform;
+    vi.mocked(spawnSync).mockImplementationOnce(() => ({
+      pid: 123,
+      output: [null, "", ""],
+      stdout: "",
+      stderr: "",
+      status: null,
+      signal: "SIGTERM",
+    }));
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+          }),
+        ),
+      ).rejects.toThrow("failed to launch Chrome for Meet: terminated by SIGTERM");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("preserves timeout diagnostics when Chrome launch stderr is empty", async () => {
+    const originalPlatform = process.platform;
+    const error = Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" });
+    vi.mocked(spawnSync).mockImplementationOnce(() => ({
+      pid: 123,
+      output: [null, "", ""],
+      stdout: "",
+      stderr: "",
+      status: null,
+      signal: "SIGTERM",
+      error,
+    }));
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+          }),
+        ),
+      ).rejects.toThrow("failed to launch Chrome for Meet: spawnSync open ETIMEDOUT");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("preserves timeout diagnostics when Chrome launch also writes stderr", async () => {
+    const originalPlatform = process.platform;
+    const error = Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" });
+    vi.mocked(spawnSync).mockImplementationOnce(() => ({
+      pid: 123,
+      output: [null, "", "child warning"],
+      stdout: "",
+      stderr: "child warning",
+      status: null,
+      signal: "SIGTERM",
+      error,
+    }));
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+          }),
+        ),
+      ).rejects.toThrow(
+        "failed to launch Chrome for Meet: spawnSync open ETIMEDOUT: child warning",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
   it("clears output playback without closing the active bridge when the old output exits", async () => {
     const originalPlatform = process.platform;
     children.length = 0;

@@ -2055,7 +2055,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.4.1",
+    "@openclaw/fs-safe": "0.4.4",
     "@openclaw/proxyline": "0.3.3",
     "@silvia-odwyer/photon-node": "0.3.4",
     "chalk": "5.6.2",

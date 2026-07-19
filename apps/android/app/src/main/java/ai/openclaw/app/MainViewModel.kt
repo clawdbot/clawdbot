@@ -536,6 +536,12 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
   val nodesDevicesErrorText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesErrorText }
+  val nodesDevicesNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesNoticeText }
+  val devicePairingCapabilities: StateFlow<GatewayDevicePairingCapabilities> =
+    runtimeState(initial = GatewayDevicePairingCapabilities()) { it.devicePairingCapabilities }
+  val operatorScopes: StateFlow<List<String>> = runtimeState(initial = emptyList()) { it.operatorScopes }
+  val devicePairingMutation: StateFlow<GatewayDevicePairingMutation?> =
+    runtimeState(initial = null) { it.devicePairingMutation }
   val channelsSummary: StateFlow<GatewayChannelsSummary> =
     runtimeState(initial = GatewayChannelsSummary(channels = emptyList())) { it.channelsSummary }
   val channelsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.channelsRefreshing }
@@ -1238,8 +1244,12 @@ class MainViewModel private constructor(
     }
   }
 
-  fun acceptGatewayTrustPrompt() {
-    runtimeRef.value?.acceptGatewayTrustPrompt()
+  fun acceptGatewayTrustPrompt(manualFingerprint: String? = null) {
+    runtimeRef.value?.acceptGatewayTrustPrompt(manualFingerprint)
+  }
+
+  fun useSystemGatewayTrustPrompt() {
+    runtimeRef.value?.useSystemGatewayTrustPrompt()
   }
 
   fun declineGatewayTrustPrompt() {
@@ -1412,6 +1422,21 @@ class MainViewModel private constructor(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun approveDevicePairing(
+    requestId: String,
+    deviceId: String,
+  ) {
+    ensureRuntime().approveDevicePairing(requestId, deviceId)
+  }
+
+  fun rejectDevicePairing(requestId: String) {
+    ensureRuntime().rejectDevicePairing(requestId)
+  }
+
+  fun removePairedDevice(deviceId: String) {
+    ensureRuntime().removePairedDevice(deviceId)
   }
 
   fun refreshExecApprovals() {

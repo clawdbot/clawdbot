@@ -71,6 +71,7 @@ export type SidebarRecentSession = {
   spawnedBy?: string;
   status?: SessionRunStatus;
   startedAt?: number;
+  updatedAt?: number | null;
   endedAt?: number;
   runtimeMs?: number;
   runtimeSampledAt?: number;

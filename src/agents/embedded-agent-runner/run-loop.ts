@@ -15,6 +15,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
+import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
@@ -270,6 +271,7 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
+    let latestMcpAppChannelView: McpAppChannelView | undefined;
     // Hoisted so the retry-limit error path can use the most recent API total.
     let lastTurnTotal: number | undefined;
     while (true) {
@@ -401,6 +403,9 @@ export async function runPreparedEmbeddedLoop(
         resolveReplayInvalidForAttempt,
         canRestartForLiveSwitch,
       } = normalizedAttempt;
+      // Continuation retries remain one user turn, so keep the newest launch target.
+      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,

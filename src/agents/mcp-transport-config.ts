@@ -3,7 +3,6 @@
  */
 import {
   clampPositiveTimerTimeoutMs,
-  finiteSecondsToTimerSafeMilliseconds,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -76,10 +75,6 @@ function getConnectionTimeoutMs(rawServer: unknown): number {
   if (milliseconds) {
     return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_CONNECTION_TIMEOUT_MS;
   }
-  const seconds = getPositiveNumber(rawServer, ["connectTimeout", "connect_timeout"]);
-  if (seconds) {
-    return finiteSecondsToTimerSafeMilliseconds(seconds) ?? 1;
-  }
   return DEFAULT_CONNECTION_TIMEOUT_MS;
 }
 
@@ -90,10 +85,6 @@ export function resolveMcpRequestTimeoutMs(
   const milliseconds = getPositiveNumber(rawServer, ["requestTimeoutMs"]);
   if (milliseconds) {
     return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  }
-  const seconds = getPositiveNumber(rawServer, ["timeout"]);
-  if (seconds) {
-    return finiteSecondsToTimerSafeMilliseconds(seconds) ?? 1;
   }
   return resolvePositiveTimerTimeoutMs(fallbackMs, DEFAULT_REQUEST_TIMEOUT_MS);
 }

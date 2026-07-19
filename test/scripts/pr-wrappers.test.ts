@@ -20,9 +20,11 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("gh_plain");
     expect(script).toContain("scripts/pr review-init <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
+    expect(script).toContain("scripts/pr ci-dispatch <PR>");
     expect(script).toContain("scripts/pr merge-run <PR>");
     expect(script).toContain('review_init "$pr"');
     expect(script).toContain('prepare_run "$pr"');
+    expect(script).toContain('ci_dispatch "$pr"');
     expect(script).toContain('merge_run "$pr"');
     expect(script).toContain('require_main_target_pr "${1-}"');
     expect(script).toContain("only support PRs targeting main");

@@ -118,8 +118,8 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
-    values: config.dm?.allowFrom,
-    path: `channels.slack.accounts.${accountId}.dm.allowFrom`,
+    values: config.allowFrom,
+    path: `channels.slack.accounts.${accountId}.allowFrom`,
     predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({

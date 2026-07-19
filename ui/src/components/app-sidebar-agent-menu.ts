@@ -55,6 +55,7 @@ type SidebarAgentMenuParams = {
   gatewayVersion: string | null;
   themeMode: ThemeMode;
   agentUnreadCount: (agentId: string) => number;
+  agentApprovalCount: (agentId: string) => number;
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
@@ -123,6 +124,11 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const label = normalizeAgentLabel(agent);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
+  const approvals = params.agentApprovalCount(agentId);
+  const approvalLabel = t(
+    approvals === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
+    { count: String(approvals) },
+  );
   const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
   return html`
     <wa-dropdown-item
@@ -135,6 +141,15 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
     >
       <span slot="icon" class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
       <span class="sidebar-customize-menu__text">${label}</span>
+      ${approvals > 0
+        ? html`<span
+            slot="details"
+            class="sidebar-agent-approval-count"
+            aria-label=${approvalLabel}
+            title=${approvalLabel}
+            >${approvals}</span
+          >`
+        : nothing}
       ${active
         ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
             >${icons.check}</span

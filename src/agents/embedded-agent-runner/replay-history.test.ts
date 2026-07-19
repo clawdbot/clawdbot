@@ -68,6 +68,42 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
 }
 
 describe("normalizeAssistantReplayContent", () => {
+  it("keeps bare marked late-media turns alive while rejecting whitespace-only media fields", () => {
+    const blankString = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/late.png",
+      __openclaw: { lateMedia: true },
+    } as unknown as AgentMessage;
+    const blankArray = {
+      role: "user",
+      content: [{ type: "text", text: "  " }],
+      MediaPaths: ["/tmp/late-array.png"],
+      __openclaw: { lateMedia: true },
+    } as unknown as AgentMessage;
+    const whitespaceOnlyPath = {
+      role: "user",
+      content: "",
+      MediaPath: "   ",
+      __openclaw: { lateMedia: true },
+    } as unknown as AgentMessage;
+    const urlOnly = {
+      role: "user",
+      content: "",
+      MediaUrl: "https://example.test/late.png",
+      __openclaw: { lateMedia: true },
+    } as unknown as AgentMessage;
+
+    const out = normalizeAssistantReplayContent([
+      blankString,
+      blankArray,
+      whitespaceOnlyPath,
+      urlOnly,
+    ]);
+
+    expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly]);
+  });
+
   it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {
     // Mid-turn failure sentinels preserve request turn ordering without
     // pretending the failed assistant generated useful content.

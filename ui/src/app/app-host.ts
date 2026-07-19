@@ -11,7 +11,6 @@ import {
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
-import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
@@ -55,6 +54,7 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
@@ -66,6 +66,7 @@ import {
   APPROVAL_PAGE_ELEMENT,
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
+  EXEC_APPROVAL_ELEMENT,
   ensureOptionalElementForHost,
   isOptionalElementDefined,
   preloadOptionalElement,
@@ -458,6 +459,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   private readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   private readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  private readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") private commandPalette?: CommandPaletteElement;
   @query("openclaw-exec-approval")
   private approvalOverlay?: HTMLElement & { show(): void };
@@ -1009,6 +1011,20 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.runWithCommandPalette((palette) => palette.togglePalette());
   };
 
+  private readonly openApprovals = () => {
+    const show = () => this.approvalOverlay?.show();
+    if (isOptionalElementDefined(this.execApprovalElement)) {
+      show();
+      return;
+    }
+    void ensureOptionalElementForHost(this, this.execApprovalElement)
+      .then(async () => {
+        await this.updateComplete;
+        show();
+      })
+      .catch(() => undefined);
+  };
+
   private deliverPanelEventAfterLoad(element: OptionalCustomElement, event: Event): void {
     void ensureOptionalElementForHost(this, element)
       .then(async () => {
@@ -1098,6 +1114,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
       }
+    }
+    if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
+      preloadOptionalElement(this, this.execApprovalElement);
     }
     const navState = {
       collapsed: this.nativeNavCollapsed(),
@@ -1296,6 +1315,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     // its scrolling and pins the composer dock to the bottom.
     const chatLikeRoute =
       activeRoute === "chat" || activeRoute === "custodian" || activeRoute === "new-session";
+    const inlineApproval =
+      activeRoute === "chat"
+        ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
+        : null;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
@@ -1401,6 +1424,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarEntries=${navigationSnapshot.sidebarEntries}
+                .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
                 .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
@@ -1413,7 +1437,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .updateRunning=${overlaySnapshot.updateRunning}
                 .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
-                .onOpenApprovals=${() => this.approvalOverlay?.show()}
+                .onOpenApprovals=${this.openApprovals}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
                   const search = newSessionSearch(agentId, target);
@@ -1492,15 +1516,21 @@ class OpenClawShell extends OpenClawLightDomElement {
             password: context.gateway.connection.password,
           })}
         ></openclaw-browser-panel>
-        <openclaw-exec-approval
-          .props=${{
-            queue: overlaySnapshot.approvalQueue,
-            busy: overlaySnapshot.approvalBusy,
-            error: overlaySnapshot.approvalError,
-            onDecision: (decision: Parameters<typeof context.overlays.decideApproval>[0]) =>
-              context.overlays.decideApproval(decision),
-          }}
-        ></openclaw-exec-approval>
+        ${isOptionalElementDefined(this.execApprovalElement)
+          ? html`<openclaw-exec-approval
+              .props=${{
+                queue: overlaySnapshot.approvalQueue,
+                busy: overlaySnapshot.approvalBusy,
+                errors: overlaySnapshot.approvalErrors,
+                nowMs: overlaySnapshot.approvalNowMs,
+                inlineApprovalId: inlineApproval?.id ?? null,
+                onDecision: (
+                  approvalId: string,
+                  decision: Parameters<typeof context.overlays.decideApproval>[0],
+                ) => context.overlays.decideApproval(decision, approvalId),
+              }}
+            ></openclaw-exec-approval>`
+          : nothing}
         ${renderDevicePairSetup({
           open: overlaySnapshot.devicePairSetupOpen,
           loading: overlaySnapshot.devicePairSetupLoading,

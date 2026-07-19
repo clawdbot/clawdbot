@@ -1,4 +1,6 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   advanceCursor,
   normalizeEpoch,
@@ -18,9 +20,15 @@ import {
   hasWorkerWorkspacePendingResult,
   insertWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
+import {
+  parseWorkerWorkspaceReconciliationPlan,
+  serializeWorkerWorkspaceReconciliationPlan,
+} from "./workspace-reconcile.js";
 
 type TurnClaimReleaseWaiter = () => void;
 const turnClaimReleaseWaiters = new Map<string, Map<string, Set<TurnClaimReleaseWaiter>>>();
+const workspaceJournalQuery = (db: DatabaseSync) =>
+  getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 
 function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter> {
   let bySession = turnClaimReleaseWaiters.get(path);
@@ -450,6 +458,23 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         ) {
           throw new Error(`Cannot advance stale worker workspace for session ${sessionId}`);
         }
+        const reconciliation = executeSqliteQuerySync(
+          db,
+          workspaceJournalQuery(db)
+            .selectFrom("worker_workspace_reconciliations")
+            .selectAll()
+            .where("session_id", "=", sessionId),
+        ).rows[0];
+        const reconciliationPlan = reconciliation
+          ? parseWorkerWorkspaceReconciliationPlan(reconciliation.plan_json)
+          : undefined;
+        if (
+          reconciliation &&
+          reconciliation.base_manifest_ref !== current.workspaceBaseManifestRef &&
+          reconciliationPlan?.appliedManifestRef !== current.workspaceBaseManifestRef
+        ) {
+          throw new Error(`Worker workspace journal owner is stale for session ${sessionId}`);
+        }
         const result = executeSqliteQuerySync(
           db,
           query(db)
@@ -469,7 +494,24 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session workspace ${sessionId} changed during reconciliation`);
         }
-        clearWorkerWorkspaceReconciliation(db, sessionId, manifestRef);
+        if (reconciliation) {
+          const markedPlan = serializeWorkerWorkspaceReconciliationPlan({
+            ...reconciliationPlan!,
+            appliedManifestRef: manifestRef,
+            basePack: reconciliation.base_pack,
+          });
+          const marked = executeSqliteQuerySync(
+            db,
+            workspaceJournalQuery(db)
+              .updateTable("worker_workspace_reconciliations")
+              .set({ plan_json: markedPlan })
+              .where("session_id", "=", sessionId)
+              .where("base_manifest_ref", "=", reconciliation.base_manifest_ref),
+          );
+          if (marked.numAffectedRows !== 1n) {
+            throw new Error(`Worker workspace journal changed for session ${sessionId}`);
+          }
+        }
         return getRequired(db, sessionId);
       });
     },
@@ -514,7 +556,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session workspace ${sessionId} changed during reconciliation`);
         }
-        clearWorkerWorkspaceReconciliation(db, sessionId, manifestRef);
+        clearWorkerWorkspaceReconciliation(db, sessionId);
         return getRequired(db, sessionId);
       });
     },

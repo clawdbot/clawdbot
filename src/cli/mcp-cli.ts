@@ -969,11 +969,20 @@ export function registerMcpCli(program: Command) {
         if (opts.parallel) {
           server.supportsParallelToolCalls = true;
         }
-        setOptionalField(server, "timeout", parsePositiveNumberOption(opts.timeout, "--timeout"));
+        const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
           server,
-          "connectTimeout",
-          parsePositiveNumberOption(opts.connectTimeout, "--connect-timeout"),
+          "requestTimeoutMs",
+          requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
+        );
+        const connectionTimeoutSeconds = parsePositiveNumberOption(
+          opts.connectTimeout,
+          "--connect-timeout",
+        );
+        setOptionalField(
+          server,
+          "connectionTimeoutMs",
+          connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
         );
         const include = parseCsvList(opts.include);
         const exclude = parseCsvList(opts.exclude);
@@ -1157,17 +1166,23 @@ export function registerMcpCli(program: Command) {
           }
         }
         if (opts.clearTimeouts) {
-          delete next.timeout;
-          delete next.connectTimeout;
-          delete next.connect_timeout;
           delete next.requestTimeoutMs;
           delete next.connectionTimeoutMs;
         }
-        setOptionalField(next, "timeout", parsePositiveNumberOption(opts.timeout, "--timeout"));
+        const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
           next,
-          "connectTimeout",
-          parsePositiveNumberOption(opts.connectTimeout, "--connect-timeout"),
+          "requestTimeoutMs",
+          requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
+        );
+        const connectionTimeoutSeconds = parsePositiveNumberOption(
+          opts.connectTimeout,
+          "--connect-timeout",
+        );
+        setOptionalField(
+          next,
+          "connectionTimeoutMs",
+          connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
         );
         if (opts.parallel === true) {
           next.supportsParallelToolCalls = true;

@@ -133,7 +133,7 @@ export function resolveWhatsAppAccount(params: {
     name: normalizeOptionalString(merged.name),
     enabled,
     sendReadReceipts: merged.sendReadReceipts ?? true,
-    messagePrefix: merged.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    messagePrefix: merged.messagePrefix,
     defaultTo: merged.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,

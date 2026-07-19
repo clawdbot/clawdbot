@@ -66,6 +66,7 @@ describe("board session shell", () => {
     render(
       renderBoardSessionSurface({
         snapshot: provider.snapshot$.value,
+        sessions: [],
         activeTabId: "main",
         dock,
         reopenDock: "right",
@@ -95,6 +96,7 @@ describe("board session shell", () => {
     render(
       renderBoardSessionSurface({
         snapshot: provider.snapshot$.value,
+        sessions: [],
         activeTabId: "main",
         dock: "hidden",
         reopenDock: "left",
@@ -123,6 +125,7 @@ describe("board session shell", () => {
     const provider = boardProviderForSession("agent:main:main");
     const props = {
       snapshot: provider.snapshot$.value,
+      sessions: [],
       activeTabId: "main",
       reopenDock: "left" as const,
       dockSize: { height: 300, width: 420 },

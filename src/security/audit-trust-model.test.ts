@@ -192,7 +192,7 @@ describe("security audit trust model findings", () => {
         name: "flags supported legacy open dm.policy",
         cfg: {
           channels: { discord: { dm: { policy: "open" } } },
-        } satisfies OpenClawConfig,
+        } as unknown as OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {
           const finding = findings.find(
             (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
@@ -223,7 +223,7 @@ describe("security audit trust model findings", () => {
               dm: { policy: "open" },
             },
           },
-        } satisfies OpenClawConfig,
+        } as unknown as OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {
           expect(
             findings.some((finding) =>

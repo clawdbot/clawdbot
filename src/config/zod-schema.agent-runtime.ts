@@ -782,7 +782,6 @@ const CommonToolPolicyFields = {
 
 const MessageToolConfigSchema = z
   .object({
-    allowCrossContextSend: z.boolean().optional(),
     crossContext: z
       .object({
         allowWithinProvider: z.boolean().optional(),

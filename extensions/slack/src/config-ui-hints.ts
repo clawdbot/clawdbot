@@ -17,7 +17,7 @@ export const slackChannelConfigUiHints = {
   },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
-    dmPolicy: { channelKey: "slack", includeLegacyNestedPolicy: true },
+    dmPolicy: { channelKey: "slack" },
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Slack channel IDs",

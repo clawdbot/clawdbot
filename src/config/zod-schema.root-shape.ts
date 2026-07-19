@@ -20,8 +20,6 @@ import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
   AccessGroupsSchema,
   CommitmentsSchema,
-  HttpUrlSchema,
-  LegacyCanvasHostSchema,
   LoggingLevelSchema,
   MarketplacesSchema,
   McpConfigSchema,
@@ -303,15 +301,7 @@ export const OpenClawSchemaShape = {
           chatPersistCommentary: z.boolean().optional(),
           chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
-        })
-        .optional(),
-    })
-    .optional(),
-  tui: z
-    .strictObject({
-      footer: z
-        .strictObject({
-          showRemoteHost: z.boolean().optional(),
+          sidebarLiveActivity: z.boolean().optional(),
         })
         .optional(),
     })
@@ -436,7 +426,6 @@ export const OpenClawSchemaShape = {
             .optional(),
         })
         .optional(),
-      webhook: HttpUrlSchema.optional(),
       webhookToken: SecretInputSchema.optional().register(sensitive),
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       failureAlert: z
@@ -629,7 +618,6 @@ export const OpenClawSchemaShape = {
       bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
     })
     .optional(),
-  canvasHost: LegacyCanvasHostSchema,
   surfaces: z
     .record(
       z.string(),

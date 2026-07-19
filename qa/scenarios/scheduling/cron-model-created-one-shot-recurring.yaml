@@ -29,6 +29,7 @@ scenario:
     - extensions/qa-lab/src/cron-run-wait.ts
   execution:
     kind: flow
+    retryCount: 0
     suiteIsolation: isolated
     summary: Ask the live model to create one-off and recurring jobs, then verify stored shape and natural scheduler outcomes over the isolated Gateway.
     channel: qa-channel
@@ -138,7 +139,7 @@ flow:
             expr: "jobs.every((job) => job.sessionTarget === 'isolated' && job.payload.kind === 'agentTurn' && job.delivery?.mode === 'none')"
             message:
               expr: "`model created unsafe job shape: ${JSON.stringify(jobs)}`"
-      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}; every=${recurringJob.id}`"
+      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}:${oneShotJob.deleteAfterRun}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}`"
 
     - name: scheduler fires one-off once and recurring repeatedly
       actions:
@@ -168,6 +169,18 @@ flow:
         - set: preRestartRecurringTs
           value:
             expr: "Math.max(...recurringRuns.map((entry) => entry.ts))"
+        - set: preRestartBaseUrl
+          value:
+            expr: env.gateway.baseUrl
+        - set: preRestartTransportCursor
+          value:
+            expr: state.getSnapshot().cursor
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= preRestartTransportCursor ? true : undefined"
+            - 10000
+            - 25
         - assert:
             expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
             message: qa gateway child does not expose restartAfterStateMutation
@@ -181,13 +194,33 @@ flow:
           args:
             - ref: env
             - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - assert:
+            expr: "env.gateway.baseUrl === preRestartBaseUrl"
+            message:
+              expr: "`gateway restart changed address from ${preRestartBaseUrl} to ${env.gateway.baseUrl}`"
+        - call: env.gateway.call
+          saveAs: postRestartBaselinePage
+          args:
+            - cron.runs
+            - id:
+                expr: recurringJob.id
+              limit: 20
+              sortDir: desc
+            - timeoutMs: 30000
+        - set: postRestartBaselineTs
+          value:
+            expr: "Math.max(preRestartRecurringTs, ...postRestartBaselinePage.entries.map((entry) => entry.ts))"
         - call: waitForCondition
           saveAs: postRestartRecurringRun
           args:
             - lambda:
                 async: true
-                expr: "env.gateway.call('cron.runs', { id: recurringJob.id, limit: 20, sortDir: 'desc' }, { timeoutMs: 30000 }).then((page) => page.entries.find((entry) => entry.ts > preRestartRecurringTs && entry.status === 'ok'))"
-            - expr: liveTurnTimeoutMs(env, 120000)
+                expr: "env.gateway.call('cron.runs', { id: recurringJob.id, limit: 20, sortDir: 'desc' }, { timeoutMs: 30000 }).then((page) => page.entries.find((entry) => entry.ts > postRestartBaselineTs && entry.status === 'ok'))"
+            - expr: liveTurnTimeoutMs(env, 180000)
             - 1000
         - call: env.gateway.call
           saveAs: finalList
@@ -205,6 +238,14 @@ flow:
             expr: "Boolean(finalRecurring?.enabled) && finalRecurring.state.nextRunAtMs > Date.now()"
             message:
               expr: "`recurring job did not remain scheduled: ${JSON.stringify(finalRecurring)}`"
+        - assert:
+            expr: "finalRecurring.state.nextRunAtMs > recurringJob.state.nextRunAtMs"
+            message:
+              expr: "`recurring next run did not advance from ${recurringJob.state.nextRunAtMs}: ${JSON.stringify(finalRecurring)}`"
+        - assert:
+            expr: "finalList.jobs.length === 1 && finalList.jobs[0].id === recurringJob.id"
+            message:
+              expr: "`gateway restart replayed or created unexpected cron jobs: ${JSON.stringify(finalList.jobs.map((job) => ({ id: job.id, name: job.name, schedule: job.schedule })))}`"
         - call: env.gateway.call
           saveAs: oneShotRunsPage
           args:
@@ -221,10 +262,17 @@ flow:
             expr: "oneShotRuns.length === 1"
             message:
               expr: "`expected exactly one one-off run, got ${JSON.stringify(oneShotRuns)}`"
+        - set: cronDeliveryMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && [oneShotPayloadMarker, recurringPayloadMarker].some((marker) => String(message.text ?? '').includes(marker)))"
+        - assert:
+            expr: "cronDeliveryMessages.length === 0"
+            message:
+              expr: "`delivery-none cron jobs emitted payload markers: ${JSON.stringify(cronDeliveryMessages.map((message) => message.text))}`"
         - call: env.gateway.call
           args:
             - cron.remove
             - id:
                 expr: recurringJob.id
             - timeoutMs: 30000
-      detailsExpr: "`one-shot=${oneShotRun.status}; recurring-runs=${recurringRuns.length}; post-restart=${postRestartRecurringRun.status}; next=${finalRecurring.state.nextRunAtMs}`"
+      detailsExpr: "`one-shot=${oneShotRun.status}; one-shot-runs=${oneShotRuns.length}; one-shot-present=${finalList.jobs.some((job) => job.id === oneShotJob.id)}; recurring-runs=${recurringRuns.length}; recurring-enabled=${finalRecurring.enabled}; recurring-next-before=${recurringJob.state.nextRunAtMs}; recurring-next-after=${finalRecurring.state.nextRunAtMs}; post-restart=${postRestartRecurringRun.status}; post-restart-ts=${postRestartBaselineTs}->${postRestartRecurringRun.ts}; restart-address=${preRestartBaseUrl}->${env.gateway.baseUrl}; final-job-count=${finalList.jobs.length}; delivery-marker-outbound=${cronDeliveryMessages.length}`"

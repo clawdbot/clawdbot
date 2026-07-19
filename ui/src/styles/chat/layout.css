@@ -149,6 +149,14 @@ openclaw-chat-page {
   margin-inline: auto;
 }
 
+.chat-inline-approval {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: calc(100% - 36px - 2 * clamp(6px, 1vw, 12px));
+  max-width: var(--chat-thread-max-width);
+  margin: 8px auto;
+}
+
 .chat-virtual-sizer {
   position: relative;
   width: 100%;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 
 function completeResult(params?: {
+  latestMcpAppChannelView?: { viewId: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
     name: string;
@@ -39,6 +40,7 @@ function completeResult(params?: {
       getLastAssistantTextMessageIndex: () => undefined,
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
+      getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getMessagingToolSentMediaUrls: () => [],
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
@@ -138,5 +140,13 @@ describe("attempt result projection", () => {
     expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
       true,
     );
+  });
+
+  it("projects the latest MCP App channel view without result data", () => {
+    expect(
+      completeResult({
+        latestMcpAppChannelView: { viewId: "view-latest" },
+      }).latestMcpAppChannelView,
+    ).toEqual({ viewId: "view-latest" });
   });
 });

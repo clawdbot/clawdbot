@@ -186,7 +186,7 @@ struct OpenClawChatComposer: View {
     private var lifecycleComposer: some View {
         self.recorderLifecycleComposer
             .onChange(of: self.presentationOwner) { _, _ in
-                self.cancelActiveDictation()
+                ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 #if !os(macOS)
                 self.showsPhotoPicker = false
                 self.showsFileImporter = false
@@ -204,7 +204,7 @@ struct OpenClawChatComposer: View {
                 self.stageCompletedVoiceNoteIfNeeded()
             }
             .onDisappear {
-                self.cancelActiveDictation()
+                ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 #if !os(macOS)
                 self.showsPhotoPicker = false
                 self.showsFileImporter = false
@@ -696,10 +696,18 @@ struct OpenClawChatComposer: View {
 
             HStack(alignment: .center, spacing: 8) {
                 if let talkControl {
-                    self.talkButton(talkControl)
+                    ChatTalkButton(
+                        control: talkControl,
+                        sessionKey: self.viewModel.sessionKey,
+                        helpText: self.talkHelpText(talkControl),
+                        style: .full)
+                    if ChatCameraFlipButton.isAvailable(for: talkControl) {
+                        ChatCameraFlipButton(control: talkControl, size: 32)
+                    }
                 }
                 if self.showsConnectionPill {
-                    self.connectionPill
+                    ChatConnectionPill(
+                        isConnected: self.viewModel.healthOK || (self.talkControl?.isGatewayConnected ?? false))
                 }
                 Spacer(minLength: 0)
                 self.sendButton
@@ -756,13 +764,20 @@ struct OpenClawChatComposer: View {
                     isComposerEnabled: self.isComposerEnabled,
                     isAttachmentInputEnabled: self.isAttachmentInputEnabled,
                     onCancelDictation: {
-                        self.cancelActiveDictation()
+                        ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                     },
                     onStartDictation: {
                         if let dictationControl = self.dictationControl {
-                            self.startDictation(dictationControl)
+                            ChatDictationActions.start(
+                                dictationControl,
+                                task: self.$dictationTask,
+                                viewModel: self.viewModel)
                         }
                     })
+            }
+
+            if let talkControl, ChatCameraFlipButton.isAvailable(for: talkControl) {
+                ChatCameraFlipButton(control: talkControl, size: self.cleanControlHeight)
             }
 
             self.cleanTrailingControl
@@ -779,7 +794,13 @@ struct OpenClawChatComposer: View {
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive),
             let talkControl
         {
-            self.compactTalkButton(talkControl)
+            ChatTalkButton(
+                control: talkControl,
+                sessionKey: self.viewModel.sessionKey,
+                helpText: self.talkHelpText(talkControl),
+                style: .compact(
+                    controlHeight: self.cleanControlHeight,
+                    iconControlSize: self.cleanIconControlSize))
         } else {
             sendButton
                 .frame(width: cleanControlHeight, height: cleanControlHeight)
@@ -793,149 +814,12 @@ struct OpenClawChatComposer: View {
             self.voiceNoteControl?.recorder.isRequestingPermission == true
     }
 
-    /// Local capture and realtime Talk share one microphone, so the Talk affordance
-    /// must yield until dictation or voice-note capture releases audio ownership.
-    nonisolated static func showsCompactTalkControl(
-        hasDraftToSend: Bool,
-        hasBlockingRunActivity: Bool,
-        isLocalVoiceCaptureActive: Bool) -> Bool
-    {
-        !hasDraftToSend && !hasBlockingRunActivity && !isLocalVoiceCaptureActive
-    }
-
-    private func talkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
-        Button {
-            talkControl.toggle(self.viewModel.sessionKey)
-        } label: {
-            HStack(spacing: 6) {
-                ChatTalkButtonGlyph(control: talkControl)
-                    .font(OpenClawChatTypography.captionSemiBold)
-                Text(talkControl.isEnabled ? "Stop" : "Talk")
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(talkControl.isEnabled ? .white : .primary)
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background {
-                Capsule()
-                    .fill(self.talkButtonFill(talkControl))
-            }
-            .overlay {
-                Capsule()
-                    .strokeBorder(self.talkButtonStroke(talkControl), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
-        .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.talkAccessibilityValue(talkControl))
-        .accessibilityIdentifier("chat-realtime-control")
-        .help(self.talkHelpText(talkControl))
-        .chatTalkInputDeviceMenu(talkControl)
-    }
-
-    private func startDictation(_ control: OpenClawChatDictationControl) {
-        guard self.dictationTask == nil else { return }
-        let session = self.viewModel.currentSessionSnapshot()
-        self.dictationTask = Task { @MainActor in
-            defer { self.dictationTask = nil }
-            do {
-                guard let transcript = try await control.start(), !transcript.isEmpty else { return }
-                try Task.checkCancellation()
-                self.viewModel.appendDictationTranscript(transcript, for: session)
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled else { return }
-                self.viewModel.setDictationError(error, for: session)
-            }
-        }
-    }
-
-    private func cancelActiveDictation() {
-        guard self.dictationTask != nil else { return }
-        self.dictationTask?.cancel()
-        self.dictationControl?.cancel()
-    }
-
-    private func compactTalkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
-        Button {
-            talkControl.toggle(self.viewModel.sessionKey)
-        } label: {
-            ChatTalkButtonGlyph(control: talkControl)
-                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(.white)
-                .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
-                // Prominent filled circle so the mic reads as the primary action,
-                // mirroring the send button it swaps with once a draft exists.
-                .background {
-                    Circle()
-                        .fill(talkControl.isEnabled
-                            ? self.talkButtonFill(talkControl)
-                            : AnyShapeStyle(OpenClawChatTheme.accent))
-                        .opacity(talkControl.isGatewayConnected || talkControl.isEnabled ? 1 : 0.4)
-                }
-                .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
-        .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.talkAccessibilityValue(talkControl))
-        .accessibilityIdentifier("chat-realtime-control")
-        .help(self.talkHelpText(talkControl))
-        .chatTalkInputDeviceMenu(talkControl)
-    }
-
-    private func talkButtonFill(_ talkControl: OpenClawChatTalkControl) -> AnyShapeStyle {
-        if talkControl.isEnabled {
-            return AnyShapeStyle(OpenClawChatTheme.userBubble)
-        }
-        if !talkControl.isGatewayConnected {
-            return AnyShapeStyle(Color.secondary.opacity(0.12))
-        }
-        return OpenClawChatTheme.subtleCard
-    }
-
-    private func talkButtonStroke(_ talkControl: OpenClawChatTalkControl) -> Color {
-        if talkControl.isEnabled {
-            return Color.white.opacity(0.18)
-        }
-        return OpenClawChatTheme.composerBorder
-    }
-
-    private func talkAccessibilityValue(_ talkControl: OpenClawChatTalkControl) -> String {
-        let status = talkControl.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = talkControl.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        return [status, provider].filter { !$0.isEmpty }.joined(separator: ", ")
-    }
-
     private func talkHelpText(_ talkControl: OpenClawChatTalkControl) -> String {
         if !talkControl.isGatewayConnected, !talkControl.isEnabled {
             return "Connect the gateway before starting realtime chat"
         }
         let action = talkControl.isEnabled ? "Stop" : "Start"
         return "\(action) realtime chat for \(self.activeSessionLabel)"
-    }
-
-    private var connectionPill: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.connectionOK ? .green : .orange)
-                .frame(width: 7, height: 7)
-            Text(self.connectionStatusText)
-                .font(OpenClawChatTypography.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, self.composerChrome == .clean ? 0 : 8)
-        .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
-        .background {
-            if self.composerChrome == .full {
-                Capsule()
-                    .fill(OpenClawChatTheme.subtleCard)
-            }
-        }
     }
 
     private var activeSessionLabel: String {
@@ -1452,14 +1336,6 @@ extension OpenClawChatComposer {
         // The app-owned recorder outlives this view. Release the microphone
         // when its only recording UI disappears so capture never runs hidden.
         recorder.cancel()
-    }
-
-    private var connectionStatusText: String {
-        self.connectionOK ? "Gateway connected" : "Connecting..."
-    }
-
-    private var connectionOK: Bool {
-        self.viewModel.healthOK || (self.talkControl?.isGatewayConnected ?? false)
     }
 
     private var placeholderText: String {

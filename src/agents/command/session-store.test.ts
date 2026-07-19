@@ -1242,6 +1242,59 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("uses non-CLI last-call usage when promptTokens is unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-responses-cumulative-usage";
+      const sessionId = "test-responses-cumulative-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "custom-openai",
+        defaultModel: "responses-model",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "custom-openai",
+              model: "responses-model",
+              usage: {
+                input: 497_720,
+                output: 7_485,
+                cacheRead: 1_323_520,
+                cacheWrite: 0,
+                total: 1_828_725,
+              },
+              lastCallUsage: {
+                input: 38_333,
+                output: 66,
+                cacheRead: 120_320,
+                cacheWrite: 0,
+                total: 158_719,
+              },
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(158_653);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokens).toBe(158_653);
+    });
+  });
+
   it("uses the compaction snapshot when non-CLI last-call context is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-unavailable-context";
@@ -1469,7 +1522,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("prefers fresh usage over positive compaction tokensAfter", async () => {
+  it("prefers fresh last-call usage over positive compaction tokensAfter", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-positive-compaction-with-usage";
@@ -1516,7 +1569,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as EmbeddedAgentRunResult,
       });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(120_000);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(95_000);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
       expect(sessionStore[sessionKey]?.inputTokens).toBe(100_000);
       expect(sessionStore[sessionKey]?.outputTokens).toBe(3_000);

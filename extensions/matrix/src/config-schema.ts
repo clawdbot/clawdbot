@@ -33,8 +33,6 @@ const matrixThreadBindingsSchema = z
     maxAgeHours: z.number().nonnegative().optional(),
     spawnSessions: z.boolean().optional(),
     defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-    spawnSubagentSessions: z.boolean().optional(),
-    spawnAcpSessions: z.boolean().optional(),
   })
   .optional();
 

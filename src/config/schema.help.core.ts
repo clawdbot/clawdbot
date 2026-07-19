@@ -246,8 +246,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Realtime provider speaker voice name override for browser or Gateway-owned Talk sessions.",
   "talk.realtime.speakerVoiceId":
     "Realtime provider speaker voice id override for browser or Gateway-owned Talk sessions.",
-  "talk.realtime.voice":
-    "Deprecated realtime provider voice override. Use talk.realtime.speakerVoice.",
   "talk.realtime.instructions":
     "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",

@@ -113,17 +113,11 @@ export type ExtensionChannelConfig = {
     spawnSessions?: boolean;
     /** Default context mode for thread-bound native subagent spawns. */
     defaultSpawnContext?: "isolated" | "fork";
-    /** @deprecated Use spawnSessions instead. */
-    spawnAcpSessions?: boolean;
-    /** @deprecated Use spawnSessions instead. */
-    spawnSubagentSessions?: boolean;
   };
   /** Channel-specific bot loop guard settings. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Channel-specific implicit-mention policy override. */
   implicitMentions?: ChannelImplicitMentionsConfig;
-  /** @deprecated Use threadBindings.spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
   /** Explicit opt-in for channels that need private network callbacks or media fetches. */
   dangerouslyAllowPrivateNetwork?: boolean;
   /** Account-scoped channel config keyed by plugin-defined account id. */

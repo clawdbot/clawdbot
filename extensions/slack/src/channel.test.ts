@@ -801,7 +801,8 @@ describe("slackPlugin security", () => {
       cfg: {
         channels: {
           slack: {
-            dm: { policy: "allowlist", allowFrom: ["  slack:U123  "] },
+            dmPolicy: "allowlist",
+            allowFrom: ["  slack:U123  "],
           },
         },
       } as OpenClawConfig,
@@ -811,7 +812,8 @@ describe("slackPlugin security", () => {
             slack: {
               botToken: "xoxb-test",
               appToken: "xapp-test",
-              dm: { policy: "allowlist", allowFrom: ["  slack:U123  "] },
+              dmPolicy: "allowlist",
+              allowFrom: ["  slack:U123  "],
             },
           },
         } as OpenClawConfig,

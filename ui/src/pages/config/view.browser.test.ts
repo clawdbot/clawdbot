@@ -66,6 +66,8 @@ describe("config view", () => {
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
+    sidebarLiveActivity: true,
+    setSidebarLiveActivity: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
@@ -1345,6 +1347,24 @@ describe("config view", () => {
       "Desk Camera",
     ]);
     expect(container.textContent).toContain("Hold microphone button to dictate");
+  });
+
+  it("renders and changes the live sidebar activity preference", () => {
+    const setSidebarLiveActivity = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      sidebarLiveActivity: true,
+      setSidebarLiveActivity,
+    });
+
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row--toggle")).find(
+      (candidate) => candidate.textContent?.includes("Show live agent activity in sidebar"),
+    );
+    expect(row).toBeDefined();
+    expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
+    row?.click();
+    expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

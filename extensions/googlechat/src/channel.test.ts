@@ -480,7 +480,7 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: ["users/alice", "googlechat:bob"] },
+          allowFrom: ["users/alice", "googlechat:bob"],
           groups: {
             "spaces/AAA": {},
             "spaces/BBB": {},
@@ -521,7 +521,7 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "] },
+          allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "],
         },
       },
     } as unknown as OpenClawConfig;
@@ -548,10 +548,8 @@ describe("googlechatPlugin security", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: {
-            policy: "allowlist",
-            allowFrom: ["  googlechat:user:Bob@Example.com  "],
-          },
+          dmPolicy: "allowlist",
+          allowFrom: ["  googlechat:user:Bob@Example.com  "],
         },
       },
     } as OpenClawConfig;

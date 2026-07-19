@@ -258,15 +258,11 @@ describe("googlechat setup", () => {
         {
           channels: {
             googlechat: {
-              dm: {
-                policy: "disabled",
-              },
+              dmPolicy: "disabled",
               accounts: {
                 alerts: {
                   serviceAccount: { client_email: "bot@example.com" },
-                  dm: {
-                    policy: "allowlist",
-                  },
+                  dmPolicy: "allowlist",
                 },
               },
             },
@@ -324,8 +320,8 @@ describe("googlechat setup", () => {
 
   it("reports account-scoped config keys for named accounts", () => {
     expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
-      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
+      policyKey: "channels.googlechat.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.googlechat.accounts.alerts.allowFrom",
     });
   });
 
@@ -334,15 +330,11 @@ describe("googlechat setup", () => {
       channels: {
         googlechat: {
           defaultAccount: "alerts",
-          dm: {
-            policy: "disabled",
-          },
+          dmPolicy: "disabled",
           accounts: {
             alerts: {
               serviceAccount: { client_email: "bot@example.com" },
-              dm: {
-                policy: "allowlist",
-              },
+              dmPolicy: "allowlist",
             },
           },
         },
@@ -351,13 +343,13 @@ describe("googlechat setup", () => {
 
     expect(googlechatSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
     expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
-      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
+      policyKey: "channels.googlechat.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.googlechat.accounts.alerts.allowFrom",
     });
 
     const next = googlechatSetupWizard.dmPolicy?.setPolicy(cfg, "open");
-    expect(next?.channels?.googlechat?.dm?.policy).toBe("disabled");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
+    expect(next?.channels?.googlechat?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dmPolicy).toBe("open");
   });
 
   it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
@@ -371,15 +363,11 @@ describe("googlechat setup", () => {
         channels: {
           googlechat: {
             defaultAccount: "alerts",
-            dm: {
-              allowFrom: ["users/root"],
-            },
+            allowFrom: ["users/root"],
             accounts: {
               alerts: {
                 serviceAccount: { client_email: "bot@example.com" },
-                dm: {
-                  allowFrom: ["users/alerts"],
-                },
+                allowFrom: ["users/alerts"],
               },
             },
           },
@@ -388,10 +376,8 @@ describe("googlechat setup", () => {
       prompter,
     });
 
-    expect(next?.channels?.googlechat?.dm?.allowFrom).toEqual(["users/root"]);
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual([
-      "users/123456789",
-    ]);
+    expect(next?.channels?.googlechat?.allowFrom).toEqual(["users/root"]);
+    expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123456789"]);
   });
 
   it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
@@ -399,9 +385,7 @@ describe("googlechat setup", () => {
       {
         channels: {
           googlechat: {
-            dm: {
-              allowFrom: ["users/123"],
-            },
+            allowFrom: ["users/123"],
             accounts: {
               alerts: {
                 serviceAccount: { client_email: "bot@example.com" },
@@ -414,9 +398,9 @@ describe("googlechat setup", () => {
       "alerts",
     );
 
-    expect(next?.channels?.googlechat?.dm?.policy).toBeUndefined();
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual(["users/123", "*"]);
+    expect(next?.channels?.googlechat?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dmPolicy).toBe("open");
+    expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123", "*"]);
   });
 
   it("keeps startAccount pending until abort, then unregisters", async () => {

@@ -4,7 +4,8 @@
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
-import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
+import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
+import { buildLateMediaAttachedText } from "../../../sessions/user-turn-transcript.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
@@ -12,6 +13,7 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import {
   findActiveUserMessageIndex,
+  hasNonBlankUserText,
   projectPersistedSenderContext,
   readFirstUserText,
   resolveUserTranscriptMessages,
@@ -466,16 +468,9 @@ function stripHistoricalInboundMetadataFromUserMessages(
       return message;
     }
     const content = (message as { content?: unknown }).content;
-    const media = message as unknown as { MediaPath?: unknown; MediaPaths?: unknown };
-    const hasMedia =
-      (typeof media.MediaPath === "string" && Boolean(media.MediaPath.trim())) ||
-      (Array.isArray(media.MediaPaths) &&
-        media.MediaPaths.some((value) => typeof value === "string" && value.trim()));
-    const injectMediaText =
-      hasMedia &&
-      (typeof content === "string"
-        ? !content.trim()
-        : Array.isArray(content) && !content.some((block) => readFirstUserText([block])?.trim()));
+    const injectMediaText = hasPersistedMedia(message) && !hasNonBlankUserText(content);
+    // #111204: restore marked path lines here, never in UI-visible transcript storage.
+    const mediaOnlyText = buildLateMediaAttachedText(message) ?? MEDIA_ONLY_USER_TEXT;
     const isActive = index === activeUserMessageIndex;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
@@ -500,7 +495,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
     // keeps such messages byte-stable across current↔historical (the envelope is
     // present in both forms) and avoids double-stamping.
     const transformText = (raw: string): string => {
-      const sourceText = injectMediaText && !raw.trim() ? MEDIA_ONLY_USER_TEXT : raw;
+      const sourceText = injectMediaText && !raw.trim() ? mediaOnlyText : raw;
       const { body, envelope } = splitLeadingTimestampEnvelope(sourceText);
       if (envelope || sourceText.includes(BOUNDARY_CRON_TIME_MARKER)) {
         if (isActive) {

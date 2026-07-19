@@ -656,6 +656,7 @@ describe("resolveMediaList", () => {
       {
         path: attachment.url,
         contentType: undefined,
+        kind: "audio",
         placeholder: "<media:audio>",
       },
     ]);
@@ -682,6 +683,205 @@ describe("resolveMediaList", () => {
       {
         path: attachment.url,
         contentType: undefined,
+        kind: "audio",
+        placeholder: "<media:audio>",
+      },
+    ]);
+  });
+
+  it.each(["application/octet-stream", "application/ogg"])(
+    "prefers the structured audio kind over non-audio MIME %s",
+    async (contentType) => {
+      const attachment = {
+        id: "att-audio-conflicting-mime",
+        url: "https://cdn.discordapp.com/attachments/1/voice.ogg",
+        filename: "voice.ogg",
+        content_type: contentType,
+      };
+      readRemoteMediaBuffer.mockResolvedValueOnce({
+        buffer: Buffer.from("audio"),
+        contentType,
+      });
+      saveMediaBuffer.mockResolvedValueOnce({
+        path: "/tmp/voice.ogg",
+        contentType,
+      });
+
+      const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+      expect(result).toEqual([
+        {
+          path: "/tmp/voice.ogg",
+          contentType: undefined,
+          kind: "audio",
+          placeholder: "<media:audio>",
+        },
+      ]);
+    },
+  );
+
+  it("normalizes MIME case before classifying audio", async () => {
+    const attachment = {
+      id: "att-audio-mime-case",
+      url: "https://cdn.discordapp.com/attachments/1/voice.bin",
+      filename: "voice.bin",
+      content_type: "Audio/OGG",
+    };
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "Audio/OGG",
+        kind: "audio",
+        placeholder: "<media:audio>",
+      },
+    ]);
+  });
+
+  it("does not let an audio-looking filename override video MIME", async () => {
+    const attachment = {
+      id: "att-video-audio-extension",
+      url: "https://cdn.discordapp.com/attachments/1/clip.ogg",
+      filename: "clip.ogg",
+      content_type: "video/ogg",
+    };
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "video/ogg",
+        placeholder: "<media:video>",
+      },
+    ]);
+  });
+
+  it("does not let an audio-looking filename override fetched image MIME", async () => {
+    const attachment = {
+      id: "att-image-audio-extension",
+      url: "https://cdn.discordapp.com/attachments/1/image.ogg",
+      filename: "image.ogg",
+    };
+    readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/image.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: "/tmp/image.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("keeps declared audio when the fetched MIME is generic", async () => {
+    const attachment = {
+      id: "att-declared-audio-fetched-generic",
+      url: "https://cdn.discordapp.com/attachments/1/voice",
+      filename: "voice",
+      content_type: "audio/ogg",
+    };
+    readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "application/octet-stream",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/voice",
+      contentType: "application/octet-stream",
+    });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: "/tmp/voice",
+        contentType: "audio/ogg",
+        kind: "audio",
+        placeholder: "<media:audio>",
+      },
+    ]);
+  });
+
+  it.each(["application/pdf", "text/plain"])(
+    "does not infer audio from an .ogg filename with definitive MIME %s",
+    async (contentType) => {
+      const attachment = {
+        id: `att-definitive-${contentType}`,
+        url: "https://cdn.discordapp.com/attachments/1/document.ogg",
+        filename: "document.ogg",
+        content_type: contentType,
+      };
+      readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+      const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+      expect(result).toEqual([
+        {
+          path: attachment.url,
+          contentType,
+          placeholder: "<media:document>",
+        },
+      ]);
+    },
+  );
+
+  it("uses fetched image MIME over declared audio", async () => {
+    const attachment = {
+      id: "att-declared-audio-fetched-image",
+      url: "https://cdn.discordapp.com/attachments/1/voice.ogg",
+      filename: "voice.ogg",
+      content_type: "audio/ogg",
+    };
+    readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/image.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: "/tmp/image.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("classifies extensionless Discord voice attachments from native fields", async () => {
+    const attachment = {
+      id: "att-voice-native-fields",
+      url: "https://cdn.discordapp.com/attachments/1/voice",
+      filename: "voice",
+      duration_secs: 1.5,
+      waveform: "AAAA",
+    };
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: undefined,
+        kind: "audio",
         placeholder: "<media:audio>",
       },
     ]);

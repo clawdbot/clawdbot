@@ -604,13 +604,13 @@ describe("message-normalizer", () => {
     });
 
     it("formats durable sender metadata for transcript attribution", () => {
-      expect(
-        normalizeMessage({
-          role: "user",
-          content: "Prompt from Alice",
-          __openclaw: { senderId: "alice@example.com" },
-        }).senderLabel,
-      ).toBe("alice");
+      const emailSender = normalizeMessage({
+        role: "user",
+        content: "Prompt from Alice",
+        __openclaw: { senderId: "alice@example.com" },
+      });
+      expect(emailSender.senderLabel).toBe("alice");
+      expect(emailSender.sender).toEqual({ id: "alice@example.com" });
       expect(
         normalizeMessage({
           role: "user",

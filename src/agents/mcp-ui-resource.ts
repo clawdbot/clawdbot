@@ -43,6 +43,24 @@ export type McpAppViewLease = {
   releaseRuntimeLease?: () => void;
 };
 
+export type McpAppChannelView = {
+  viewId: string;
+};
+
+/** Retain only the bounded view identity needed for late channel materialization. */
+export function readMcpAppChannelView(result: unknown): McpAppChannelView | undefined {
+  const details = asRecord(asRecord(result)?.details);
+  const preview = asRecord(details?.mcpAppPreview);
+  const view = asRecord(preview?.view);
+  const descriptor = asRecord(preview?.mcpApp);
+  const viewId = typeof descriptor?.viewId === "string" ? descriptor.viewId.trim() : "";
+  const projectedViewId = typeof view?.id === "string" ? view.id.trim() : "";
+  if (!viewId || projectedViewId !== viewId) {
+    return undefined;
+  }
+  return { viewId };
+}
+
 type McpAppViewStore = Map<string, McpAppViewLease>;
 
 function getViewStore(): McpAppViewStore {

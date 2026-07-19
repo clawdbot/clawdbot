@@ -20,6 +20,9 @@ export type WorkerWorkspaceReconciliationJournal = {
   currentManifestRef: string;
   baseEntries: WorkerWorkspaceManifestEntry[];
   appliedEntries: WorkerWorkspaceManifestEntry[];
+  baseDirectories?: string[];
+  appliedDirectories?: string[];
+  appliedManifestRef?: string;
   baseTree: string;
   basePackSha256: string;
   basePack: Uint8Array;
@@ -155,6 +158,25 @@ function validateAndProjectEntries(values: unknown[]): {
   };
 }
 
+export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
+  return JSON.stringify({
+    version: manifest.version,
+    baseCommit: manifest.baseCommit,
+    entries: [
+      ...(manifest.directories ?? [])
+        .filter((entryPath) => !isDerivedWorkspacePath(entryPath))
+        .map((entryPath) => ({
+          path: entryPath,
+          type: "directory" as const,
+          // Phase 1 projects directory permissions away. Keep recomputed
+          // manifests deterministic without creating a new mode contract.
+          mode: 0o700,
+        })),
+      ...manifest.entries.filter((entry) => !isDerivedWorkspacePath(entry.path)),
+    ].toSorted((left, right) => left.path.localeCompare(right.path)),
+  });
+}
+
 export function parseWorkerWorkspaceManifest(
   raw: string,
   expectedRef: string,
@@ -207,6 +229,9 @@ export function serializeWorkerWorkspaceReconciliationPlan(
     currentManifestRef: journal.currentManifestRef,
     baseEntries: journal.baseEntries,
     appliedEntries: journal.appliedEntries,
+    baseDirectories: journal.baseDirectories ?? [],
+    appliedDirectories: journal.appliedDirectories ?? [],
+    appliedManifestRef: journal.appliedManifestRef,
     baseTree: journal.baseTree,
     basePackSha256: journal.basePackSha256,
   } satisfies WorkerWorkspaceReconciliationPlan);
@@ -234,16 +259,34 @@ export function parseWorkerWorkspaceReconciliationPlan(
     !/^[a-f0-9]{64}$/u.test(plan.basePackSha256) ||
     !Array.isArray(plan.baseEntries) ||
     !Array.isArray(plan.appliedEntries) ||
-    plan.baseEntries.length + plan.appliedEntries.length > MAX_RECONCILIATION_ENTRIES
+    (plan.baseDirectories !== undefined && !Array.isArray(plan.baseDirectories)) ||
+    (plan.appliedDirectories !== undefined && !Array.isArray(plan.appliedDirectories)) ||
+    (plan.appliedManifestRef !== undefined &&
+      (typeof plan.appliedManifestRef !== "string" ||
+        !MANIFEST_REF_PATTERN.test(plan.appliedManifestRef))) ||
+    plan.baseEntries.length +
+      plan.appliedEntries.length +
+      ((plan.baseDirectories as unknown[] | undefined)?.length ?? 0) +
+      ((plan.appliedDirectories as unknown[] | undefined)?.length ?? 0) >
+      MAX_RECONCILIATION_ENTRIES
   ) {
     throw new Error("Worker workspace reconciliation journal has an unsupported shape");
   }
   const baseEntries = plan.baseEntries.map(parseJournalEntry);
   const appliedEntries = plan.appliedEntries.map(parseJournalEntry);
+  const baseDirectories = ((plan.baseDirectories as unknown[] | undefined) ?? []).map(manifestPath);
+  const appliedDirectories = ((plan.appliedDirectories as unknown[] | undefined) ?? []).map(
+    manifestPath,
+  );
   for (const entries of [baseEntries, appliedEntries]) {
     const paths = entries.map((entry) => entry.path);
     if (new Set(paths).size !== paths.length) {
       throw new Error("Worker workspace reconciliation journal has duplicate paths");
+    }
+  }
+  for (const directories of [baseDirectories, appliedDirectories]) {
+    if (new Set(directories).size !== directories.length) {
+      throw new Error("Worker workspace reconciliation journal has duplicate directories");
     }
   }
   return {
@@ -253,6 +296,9 @@ export function parseWorkerWorkspaceReconciliationPlan(
     currentManifestRef: plan.currentManifestRef,
     baseEntries,
     appliedEntries,
+    baseDirectories,
+    appliedDirectories,
+    appliedManifestRef: plan.appliedManifestRef as string | undefined,
     baseTree: plan.baseTree,
     basePackSha256: plan.basePackSha256,
   };

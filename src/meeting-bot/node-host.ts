@@ -81,10 +81,15 @@ function runCommandWithTimeout(argv: string[], timeoutMs: number) {
     throw new Error("command must not be empty");
   }
   const result = spawnSync(command, args, { encoding: "utf8", timeout: timeoutMs });
+  const errorMessage = result.error ? formatErrorMessage(result.error) : "";
+  const stderr =
+    errorMessage && result.stderr
+      ? `${errorMessage}: ${result.stderr}`
+      : errorMessage || result.stderr || (result.signal ? `terminated by ${result.signal}` : "");
   return {
-    code: typeof result.status === "number" ? result.status : result.error ? 1 : 0,
+    code: typeof result.status === "number" ? result.status : 1,
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? (result.error ? formatErrorMessage(result.error) : ""),
+    stderr,
   };
 }
 

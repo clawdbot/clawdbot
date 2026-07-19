@@ -1138,9 +1138,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the imported sources. Plugin target writebacks update matching `cron_jobs`
   rows instead of loading and replacing the whole cron store.
 - Gateway startup ignores legacy `notify: true` markers in the runtime
-  projection. Doctor translates them into explicit SQLite delivery when
-  `cron.webhook` is valid, removes inert markers when it is unset, and preserves
-  them with a warning when the configured webhook is invalid.
+  projection. Doctor reads the retired raw `cron.webhook` only while translating
+  those markers into explicit SQLite delivery, then removes the config key.
 - Outbound and session delivery queues now store queue status, entry kind,
   session key, channel, target, account id, retry count, last attempt/error,
   recovery state, and platform-send markers as typed columns in the shared

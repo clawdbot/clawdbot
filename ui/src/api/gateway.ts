@@ -361,6 +361,10 @@ export class GatewayBrowserClient {
     });
   }
 
+  get instanceId(): string | undefined {
+    return this.opts.instanceId;
+  }
+
   start() {
     this.client.start();
   }

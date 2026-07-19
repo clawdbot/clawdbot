@@ -5537,7 +5537,7 @@ describe("DiscordVoiceManager", () => {
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
           requireWakeName: true,

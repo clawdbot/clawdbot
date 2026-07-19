@@ -62,8 +62,6 @@ export type TalkRealtimeConfig = {
   speakerVoice?: string;
   /** Provider speaker voice id override for realtime sessions. */
   speakerVoiceId?: string;
-  /** @deprecated Use speakerVoice. */
-  voice?: string;
   /** Additional system instructions appended to realtime Talk sessions. */
   instructions?: string;
   /** Realtime execution mode. */

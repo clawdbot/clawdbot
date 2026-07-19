@@ -34,6 +34,12 @@ export type PersistedTurnClaim =
       ownerEpoch: number;
     };
 
+export type WorkerWorkspaceResultConflict = {
+  paths: string[];
+  stagedResultRef: string;
+  totalCount?: number;
+};
+
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
 type PersistedWorkerTurnClaim = Extract<PersistedTurnClaim, { owner: "worker" }>;
 
@@ -44,6 +50,8 @@ type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
     createdAtMs: number;
     updatedAtMs: number;
     stateChangedAtMs: number;
+    /** Process-local UI projection; deliberately absent from SQLite. */
+    workspaceResultConflict?: WorkerWorkspaceResultConflict;
   };
 
 type UnclaimedPlacementRecordBase = PlacementRecordBase<null>;

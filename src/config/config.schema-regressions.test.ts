@@ -432,19 +432,6 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts tools.media.asyncCompletion.directSend", () => {
-    const res = validateConfigObject({
-      tools: {
-        media: {
-          asyncCompletion: {
-            directSend: true,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
   it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
     const res = validateConfigObject({
       discovery: {

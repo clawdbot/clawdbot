@@ -585,6 +585,7 @@ export const en: TranslationMap = {
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
     dashboardAvailable: "Dashboard available",
+    approvalNeeded: "Approval needed",
     noSessions: "No threads found.",
     noSessionsMatchFilters: "No threads match your filters.",
     pagination: "{start}-{end} of {total} rows",
@@ -1279,6 +1280,12 @@ export const en: TranslationMap = {
       title: "Chat",
       hint: "Browser-local chat preferences.",
     },
+    sidebarPrefs: {
+      title: "Sidebar",
+      hint: "Choose what appears while sessions are running.",
+      liveActivity: "Show live agent activity in sidebar",
+      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
+    },
     connection: {
       title: "Connection",
       gateway: "Gateway",
@@ -1338,6 +1345,10 @@ export const en: TranslationMap = {
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
     pending: "{count} pending",
+    otherPending: "Other pending requests",
+    reviewRequest: "Review approval from {agent}: {command}",
+    agentPendingOne: "{count} pending approval",
+    agentPending: "{count} pending approvals",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
@@ -2081,6 +2092,7 @@ export const en: TranslationMap = {
     swarm: {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
+      empty: "No active swarms.",
     },
   },
   aboutPage: {
@@ -3722,6 +3734,7 @@ export const en: TranslationMap = {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} threads",
+      toolActivity: "Using {tool}",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",

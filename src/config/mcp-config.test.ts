@@ -333,17 +333,17 @@ describe("config mcp config", () => {
     });
   });
 
-  it("canonicalizes common MCP operator aliases when saving config", async () => {
+  it("keeps canonical MCP operator settings when saving config", async () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
         name: "remote",
         server: {
           url: "https://example.com/mcp",
-          connect_timeout: 5,
-          supports_parallel_tool_calls: true,
-          ssl_verify: false,
-          client_cert: "/tmp/client.crt",
-          client_key: "/tmp/client.key",
+          connectionTimeoutMs: 5,
+          supportsParallelToolCalls: true,
+          sslVerify: false,
+          clientCert: "/tmp/client.crt",
+          clientKey: "/tmp/client.key",
         },
       });
 
@@ -355,7 +355,7 @@ describe("config mcp config", () => {
       }
       expect(loaded.mcpServers.remote).toEqual({
         url: "https://example.com/mcp",
-        connectTimeout: 5,
+        connectionTimeoutMs: 5,
         supportsParallelToolCalls: true,
         sslVerify: false,
         clientCert: "/tmp/client.crt",

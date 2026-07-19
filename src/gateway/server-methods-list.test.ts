@@ -149,6 +149,8 @@ describe("listGatewayMethods", () => {
   it("advertises the versioned Talk session RPCs", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
+    expect(methods).toContain("talk.client.transcript");
+    expect(methods).toContain("talk.client.close");
     expect(methods).toContain("talk.client.toolCall");
     expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");

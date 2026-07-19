@@ -34,11 +34,17 @@ private actor CancellingCameraService: CameraServicing {
         []
     }
 
-    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(
+        params _: OpenClawCameraSnapParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
+    {
         throw CancellationError()
     }
 
-    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(
+        params _: OpenClawCameraClipParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
+    {
         throw CancellationError()
     }
 }
@@ -50,11 +56,17 @@ private actor RecordingCameraService: CameraServicing {
         []
     }
 
-    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(
+        params _: OpenClawCameraSnapParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
+    {
         (format: "jpg", base64: "", width: 1, height: 1)
     }
 
-    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(
+        params _: OpenClawCameraClipParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
+    {
         self.clipCalls += 1
         return (format: "mp4", base64: "", durationMs: 1, hasAudio: true)
     }
@@ -105,11 +117,17 @@ private actor BlockingAudioCameraService: CameraServicing {
         []
     }
 
-    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(
+        params _: OpenClawCameraSnapParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
+    {
         (format: "jpg", base64: "", width: 1, height: 1)
     }
 
-    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(
+        params _: OpenClawCameraClipParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
+    {
         await self.barrier.suspendFirstPreparation()
         try Task.checkCancellation()
         return (format: "mp4", base64: "", durationMs: 1, hasAudio: true)
@@ -186,7 +204,10 @@ private actor OverlappingCameraService: CameraServicing {
         []
     }
 
-    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(
+        params _: OpenClawCameraSnapParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
+    {
         self.snapCount += 1
         if self.snapCount == 1 {
             self.firstStarted.yield()
@@ -201,7 +222,10 @@ private actor OverlappingCameraService: CameraServicing {
         return (format: "jpg", base64: "", width: 1, height: 1)
     }
 
-    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(
+        params _: OpenClawCameraClipParams,
+        defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
+    {
         throw CancellationError()
     }
 

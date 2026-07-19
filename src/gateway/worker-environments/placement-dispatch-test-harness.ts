@@ -30,10 +30,13 @@ export function createHarness(
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     workspacePath?: string;
+    priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
+    reconcileConflictPaths?: string[];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   const log: string[] = [];
+  const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
     log.push(stage);
     if (options.failAt === stage) {
@@ -51,9 +54,21 @@ export function createHarness(
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     recordStagedWorkspaceResult: (claim, ref) =>
       placementStore.recordStagedWorkspaceResult(claim, ref),
+    recordWorkspaceResultConflict: (claim, conflict) =>
+      placementStore.recordWorkspaceResultConflict(claim, conflict),
+    claimTurn: (params) => placementStore.claimTurn(params),
+    markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
-    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
-      placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),
+    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) => {
+      const completed = placementStore.completeWorkspaceResultAndReleaseTurn(
+        claim,
+        completionOptions,
+      );
+      if (completionOptions?.reclaim) {
+        log.push("placement:reclaimed");
+      }
+      return completed;
+    },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
@@ -89,6 +104,7 @@ export function createHarness(
       }
       return placementStore.finishReclaim(params);
     },
+    list: () => placementStore.list(),
     listForReconcile: () => placementStore.listForReconcile(),
     startDrain: (params) => {
       log.push("placement:draining");
@@ -147,6 +163,9 @@ export function createHarness(
         throw new Error("workspace conflict");
       }
       request.journal.commit(reconciledManifestRef);
+      if (options.reconcileConflictPaths?.length && request.stagedResult) {
+        request.stagedResult.record(request.stagedResult.ref);
+      }
       return {
         manifestRef: reconciledManifestRef,
         changed: true,
@@ -162,6 +181,14 @@ export function createHarness(
             throw new Error("local workspace changed after reconciliation");
           }
         },
+        getAppliedWorkspaceResult: options.reconcileConflictPaths?.length
+          ? () => ({
+              manifestRef: reconciledManifestRef,
+              manifest: { version: 1 as const, baseCommit: null, entries: [] },
+              conflictPaths: options.reconcileConflictPaths!,
+              verifyLocalStable: async () => {},
+            })
+          : undefined,
       };
     }),
     runWorkspaceCommand: vi.fn(async () => ({
@@ -245,6 +272,8 @@ export function createHarness(
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";
     },
+    reportWorkspaceResultConflict,
+    resolveWorkspaceResultConflict: vi.fn(async () => options.priorWorkspaceResultConflict),
   });
   return {
     log,
@@ -268,6 +297,7 @@ export function createHarness(
       },
     },
     environments,
+    reportWorkspaceResultConflict,
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
     },

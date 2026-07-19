@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { BoardSnapshot, BoardViewCallbacks, BoardWidget } from "../../lib/board/view-types.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import "./board-view.ts";
@@ -85,6 +86,7 @@ async function mount(
     activeTabId?: string;
     callbacks?: BoardViewCallbacks;
     widgetFrameUrl?: (name: string, revision: number) => string;
+    sessions?: readonly GatewaySessionRow[];
   } = {},
 ): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
@@ -92,6 +94,7 @@ async function mount(
   view.activeTabId = options.activeTabId ?? "main";
   view.widgetFrameUrl = options.widgetFrameUrl ?? (() => "about:blank");
   view.callbacks = options.callbacks ?? callbacks();
+  view.sessions = options.sessions ?? [];
   document.body.append(view);
   await settleCells(view);
   return view;
@@ -116,6 +119,42 @@ describe("openclaw-board-view", () => {
       expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
       expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     }
+  });
+
+  it("renders the native swarm card without a frame or persisted widget controls", async () => {
+    const swarm = boardWidget({
+      name: "builtin:swarm",
+      tabId: "builtin-swarm",
+      title: "Swarm progress",
+      contentKind: "builtin",
+      builtin: "swarm",
+      readOnly: true,
+    });
+    const source = snapshot({
+      sessionKey: "agent:main:parent",
+      tabs: [{ tabId: "builtin-swarm", title: "Swarm progress", position: 0, chatDock: "right" }],
+      widgets: [swarm],
+    });
+    const view = await mount({
+      snapshot: source,
+      activeTabId: "builtin-swarm",
+      sessions: [
+        {
+          key: "agent:main:child",
+          kind: "direct",
+          updatedAt: 1,
+          parentSessionKey: "agent:main:parent",
+          swarmGroupId: "swarm:agent:main:parent:turn-42",
+          label: "Worker A",
+          status: "running",
+        },
+      ],
+    });
+
+    expect(view.querySelector("[data-test-id=swarm-widget]")).not.toBeNull();
+    expect(view.querySelector("iframe")).toBeNull();
+    expect(view.querySelector(".board-widget__menu")).toBeNull();
+    expect(view.querySelector(".board-widget__resize-handle")).toBeNull();
   });
 
   it("preserves each widget cell and iframe identity when order changes", async () => {

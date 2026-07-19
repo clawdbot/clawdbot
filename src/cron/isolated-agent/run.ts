@@ -1248,9 +1248,7 @@ async function finalizeCronRun(params: {
     const totalTokens =
       typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
         ? lastCallTotalTokens
-        : lastCallUsage?.contextUsage?.state === "unavailable"
-          ? undefined
-          : deriveSessionTotalTokens({ usage, contextTokens, promptTokens });
+        : undefined;
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
         usage,

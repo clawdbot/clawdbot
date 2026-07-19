@@ -266,8 +266,9 @@ ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 
-# Generated docs baseline artifacts (locally generated, only hashes tracked)
+# Generated docs baseline artifacts (locally generated, only drift detectors tracked)
 docs/.generated/*.json
+!docs/.generated/config-baseline.counts.json
 docs/.generated/*.jsonl
 
 # Deprecated changelog fragment workflow

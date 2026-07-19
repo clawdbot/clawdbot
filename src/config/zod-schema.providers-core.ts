@@ -2,6 +2,7 @@
 import { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import {
   normalizeCommandDescription,
@@ -10,23 +11,23 @@ import {
 } from "../shared/custom-command-config.js";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
-import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import {
-  ChannelHealthMonitorSchema,
-  ChannelHeartbeatVisibilitySchema,
-} from "./zod-schema.channels.js";
+  ChannelBotLoopProtectionSchema,
+  ChannelDangerouslyAllowNameMatchingSchema,
+  ChannelSendReadReceiptsSchema,
+  buildChannelAllowBotsSchema,
+  buildChannelExecApprovalsSchema,
+  buildChannelReactionShape,
+  buildCommonChannelAccountShape,
+} from "./zod-schema.channel-messaging-common.js";
 import {
   BlockStreamingChunkSchema,
   ChannelDeliveryStreamingConfigSchema,
   ChannelStreamingBlockSchema,
-  ContextVisibilityModeSchema,
-  DmConfigSchema,
   DmPolicySchema,
   ExecutableTokenSchema,
   GroupPolicySchema,
   HexColorSchema,
-  MarkdownConfigSchema,
-  MentionPatternsPolicySchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
   SecretInputSchema,
@@ -54,8 +55,6 @@ import { sensitive } from "./zod-schema.sensitive.js";
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
-const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
-
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
   z
@@ -117,15 +116,6 @@ const SlackCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
-const BotLoopProtectionSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    maxEventsPerWindow: z.number().int().positive().optional(),
-    windowSeconds: z.number().int().positive().optional(),
-    cooldownSeconds: z.number().int().positive().optional(),
-  })
-  .strict();
-
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 const TelegramCommandNamePattern = /^[a-z0-9_]{1,32}$/;
 const TelegramCustomCommandConfig = {
@@ -149,23 +139,14 @@ const TelegramTopicSchema = z
   })
   .strict();
 
-const TelegramGroupSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    ingest: z.boolean().optional(),
-    disableAudioPreflight: z.boolean().optional(),
-    groupPolicy: GroupPolicySchema.optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    systemPrompt: z.string().optional(),
-    topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
-    errorPolicy: TelegramErrorPolicySchema,
-    errorCooldownMs: z.number().int().nonnegative().optional(),
-  })
-  .strict();
+const TelegramGroupSchema = buildGroupEntrySchema({
+  ingest: z.boolean().optional(),
+  disableAudioPreflight: z.boolean().optional(),
+  groupPolicy: GroupPolicySchema.optional(),
+  topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+  errorPolicy: TelegramErrorPolicySchema,
+  errorCooldownMs: z.number().int().nonnegative().optional(),
+});
 
 const AutoTopicLabelSchema = z
   .union([
@@ -227,42 +208,20 @@ const validateTelegramCustomCommands = (
 
 const TelegramAccountSchemaBase = z
   .object({
-    name: z.string().optional(),
-    capabilities: TelegramCapabilitiesSchema.optional(),
-    execApprovals: z
-      .object({
-        enabled: NativeExecApprovalEnableModeSchema.optional(),
-        approvers: TelegramIdListSchema.optional(),
-        agentFilter: z.array(z.string()).optional(),
-        sessionFilter: z.array(z.string()).optional(),
-        target: z.enum(["dm", "channel", "both"]).optional(),
-      })
-      .strict()
-      .optional(),
-    markdown: MarkdownConfigSchema,
-    enabled: z.boolean().optional(),
+    ...buildCommonChannelAccountShape({
+      useDefaults: true,
+      capabilities: TelegramCapabilitiesSchema.optional(),
+      defaultTo: z.union([z.string(), z.number()]).optional(),
+      streaming: TelegramPreviewStreamingConfigSchema.optional(),
+    }),
+    execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
-    configWrites: z.boolean().optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
     botToken: SecretInputSchema.optional().register(sensitive),
     tokenFile: z.string().optional(),
-    replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    defaultTo: z.union([z.string(), z.number()]).optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    mentionPatterns: MentionPatternsPolicySchema.optional(),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
     richMessages: z.boolean().optional(),
-    streaming: TelegramPreviewStreamingConfigSchema.optional(),
-    mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     mediaGroupFlushMs: z
       .number()
@@ -346,19 +305,16 @@ const TelegramAccountSchemaBase = z
         maxAgeHours: z.number().nonnegative().optional(),
         spawnSessions: z.boolean().optional(),
         defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-        spawnSubagentSessions: z.boolean().optional(),
-        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
-    reactionNotifications: z.enum(["off", "own", "all"]).optional(),
-    reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
+    ...buildChannelReactionShape({
+      notificationModes: ["off", "own", "all"],
+      reactionLevels: ["off", "ack", "minimal", "extensive"],
+      ackReaction: z.string().optional(),
+    }),
     linkPreview: z.boolean().optional(),
     silentErrorReplies: z.boolean().optional(),
-    responsePrefix: z.string().optional(),
-    ackReaction: z.string().optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
@@ -469,17 +425,11 @@ const DiscordThreadSchema = z
   })
   .strict();
 
-const DiscordGuildChannelSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
+const DiscordGuildChannelSchema = buildGroupEntrySchema(
+  {
     ignoreOtherMentions: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
-    systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
     /** Naming strategy for auto-created threads. "message" uses message text; "generated" creates an LLM title after thread creation. */
@@ -494,23 +444,24 @@ const DiscordGuildChannelSchema = z
         z.literal(10080),
       ])
       .optional(),
-  })
-  .strict();
+  },
+  { omit: ["allowFrom"] },
+);
 
-const DiscordGuildSchema = z
-  .object({
+const DiscordGuildSchema = buildGroupEntrySchema(
+  {
     slug: z.string().optional(),
-    requireMention: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    ...buildChannelReactionShape({
+      notificationModes: ["off", "own", "all", "allowlist"],
+    }),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
     presenceEvents: DiscordPresenceEventsSchema.optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
-  })
-  .strict();
+  },
+  { omit: ["enabled", "skills", "allowFrom", "systemPrompt"] },
+);
 
 const DiscordUiSchema = z
   .object({
@@ -557,7 +508,6 @@ const DiscordVoiceRealtimeSchema = z
     model: z.string().min(1).optional(),
     speakerVoice: z.string().min(1).optional(),
     speakerVoiceId: z.string().min(1).optional(),
-    voice: z.string().min(1).optional(),
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
@@ -610,12 +560,13 @@ const DiscordVoiceSchema = z
 
 const DiscordAccountSchema = z
   .object({
-    name: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    enabled: z.boolean().optional(),
+    ...buildCommonChannelAccountShape({
+      omit: ["groupAllowFrom"],
+      groupPolicyDefault: true,
+      allowFrom: DiscordIdListSchema.optional(),
+      streaming: DiscordPreviewStreamingConfigSchema.optional(),
+    }),
     commands: ProviderCommandsSchema,
-    configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
     applicationId: DiscordIdSchema.optional(),
     activities: z
@@ -629,21 +580,12 @@ const DiscordAccountSchema = z
     gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     gatewayRuntimeReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
-    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-    botLoopProtection: BotLoopProtectionSchema.optional(),
-    dangerouslyAllowNameMatching: z.boolean().optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+    dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     mentionAliases: z.record(z.string(), DiscordSnowflakeStringSchema).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    mentionPatterns: MentionPatternsPolicySchema.optional(),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
     suppressEmbeds: z.boolean().optional(),
-    streaming: DiscordPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
-    mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,
     actions: z
       .object({
@@ -669,28 +611,12 @@ const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
-    replyToMode: ReplyToModeSchema.optional(),
     thread: DiscordThreadSchema.optional(),
-    // Aliases for channels.discord.dm.policy / channels.discord.dm.allowFrom. Prefer these for
-    // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
-    dmPolicy: DmPolicySchema.optional(),
-    allowFrom: DiscordIdListSchema.optional(),
-    defaultTo: z.string().optional(),
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    execApprovals: z
-      .object({
-        enabled: NativeExecApprovalEnableModeSchema.optional(),
-        approvers: DiscordIdListSchema.optional(),
-        agentFilter: z.array(z.string()).optional(),
-        sessionFilter: z.array(z.string()).optional(),
-        cleanupAfterResolve: z.boolean().optional(),
-        target: z.enum(["dm", "channel", "both"]).optional(),
-      })
-      .strict()
-      .optional(),
+    execApprovals: buildChannelExecApprovalsSchema(DiscordIdSchema, {
+      cleanupAfterResolve: z.boolean().optional(),
+    }),
     agentComponents: z
       .object({
         enabled: z.boolean().optional(),
@@ -717,8 +643,6 @@ const DiscordAccountSchema = z
         maxAgeHours: z.number().nonnegative().optional(),
         spawnSessions: z.boolean().optional(),
         defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-        spawnSubagentSessions: z.boolean().optional(),
-        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -739,8 +663,7 @@ const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
-    responsePrefix: z.string().optional(),
-    ackReaction: z.string().optional(),
+    ...buildChannelReactionShape({ ackReaction: z.string().optional() }),
     ackReactionScope: z
       .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
       .optional(),
@@ -831,25 +754,22 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
-  const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
-  const allowFromPath =
-    value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+  const dmPolicy = value.dmPolicy ?? "pairing";
+  const allowFrom = value.allowFrom;
   requireOpenAllowFrom({
     policy: dmPolicy,
     allowFrom,
     ctx,
-    path: [...allowFromPath],
-    message:
-      'channels.discord.dmPolicy="open" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to include "*"',
+    path: ["allowFrom"],
+    message: 'channels.discord.dmPolicy="open" requires channels.discord.allowFrom to include "*"',
   });
   requireAllowlistAllowFrom({
     policy: dmPolicy,
     allowFrom,
     ctx,
-    path: [...allowFromPath],
+    path: ["allowFrom"],
     message:
-      'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to contain at least one sender ID',
+      'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom to contain at least one sender ID',
   });
 
   if (!value.accounts) {
@@ -859,10 +779,8 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
     if (!account) {
       continue;
     }
-    const effectivePolicy =
-      account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
-    const effectiveAllowFrom =
-      account.allowFrom ?? account.dm?.allowFrom ?? value.allowFrom ?? value.dm?.allowFrom;
+    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
+    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
     requireOpenAllowFrom({
       policy: effectivePolicy,
       allowFrom: effectiveAllowFrom,
@@ -885,11 +803,8 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
 const SlackDmSchema = z
   .object({
     enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
-    replyToMode: ReplyToModeSchema.optional(),
   })
   .strict();
 
@@ -899,22 +814,17 @@ const SlackPresenceEventsSchema = z
   })
   .strict();
 
-const SlackChannelSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    requireMention: z.boolean().optional(),
+const SlackChannelSchema = buildGroupEntrySchema(
+  {
     ignoreOtherMentions: z.boolean().optional(),
     replyToMode: ReplyToModeSchema.optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-    botLoopProtection: BotLoopProtectionSchema.optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
-    skills: z.array(z.string()).optional(),
-    systemPrompt: z.string().optional(),
     presenceEvents: SlackPresenceEventsSchema.optional(),
-  })
-  .strict();
+  },
+  { omit: ["allowFrom"] },
+);
 
 const SlackThreadSchema = z
   .object({
@@ -959,7 +869,11 @@ const SlackIdentitySchema = z.enum(["bot", "user"]);
 
 const SlackAccountSchema = z
   .object({
-    name: z.string().optional(),
+    ...buildCommonChannelAccountShape({
+      omit: ["groupAllowFrom"],
+      capabilities: SlackCapabilitiesSchema.optional(),
+      streaming: SlackStreamingConfigSchema.optional(),
+    }),
     identity: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     enterpriseOrgInstall: z.boolean().optional(),
@@ -967,44 +881,24 @@ const SlackAccountSchema = z
     relay: SlackRelaySchema.optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
-    capabilities: SlackCapabilitiesSchema.optional(),
-    execApprovals: z
-      .object({
-        enabled: NativeExecApprovalEnableModeSchema.optional(),
-        approvers: z.array(z.union([z.string(), z.number()])).optional(),
-        agentFilter: z.array(z.string()).optional(),
-        sessionFilter: z.array(z.string()).optional(),
-        target: z.enum(["dm", "channel", "both"]).optional(),
-      })
-      .strict()
-      .optional(),
-    markdown: MarkdownConfigSchema,
-    enabled: z.boolean().optional(),
+    execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
     commands: ProviderCommandsSchema,
-    configWrites: z.boolean().optional(),
     botToken: SecretInputSchema.optional().register(sensitive),
     appToken: SecretInputSchema.optional().register(sensitive),
     userToken: SecretInputSchema.optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
-    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-    botLoopProtection: BotLoopProtectionSchema.optional(),
-    dangerouslyAllowNameMatching: z.boolean().optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+    dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     requireMention: z.boolean().optional(),
     implicitMentions: ChannelImplicitMentionsSchema.optional(),
-    groupPolicy: GroupPolicySchema.optional(),
-    mentionPatterns: MentionPatternsPolicySchema.optional(),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
     unfurlLinks: z.boolean().optional(),
     unfurlMedia: z.boolean().optional(),
-    streaming: SlackStreamingConfigSchema.optional(),
-    mediaMaxMb: z.number().positive().optional(),
-    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-    reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
-    replyToMode: ReplyToModeSchema.optional(),
+    ...buildChannelReactionShape({
+      notificationModes: ["off", "own", "all", "allowlist"],
+      reactionAllowlist: true,
+      ackReaction: z.string().optional(),
+    }),
     replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
     presenceEvents: SlackPresenceEventsSchema.optional(),
@@ -1030,17 +924,8 @@ const SlackAccountSchema = z
       })
       .strict()
       .optional(),
-    // Aliases for channels.slack.dm.policy / channels.slack.dm.allowFrom. Prefer these for
-    // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
-    dmPolicy: DmPolicySchema.optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    defaultTo: z.string().optional(),
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    responsePrefix: z.string().optional(),
-    ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
   })
   .strict();
@@ -1056,30 +941,25 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   signingSecret: SecretInputSchema.optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  mentionPatterns: MentionPatternsPolicySchema.optional(),
-  contextVisibility: ContextVisibilityModeSchema.optional(),
   accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
-  const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
-  const allowFromPath =
-    value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+  const dmPolicy = value.dmPolicy ?? "pairing";
+  const allowFrom = value.allowFrom;
   requireOpenAllowFrom({
     policy: dmPolicy,
     allowFrom,
     ctx,
-    path: [...allowFromPath],
-    message:
-      'channels.slack.dmPolicy="open" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to include "*"',
+    path: ["allowFrom"],
+    message: 'channels.slack.dmPolicy="open" requires channels.slack.allowFrom to include "*"',
   });
   requireAllowlistAllowFrom({
     policy: dmPolicy,
     allowFrom,
     ctx,
-    path: [...allowFromPath],
+    path: ["allowFrom"],
     message:
-      'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to contain at least one sender ID',
+      'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom to contain at least one sender ID',
   });
 
   const requireRelayConfig = (
@@ -1131,10 +1011,8 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       ...value.relay,
       ...account.relay,
     };
-    const effectivePolicy =
-      account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
-    const effectiveAllowFrom =
-      account.allowFrom ?? account.dm?.allowFrom ?? value.allowFrom ?? value.dm?.allowFrom;
+    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
+    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
     requireOpenAllowFrom({
       policy: effectivePolicy,
       allowFrom: effectiveAllowFrom,
@@ -1161,24 +1039,23 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   validateSlackSigningSecretRequirements(value, ctx);
 });
 
-const SignalGroupEntrySchema = z
-  .object({
-    requireMention: z.boolean().optional(),
+const SignalGroupEntrySchema = buildGroupEntrySchema(
+  {
     ingest: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-  })
-  .strict();
+  },
+  { omit: ["skills", "enabled", "allowFrom", "systemPrompt"] },
+);
 
 const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
 
 const SignalAccountSchemaBase = z
   .object({
-    name: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
+    ...buildCommonChannelAccountShape({
+      useDefaults: true,
+      omit: ["mentionPatterns"],
+      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+      mediaMaxMb: z.number().int().positive().optional(),
+    }),
     account: z.string().optional(),
     accountUuid: z.string().optional(),
     configPath: z.string().optional(),
@@ -1191,35 +1068,21 @@ const SignalAccountSchemaBase = z
     receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
     ignoreAttachments: z.boolean().optional(),
     ignoreStories: z.boolean().optional(),
-    sendReadReceipts: z.boolean().optional(),
+    sendReadReceipts: ChannelSendReadReceiptsSchema,
     aliases: z.record(z.string(), z.string()).optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
     groups: SignalGroupsSchema,
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
-    replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: DirectGroupReplyToModeByChatTypeSchema.optional(),
-    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-    reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+    ...buildChannelReactionShape({
+      notificationModes: ["off", "own", "all", "allowlist"],
+      reactionAllowlist: true,
+      reactionLevels: ["off", "ack", "minimal", "extensive"],
+    }),
     actions: z
       .object({
         reactions: z.boolean().optional(),
       })
       .strict()
       .optional(),
-    reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -1293,11 +1156,12 @@ const IMessageActionSchema = z
 
 const IMessageAccountSchemaBase = z
   .object({
-    name: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
+    ...buildCommonChannelAccountShape({
+      useDefaults: true,
+      omit: ["mentionPatterns", "replyToMode"],
+      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+      mediaMaxMb: z.number().int().positive().optional(),
+    }),
     cliPath: ExecutableTokenSchema.optional(),
     dbPath: z.string().optional(),
     remoteHost: z
@@ -1308,15 +1172,6 @@ const IMessageAccountSchemaBase = z
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     sendTransport: z.enum(["auto", "bridge", "applescript"]).optional(),
     region: z.string().optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     includeAttachments: z.boolean().optional(),
     attachmentRoots: z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
@@ -1324,12 +1179,9 @@ const IMessageAccountSchemaBase = z
     remoteAttachmentRoots: z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
       .optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
     probeTimeoutMs: z.number().int().positive().optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-    sendReadReceipts: z.boolean().optional(),
-    reactionNotifications: z.enum(["off", "own", "all"]).optional(),
+    sendReadReceipts: ChannelSendReadReceiptsSchema,
+    ...buildChannelReactionShape({ notificationModes: ["off", "own", "all"] }),
     coalesceSameSenderDms: z.boolean().optional(),
     catchup: z
       .object({
@@ -1344,20 +1196,11 @@ const IMessageAccountSchemaBase = z
     groups: z
       .record(
         z.string(),
-        z
-          .object({
-            requireMention: z.boolean().optional(),
-            tools: ToolPolicySchema,
-            toolsBySender: ToolPolicyBySenderSchema,
-            systemPrompt: z.string().optional(),
-          })
-          .strict()
-          .optional(),
+        buildGroupEntrySchema(undefined, {
+          omit: ["skills", "enabled", "allowFrom"],
+        }).optional(),
       )
       .optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -1469,11 +1312,14 @@ function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
 
 export const MSTeamsConfigSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    capabilities: z.array(z.string()).optional(),
-    dangerouslyAllowNameMatching: z.boolean().optional(),
-    markdown: MarkdownConfigSchema,
-    configWrites: z.boolean().optional(),
+    ...buildCommonChannelAccountShape({
+      useDefaults: true,
+      omit: ["name", "mentionPatterns", "replyToMode"],
+      allowFrom: z.array(z.string()).optional(),
+      groupAllowFrom: z.array(z.string()).optional(),
+      streaming: ChannelPreviewStreamingConfigSchema.optional(),
+    }),
+    dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     appId: z.string().optional(),
     appPassword: SecretInputSchema.optional().register(sensitive),
     tenantId: z.string().optional(),
@@ -1498,31 +1344,16 @@ export const MSTeamsConfigSchema = z
       })
       .strict()
       .optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.string()).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.string()).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     typingIndicator: z.boolean().optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),
     graphMediaFallback: z.boolean().optional(),
     requireMention: z.boolean().optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
     /** Max inbound and outbound media size in MB (default: 100MB). */
-    mediaMaxMb: z.number().positive().optional(),
     /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
     sharePointSiteId: z.string().optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    responsePrefix: z.string().optional(),
     welcomeCard: z.boolean().optional(),
     promptStarters: z.array(z.string()).optional(),
     groupWelcomeCard: z.boolean().optional(),

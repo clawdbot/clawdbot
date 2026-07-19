@@ -393,6 +393,7 @@ private struct ChatMessageBody: View {
                 id: self.message.content.first?.id ?? "result-0",
                 name: self.message.toolName,
                 arguments: nil,
+                details: self.message.details,
                 resultText: self.primaryText,
                 isPending: false)]
         }
@@ -810,6 +811,7 @@ struct ChatPendingToolsBubble: View {
                 id: call.id,
                 name: call.name,
                 arguments: call.args,
+                details: nil,
                 resultText: nil,
                 isPending: true)
         }

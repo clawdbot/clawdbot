@@ -63,6 +63,7 @@ describe("embedded attempt phase lifecycle state", () => {
         getCompactionCount: () => 0,
         getCurrentAttemptAssistant: () => undefined,
         getUsageTotals: () => undefined,
+        getLastAssistantUsage: () => undefined,
       } as never,
       state: {
         promptError: null,

@@ -12,11 +12,13 @@ const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
   "text",
+  "script",
   "model",
   "fallbacks",
   "toolsAllow",
   "thinking",
   "timeoutSeconds",
+  "toolBudget",
   "lightContext",
   "allowUnsafeExternalContent",
 ] as const;
@@ -236,21 +238,23 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 
   if (!isCronPayloadKind(payload.kind)) {
-    const hasAgentTurnSignal =
-      isNonEmptyString(payload.message) ||
-      isNonEmptyString(payload.model) ||
-      payload.model === null ||
-      isNonEmptyString(payload.thinking) ||
-      typeof payload.timeoutSeconds === "number" ||
-      typeof payload.lightContext === "boolean" ||
-      typeof payload.allowUnsafeExternalContent === "boolean" ||
-      (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
-    if (hasAgentTurnSignal) {
-      payload.kind = "agentTurn";
-    } else if (isNonEmptyString(payload.script)) {
+    if (isNonEmptyString(payload.script)) {
       payload.kind = "script";
-    } else if (isNonEmptyString(payload.text)) {
-      payload.kind = "systemEvent";
+    } else {
+      const hasAgentTurnSignal =
+        isNonEmptyString(payload.message) ||
+        isNonEmptyString(payload.model) ||
+        payload.model === null ||
+        isNonEmptyString(payload.thinking) ||
+        typeof payload.timeoutSeconds === "number" ||
+        typeof payload.lightContext === "boolean" ||
+        typeof payload.allowUnsafeExternalContent === "boolean" ||
+        (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
+      if (hasAgentTurnSignal) {
+        payload.kind = "agentTurn";
+      } else if (isNonEmptyString(payload.text)) {
+        payload.kind = "systemEvent";
+      }
     }
   }
 

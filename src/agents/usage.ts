@@ -337,14 +337,8 @@ export function deriveContextPromptTokens(params: {
 
 /** Derive the session prompt-token snapshot stored for context display. */
 export function deriveSessionTotalTokens(params: {
-  usage?: {
-    input?: number;
-    output?: number;
-    total?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    contextUsage?: ContextUsage;
-  };
+  lastCallUsage?: NormalizedUsage;
+  usage?: NormalizedUsage;
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
@@ -353,13 +347,14 @@ export function deriveSessionTotalTokens(params: {
     typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
 
   const usage = params.usage;
-  if (!usage && !hasPromptOverride) {
+  if (!params.lastCallUsage && !usage && !hasPromptOverride) {
     return undefined;
   }
 
   // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
   // It intentionally excludes completion/output tokens.
   const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastCallUsage,
     promptTokens: hasPromptOverride ? promptOverride : undefined,
     usage,
   });

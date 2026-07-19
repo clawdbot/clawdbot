@@ -9840,6 +9840,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install and pair
   - H2: Use it
   - H3: Tab copilot side panel
+  - H2: Send a page to OpenClaw
   - H2: Remote / cross-machine
   - H2: Diagnostics
   - H2: Security model

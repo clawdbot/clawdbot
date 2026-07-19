@@ -88,17 +88,14 @@ function dirExists(dirPath: string): boolean {
   }
 }
 
-function resolveLegacyDebugProxyCapturePaths(
-  stateDir: string,
-  env: NodeJS.ProcessEnv,
-): {
+function resolveLegacyDebugProxyCapturePaths(stateDir: string): {
   sourcePath: string;
   blobDir: string;
 } {
   const rootDir = path.join(stateDir, "debug-proxy");
   return {
-    sourcePath: env.OPENCLAW_DEBUG_PROXY_DB_PATH?.trim() || path.join(rootDir, "capture.sqlite"),
-    blobDir: env.OPENCLAW_DEBUG_PROXY_BLOB_DIR?.trim() || path.join(rootDir, "blobs"),
+    sourcePath: path.join(rootDir, "capture.sqlite"),
+    blobDir: path.join(rootDir, "blobs"),
   };
 }
 
@@ -116,7 +113,7 @@ export function detectLegacyDebugProxyCaptureSidecar(
   stateDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): LegacyDebugProxyCaptureDetection {
-  const paths = resolveLegacyDebugProxyCapturePaths(stateDir, env);
+  const paths = resolveLegacyDebugProxyCapturePaths(stateDir);
   if (
     path.resolve(paths.sourcePath) ===
     path.resolve(resolveOpenClawStateSqlitePath({ ...env, OPENCLAW_STATE_DIR: stateDir }))

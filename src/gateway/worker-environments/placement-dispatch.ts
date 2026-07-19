@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   createPlacementFailureActions,
   type WorkerActivationBarrier,
@@ -13,9 +14,18 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import {
+  projectWorkspaceResultConflict,
+  type WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
+import {
+  deleteStagedWorkerWorkspaceResult,
+  moveStagedWorkerWorkspaceResultToCleanup,
+  workerWorkspaceResultRef,
+} from "./workspace-result-staging.js";
 
 type WorkerLocalDispatchBarrier = (params: {
   sessionId: string;
@@ -43,6 +53,17 @@ type WorkerPlacementDispatchOptions = {
     sessionKey: string;
     agentId: string;
   }) => Promise<string>;
+  reportWorkspaceResultConflict: (
+    params: { sessionId: string; sessionKey: string; agentId: string } & (
+      | { paths: string[]; stagedResultRef: string; totalCount: number }
+      | { cleared: true }
+    ),
+  ) => Promise<void>;
+  resolveWorkspaceResultConflict: (params: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
 };
 
 function requireProvisionedEnvironment(
@@ -72,6 +93,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     placements,
     runActivationBarrier: options.runActivationBarrier,
     resolveWorkspacePath: options.resolveWorkspacePath,
+    reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
+    resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     workspaceOperations: options.workspaceOperations,
   });
 
@@ -212,23 +235,31 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           ownerEpoch: current.activeOwnerEpoch,
           placementGeneration: current.generation,
         };
-        let accepted: Extract<WorkerDispatchPlacement, { state: "active" }> | undefined;
+        const reclaimClaimId = `reclaim-${randomUUID()}`;
+        const reclaimClaim = placements.claimTurn({
+          sessionId: current.sessionId,
+          sessionKey: current.sessionKey,
+          agentId: current.agentId,
+          claimId: reclaimClaimId,
+          runId: reclaimClaimId,
+          owner: {
+            kind: "worker",
+            environmentId: current.environmentId,
+            ownerEpoch: current.activeOwnerEpoch,
+          },
+        });
+        placements.markWorkspaceResultPending(reclaimClaim);
+        let manifestAccepted = false;
         const journal = {
           load: () => placements.loadWorkspaceReconciliation(journalOwner),
           begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) =>
             placements.beginWorkspaceReconciliation(journalOwner, next),
           commit: (manifestRef: string) => {
-            const next = placements.acceptIdleWorkspaceReconciliation({
-              sessionId: current.sessionId,
-              environmentId: current.environmentId,
-              ownerEpoch: current.activeOwnerEpoch,
-              expectedGeneration: current.generation,
+            placements.updateWorkspaceBaseManifest({
+              claim: reclaimClaim,
               manifestRef,
             });
-            if (next.state !== "active") {
-              throw new Error("Cloud worker stop did not accept its reconciled workspace");
-            }
-            accepted = next;
+            manifestAccepted = true;
           },
           abort: () => placements.abortWorkspaceReconciliation(journalOwner),
         };
@@ -241,57 +272,122 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
         });
-        const acceptedPlacement = await options.workspaceOperations.run(
-          current.environmentId,
-          async () => {
-            const owned = placements.get(current.sessionId);
+        const reclaimed = await options.workspaceOperations.run(current.environmentId, async () => {
+          const owned = placements.get(current.sessionId);
+          if (
+            owned?.state !== "active" ||
+            owned.generation !== current.generation ||
+            owned.environmentId !== current.environmentId ||
+            owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
+            owned.turnClaim?.claimId !== reclaimClaim.claimId
+          ) {
+            throw new Error("Cloud worker stop lost its placement owner before reconciliation");
+          }
+          const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+          let destroyed = false;
+          try {
+            const reconciliation = await tunnel.reconcileWorkspace({
+              localPath,
+              remoteWorkspaceDir: current.remoteWorkspaceDir,
+              baseManifestRef: current.workspaceBaseManifestRef,
+              journal,
+              stagedResult: {
+                ref: workerWorkspaceResultRef(reclaimClaim.claimId),
+                record: (ref) => placements.recordStagedWorkspaceResult(reclaimClaim, ref),
+              },
+            });
+            if (!manifestAccepted) {
+              throw new Error("Cloud worker stop did not commit its reconciled workspace");
+            }
+            const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+            placements.acceptWorkspaceResult(reclaimClaim);
+            const recordedStagedResultRef = placements
+              .listPendingWorkspaceResults()
+              .find(
+                (result) =>
+                  result.sessionId === reclaimClaim.sessionId &&
+                  result.claimId === reclaimClaim.claimId &&
+                  result.runId === reclaimClaim.runId,
+              )?.stagedResultRef;
+            const conflictPaths = applied?.conflictPaths ?? [];
+            if (conflictPaths.length > 0 && !recordedStagedResultRef) {
+              throw new Error("Cloud worker stop conflict has no staged result reference");
+            }
+            const priorWorkspaceResultConflict =
+              current.workspaceResultConflict ??
+              (await options.resolveWorkspaceResultConflict({
+                sessionId: current.sessionId,
+                sessionKey: current.sessionKey,
+                agentId: current.agentId,
+              }));
+            const supersededConflict =
+              priorWorkspaceResultConflict &&
+              (conflictPaths.length === 0 ||
+                priorWorkspaceResultConflict.stagedResultRef !== recordedStagedResultRef)
+                ? priorWorkspaceResultConflict
+                : undefined;
             if (
-              owned?.state !== "active" ||
-              owned.generation !== current.generation ||
-              owned.environmentId !== current.environmentId ||
-              owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
-              owned.turnClaim
+              supersededConflict &&
+              supersededConflict.stagedResultRef !== recordedStagedResultRef
             ) {
-              throw new Error("Cloud worker stop lost its placement owner before reconciliation");
-            }
-            const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
-            let destroyed = false;
-            try {
-              const reconciliation = await tunnel.reconcileWorkspace({
-                localPath,
-                remoteWorkspaceDir: current.remoteWorkspaceDir,
-                baseManifestRef: current.workspaceBaseManifestRef,
-                journal,
+              await deleteStagedWorkerWorkspaceResult({
+                root: localPath,
+                stagedResultRef: supersededConflict.stagedResultRef,
               });
-              if (!accepted) {
-                throw new Error("Cloud worker stop did not commit its reconciled workspace");
-              }
-              await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
-              await environments.destroy(current.environmentId);
-              destroyed = true;
-              return accepted;
-            } finally {
-              if (!destroyed) {
-                await quiescence.resume();
-              }
             }
-          },
-        );
+            if (conflictPaths.length > 0 && recordedStagedResultRef) {
+              const projectedConflict = projectWorkspaceResultConflict(
+                conflictPaths,
+                recordedStagedResultRef,
+              );
+              placements.recordWorkspaceResultConflict(reclaimClaim, projectedConflict);
+              await options.reportWorkspaceResultConflict({
+                sessionId: current.sessionId,
+                sessionKey: current.sessionKey,
+                agentId: current.agentId,
+                ...projectedConflict,
+              });
+            } else if (supersededConflict) {
+              placements.recordWorkspaceResultConflict(reclaimClaim, undefined);
+              await options.reportWorkspaceResultConflict({
+                sessionId: current.sessionId,
+                sessionKey: current.sessionKey,
+                agentId: current.agentId,
+                cleared: true,
+              });
+            }
+            const cleanupRef =
+              recordedStagedResultRef && conflictPaths.length === 0
+                ? await moveStagedWorkerWorkspaceResultToCleanup({
+                    root: localPath,
+                    stagedResultRef: recordedStagedResultRef,
+                  })
+                : undefined;
+            await environments.destroy(current.environmentId);
+            destroyed = true;
+            const completed = placements.completeWorkspaceResultAndReleaseTurn(reclaimClaim, {
+              reclaim: true,
+            });
+            if (completed.state !== "reclaimed") {
+              throw new Error("Cloud worker stop did not produce a reclaimed placement");
+            }
+            if (cleanupRef) {
+              await deleteStagedWorkerWorkspaceResult({
+                root: localPath,
+                stagedResultRef: cleanupRef,
+              }).catch(() => undefined);
+            }
+            return completed;
+          } finally {
+            if (!destroyed) {
+              await quiescence.resume();
+            }
+          }
+        });
         try {
           await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
         } catch {
           // Provider teardown is authoritative; local tunnel cleanup is best effort.
-        }
-        // Provider teardown is proven. Persist the terminal placement state in
-        // one CAS so restart recovery never strands a successful stop mid-transition.
-        const reclaimed = placements.finishReclaim({
-          sessionId: acceptedPlacement.sessionId,
-          environmentId: acceptedPlacement.environmentId,
-          ownerEpoch: acceptedPlacement.activeOwnerEpoch,
-          expectedGeneration: acceptedPlacement.generation,
-        });
-        if (reclaimed.state !== "reclaimed") {
-          throw new Error("Cloud worker stop did not produce a reclaimed placement");
         }
         return reclaimed;
       },

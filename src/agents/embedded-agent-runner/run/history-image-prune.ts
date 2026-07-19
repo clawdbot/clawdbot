@@ -1,7 +1,9 @@
 /**
  * Prunes already-processed image payloads from replayed prompt history.
  */
+import { buildLateMediaAttachedText } from "../../../sessions/user-turn-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { hasNonBlankUserText } from "./attempt.user-message-boundary.js";
 
 /** Replacement text for old image blocks that were already available to the model. */
 const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
@@ -78,14 +80,7 @@ function cloneMessageWithContent(
   return { ...message, content } as AgentMessage;
 }
 
-/**
- * Idempotent cleanup: prune persisted image blocks from completed turns older
- * than {@link PRESERVE_RECENT_COMPLETED_TURNS}. The delay also reduces
- * prompt-cache churn, though prefix stability additionally depends on the
- * replay sanitizer being idempotent. Textual media markers are scrubbed on the
- * same boundary because detectAndLoadPromptImages treats them as fresh prompt
- * image references when old history is replayed into a later prompt.
- */
+/** Prunes old image payloads and references before later LLM-boundary synthesis. */
 export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMessage[] | null {
   const pruneBeforeIndex = resolvePruneBeforeIndex(messages);
   if (pruneBeforeIndex < 0) {
@@ -99,8 +94,19 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
       continue;
     }
 
-    if (typeof message.content === "string") {
-      const prunedText = pruneHistoryMediaReferenceText(message.content);
+    // Materialize blank marked turns here so this earlier boundary still prunes stale paths.
+    const lateMediaText =
+      message.role === "user" && !hasNonBlankUserText(message.content)
+        ? buildLateMediaAttachedText(message)
+        : undefined;
+    const content = lateMediaText
+      ? Array.isArray(message.content)
+        ? ([{ type: "text", text: lateMediaText }, ...message.content] as typeof message.content)
+        : lateMediaText
+      : message.content;
+
+    if (typeof content === "string") {
+      const prunedText = pruneHistoryMediaReferenceText(content);
       if (prunedText !== message.content) {
         prunedMessages ??= messages.slice();
         prunedMessages[i] = cloneMessageWithContent(message, prunedText);
@@ -108,46 +114,23 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
       continue;
     }
 
-    if (!Array.isArray(message.content)) {
+    if (!Array.isArray(content)) {
       continue;
     }
 
-    for (let j = 0; j < message.content.length; j++) {
-      const block = message.content[j];
-      if (!block || typeof block !== "object") {
-        continue;
+    const nextContent = content.map((block) => {
+      const typed = block as { type?: unknown; text?: unknown } | null | undefined;
+      if (typed?.type === "text" && typeof typed.text === "string") {
+        const text = pruneHistoryMediaReferenceText(typed.text);
+        return text === typed.text ? block : ({ ...block, text } as (typeof content)[number]);
       }
-      const blockType = (block as { type?: string }).type;
-      if (blockType === "text" && typeof (block as { text?: unknown }).text === "string") {
-        const text = (block as { text: string }).text;
-        const prunedText = pruneHistoryMediaReferenceText(text);
-        if (prunedText !== text) {
-          prunedMessages ??= messages.slice();
-          const baseMessage = prunedMessages[i];
-          const baseContent =
-            baseMessage && "content" in baseMessage && Array.isArray(baseMessage.content)
-              ? baseMessage.content
-              : message.content;
-          const nextContent = baseContent.slice() as typeof message.content;
-          nextContent[j] = { ...block, text: prunedText } as (typeof message.content)[number];
-          prunedMessages[i] = cloneMessageWithContent(message, nextContent);
-        }
-        continue;
-      }
-      if (blockType === "image") {
-        prunedMessages ??= messages.slice();
-        const baseMessage = prunedMessages[i];
-        const baseContent =
-          baseMessage && "content" in baseMessage && Array.isArray(baseMessage.content)
-            ? baseMessage.content
-            : message.content;
-        const nextContent = baseContent.slice() as typeof message.content;
-        nextContent[j] = {
-          type: "text",
-          text: PRUNED_HISTORY_IMAGE_MARKER,
-        } as (typeof message.content)[number];
-        prunedMessages[i] = cloneMessageWithContent(message, nextContent);
-      }
+      return typed?.type === "image"
+        ? ({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER } as (typeof content)[number])
+        : block;
+    });
+    if (lateMediaText || nextContent.some((block, index) => block !== content[index])) {
+      prunedMessages ??= messages.slice();
+      prunedMessages[i] = cloneMessageWithContent(message, nextContent);
     }
   }
 

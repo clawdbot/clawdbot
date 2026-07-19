@@ -948,6 +948,7 @@ extension OpenClawChatView {
             }
 
             var content = last.content
+            // Tool-result diff metadata arrives on the message, but the UI renders the merged block.
             content.append(
                 OpenClawChatMessageContent(
                     type: "tool_result",
@@ -959,7 +960,8 @@ extension OpenClawChatView {
                     content: nil,
                     id: toolCallId,
                     name: message.toolName,
-                    arguments: nil))
+                    arguments: nil,
+                    details: message.details))
 
             let merged = OpenClawChatMessage(
                 id: last.id,
@@ -973,7 +975,8 @@ extension OpenClawChatView {
                 toolName: last.toolName,
                 usage: last.usage,
                 stopReason: last.stopReason,
-                errorMessage: last.errorMessage)
+                errorMessage: last.errorMessage,
+                details: last.details)
             result[result.count - 1] = merged
         }
 

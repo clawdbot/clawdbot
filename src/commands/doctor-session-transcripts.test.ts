@@ -18,16 +18,22 @@ vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite,
 }));
 
-vi.mock("./doctor-sqlite-maintenance-lock.js", () => ({
-  withDoctorSqliteMaintenanceLock,
-}));
+vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-sqlite-maintenance-lock.js")>();
+  return {
+    ...actual,
+    withDoctorSqliteMaintenanceLock,
+  };
+});
 
+import { GatewayLockError } from "../infra/gateway-lock.js";
 import {
   detectSessionTranscriptHealthIssues,
   noteSessionTranscriptHealth,
   sessionTranscriptIssueToHealthFinding,
   sessionTranscriptIssueToRepairEffect,
 } from "./doctor-session-transcripts.js";
+import { DoctorSqliteMaintenanceLockUnavailableError } from "./doctor-sqlite-maintenance-lock.js";
 
 async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
@@ -321,6 +327,50 @@ describe("doctor session transcript repair", () => {
       mode: "dry-run",
     });
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
+  });
+
+  it("skips session SQLite import when the Gateway owns the state lock", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(
+      new DoctorSqliteMaintenanceLockUnavailableError(
+        "session SQLite import",
+        new GatewayLockError("gateway already running"),
+      ),
+    );
+
+    await expect(
+      noteSessionTranscriptHealth({
+        cfg: {},
+        env,
+        sessionSqlite: true,
+        shouldRepair: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Skipped: Gateway or another SQLite maintenance command owns the state directory",
+      ),
+      "Session SQLite",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('run "openclaw doctor --fix" for session-store maintenance'),
+      "Session SQLite",
+    );
+  });
+
+  it("keeps non-lock session SQLite import failures fatal", async () => {
+    withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(new Error("SQLite import failed"));
+
+    await expect(
+      noteSessionTranscriptHealth({
+        cfg: {},
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        sessionSqlite: true,
+        shouldRepair: true,
+      }),
+    ).rejects.toThrow("SQLite import failed");
   });
 
   it("repairs supported current-version linear transcripts", async () => {

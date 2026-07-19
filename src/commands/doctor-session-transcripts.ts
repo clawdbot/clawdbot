@@ -8,6 +8,7 @@ import {
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   isSessionTranscriptLeafControl,
@@ -19,7 +20,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
-import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import {
+  DoctorSqliteMaintenanceLockUnavailableError,
+  withDoctorSqliteMaintenanceLock,
+} from "./doctor-sqlite-maintenance-lock.js";
 import { isLegacyCodexProviderId } from "./doctor/shared/codex-route-model-ref.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
@@ -508,13 +512,25 @@ async function noteSessionSqliteMigrationHealth(params: {
       env: params.env,
       mode: params.shouldRepair ? "import" : "dry-run",
     });
-  const report = params.shouldRepair
-    ? await withDoctorSqliteMaintenanceLock({
-        env: params.env,
-        operation: "session SQLite import",
-        run: runSessionSqlite,
-      })
-    : await runSessionSqlite();
+  let report: Awaited<ReturnType<typeof runSessionSqlite>>;
+  try {
+    report = params.shouldRepair
+      ? await withDoctorSqliteMaintenanceLock({
+          env: params.env,
+          operation: "session SQLite import",
+          run: runSessionSqlite,
+        })
+      : await runSessionSqlite();
+  } catch (error) {
+    if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {
+      throw error;
+    }
+    note(
+      `- Skipped: Gateway or another SQLite maintenance command owns the state directory. Stop the Gateway, then run "${formatCliCommand("openclaw doctor --fix", params.env)}" for session-store maintenance.`,
+      "Session SQLite",
+    );
+    return;
+  }
   if (
     report.totals.legacyEntries === 0 &&
     report.totals.unreferencedJsonlFiles === 0 &&

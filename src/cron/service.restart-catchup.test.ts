@@ -236,6 +236,45 @@ describe("CronService restart catch-up", () => {
     }
   });
 
+  it("persists successful script state from a startup catch-up run", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    const job: CronJob = {
+      ...createOverdueEveryJob("restart-script-state", startNow - 60_000),
+      payload: { kind: "script", script: "return { state: { revision: 2 } }" },
+      state: {
+        nextRunAtMs: startNow - 60_000,
+        triggerState: { revision: 1 },
+      },
+    };
+    await writeStoreJobs(store.storePath, [job]);
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startNow,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob: vi.fn(async () => ({
+        status: "ok" as const,
+        stateChanged: true,
+        state: { revision: 2 },
+      })),
+    });
+
+    try {
+      await runMissedJobs(state);
+
+      const persisted = await loadCronStore(store.storePath);
+      expect(persisted.jobs[0]?.state.triggerState).toEqual({ revision: 2 });
+    } finally {
+      await store.cleanup();
+    }
+  });
+
   it("does not resurrect a job removed during startup catch-up", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");

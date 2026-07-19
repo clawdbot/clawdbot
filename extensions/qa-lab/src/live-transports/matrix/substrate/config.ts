@@ -58,10 +58,6 @@ type MatrixQaThreadBindingsConfigOverrides = {
   maxAgeHours?: number;
   spawnSessions?: boolean;
   defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
-  spawnAcpSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
 };
 type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];

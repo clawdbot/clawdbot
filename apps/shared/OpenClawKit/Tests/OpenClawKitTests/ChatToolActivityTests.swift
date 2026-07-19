@@ -1,3 +1,4 @@
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
@@ -12,6 +13,7 @@ struct ChatToolActivityTests {
             id: "call-1",
             name: "exec",
             arguments: nil,
+            details: nil,
             resultText: "done",
             isPending: false)])
     }
@@ -25,6 +27,7 @@ struct ChatToolActivityTests {
             id: "result-0",
             name: "read",
             arguments: nil,
+            details: nil,
             resultText: "orphaned",
             isPending: false)])
     }
@@ -53,15 +56,31 @@ struct ChatToolActivityTests {
             id: "call-0",
             name: "search",
             arguments: nil,
+            details: nil,
             resultText: nil,
             isPending: false)])
+    }
+
+    @Test func `threads paired result details`() {
+        let details = AnyCodable(["diff": AnyCodable("+1 added")])
+        let items = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "edit")],
+            results: [self.content(
+                type: "toolResult",
+                text: "done",
+                id: "call-1",
+                name: "edit",
+                details: details)])
+
+        #expect(items.first?.details == details)
     }
 
     private func content(
         type: String,
         text: String? = nil,
         id: String? = nil,
-        name: String? = nil) -> OpenClawChatMessageContent
+        name: String? = nil,
+        details: AnyCodable? = nil) -> OpenClawChatMessageContent
     {
         OpenClawChatMessageContent(
             type: type,
@@ -70,6 +89,7 @@ struct ChatToolActivityTests {
             fileName: nil,
             content: nil,
             id: id,
-            name: name)
+            name: name,
+            details: details)
     }
 }

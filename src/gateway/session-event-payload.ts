@@ -43,6 +43,7 @@ export function buildGatewaySessionEventFields(params: {
     lastReadAt: sessionRow.lastReadAt,
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
+    swarmGroupId: sessionRow.swarmGroupId,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     forkedFromParent: sessionRow.forkedFromParent,

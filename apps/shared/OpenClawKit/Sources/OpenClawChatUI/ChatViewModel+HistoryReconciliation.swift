@@ -143,7 +143,8 @@ extension OpenClawChatViewModel {
             toolName: incoming.toolName,
             usage: incoming.usage,
             stopReason: incoming.stopReason,
-            errorMessage: incoming.errorMessage)
+            errorMessage: incoming.errorMessage,
+            details: incoming.details)
     }
 
     private static func preservingLocalAudioDurations(

@@ -17,6 +17,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.firstGraphemeOrNull
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -99,6 +100,7 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -332,6 +334,7 @@ fun ShellScreen(
           GatewayTrustDialog(
             prompt = prompt,
             onAccept = viewModel::acceptGatewayTrustPrompt,
+            onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
             onDecline = viewModel::declineGatewayTrustPrompt,
           )
         }
@@ -374,18 +377,31 @@ private fun CanvasOverlay(
 @Composable
 private fun GatewayTrustDialog(
   prompt: NodeRuntime.GatewayTrustPrompt,
-  onAccept: () -> Unit,
+  onAccept: (String?) -> Unit,
+  onUseSystemTrust: () -> Unit,
   onDecline: () -> Unit,
 ) {
+  val manualEntry = prompt.fingerprintSha256 == null
+  val systemTrustAvailable = prompt.systemTrustAvailable
+  var manualFingerprint by
+    rememberSaveable(prompt.endpoint.stableId, prompt.probeFailure) {
+      mutableStateOf("")
+    }
+  val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
   val message =
-    if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-      stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-    } else {
-      stringResource(
-        R.string.gateway_trust_changed,
-        prompt.previousFingerprintSha256,
-        prompt.fingerprintSha256,
-      )
+    when {
+      manualEntry ->
+        nativeString(
+          "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+        )
+      prompt.previousFingerprintSha256.isNullOrBlank() ->
+        stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
+      else ->
+        stringResource(
+          R.string.gateway_trust_changed,
+          prompt.previousFingerprintSha256,
+          prompt.fingerprintSha256,
+        )
     }
 
   AlertDialog(
@@ -398,15 +414,47 @@ private fun GatewayTrustDialog(
         color = ClawTheme.colors.text,
       )
     },
-    text = { Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        if (systemTrustAvailable) {
+          Text(
+            nativeString("This gateway now presents a certificate trusted by this device."),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+        if (manualEntry) {
+          OutlinedTextField(
+            value = manualFingerprint,
+            onValueChange = { manualFingerprint = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(nativeString("SHA-256 fingerprint")) },
+            singleLine = true,
+          )
+        }
+      }
+    },
     confirmButton = {
-      TextButton(onClick = onAccept) {
+      TextButton(
+        onClick = {
+          onAccept(if (manualEntry) normalizedManualFingerprint else null)
+        },
+        enabled = !manualEntry || normalizedManualFingerprint != null,
+      ) {
         Text(stringResource(R.string.trust_and_continue))
       }
     },
     dismissButton = {
-      TextButton(onClick = onDecline) {
-        Text(stringResource(R.string.cancel))
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (systemTrustAvailable) {
+          TextButton(onClick = onUseSystemTrust) {
+            Text(nativeString("Use system trust"))
+          }
+        }
+        TextButton(onClick = onDecline) {
+          Text(stringResource(R.string.cancel))
+        }
       }
     },
   )

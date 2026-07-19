@@ -18,6 +18,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) menuOpen = false;
   /** Unread sessions exist on non-active agents; surfaces next to the name. */
   @property({ attribute: false }) menuUnread = false;
+  @property({ attribute: false }) approvalCount = 0;
   /** More than one agent is configured; labels the menu as a switcher. */
   @property({ attribute: false }) switcherAvailable = false;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
@@ -26,6 +27,10 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
     const menuLabel = this.switcherAvailable
       ? t("agentChip.switchAgent")
       : t("agentChip.menuLabel");
+    const approvalLabel = t(
+      this.approvalCount === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
+      { count: String(this.approvalCount) },
+    );
     return html`
       <div class="sidebar-agent-card ${this.menuOpen ? "sidebar-agent-card--open" : ""}">
         <button
@@ -33,7 +38,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           class="sidebar-agent-card__main"
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
-          aria-label="${this.agentName} · ${menuLabel} · ${this.statusLabel}"
+          aria-label="${this.agentName} · ${menuLabel} · ${this.statusLabel}${this.approvalCount > 0
+            ? ` · ${approvalLabel}`
+            : ""}"
           @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           <span class="sidebar-agent-card__avatar">
@@ -68,6 +75,14 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
               : nothing}
           </span>
+          ${this.approvalCount > 0
+            ? html`<span
+                class="sidebar-agent-approval-count sidebar-agent-card__approval-count"
+                aria-label=${approvalLabel}
+                title=${approvalLabel}
+                >${this.approvalCount}</span
+              >`
+            : nothing}
           ${this.menuUnread && !this.menuOpen
             ? html`<span
                 class="session-unread-dot sidebar-agent-card__menu-unread"

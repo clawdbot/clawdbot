@@ -30,6 +30,7 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import {
   extractToolCardsCached,
   extractToolPreview,
@@ -398,6 +399,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
         ? (normalized.senderLabel ?? null)
         : null;
+    const sender = role.toLowerCase() === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
     const startsProjectedTurn =
@@ -407,7 +409,9 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
-      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender &&
+        (currentGroup.senderLabel !== senderLabel ||
+          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -417,6 +421,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
+        ...(sender ? { sender } : {}),
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
@@ -1093,6 +1098,12 @@ function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> |
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(item.sender?.id ? { senderId: item.sender.id } : {}),
+      ...(item.sender?.name ? { senderName: item.sender.name } : {}),
+      ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
+      ...(item.sender?.profileAvatarUrl
+        ? { senderProfileAvatarUrl: item.sender.profileAvatarUrl }
+        : {}),
     },
   };
 }
@@ -1525,6 +1536,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
+    senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     previous.isStreaming === next.isStreaming &&
     previous.turnSucceeded === next.turnSucceeded &&
     previous.messages.length === next.messages.length &&
@@ -1625,7 +1637,8 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
-        prior.senderLabel !== item.senderLabel
+        prior.senderLabel !== item.senderLabel ||
+        senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
       }

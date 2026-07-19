@@ -476,6 +476,20 @@ describe("deriveContextPromptTokens", () => {
 });
 
 describe("deriveSessionTotalTokens", () => {
+  it("prefers last-call usage over aggregate billing usage", () => {
+    expect(
+      deriveSessionTotalTokens({
+        lastCallUsage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
+        usage: {
+          input: 497_720,
+          output: 7_485,
+          cacheRead: 1_323_520,
+          total: 1_828_725,
+        },
+      }),
+    ).toBe(158_653);
+  });
+
   it("prefers the explicit context snapshot over aggregate billing buckets", () => {
     expect(
       deriveSessionTotalTokens({

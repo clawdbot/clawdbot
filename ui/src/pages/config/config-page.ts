@@ -63,6 +63,7 @@ type ConfigSelection = { activeSection: string | null; activeSubsection: string 
 // across devices is owned by app/server-prefs.ts, not by this type.
 type ConfigPageSetting =
   | "textScale"
+  | "sidebarLiveActivity"
   | "chatSendShortcut"
   | "chatFollowUpMode"
   | "catalogOpenTarget"
@@ -614,6 +615,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeMode: next.themeMode,
       customTheme: next.customTheme,
       textScale: next.textScale,
+      sidebarLiveActivity: next.sidebarLiveActivity,
       chatSendShortcut: next.chatSendShortcut,
       chatFollowUpMode: next.chatFollowUpMode,
       catalogOpenTarget: next.catalogOpenTarget,
@@ -829,6 +831,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
+      sidebarLiveActivity: this.settings.sidebarLiveActivity !== false,
+      setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),

@@ -89,6 +89,7 @@ import {
 } from "./task-runs.js";
 import {
   applyJobResult,
+  applyScriptRunResult,
   applyTriggerNoFireResult,
   applyTriggerRunResult,
   armTimer,
@@ -97,6 +98,7 @@ import {
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
   runMissedJobs,
+  runsDetachedFromMainSession,
   stopTimer,
 } from "./timer.js";
 import { wake } from "./wake.js";
@@ -108,7 +110,7 @@ function markManualCronJobActive(
   const jobId = job.id;
   state.activeManualRunJobIds.add(jobId);
   return markCronJobActive(jobId, {
-    preserveAcrossGenerationAdvance: job.sessionTarget === "main",
+    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
 }
 
@@ -195,6 +197,7 @@ export async function start(state: CronServiceState) {
               job,
               runningAtMs,
               entry: finalized.entry,
+              ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
               ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
             })
           ) {
@@ -775,11 +778,13 @@ function emitCronRunFinished(
   tracker?: ManualRunTerminalTracker,
   taskRunId?: string,
   triggerEval?: CronTriggerEvalOutcome,
+  scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown },
 ): void {
   tryFinishCronTaskRun(state, {
     taskRunId,
     job: evt.job,
     event: evt,
+    ...(scriptResult ? { scriptResult } : {}),
     ...(triggerEval ? { triggerEval } : {}),
   });
   emit(state, evt);
@@ -1323,6 +1328,7 @@ async function finishPreparedManualRun(
           endedAt,
           triggerEval: coreResult.triggerEval,
         });
+        applyScriptRunResult(job, coreResult);
 
         emitCronRunFinished(
           state,
@@ -1353,6 +1359,7 @@ async function finishPreparedManualRun(
           prepared.terminalTracker,
           taskRunId,
           coreResult.triggerEval,
+          coreResult,
         );
       }
 

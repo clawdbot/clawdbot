@@ -10,6 +10,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -683,6 +684,48 @@ function createDeferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+describe("inline approval card", () => {
+  it("renders between the transcript and composer and forwards its decision id", () => {
+    const onApprovalDecision = vi.fn();
+    const inlineApproval = {
+      id: "approval-inline",
+      kind: "exec",
+      request: {
+        command: "rm -rf build",
+        agentId: "main",
+        sessionKey: "agent:main:current",
+        commandSpans: [{ startIndex: 0, endIndex: 5 }],
+      },
+      createdAtMs: 1,
+      expiresAtMs: 61_000,
+    } satisfies ExecApprovalRequest;
+
+    const container = renderChatView({
+      inlineApproval,
+      approvalNowMs: 1_000,
+      approvalErrors: new Map([["approval-inline", "Approval failed: gateway unavailable"]]),
+      onApprovalDecision,
+    });
+
+    const card = container.querySelector(".chat-inline-approval .exec-approval-card");
+    const inlineSurface = container.querySelector(".chat-inline-approval");
+    expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
+    expect(inlineSurface?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(
+      inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
+    ).toBe(true);
+    expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
+      "expires in 01:00",
+    );
+    expect(container.querySelector(".exec-approval-command-span")?.textContent).toBe("rm -r");
+    expect(container.querySelector(".exec-approval-error")?.textContent).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    container.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
+    expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
+  });
+});
 
 describe("chat compaction divider", () => {
   it("renders checkpoint recovery copy and action", () => {

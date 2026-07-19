@@ -133,6 +133,7 @@ final class TalkModeManager: NSObject {
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
     private static let realtimePrefetchExpiryLeewaySeconds: TimeInterval = 30
+    private static let preferredInputDeviceIDKey = "talk.preferredInputDeviceID"
     var isEnabled: Bool = false
     var isListening: Bool = false
     var isSpeaking: Bool = false
@@ -156,6 +157,7 @@ final class TalkModeManager: NSObject {
     /// voice path exposes no real level (system voice, compressed streaming); the
     /// waveform then falls back to a synthetic pulse.
     var playbackLevel: Double?
+    private(set) var preferredInputDeviceID: String?
     var gatewayTalkConfigLoaded: Bool = false
     var gatewayTalkApiKeyConfigured: Bool = false
     var gatewayTalkDefaultModelId: String?
@@ -480,7 +482,22 @@ final class TalkModeManager: NSObject {
         self.allowSimulatorCapture = allowSimulatorCapture
         self.gatewaySpeechSynthesizerOverride = gatewaySpeechSynthesizer
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
+        self.preferredInputDeviceID = UserDefaults.standard.string(
+            forKey: Self.preferredInputDeviceIDKey)
         super.init()
+    }
+
+    func selectInputDevice(_ deviceID: String?) {
+        let normalizedID = deviceID.flatMap { $0.isEmpty ? nil : $0 }
+        self.preferredInputDeviceID = normalizedID
+        if let normalizedID {
+            UserDefaults.standard.set(normalizedID, forKey: Self.preferredInputDeviceIDKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.preferredInputDeviceIDKey)
+        }
+
+        guard self.audioSessionIsActive else { return }
+        Self.applyPreferredInput(normalizedID, to: AVAudioSession.sharedInstance())
     }
 
     func attachGateway(_ gateway: GatewayNodeSession) {
@@ -2200,6 +2217,9 @@ final class TalkModeManager: NSObject {
                 session.stop()
                 return .ignored
             }
+            // WebRTC configures the shared session and may force speaker + built-in mic.
+            // Apply the user's input last so the explicit microphone selection wins.
+            Self.applyPreferredInput(self.preferredInputDeviceID, to: AVAudioSession.sharedInstance())
             self.markRealtimeSessionReady()
             GatewayDiagnostics.log(
                 "talk.timeline realtime start ready elapsedMs=\(Self.elapsedMs(since: startedAt))")
@@ -4287,12 +4307,12 @@ extension TalkModeManager {
     }
 
     private func configureOwnedAudioSession() throws {
-        try Self.configureAudioSession()
+        try Self.configureAudioSession(preferredInputDeviceID: self.preferredInputDeviceID)
         self.audioSessionIsActive = true
     }
 
     private func configureOwnedRealtimeAudioSession() throws {
-        try Self.configureRealtimeAudioSession()
+        try Self.configureRealtimeAudioSession(preferredInputDeviceID: self.preferredInputDeviceID)
         self.audioSessionIsActive = true
     }
 
@@ -4320,7 +4340,7 @@ extension TalkModeManager {
         }
     }
 
-    static func configureAudioSession() throws {
+    static func configureAudioSession(preferredInputDeviceID: String? = nil) throws {
         let session = AVAudioSession.sharedInstance()
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
@@ -4337,10 +4357,12 @@ extension TalkModeManager {
         } else {
             try? session.overrideOutputAudioPort(.none)
         }
+        // A speaker override also forces the built-in microphone; apply an explicit input last.
+        self.applyPreferredInput(preferredInputDeviceID, to: session)
         GatewayDiagnostics.log("talk audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
     }
 
-    static func configureRealtimeAudioSession() throws {
+    static func configureRealtimeAudioSession(preferredInputDeviceID: String? = nil) throws {
         let session = AVAudioSession.sharedInstance()
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
@@ -4358,8 +4380,22 @@ extension TalkModeManager {
         } else {
             try? session.overrideOutputAudioPort(.none)
         }
+        // A speaker override also forces the built-in microphone; apply an explicit input last.
+        self.applyPreferredInput(preferredInputDeviceID, to: session)
         GatewayDiagnostics.log(
             "talk realtime audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
+    }
+
+    private static func applyPreferredInput(_ deviceID: String?, to session: AVAudioSession) {
+        let input = deviceID.flatMap { id in
+            session.availableInputs?.first(where: { $0.uid == id })
+        }
+        do {
+            try session.setPreferredInput(input)
+        } catch {
+            try? session.setPreferredInput(nil)
+            GatewayDiagnostics.log("talk audio: preferred input update failed: \(error.localizedDescription)")
+        }
     }
 
     private static func describeAudioSession() -> String {

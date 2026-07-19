@@ -19,6 +19,7 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
 import {
@@ -454,6 +455,7 @@ function enqueuePendingSendMessage(
   if (!trimmed && !hasAttachments) {
     return null;
   }
+  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId);
   const pending: ChatQueueItem = {
     id: generateUUID(),
     text: trimmed,
@@ -466,6 +468,7 @@ function enqueuePendingSendMessage(
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
+    ...(sender ? { sender } : {}),
     ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
     ...(replyToId ? { replyToId } : {}),
   };
@@ -2266,10 +2269,17 @@ export async function handleSendChat(
           host.chatMessage = "";
           resetChatInputHistoryNavigation(host);
         }
-        const queued = enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
-          args: parsed.args,
-          name: parsed.command.key,
-        });
+        const queued = enqueueChatMessage(
+          host,
+          message,
+          undefined,
+          isChatResetCommand(message),
+          {
+            args: parsed.args,
+            name: parsed.command.key,
+          },
+          resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+        );
         if (queued) {
           queued.sendState = reconnectSafeQueuedSendState(host);
         }

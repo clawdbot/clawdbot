@@ -70,7 +70,7 @@ fi
 
 is_locked_pr_command() {
   case "$1" in
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run) return 0 ;;
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify | merge-run) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -124,6 +124,7 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
+  scripts/pr ci-dispatch <PR>
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR>
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
@@ -213,7 +214,7 @@ main() {
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify | merge-run)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -231,6 +232,7 @@ main() {
   if is_locked_pr_command "$cmd"; then
     local locked_pr="${1-}"
     acquire_pr_operation_lock "$locked_pr"
+    begin_pr_operation_validation_phase
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 131' QUIT
@@ -318,6 +320,11 @@ main() {
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
       prepare_run "$pr"
+      ;;
+    ci-dispatch)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      ci_dispatch "$pr"
       ;;
     merge-verify)
       local pr="${1-}"

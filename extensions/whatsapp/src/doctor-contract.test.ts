@@ -16,6 +16,17 @@ describe("whatsapp streaming legacy config rules", () => {
   });
 });
 
+it("removes retired exposeErrorText at root and account level", () => {
+  const result = normalizeCompatibilityConfig({
+    cfg: whatsappConfig({ exposeErrorText: true, accounts: { work: { exposeErrorText: false } } }),
+  });
+  expect(result.config.channels?.whatsapp).toEqual({ accounts: { work: {} } });
+  expect(result.changes).toContain("Removed retired channels.whatsapp.exposeErrorText.");
+  expect(result.changes).toContain(
+    "Removed retired channels.whatsapp.accounts.work.exposeErrorText.",
+  );
+});
+
 describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
   it("moves flat delivery aliases at root and account level with root seeding", () => {
     const result = normalizeCompatibilityConfig({

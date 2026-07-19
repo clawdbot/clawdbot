@@ -92,15 +92,16 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
       if (!row) {
         return undefined;
       }
+      const plan = parseWorkerWorkspaceReconciliationPlan(row.plan_json);
       if (
         row.environment_id !== owner.environmentId ||
         row.owner_epoch !== owner.ownerEpoch ||
         row.placement_generation !== owner.placementGeneration ||
-        placement.workspaceBaseManifestRef !== row.base_manifest_ref
+        (placement.workspaceBaseManifestRef !== row.base_manifest_ref &&
+          placement.workspaceBaseManifestRef !== plan.appliedManifestRef)
       ) {
         throw new Error(`Worker workspace journal owner is stale for session ${owner.sessionId}`);
       }
-      const plan = parseWorkerWorkspaceReconciliationPlan(row.plan_json);
       if (
         plan.baseManifestRef !== row.base_manifest_ref ||
         plan.currentManifestRef !== row.current_manifest_ref
@@ -120,6 +121,9 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
       owner: WorkerWorkspaceJournalOwner,
       journal: WorkerWorkspaceReconciliationJournal,
     ): void {
+      if (journal.appliedManifestRef) {
+        throw new Error("Worker workspace reconciliation cannot begin as already applied");
+      }
       write((db) => {
         const placement = assertJournalOwner(db, owner);
         if (placement.workspaceBaseManifestRef !== journal.baseManifestRef) {

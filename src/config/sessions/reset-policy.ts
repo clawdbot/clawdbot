@@ -43,13 +43,7 @@ export function resolveSessionResetPolicy(params: {
 }): SessionResetPolicy {
   const sessionCfg = params.sessionCfg;
   const baseReset = params.resetOverride ?? sessionCfg?.reset;
-  // Backward compat: accept legacy "dm" key as alias for "direct".
-  const typeReset = params.resetOverride
-    ? undefined
-    : (sessionCfg?.resetByType?.[params.resetType] ??
-      (params.resetType === "direct"
-        ? (sessionCfg?.resetByType as { dm?: SessionResetConfig } | undefined)?.dm
-        : undefined));
+  const typeReset = params.resetOverride ? undefined : sessionCfg?.resetByType?.[params.resetType];
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
   const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);

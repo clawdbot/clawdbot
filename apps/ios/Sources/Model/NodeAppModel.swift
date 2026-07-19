@@ -405,6 +405,7 @@ final class NodeAppModel {
     var isBackgrounded: Bool = false
     let screen: ScreenController
     private let camera: any CameraServicing
+    private(set) var preferredCameraFacing: OpenClawCameraFacing
     private let screenRecorder: any ScreenRecordingServicing
     private var watchGatewayConnectionStatus: OpenClawWatchAppStatusCode?
     var gatewayStatusText: String = "Offline" {
@@ -804,6 +805,7 @@ final class NodeAppModel {
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
+    private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
     private static let watchChatCompletionWaitMs = 75000
     private static let watchChatRunWaitSliceMs = 60000
@@ -839,6 +841,8 @@ final class NodeAppModel {
     {
         self.screen = screen
         self.camera = camera
+        self.preferredCameraFacing = Self.cameraFacingPreference(
+            rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
         self.screenRecorder = screenRecorder
         self.locationService = locationService
         self.notificationCenter = notificationCenter
@@ -2391,8 +2395,11 @@ final class NodeAppModel {
             triggerCameraFlash()
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
+            let defaultFacing = self.preferredCameraFacing
             let res = try await self.withForegroundCapture {
-                try await self.camera.snap(params: params)
+                try await self.camera.snap(
+                    params: params,
+                    defaultFacing: defaultFacing)
             }
 
             struct Payload: Codable {
@@ -2415,11 +2422,14 @@ final class NodeAppModel {
                 OpenClawCameraClipParams()
 
             let includeAudio = params.includeAudio ?? true
+            let defaultFacing = self.preferredCameraFacing
             showCameraHUD(ownerID: req.id, text: "Recording…", kind: .recording)
             let res = try await self.withForegroundCapture(
                 audioOwner: includeAudio ? .cameraClip : nil)
             {
-                try await self.camera.clip(params: params)
+                try await self.camera.clip(
+                    params: params,
+                    defaultFacing: defaultFacing)
             }
 
             struct Payload: Codable {
@@ -3438,6 +3448,21 @@ extension NodeAppModel {
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         if UserDefaults.standard.object(forKey: "camera.enabled") == nil { return true }
         return UserDefaults.standard.bool(forKey: "camera.enabled")
+    }
+
+    nonisolated static func cameraFacingPreference(rawValue: String?) -> OpenClawCameraFacing {
+        rawValue.flatMap(OpenClawCameraFacing.init(rawValue:)) ?? .front
+    }
+
+    func setPreferredCameraFacing(_ facing: OpenClawCameraFacing) {
+        guard self.preferredCameraFacing != facing else { return }
+        self.preferredCameraFacing = facing
+        UserDefaults.standard.set(facing.rawValue, forKey: Self.preferredCameraFacingKey)
+    }
+
+    func flipPreferredCameraFacing() {
+        self.setPreferredCameraFacing(self.preferredCameraFacing == .front ? .back : .front)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private func triggerCameraFlash() {

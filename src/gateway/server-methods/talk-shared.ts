@@ -13,6 +13,8 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../../packages/speech-core/voice-models.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
@@ -20,6 +22,7 @@ import {
   listRealtimeTranscriptionProviders,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
@@ -27,9 +30,70 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderConfig,
 } from "../../talk/provider-types.js";
-import type { TalkEvent } from "../../talk/talk-events.js";
+import type { TalkBrain, TalkEvent, TalkMode, TalkTransport } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { TalkHandoffTurnResult } from "../talk-handoff.js";
+
+/** Resolve the Talk session mode, defaulting managed-room transports to stt-tts. */
+export function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
+  return (
+    (normalizeOptionalLowercaseString(params.mode) as TalkMode | undefined) ??
+    (normalizeOptionalLowercaseString(params.transport) === "managed-room" ? "stt-tts" : "realtime")
+  );
+}
+
+/** Resolve the Talk session transport from mode when the client omits it. */
+export function normalizeTalkSessionTransport(params: {
+  mode: TalkMode;
+  transport?: string;
+}): TalkTransport {
+  const transport = normalizeOptionalLowercaseString(params.transport) as TalkTransport | undefined;
+  if (transport) {
+    return transport;
+  }
+  return params.mode === "stt-tts" ? "managed-room" : "gateway-relay";
+}
+
+/** Resolve the Talk session brain, defaulting transcription sessions to none. */
+export function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: string }): TalkBrain {
+  const brain = normalizeOptionalLowercaseString(params.brain) as TalkBrain | undefined;
+  if (brain) {
+    return brain;
+  }
+  return params.mode === "transcription" ? "none" : "agent-consult";
+}
+
+export async function resolveTalkRealtimeProviderInstructions(params: {
+  config: OpenClawConfig;
+  configuredInstructions?: string;
+  sessionKey?: unknown;
+  /** Relay sessions bind their agent lazily; injecting a guessed profile would mix agents. */
+  requireSessionKeyForProfile?: boolean;
+  warn: (message: string) => void;
+}): Promise<{ agentId: string; instructions: string; requestedSessionKey?: string }> {
+  const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+  // Older clients can prefetch without a key. Client-owned creates bind to the
+  // default agent immediately, so its workspace profile stays consistent there.
+  const agentId = requestedSessionKey
+    ? resolveAgentIdFromSessionKey(requestedSessionKey)
+    : resolveDefaultAgentId(params.config);
+  const bootstrapContext =
+    params.requireSessionKeyForProfile && !requestedSessionKey
+      ? undefined
+      : await resolveRealtimeBootstrapContextInstructions({
+          agentId,
+          config: params.config,
+          sessionKey: requestedSessionKey,
+          warn: params.warn,
+        });
+  return {
+    agentId,
+    instructions: [params.configuredInstructions, bootstrapContext]
+      .filter((entry): entry is string => Boolean(entry?.trim()))
+      .join("\n\n"),
+    ...(requestedSessionKey ? { requestedSessionKey } : {}),
+  };
+}
 
 export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];

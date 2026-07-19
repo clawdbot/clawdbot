@@ -36,9 +36,6 @@ overrides:
 
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
-patchedDependencies:
-  '@openclaw/fs-safe@0.4.1': e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c
-
 importers:
 
   .:
@@ -86,8 +83,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.4.1
-        version: 0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)
+        specifier: 0.4.4
+        version: 0.4.4
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.5.0)
@@ -3702,8 +3699,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.4.1':
-    resolution: {integrity: sha512-hQi+BxO10KdRFlYUot1syC+hTaUnGeQNdqX5kwkKJig8CFq1tKsYJLPm+zkiiGsSKOprPAquQl/txejEhpKPgg==}
+  '@openclaw/fs-safe@0.4.4':
+    resolution: {integrity: sha512-QklFGshaQDXl7RFyxPeSN/1moYq/X+SJcmX/nY3oXJO/tzVasL9i1g3m4nJqIfd6qUTJQjeu+41aIqw8+SbUww==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -10072,7 +10069,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)':
+  '@openclaw/fs-safe@0.4.4':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.19

@@ -40,6 +40,23 @@ const loadLegacyCronRepair = createLazyRuntimeModule(
 );
 const startupPreflightTraceStartedAt = performance.now();
 
+function withLegacyCronWebhook(
+  config: OpenClawConfig,
+  legacyConfig: OpenClawConfig | undefined,
+): OpenClawConfig {
+  const legacyCron = legacyConfig?.cron as Record<string, unknown> | undefined;
+  if (!legacyCron || !Object.hasOwn(legacyCron, "webhook")) {
+    return config;
+  }
+  return {
+    ...config,
+    cron: {
+      ...config.cron,
+      webhook: legacyCron.webhook,
+    },
+  } as OpenClawConfig;
+}
+
 async function measureStartupPreflightStep<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   if (!isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
     return await run();
@@ -573,7 +590,10 @@ export async function runDoctorConfigPreflight(
             repairLegacyCronStoreWithoutPrompt,
           } = await loadLegacyCronRepair();
           const cronResult = await repairLegacyCronStoreWithoutPrompt({
-            cfg: stateMigrationInput.cfg,
+            cfg: withLegacyCronWebhook(
+              stateMigrationInput.cfg,
+              stateMigrationInput.pluginDoctorConfig,
+            ),
             migrateCodexModelRefs: false,
           });
           noteStartupStateMigrationResult(cronResult);

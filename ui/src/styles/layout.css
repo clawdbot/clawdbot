@@ -2766,6 +2766,26 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 6px;
 }
 
+.sidebar-agent-approval-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-agent-card__approval-count {
+  flex: none;
+  margin-left: auto;
+}
+
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
   display: flex;
@@ -2814,6 +2834,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .nav-item__state {
   flex: none;
   margin-left: auto;
+}
+
+.sidebar-home-session-states {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
@@ -3516,6 +3542,19 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__name,
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__subtitle {
   color: color-mix(in srgb, var(--danger) 86%, var(--text));
+}
+
+.sidebar-recent-session__subtitle--narration {
+  animation: sidebar-narration-arrive var(--duration-fast) ease-out;
+}
+
+@keyframes sidebar-narration-arrive {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */

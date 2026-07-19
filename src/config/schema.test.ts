@@ -181,8 +181,8 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("enabled");
-    expect(serversNode?.additionalProperties?.properties).toHaveProperty("timeout");
-    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectTimeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("requestTimeoutMs");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectionTimeoutMs");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("auth");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("sslVerify");

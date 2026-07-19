@@ -545,7 +545,9 @@ describe("discord doctor", () => {
 
     const result = maybeRepairDiscordNumericIds(cfg, "openclaw doctor --fix");
     expect(result.config.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["99"]);
+    expect(
+      (result.config.channels?.discord?.dm as { allowFrom?: string[] } | undefined)?.allowFrom,
+    ).toEqual(["99"]);
     expect(result.config.channels?.discord?.guilds?.main?.users).toEqual(["111"]);
     expect(result.config.channels?.discord?.guilds?.main?.roles).toEqual(["222"]);
     expect(result.changes).not.toHaveLength(0);

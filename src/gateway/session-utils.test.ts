@@ -208,6 +208,23 @@ describe("gateway session utils", () => {
     expect(row.unread).toBe(expected);
   });
 
+  test("projects swarm collector group ids to list and live session payloads", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:child",
+      entry: {
+        swarmGroupId: "swarm:agent:main:parent:turn-42",
+      } as SessionEntry,
+    });
+
+    expect(row.swarmGroupId).toBe("swarm:agent:main:parent:turn-42");
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).swarmGroupId).toBe(
+      "swarm:agent:main:parent:turn-42",
+    );
+  });
+
   test("session lists apply a bounded default and expose truncation metadata", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(

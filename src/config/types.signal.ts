@@ -1,6 +1,10 @@
 // Defines Signal channel configuration types.
 import type { ReplyToMode } from "./types.base.js";
-import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type {
+  ChannelReactionConfig,
+  ChannelReadReceiptConfig,
+  CommonChannelMessagingConfig,
+} from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -15,57 +19,42 @@ export type SignalGroupConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
-export type SignalAccountConfig = CommonChannelMessagingConfig & {
-  /** Optional explicit E.164 account for signal-cli. */
-  account?: string;
-  /** Optional account UUID for signal-cli (used for loop protection). */
-  accountUuid?: string;
-  /** Optional signal-cli config directory path (passed as --config). */
-  configPath?: string;
-  /** Optional full base URL for signal-cli HTTP daemon. */
-  httpUrl?: string;
-  /** HTTP host for signal-cli daemon (default 127.0.0.1). */
-  httpHost?: string;
-  /** HTTP port for signal-cli daemon (default 8080). */
-  httpPort?: number;
-  /** signal-cli binary path (default: signal-cli). */
-  cliPath?: string;
-  /** Auto-start signal-cli daemon (default: true if httpUrl not set). */
-  autoStart?: boolean;
-  /** Max time to wait for signal-cli daemon startup (ms, cap 120000). */
-  startupTimeoutMs?: number;
-  receiveMode?: "on-start" | "manual";
-  ignoreAttachments?: boolean;
-  ignoreStories?: boolean;
-  sendReadReceipts?: boolean;
-  /** OpenClaw-side target aliases keyed by friendly name. */
-  aliases?: Record<string, string>;
-  /** Per-group overrides keyed by Signal group id (or "*"). */
-  groups?: Record<string, SignalGroupConfig>;
-  /** Outbound text chunk size (chars). Default: 4000. */
-  textChunkLimit?: number;
-  /** Control native reply quoting when replies target an inbound Signal message. */
-  replyToMode?: ReplyToMode;
-  /** Optional per-chat-type native reply quoting overrides. */
-  replyToModeByChatType?: Partial<Record<"direct" | "group", ReplyToMode>>;
-  /** Reaction notification mode (off|own|all|allowlist). Default: own. */
-  reactionNotifications?: SignalReactionNotificationMode;
-  /** Allowlist for reaction notifications when mode is allowlist. */
-  reactionAllowlist?: Array<string | number>;
-  /** Action toggles for message tool capabilities. */
-  actions?: {
-    /** Enable/disable sending reactions via message tool (default: true). */
-    reactions?: boolean;
+export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> &
+  ChannelReadReceiptConfig &
+  ChannelReactionConfig<SignalReactionNotificationMode, SignalReactionLevel, never, true> & {
+    /** Optional explicit E.164 account for signal-cli. */
+    account?: string;
+    /** Optional account UUID for signal-cli (used for loop protection). */
+    accountUuid?: string;
+    /** Optional signal-cli config directory path (passed as --config). */
+    configPath?: string;
+    /** Optional full base URL for signal-cli HTTP daemon. */
+    httpUrl?: string;
+    /** HTTP host for signal-cli daemon (default 127.0.0.1). */
+    httpHost?: string;
+    /** HTTP port for signal-cli daemon (default 8080). */
+    httpPort?: number;
+    /** signal-cli binary path (default: signal-cli). */
+    cliPath?: string;
+    /** Auto-start signal-cli daemon (default: true if httpUrl not set). */
+    autoStart?: boolean;
+    /** Max time to wait for signal-cli daemon startup (ms, cap 120000). */
+    startupTimeoutMs?: number;
+    receiveMode?: "on-start" | "manual";
+    ignoreAttachments?: boolean;
+    ignoreStories?: boolean;
+    /** OpenClaw-side target aliases keyed by friendly name. */
+    aliases?: Record<string, string>;
+    /** Per-group overrides keyed by Signal group id (or "*"). */
+    groups?: Record<string, SignalGroupConfig>;
+    /** Optional per-chat-type native reply quoting overrides. */
+    replyToModeByChatType?: Partial<Record<"direct" | "group", ReplyToMode>>;
+    /** Action toggles for message tool capabilities. */
+    actions?: {
+      /** Enable/disable sending reactions via message tool (default: true). */
+      reactions?: boolean;
+    };
   };
-  /**
-   * Controls agent reaction behavior:
-   * - "off": No reactions
-   * - "ack": Only automatic ack reactions (👀 when processing)
-   * - "minimal": Agent can react sparingly (default)
-   * - "extensive": Agent can react liberally
-   */
-  reactionLevel?: SignalReactionLevel;
-};
 
 export type SignalConfig = {
   /**

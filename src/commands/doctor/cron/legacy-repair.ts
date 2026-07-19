@@ -176,7 +176,9 @@ export async function applyLegacyCronStoreRepair(params: {
       shouldMigrateCodexRuntimePolicyTarget: (target) =>
         !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
     });
-  const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
+  const legacyWebhook = normalizeOptionalString(
+    (params.cfg.cron as Record<string, unknown> | undefined)?.webhook,
+  );
   const notifyMigration = migrateLegacyNotifyFallback({
     jobs: state.rawJobs,
     legacyWebhook,

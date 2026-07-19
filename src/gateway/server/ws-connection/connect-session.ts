@@ -14,6 +14,7 @@ import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js"
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { loadNodeHostConfig } from "../../../node-host/config.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
@@ -133,6 +134,24 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
+  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
+  if (authenticatedUserId) {
+    try {
+      const profile = ensureProfileForEmail(authenticatedUserId);
+      // Profile metadata is a connect-time snapshot; edits become visible after reconnect.
+      authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: profile.avatarMime !== null,
+      };
+    } catch (error) {
+      // Profile storage must not block login; retain the legacy email-only identity on failure.
+      logWsControl.warn(
+        `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
+      );
+    }
+  }
+
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
   const pendingPluginNodeCapabilities: Array<{
@@ -226,6 +245,7 @@ export async function attachAuthenticatedGatewayConnect(
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -325,7 +345,22 @@ export async function attachAuthenticatedGatewayConnect(
       scopes,
       instanceId: device?.id ?? instanceId,
       ...(authenticatedUserId
-        ? { user: { id: authenticatedUserId, email: authenticatedUserId } }
+        ? {
+            user: authenticatedUserProfile
+              ? {
+                  id: authenticatedUserProfile.profileId,
+                  email: authenticatedUserId,
+                  ...(authenticatedUserProfile.displayName
+                    ? { name: authenticatedUserProfile.displayName }
+                    : {}),
+                  ...(authenticatedUserProfile.hasAvatar
+                    ? {
+                        avatarUrl: `/api/users/${authenticatedUserProfile.profileId}/avatar`,
+                      }
+                    : {}),
+                }
+              : { id: authenticatedUserId, email: authenticatedUserId },
+          }
         : {}),
       reason: "connect",
     });

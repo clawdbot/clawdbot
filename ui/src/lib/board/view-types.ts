@@ -15,7 +15,11 @@ export type BoardWidget = {
   name: string;
   tabId: string;
   title?: string;
-  contentKind: "html" | "mcp-app";
+  contentKind: "html" | "mcp-app" | "builtin";
+  /** Named native Control UI card; unlike framed widgets it never persists board mutations. */
+  builtin?: "swarm";
+  /** Virtual cards are derived from live session state and cannot be moved or removed. */
+  readOnly?: boolean;
   sizeW: number;
   sizeH: number;
   position: number;

@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -13,6 +14,7 @@ export type BoardChatDockSize = {
 
 type BoardSessionSurfaceProps = {
   snapshot: BoardSnapshot;
+  sessions: readonly GatewaySessionRow[];
   activeTabId: string;
   dock: BoardTab["chatDock"];
   reopenDock: BoardVisibleChatDock;
@@ -23,14 +25,16 @@ type BoardSessionSurfaceProps = {
   onDockChange: (dock: BoardTab["chatDock"]) => void;
 };
 
-let placeholderLoad: Promise<unknown> | null = null;
+let boardViewLoad: Promise<unknown> | null = null;
 
 export async function ensureBoardViewElement(): Promise<boolean> {
-  if (customElements.get("openclaw-board-view") || !isMockBoardEnabled()) {
+  if (customElements.get("openclaw-board-view")) {
     return false;
   }
-  placeholderLoad ??= import("../../components/board-view-placeholder.ts");
-  await placeholderLoad;
+  boardViewLoad ??= isMockBoardEnabled()
+    ? import("../../components/board-view-placeholder.ts")
+    : import("../../components/board/board-view.ts");
+  await boardViewLoad;
   return true;
 }
 
@@ -134,6 +138,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${widgetFrameUrl}
         .callbacks=${props.callbacks}
+        .sessions=${props.sessions}
       ></openclaw-board-view>
     </div>
   `;

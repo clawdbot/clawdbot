@@ -92,18 +92,6 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
-    return raw;
-  }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
-  return {
-    ...raw,
-    commands,
-  };
-}
-
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
   if (!providers) {
@@ -1073,7 +1061,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    stripDeprecatedValidationKeys(raw),
+    raw,
     opts?.preservedLegacyRootKeys,
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);

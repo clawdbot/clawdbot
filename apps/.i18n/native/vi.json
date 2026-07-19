@@ -459,6 +459,21 @@
       "translated": "Không thể xử lý phê duyệt. Hãy làm mới và thử lại."
     },
     {
+      "id": "native.android.ab7de09b2e9bafd2",
+      "source": "Device approved.",
+      "translated": "Đã phê duyệt thiết bị."
+    },
+    {
+      "id": "native.android.0f3b1e2ce6f0aed5",
+      "source": "Pairing request rejected.",
+      "translated": "Đã từ chối yêu cầu ghép nối."
+    },
+    {
+      "id": "native.android.e98062fe81b36c4a",
+      "source": "Paired device removed.",
+      "translated": "Đã xóa thiết bị được ghép nối."
+    },
+    {
       "id": "native.android.5cf2b6b55ea97b67",
       "source": "Proposal applied.",
       "translated": "Đã áp dụng đề xuất."
@@ -802,6 +817,11 @@
       "id": "native.android.df0d071809dfbbb3",
       "source": "Connect the gateway to update Skill Workshop proposals.",
       "translated": "Kết nối Gateway để cập nhật các đề xuất trong Skill Workshop."
+    },
+    {
+      "id": "native.android.9481b642ee32ed95",
+      "source": "Could not verify the device pairing change. Refresh and try again.",
+      "translated": "Không thể xác minh thay đổi ghép nối thiết bị. Hãy làm mới và thử lại."
     },
     {
       "id": "native.android.21445608d791c302",
@@ -2429,6 +2449,91 @@
       "translated": "Thiết bị đã ghép đôi"
     },
     {
+      "id": "native.android.8c6f23f9b2a2f5c3",
+      "source": "Approve device?",
+      "translated": "Phê duyệt thiết bị?"
+    },
+    {
+      "id": "native.android.61e56e7c2425c765",
+      "source": "Reject pairing request?",
+      "translated": "Từ chối yêu cầu ghép nối?"
+    },
+    {
+      "id": "native.android.a233e379d3281626",
+      "source": "Remove paired device?",
+      "translated": "Xóa thiết bị được ghép nối?"
+    },
+    {
+      "id": "native.android.84789f373ff7e379",
+      "source": "Verify this requesting device before granting access.",
+      "translated": "Hãy xác minh thiết bị đang yêu cầu này trước khi cấp quyền truy cập."
+    },
+    {
+      "id": "native.android.80f2666384538867",
+      "source": "$label: $value",
+      "translated": "$label: $value"
+    },
+    {
+      "id": "native.android.857fc6dbd43c147c",
+      "source": "Reject the pairing request from this device?",
+      "translated": "Từ chối yêu cầu ghép nối từ thiết bị này?"
+    },
+    {
+      "id": "native.android.a0cb7097dac32274",
+      "source": "This device will lose its trusted Gateway access.",
+      "translated": "Thiết bị này sẽ mất quyền truy cập Gateway đáng tin cậy."
+    },
+    {
+      "id": "native.android.d62bd835e46f047f",
+      "source": "Cancel",
+      "translated": "Hủy"
+    },
+    {
+      "id": "native.android.54bc27d84e77fdeb",
+      "source": "Name",
+      "translated": "Tên"
+    },
+    {
+      "id": "native.android.549fcca19ab575e8",
+      "source": "Device ID",
+      "translated": "ID thiết bị"
+    },
+    {
+      "id": "native.android.0a2b46e9ba9a43a7",
+      "source": "Public key",
+      "translated": "Khóa công khai"
+    },
+    {
+      "id": "native.android.3029d9b112d91460",
+      "source": "Platform",
+      "translated": "Nền tảng"
+    },
+    {
+      "id": "native.android.34495d4163dd2b0d",
+      "source": "Client",
+      "translated": "Ứng dụng khách"
+    },
+    {
+      "id": "native.android.9d5173f45aa99bc9",
+      "source": "Origin",
+      "translated": "Nguồn gốc"
+    },
+    {
+      "id": "native.android.1690971a387e62fa",
+      "source": "Remote IP",
+      "translated": "IP từ xa"
+    },
+    {
+      "id": "native.android.e478d6d87813a30a",
+      "source": "Roles",
+      "translated": "Vai trò"
+    },
+    {
+      "id": "native.android.d390e77c38097584",
+      "source": "Scopes",
+      "translated": "Phạm vi"
+    },
+    {
       "id": "native.android.f87fa5da40b7f94f",
       "source": "New device",
       "translated": "Thiết bị mới"
@@ -2444,9 +2549,24 @@
       "translated": "Xem xét"
     },
     {
+      "id": "native.android.caa6c7dea18d5127",
+      "source": "Reject",
+      "translated": "Từ chối"
+    },
+    {
+      "id": "native.android.ef8a2c38eba42e89",
+      "source": "Approve",
+      "translated": "Phê duyệt"
+    },
+    {
       "id": "native.android.36735662df3e8ab2",
       "source": "Paired device",
       "translated": "Thiết bị đã ghép nối"
+    },
+    {
+      "id": "native.android.ce8e5c5a934ed2aa",
+      "source": "Remove",
+      "translated": "Xóa"
     },
     {
       "id": "native.android.e274308654ddc04b",
@@ -2504,9 +2624,9 @@
       "translated": "Quyền chưa được phê duyệt"
     },
     {
-      "id": "native.android.13024ff403917bfe",
-      "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "Phiên đăng nhập Gateway này có thể liệt kê các nút đã kết nối, nhưng không thể phê duyệt việc ghép đôi điện thoại mới. Hãy ghép đôi điện thoại mới từ phiên quản trị Gateway. Việc phê duyệt khả năng của nút là riêng biệt và vẫn sử dụng nodes approve <request id>."
+      "id": "native.android.8b55ed05cd70b8d9",
+      "source": "Device pairing actions are unavailable in this Gateway session. Run openclaw devices list on the Gateway host and manage the request there. Node capability approval is separate and still uses nodes approve <request id>.",
+      "translated": "Các thao tác ghép nối thiết bị không khả dụng trong phiên Gateway này. Chạy openclaw devices list trên máy chủ Gateway và quản lý yêu cầu tại đó. Việc phê duyệt quyền của node là riêng biệt và vẫn sử dụng nodes approve <request id>."
     },
     {
       "id": "native.android.0d8e9ede9c229b8e",
@@ -2604,9 +2724,29 @@
       "translated": "Không thể khởi động camera. Hãy chọn hình ảnh mã QR từ thư viện hoặc nhập mã thiết lập theo cách thủ công."
     },
     {
+      "id": "native.android.7a18be21a62739bf",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "Không thể tự động đọc chứng chỉ của Gateway. Hãy dán dấu vân tay SHA-256 lấy được trên máy chủ Gateway."
+    },
+    {
+      "id": "native.android.aa489429ad39aa39",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "Gateway này hiện cung cấp chứng chỉ được thiết bị này tin cậy."
+    },
+    {
+      "id": "native.android.b3db82f1162808ad",
+      "source": "SHA-256 fingerprint",
+      "translated": "Dấu vân tay SHA-256"
+    },
+    {
       "id": "native.android.9ac2d4498b17d478",
       "source": "Trust",
       "translated": "Tin cậy"
+    },
+    {
+      "id": "native.android.09245320d3878458",
+      "source": "Use system trust",
+      "translated": "Sử dụng độ tin cậy của hệ thống"
     },
     {
       "id": "native.android.e26ee07a1d1911be",
@@ -5437,6 +5577,26 @@
       "id": "native.android.30d8b822fa68d6c4",
       "source": "Close Canvas",
       "translated": "Đóng Canvas"
+    },
+    {
+      "id": "native.android.846fe5afd08b8089",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "Không thể tự động đọc chứng chỉ của Gateway. Hãy dán dấu vân tay SHA-256 lấy được trên máy chủ Gateway."
+    },
+    {
+      "id": "native.android.b263dca13f55dad9",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "Gateway này hiện cung cấp chứng chỉ được thiết bị này tin cậy."
+    },
+    {
+      "id": "native.android.dca0f8814b658170",
+      "source": "SHA-256 fingerprint",
+      "translated": "Dấu vân tay SHA-256"
+    },
+    {
+      "id": "native.android.bb5d50fcdd5ebafe",
+      "source": "Use system trust",
+      "translated": "Sử dụng độ tin cậy của hệ thống"
     },
     {
       "id": "native.android.3d83e0755437a5f9",
@@ -22909,6 +23069,51 @@
       "translated": "<\\(tag)"
     },
     {
+      "id": "native.apple.fc5931c1f0a6bbec",
+      "source": "Switch to back camera",
+      "translated": "Chuyển sang camera sau"
+    },
+    {
+      "id": "native.apple.cce3b539e31701c0",
+      "source": "Switch to front camera",
+      "translated": "Chuyển sang camera trước"
+    },
+    {
+      "id": "native.apple.f397daffdfd02ee0",
+      "source": "Flip camera",
+      "translated": "Đổi chiều camera"
+    },
+    {
+      "id": "native.apple.11f8de87ca3fcb11",
+      "source": "Stop",
+      "translated": "Dừng"
+    },
+    {
+      "id": "native.apple.7c92bec1c8a83e43",
+      "source": "Talk",
+      "translated": "Nói"
+    },
+    {
+      "id": "native.apple.dae61543f9b416ca",
+      "source": "Start realtime chat",
+      "translated": "Bắt đầu trò chuyện theo thời gian thực"
+    },
+    {
+      "id": "native.apple.d376b015a90792a9",
+      "source": "Stop realtime chat",
+      "translated": "Dừng trò chuyện theo thời gian thực"
+    },
+    {
+      "id": "native.apple.ac48dbe25ac4d40d",
+      "source": "Connecting...",
+      "translated": "Đang kết nối..."
+    },
+    {
+      "id": "native.apple.ccce98756eb1dacd",
+      "source": "Gateway connected",
+      "translated": "Đã kết nối Gateway"
+    },
+    {
       "id": "native.apple.03aca5cfee32f12d",
       "source": "Context %@%% used",
       "translated": "Đã sử dụng %@%% ngữ cảnh"
@@ -23004,21 +23209,6 @@
       "translated": "Tệp đính kèm"
     },
     {
-      "id": "native.apple.ee2c0d22f5861159",
-      "source": "Talk",
-      "translated": "Nói chuyện"
-    },
-    {
-      "id": "native.apple.5d5041aefe6dfddd",
-      "source": "Start realtime chat",
-      "translated": "Bắt đầu trò chuyện thời gian thực"
-    },
-    {
-      "id": "native.apple.21a7d3a3386a2218",
-      "source": "Stop realtime chat",
-      "translated": "Dừng trò chuyện thời gian thực"
-    },
-    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "Bắt đầu"
@@ -23062,16 +23252,6 @@
       "id": "native.apple.f4473f79bb87b2fd",
       "source": "Refresh",
       "translated": "Làm mới"
-    },
-    {
-      "id": "native.apple.6c984c0e3ed3a69e",
-      "source": "Connecting...",
-      "translated": "Đang kết nối..."
-    },
-    {
-      "id": "native.apple.898849eb2bcb0b53",
-      "source": "Gateway connected",
-      "translated": "Gateway đã kết nối"
     },
     {
       "id": "native.apple.b6adfcd17a6e73d7",
@@ -23977,6 +24157,11 @@
       "id": "native.apple.065f4da5ddaf14a1",
       "source": "Show all %lld lines",
       "translated": "Hiển thị tất cả %lld dòng"
+    },
+    {
+      "id": "native.apple.f80bb83a659d23f4",
+      "source": "Collapsed",
+      "translated": "Đã thu gọn"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",

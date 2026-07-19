@@ -52,7 +52,7 @@ openclaw tui --local
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver. When `tui.footer.showRemoteHost` is enabled, remote Gateway connections also show the connection host.
+- Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -66,14 +66,6 @@ openclaw tui --local
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
-- To show the Gateway host for non-local URL-backed connections, opt in with:
-
-  ```bash
-  openclaw config set tui.footer.showRemoteHost true
-  ```
-
-  Default is `false`. Loopback and embedded local connections never show a host label.
-
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session for the same gateway, agent, and session scope if that session still exists. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.

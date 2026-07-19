@@ -23,6 +23,7 @@ import {
   cronRunStatusToTaskStatus,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
+  cronTaskRecordToScriptRunResult,
   cronTaskRecordToTriggerEval,
   resolveCronTaskRecordTimestamp,
 } from "../task-run-detail.js";
@@ -160,6 +161,7 @@ export function tryFindFinalizedCronTaskRun(
 ):
   | {
       entry: CronRunLogEntry & { status: CronRunStatus };
+      scriptResult?: { scriptStateChanged: true; scriptState?: JsonValue };
       triggerEval?: { fired: true; stateChanged: boolean; state?: JsonValue };
     }
   | undefined {
@@ -177,8 +179,10 @@ export function tryFindFinalizedCronTaskRun(
       return undefined;
     }
     const triggerEval = cronTaskRecordToTriggerEval(task);
+    const scriptResult = cronTaskRecordToScriptRunResult(task);
     return {
       entry: { ...entry, status: entry.status },
+      ...(scriptResult ? { scriptResult } : {}),
       ...(triggerEval ? { triggerEval } : {}),
     };
   } catch (error) {
@@ -289,6 +293,7 @@ export function tryFinishCronTaskRun(
     taskRunId?: string;
     job?: CronJob;
     event: CronEvent & { action: "finished" };
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
   },
 ): void {
@@ -316,6 +321,7 @@ export function tryFinishCronTaskRun(
     const legacyRecoveryRunId = createCronExecutionId(entry.jobId, startedAt);
     const detail = cronRunLogEntryToTaskDetail(entry, {
       storeKey,
+      ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
       ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
     });
     const finalize = (

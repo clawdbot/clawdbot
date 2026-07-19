@@ -37,15 +37,6 @@ export const TailscaleServiceNameSchema = z
       'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
   });
 
-export const LegacyCanvasHostSchema = z
-  .strictObject({
-    enabled: z.boolean().optional(),
-    root: z.string().optional(),
-    port: z.number().int().positive().optional(),
-    liveReload: z.boolean().optional(),
-  })
-  .optional();
-
 export const SecuritySchema = z
   .strictObject({
     audit: z
@@ -177,7 +168,7 @@ export const MemorySchema = z
   })
   .optional();
 
-export const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
+const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
 
 const McpOAuthClientMetadataUrlSchema = z
   .string()
@@ -242,7 +233,6 @@ const TalkRealtimeSchema = z
     model: z.string().optional(),
     speakerVoice: z.string().optional(),
     speakerVoiceId: z.string().optional(),
-    voice: z.string().optional(),
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
@@ -333,10 +323,7 @@ const McpServerSchema = z
       )
       .optional(),
     connectionTimeoutMs: z.number().finite().positive().optional(),
-    connectTimeout: z.number().finite().positive().optional(),
-    connect_timeout: z.number().finite().positive().optional(),
     requestTimeoutMs: z.number().finite().positive().optional(),
-    timeout: z.number().finite().positive().optional(),
     supportsParallelToolCalls: z.boolean().optional(),
     supports_parallel_tool_calls: z.boolean().optional(),
     auth: z.literal("oauth").optional(),
@@ -377,6 +364,16 @@ const McpServerSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
+    // This schema is .catchall(z.unknown()) (open-world server options), so
+    // unknown keys survive into this refine; retired aliases are rejected here.
+    for (const key of ["connectTimeout", "connect_timeout", "timeout"] as const) {
+      if (Object.hasOwn(data, key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unrecognized key: "${key}"`,
+        });
+      }
+    }
     if (Object.hasOwn(data, "disabled")) {
       const disabled = Reflect.get(data, "disabled") as unknown;
       const replacement =

@@ -2031,11 +2031,16 @@ describe("buildCachedChatItems", () => {
           createdAt: 2,
           sendSubmittedAtMs: 10,
           sendState: "sending",
+          sender: { id: "alice@example.com", name: "Alice Example" },
         },
       ],
     });
 
     expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+    expect(groupAt(groups, 1).sender).toEqual({
+      id: "alice@example.com",
+      name: "Alice Example",
+    });
     expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "first visible send" },
     ]);

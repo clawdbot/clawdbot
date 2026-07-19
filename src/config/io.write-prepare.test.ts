@@ -1142,7 +1142,7 @@ describe("config io write prepare", () => {
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
-    const sourceConfig: OpenClawConfig = {
+    const sourceConfig = {
       channels: {
         discord: {
           dmPolicy: "pairing",
@@ -1154,7 +1154,7 @@ describe("config io write prepare", () => {
         },
       },
       gateway: { port: 18789 },
-    } satisfies OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const nextConfig = structuredClone(sourceConfig);
     delete (nextConfig.channels?.discord?.dm as { enabled?: boolean; policy?: string } | undefined)

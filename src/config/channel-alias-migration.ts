@@ -99,6 +99,11 @@ function buildAliasRuleMessage(params: {
   return `${keyList} are legacy; use ${prefix}.streaming.{${nested.join(",")}}. Run "openclaw doctor --fix".`;
 }
 
+function hasLegacyDmAliases(value: unknown): boolean {
+  const dm = asObjectRecord(asObjectRecord(value)?.dm);
+  return dm !== null && (Object.hasOwn(dm, "policy") || Object.hasOwn(dm, "allowFrom"));
+}
+
 /**
  * Builds the standard channel doctor alias-migration surface from a small spec:
  * detection rules (root + accounts), the per-entry matcher, and the config
@@ -154,7 +159,9 @@ export function defineChannelAliasMigration<TMode extends string = StreamingAlia
     if (
       streaming.deliveryOnly === true &&
       !hasLegacyAliases(entry) &&
-      !hasLegacyAccountStreamingAliases(entry.accounts, hasLegacyAliases)
+      !hasLegacyAccountStreamingAliases(entry.accounts, hasLegacyAliases) &&
+      !(spec.dm?.root && hasLegacyDmAliases(entry)) &&
+      !(spec.dm?.accounts && hasLegacyAccountStreamingAliases(entry.accounts, hasLegacyDmAliases))
     ) {
       return { config: params.cfg, changes };
     }
@@ -181,23 +188,39 @@ export function defineChannelAliasMigration<TMode extends string = StreamingAlia
     };
   };
 
+  const legacyConfigRules: LegacyConfigRule[] = [
+    {
+      path: ["channels", spec.channelId],
+      message: buildAliasRuleMessage({ streaming, prefix: pathPrefix, root: true }),
+      match: hasLegacyAliases,
+    },
+    {
+      path: ["channels", spec.channelId, "accounts"],
+      message: buildAliasRuleMessage({
+        streaming,
+        prefix: `${pathPrefix}.accounts.<id>`,
+        root: false,
+      }),
+      match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyAliases),
+    },
+  ];
+  if (spec.dm?.root) {
+    legacyConfigRules.push({
+      path: ["channels", spec.channelId],
+      message: `${pathPrefix}.dm.policy and ${pathPrefix}.dm.allowFrom are legacy; use ${pathPrefix}.dmPolicy and ${pathPrefix}.allowFrom. Run "openclaw doctor --fix".`,
+      match: hasLegacyDmAliases,
+    });
+  }
+  if (spec.dm?.accounts) {
+    legacyConfigRules.push({
+      path: ["channels", spec.channelId, "accounts"],
+      message: `${pathPrefix}.accounts.<id>.dm.policy and dm.allowFrom are legacy; use ${pathPrefix}.accounts.<id>.dmPolicy and allowFrom. Run "openclaw doctor --fix".`,
+      match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyDmAliases),
+    });
+  }
+
   return {
-    legacyConfigRules: [
-      {
-        path: ["channels", spec.channelId],
-        message: buildAliasRuleMessage({ streaming, prefix: pathPrefix, root: true }),
-        match: hasLegacyAliases,
-      },
-      {
-        path: ["channels", spec.channelId, "accounts"],
-        message: buildAliasRuleMessage({
-          streaming,
-          prefix: `${pathPrefix}.accounts.<id>`,
-          root: false,
-        }),
-        match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyAliases),
-      },
-    ],
+    legacyConfigRules,
     hasLegacyAliases,
     normalizeChannelConfig,
   };

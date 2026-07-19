@@ -48,7 +48,7 @@ describe("doctor config analysis helpers", () => {
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
   });
 
-  it("preserves user-authored model and agent metadata during unknown-key cleanup", () => {
+  it("strips unknown root model metadata while preserving supported agent metadata", () => {
     const result = stripUnknownConfigKeys({
       defaultModel: "minimax/MiniMax-M2.7",
       mcp: {
@@ -69,12 +69,11 @@ describe("doctor config analysis helpers", () => {
     } as never);
 
     expect(result.removed).toContain("unexpected");
-    expect(result.removed).not.toContain("defaultModel");
+    expect(result.removed).toContain("defaultModel");
     expect(result.removed).not.toContain("agents.list[0].description");
     expect(result.removed).not.toContain("agents.list[1].description");
     expect(OpenClawSchema.safeParse({ defaultModel: "minimax/MiniMax-M2.7" }).success).toBe(false);
     expect(result.config).toMatchObject({
-      defaultModel: "minimax/MiniMax-M2.7",
       mcp: {
         servers: {
           tushareMcp: {

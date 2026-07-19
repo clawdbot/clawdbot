@@ -66,6 +66,16 @@ const SessionPlacementAckProperties = {
   ),
 };
 
+const WorkspaceResultConflictSchema = closedObject({
+  paths: Type.Array(NonEmptyString, { minItems: 1, maxItems: 256 }),
+  stagedResultRef: NonEmptyString,
+  totalCount: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+});
+
+const SessionPlacementConflictProperties = {
+  workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
+};
+
 const TerminalSessionPlacementProperties = {
   environmentId: Type.Optional(NonEmptyString),
   activeOwnerEpoch: Type.Optional(SessionPlacementOwnerEpochSchema),
@@ -73,6 +83,7 @@ const TerminalSessionPlacementProperties = {
   remoteWorkspaceDir: Type.Optional(NonEmptyString),
   workerBundleHash: Type.Optional(WorkerBundleHashSchema),
   ...SessionPlacementAckProperties,
+  ...SessionPlacementConflictProperties,
 };
 
 function createUnownedSessionPlacementSchema<const State extends "local" | "requested">(
@@ -92,6 +103,7 @@ function createWorkerOwnedSessionPlacementSchema<
     workerBundleHash: WorkerBundleHashSchema,
     ...SessionPlacementWorkspaceProperties,
     ...SessionPlacementAckProperties,
+    ...SessionPlacementConflictProperties,
   });
 }
 

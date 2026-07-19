@@ -1,6 +1,5 @@
 // Defines shared Discord config schema fragments.
 import { z } from "zod";
-import { DmPolicySchema } from "./zod-schema.core.js";
 
 export const DiscordIdSchema = z
   .union([z.string(), z.number()])
@@ -29,8 +28,6 @@ export const DiscordSnowflakeStringSchema = z
 export const DiscordDmSchema = z
   .object({
     enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional(),
-    allowFrom: DiscordIdListSchema.optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: DiscordIdListSchema.optional(),
   })

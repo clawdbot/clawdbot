@@ -53,13 +53,16 @@ function makePrompter(confirmResult = true) {
   };
 }
 
-function createCronConfig(storePath: string): OpenClawConfig {
+function createCronConfig(
+  storePath: string,
+  webhook = "https://example.invalid/cron-finished",
+): OpenClawConfig {
   return {
     cron: {
       store: storePath,
-      webhook: "https://example.invalid/cron-finished",
+      webhook,
     },
-  };
+  } as unknown as OpenClawConfig;
 }
 
 function createLegacyCronJob(overrides: Record<string, unknown> = {}) {
@@ -1596,12 +1599,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "https://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath),
       options: { nonInteractive: true },
       prompter: makePrompter(true),
     });
@@ -1682,12 +1680,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "https://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -1732,12 +1725,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "https://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -1761,12 +1749,7 @@ describe("maybeRepairLegacyCronStore", () => {
     ]);
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "ftp://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath, "ftp://example.invalid/cron-finished"),
       options: {},
       prompter: makePrompter(true),
     });

@@ -101,8 +101,6 @@ export type StatusReactionsConfig = {
 };
 
 export type MessagesConfig = {
-  /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
-  messagePrefix?: string;
   /**
    * Controls how source inbound events produce visible replies across direct,
    * group, and channel conversations. Group/channel events still default to

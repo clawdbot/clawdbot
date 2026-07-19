@@ -1419,6 +1419,66 @@ describe("handleToolExecutionEnd private result observer", () => {
   });
 });
 
+describe("handleToolExecutionEnd MCP App channel view tracking", () => {
+  const result = (viewId: string, title: string) => ({
+    details: {
+      mcpAppPreview: {
+        view: { id: viewId, title },
+        mcpApp: { viewId },
+      },
+    },
+  });
+
+  it("retains only the latest successful bounded view identity", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_first",
+      toolCallId: "mcp-first",
+      isError: false,
+      result: result("view-first", "First app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_failed",
+      toolCallId: "mcp-failed",
+      isError: true,
+      result: result("view-failed", "Failed app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_latest",
+      toolCallId: "mcp-latest",
+      isError: false,
+      result: result("view-latest", "Latest app"),
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toEqual({ viewId: "view-latest" });
+  });
+
+  it("ignores mismatched or unbounded preview data", async () => {
+    const { ctx } = createTestContext();
+    const leaked = {
+      ...result("view-safe", "Safe app"),
+      html: "private html",
+      sessionKey: "agent:secret",
+      bearerToken: "secret",
+    };
+    leaked.details.mcpAppPreview.view.id = "different-view";
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_invalid",
+      toolCallId: "mcp-invalid",
+      isError: false,
+      result: leaked,
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toBeUndefined();
+  });
+});
+
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
   it("records accepted sessions_spawn identifiers", async () => {
     const { ctx } = createTestContext();

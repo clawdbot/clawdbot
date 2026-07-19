@@ -1,7 +1,6 @@
 // Control UI module implements main behavior.
 import "./styles.css";
 import "./app/app-host.ts";
-import "./components/board/board-view.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import {
   installMissingStylesheetRecovery,

@@ -459,6 +459,21 @@
       "translated": "No se pudo resolver la aprobación. Actualiza e inténtalo de nuevo."
     },
     {
+      "id": "native.android.ab7de09b2e9bafd2",
+      "source": "Device approved.",
+      "translated": "Dispositivo aprobado."
+    },
+    {
+      "id": "native.android.0f3b1e2ce6f0aed5",
+      "source": "Pairing request rejected.",
+      "translated": "Solicitud de emparejamiento rechazada."
+    },
+    {
+      "id": "native.android.e98062fe81b36c4a",
+      "source": "Paired device removed.",
+      "translated": "Dispositivo emparejado eliminado."
+    },
+    {
       "id": "native.android.5cf2b6b55ea97b67",
       "source": "Proposal applied.",
       "translated": "Propuesta aplicada."
@@ -802,6 +817,11 @@
       "id": "native.android.df0d071809dfbbb3",
       "source": "Connect the gateway to update Skill Workshop proposals.",
       "translated": "Conecta el Gateway para actualizar las propuestas de Skill Workshop."
+    },
+    {
+      "id": "native.android.9481b642ee32ed95",
+      "source": "Could not verify the device pairing change. Refresh and try again.",
+      "translated": "No se pudo verificar el cambio de emparejamiento del dispositivo. Actualiza e inténtalo de nuevo."
     },
     {
       "id": "native.android.21445608d791c302",
@@ -2429,6 +2449,91 @@
       "translated": "Dispositivos emparejados"
     },
     {
+      "id": "native.android.8c6f23f9b2a2f5c3",
+      "source": "Approve device?",
+      "translated": "¿Aprobar dispositivo?"
+    },
+    {
+      "id": "native.android.61e56e7c2425c765",
+      "source": "Reject pairing request?",
+      "translated": "¿Rechazar solicitud de emparejamiento?"
+    },
+    {
+      "id": "native.android.a233e379d3281626",
+      "source": "Remove paired device?",
+      "translated": "¿Eliminar dispositivo emparejado?"
+    },
+    {
+      "id": "native.android.84789f373ff7e379",
+      "source": "Verify this requesting device before granting access.",
+      "translated": "Verifica el dispositivo solicitante antes de concederle acceso."
+    },
+    {
+      "id": "native.android.80f2666384538867",
+      "source": "$label: $value",
+      "translated": "$label: $value"
+    },
+    {
+      "id": "native.android.857fc6dbd43c147c",
+      "source": "Reject the pairing request from this device?",
+      "translated": "¿Rechazar la solicitud de emparejamiento de este dispositivo?"
+    },
+    {
+      "id": "native.android.a0cb7097dac32274",
+      "source": "This device will lose its trusted Gateway access.",
+      "translated": "Este dispositivo perderá su acceso de confianza al Gateway."
+    },
+    {
+      "id": "native.android.d62bd835e46f047f",
+      "source": "Cancel",
+      "translated": "Cancelar"
+    },
+    {
+      "id": "native.android.54bc27d84e77fdeb",
+      "source": "Name",
+      "translated": "Nombre"
+    },
+    {
+      "id": "native.android.549fcca19ab575e8",
+      "source": "Device ID",
+      "translated": "ID del dispositivo"
+    },
+    {
+      "id": "native.android.0a2b46e9ba9a43a7",
+      "source": "Public key",
+      "translated": "Clave pública"
+    },
+    {
+      "id": "native.android.3029d9b112d91460",
+      "source": "Platform",
+      "translated": "Plataforma"
+    },
+    {
+      "id": "native.android.34495d4163dd2b0d",
+      "source": "Client",
+      "translated": "Cliente"
+    },
+    {
+      "id": "native.android.9d5173f45aa99bc9",
+      "source": "Origin",
+      "translated": "Origen"
+    },
+    {
+      "id": "native.android.1690971a387e62fa",
+      "source": "Remote IP",
+      "translated": "IP remota"
+    },
+    {
+      "id": "native.android.e478d6d87813a30a",
+      "source": "Roles",
+      "translated": "Roles"
+    },
+    {
+      "id": "native.android.d390e77c38097584",
+      "source": "Scopes",
+      "translated": "Ámbitos"
+    },
+    {
       "id": "native.android.f87fa5da40b7f94f",
       "source": "New device",
       "translated": "Nuevo dispositivo"
@@ -2444,9 +2549,24 @@
       "translated": "Revisar"
     },
     {
+      "id": "native.android.caa6c7dea18d5127",
+      "source": "Reject",
+      "translated": "Rechazar"
+    },
+    {
+      "id": "native.android.ef8a2c38eba42e89",
+      "source": "Approve",
+      "translated": "Aprobar"
+    },
+    {
       "id": "native.android.36735662df3e8ab2",
       "source": "Paired device",
       "translated": "Dispositivo emparejado"
+    },
+    {
+      "id": "native.android.ce8e5c5a934ed2aa",
+      "source": "Remove",
+      "translated": "Eliminar"
     },
     {
       "id": "native.android.e274308654ddc04b",
@@ -2504,9 +2624,9 @@
       "translated": "Capacidad no aprobada"
     },
     {
-      "id": "native.android.13024ff403917bfe",
-      "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "Este inicio de sesión en el Gateway permite ver los nodos conectados, pero no aprobar el emparejamiento de teléfonos nuevos. Empareja teléfonos nuevos desde una sesión de administrador del Gateway. La aprobación de capacidades del nodo es independiente y sigue usando nodes approve <request id>."
+      "id": "native.android.8b55ed05cd70b8d9",
+      "source": "Device pairing actions are unavailable in this Gateway session. Run openclaw devices list on the Gateway host and manage the request there. Node capability approval is separate and still uses nodes approve <request id>.",
+      "translated": "Las acciones de vinculación de dispositivos no están disponibles en esta sesión de Gateway. Ejecuta openclaw devices list en el host de Gateway y gestiona la solicitud allí. La aprobación de capacidades del nodo se realiza por separado y sigue usando nodes approve <request id>."
     },
     {
       "id": "native.android.0d8e9ede9c229b8e",
@@ -2604,9 +2724,29 @@
       "translated": "No se pudo iniciar la cámara. Selecciona una imagen QR de la galería o introduce manualmente el código de configuración."
     },
     {
+      "id": "native.android.7a18be21a62739bf",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "No se pudo leer automáticamente el certificado del gateway. Pega la huella digital SHA-256 obtenida en el host del gateway."
+    },
+    {
+      "id": "native.android.aa489429ad39aa39",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "Este gateway ahora presenta un certificado en el que confía este dispositivo."
+    },
+    {
+      "id": "native.android.b3db82f1162808ad",
+      "source": "SHA-256 fingerprint",
+      "translated": "Huella digital SHA-256"
+    },
+    {
       "id": "native.android.9ac2d4498b17d478",
       "source": "Trust",
       "translated": "Confiar"
+    },
+    {
+      "id": "native.android.09245320d3878458",
+      "source": "Use system trust",
+      "translated": "Usar la confianza del sistema"
     },
     {
       "id": "native.android.e26ee07a1d1911be",
@@ -5437,6 +5577,26 @@
       "id": "native.android.30d8b822fa68d6c4",
       "source": "Close Canvas",
       "translated": "Cerrar Canvas"
+    },
+    {
+      "id": "native.android.846fe5afd08b8089",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "No se pudo leer automáticamente el certificado del gateway. Pega la huella digital SHA-256 obtenida en el host del gateway."
+    },
+    {
+      "id": "native.android.b263dca13f55dad9",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "Este gateway ahora presenta un certificado en el que confía este dispositivo."
+    },
+    {
+      "id": "native.android.dca0f8814b658170",
+      "source": "SHA-256 fingerprint",
+      "translated": "Huella digital SHA-256"
+    },
+    {
+      "id": "native.android.bb5d50fcdd5ebafe",
+      "source": "Use system trust",
+      "translated": "Usar la confianza del sistema"
     },
     {
       "id": "native.android.3d83e0755437a5f9",
@@ -22909,6 +23069,51 @@
       "translated": "<\\(tag)"
     },
     {
+      "id": "native.apple.fc5931c1f0a6bbec",
+      "source": "Switch to back camera",
+      "translated": "Cambiar a la cámara trasera"
+    },
+    {
+      "id": "native.apple.cce3b539e31701c0",
+      "source": "Switch to front camera",
+      "translated": "Cambiar a la cámara frontal"
+    },
+    {
+      "id": "native.apple.f397daffdfd02ee0",
+      "source": "Flip camera",
+      "translated": "Voltear la cámara"
+    },
+    {
+      "id": "native.apple.11f8de87ca3fcb11",
+      "source": "Stop",
+      "translated": "Detener"
+    },
+    {
+      "id": "native.apple.7c92bec1c8a83e43",
+      "source": "Talk",
+      "translated": "Hablar"
+    },
+    {
+      "id": "native.apple.dae61543f9b416ca",
+      "source": "Start realtime chat",
+      "translated": "Iniciar chat en tiempo real"
+    },
+    {
+      "id": "native.apple.d376b015a90792a9",
+      "source": "Stop realtime chat",
+      "translated": "Detener chat en tiempo real"
+    },
+    {
+      "id": "native.apple.ac48dbe25ac4d40d",
+      "source": "Connecting...",
+      "translated": "Conectando..."
+    },
+    {
+      "id": "native.apple.ccce98756eb1dacd",
+      "source": "Gateway connected",
+      "translated": "Gateway conectado"
+    },
+    {
       "id": "native.apple.03aca5cfee32f12d",
       "source": "Context %@%% used",
       "translated": "%@%% del contexto usado"
@@ -23004,21 +23209,6 @@
       "translated": "Archivos adjuntos"
     },
     {
-      "id": "native.apple.ee2c0d22f5861159",
-      "source": "Talk",
-      "translated": "Hablar"
-    },
-    {
-      "id": "native.apple.5d5041aefe6dfddd",
-      "source": "Start realtime chat",
-      "translated": "Iniciar chat en tiempo real"
-    },
-    {
-      "id": "native.apple.21a7d3a3386a2218",
-      "source": "Stop realtime chat",
-      "translated": "Detener chat en tiempo real"
-    },
-    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "Iniciar"
@@ -23062,16 +23252,6 @@
       "id": "native.apple.f4473f79bb87b2fd",
       "source": "Refresh",
       "translated": "Actualizar"
-    },
-    {
-      "id": "native.apple.6c984c0e3ed3a69e",
-      "source": "Connecting...",
-      "translated": "Conectando..."
-    },
-    {
-      "id": "native.apple.898849eb2bcb0b53",
-      "source": "Gateway connected",
-      "translated": "Gateway conectado"
     },
     {
       "id": "native.apple.b6adfcd17a6e73d7",
@@ -23977,6 +24157,11 @@
       "id": "native.apple.065f4da5ddaf14a1",
       "source": "Show all %lld lines",
       "translated": "Mostrar las %lld líneas"
+    },
+    {
+      "id": "native.apple.f80bb83a659d23f4",
+      "source": "Collapsed",
+      "translated": "Contraído"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",

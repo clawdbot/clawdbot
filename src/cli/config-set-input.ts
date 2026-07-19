@@ -5,8 +5,8 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
-import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;

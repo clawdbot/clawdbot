@@ -213,6 +213,11 @@ type ExecuteJobCoreOptions = {
   onLaneWait?: (info?: { waiting?: boolean }) => void;
 };
 
+/** Script payloads run headlessly even when their notifications target main. */
+export function runsDetachedFromMainSession(job: CronJob): boolean {
+  return job.sessionTarget !== "main" || job.payload.kind === "script";
+}
+
 /**
  * Carries the already-resolved run attribution from watchdog-visible execution
  * state into a timer-built error outcome. The wall-clock/cancel paths return
@@ -269,14 +274,13 @@ export async function executeJobCoreWithTimeout(
     runAbortController.abort("Gateway restarting.");
     return createOperatorCancellationOutcome();
   }
-  const releaseCronTaskRun =
-    job.sessionTarget !== "main"
-      ? registerActiveCronTaskRun({
-          runId: opts?.runId ?? `cron-active:${job.id}`,
-          controller: runAbortController,
-          onCancel: () => resolveOperatorCancellation?.(operatorCancellationMarker),
-        })
-      : undefined;
+  const releaseCronTaskRun = runsDetachedFromMainSession(job)
+    ? registerActiveCronTaskRun({
+        runId: opts?.runId ?? `cron-active:${job.id}`,
+        controller: runAbortController,
+        onCancel: () => resolveOperatorCancellation?.(operatorCancellationMarker),
+      })
+    : undefined;
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
@@ -1136,6 +1140,18 @@ export function applyTriggerRunResult(
   }
 }
 
+/** Commits payload-script state only after the complete cron run succeeds. */
+export function applyScriptRunResult(
+  job: CronJob,
+  result: { status: CronRunStatus; scriptStateChanged?: boolean; scriptState?: unknown },
+): void {
+  if (result.status === "ok" && result.scriptStateChanged === true) {
+    // Trigger and payload scripts share frozen trigger.state. The payload's
+    // final state wins only after trigger evaluation and payload execution succeed.
+    job.state.triggerState = result.scriptState;
+  }
+}
+
 /** Applies a quiet trigger tick without mutating normal run-history state. */
 export function applyTriggerNoFireResult(
   state: CronServiceState,
@@ -1220,11 +1236,7 @@ function applyOutcomeToStoredJob(
 
   const shouldDelete = applyJobResult(state, job, result);
   applyTriggerRunResult(job, result);
-  if (result.status === "ok" && result.scriptStateChanged === true) {
-    // Both trigger and payload scripts expose frozen trigger.state. Advance it
-    // only after the complete cron run has succeeded.
-    job.state.triggerState = result.scriptState;
-  }
+  applyScriptRunResult(job, result);
   job.state.startupCatchupAtMs = undefined;
 
   emitJobFinished(state, job, result, result.startedAt);
@@ -1472,7 +1484,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       executionJob.state.runningAtMs = startedAt;
       executionJob.state.lastError = undefined;
       const activeJobMarker = markCronJobActive(executionJob.id, {
-        preserveAcrossGenerationAdvance: executionJob.sessionTarget === "main",
+        preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),
       });
       emit(state, {
         jobId: executionJob.id,
@@ -2287,7 +2299,7 @@ async function runStartupCatchupCandidate(
     runIdStartedAt: candidate.reservedAtMs,
   });
   const activeJobMarker = markCronJobActive(executionJob.id, {
-    preserveAcrossGenerationAdvance: executionJob.sessionTarget === "main",
+    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),
   });
   emit(state, {
     jobId: executionJob.id,
@@ -2306,23 +2318,9 @@ async function runStartupCatchupCandidate(
       taskRunId,
       activeJobMarker,
       reservationIdentity: candidate.reservationIdentity,
-      status: result.status,
-      error: result.error,
-      executionStarted: result.executionStarted,
-      summary: result.summary,
-      diagnostics: result.diagnostics,
-      delivered: result.delivered,
-      deliveryError: result.deliveryError,
-      nextCheck: result.nextCheck,
-      sessionId: result.sessionId,
-      sessionKey: result.sessionKey,
-      model: result.model,
-      provider: result.provider,
-      usage: result.usage,
-      isolatedAgentSetupTimeout: result.isolatedAgentSetupTimeout,
-      // Quiet trigger ticks during startup catch-up must keep their eval
-      // outcome; dropping it would record them as successful payload runs.
-      triggerEval: result.triggerEval,
+      // Keep the complete core outcome: startup catch-up shares the same result
+      // application path as timer runs, including delivery and script state.
+      ...result,
       startedAt,
       endedAt: state.deps.nowMs(),
     };
@@ -2548,7 +2546,12 @@ async function executeJobCore(
     }
   }
   if (effectiveJob.payload.kind === "script") {
-    const result = await executeScriptCronJob(state, effectiveJob, abortSignal);
+    const result = await executeScriptCronJob(
+      state,
+      effectiveJob,
+      abortSignal,
+      options?.activeJobMarker,
+    );
     return triggerEval ? { ...result, triggerEval } : result;
   }
   if (effectiveJob.sessionTarget === "main") {
@@ -2837,6 +2840,7 @@ async function executeScriptCronJob(
   state: CronServiceState,
   job: CronJob,
   abortSignal: AbortSignal | undefined,
+  activeJobMarker?: CronActiveJobMarker,
 ) {
   if (state.deps.cronConfig?.triggers?.enabled !== true) {
     return {
@@ -2849,6 +2853,14 @@ async function executeScriptCronJob(
     return { status: "error" as const, error: "cron script payload executor is unavailable" };
   }
   const result = await state.deps.runScriptJob({ job, abortSignal });
+  // Script runners may settle after ignoring an abort. Recheck both operator
+  // cancellation and scheduler ownership before any notify/wake side effect.
+  if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
+    return { status: "error" as const, error: "Gateway restarting." };
+  }
+  if (abortSignal?.aborted) {
+    return { status: "error" as const, error: abortErrorMessage(abortSignal) };
+  }
   if (result.status !== "ok") {
     return result;
   }
@@ -2926,6 +2938,7 @@ function emitJobFinished(
     taskRunId: result.taskRunId,
     job,
     event,
+    ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
     ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
   });
   emit(state, event);

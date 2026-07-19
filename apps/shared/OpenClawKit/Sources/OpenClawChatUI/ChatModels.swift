@@ -124,6 +124,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let id: String?
     public let name: String?
     public let arguments: AnyCodable?
+    public let details: AnyCodable?
 
     public init(
         type: String?,
@@ -137,7 +138,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         preview: OpenClawChatCanvasPreview? = nil,
         id: String? = nil,
         name: String? = nil,
-        arguments: AnyCodable? = nil)
+        arguments: AnyCodable? = nil,
+        details: AnyCodable? = nil)
     {
         self.type = type
         self.text = text
@@ -151,6 +153,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.id = id
         self.name = name
         self.arguments = arguments
+        self.details = details
     }
 
     enum CodingKeys: String, CodingKey {
@@ -166,6 +169,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case id
         case name
         case arguments
+        case details
     }
 
     public init(from decoder: Decoder) throws {
@@ -180,6 +184,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
+        self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
         self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
 
         if let any = try container.decodeIfPresent(AnyCodable.self, forKey: .content) {
@@ -237,6 +242,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let usage: OpenClawChatUsage?
     public let stopReason: String?
     public let errorMessage: String?
+    public let details: AnyCodable?
 
     enum CodingKeys: String, CodingKey {
         case role
@@ -251,6 +257,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         case usage
         case stopReason
         case errorMessage
+        case details
         case mediaPath = "MediaPath"
         case mediaPaths = "MediaPaths"
         case mediaType = "MediaType"
@@ -269,7 +276,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         toolName: String? = nil,
         usage: OpenClawChatUsage? = nil,
         stopReason: String? = nil,
-        errorMessage: String? = nil)
+        errorMessage: String? = nil,
+        details: AnyCodable? = nil)
     {
         self.id = id
         self.transcriptMessageID = transcriptMessageID
@@ -283,6 +291,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.usage = usage
         self.stopReason = stopReason
         self.errorMessage = errorMessage
+        self.details = details
     }
 
     public init(from decoder: Decoder) throws {
@@ -301,6 +310,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         let decodedUsage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
         let decodedStopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
         let decodedErrorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        let decodedDetails = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
 
         self.role = decodedRole
         self.transcriptMessageID = decodedOpenClaw?.id
@@ -311,6 +321,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.usage = decodedUsage
         self.stopReason = decodedStopReason
         self.errorMessage = decodedErrorMessage
+        self.details = decodedDetails
 
         let decodedContent: [OpenClawChatMessageContent] = if let decoded = try? container.decode(
             [OpenClawChatMessageContent].self,
@@ -420,6 +431,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(self.usage, forKey: .usage)
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
         try container.encodeIfPresent(self.errorMessage, forKey: .errorMessage)
+        try container.encodeIfPresent(self.details, forKey: .details)
         try container.encode(self.content, forKey: .content)
     }
 }

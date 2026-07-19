@@ -1072,7 +1072,7 @@ describe("update-startup", () => {
       throw new Error("expected command options object");
     }
     expect(options.timeoutMs).toBe(45 * 60 * 1000);
-    expect(options.env).toEqual({ OPENCLAW_AUTO_UPDATE: "1" });
+    expect(options.env).toBeUndefined();
   });
 
   it("hands supervised auto-updates to a detached service handoff before restarting", async () => {

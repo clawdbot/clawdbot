@@ -195,6 +195,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         spawnedBy: row.spawnedBy,
         status: row.status,
         startedAt: row.startedAt,
+        updatedAt: row.updatedAt,
         endedAt: row.endedAt,
         runtimeMs: row.runtimeMs,
         runtimeSampledAt,

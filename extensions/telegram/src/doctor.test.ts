@@ -198,7 +198,12 @@ describe("telegram doctor", () => {
       } as never,
     });
 
-    const telegram = result.config.channels?.telegram;
+    const telegram = result.config.channels?.telegram as
+      | (NonNullable<typeof result.config.channels>["telegram"] & {
+          dm?: unknown;
+          accounts?: Record<string, { dm?: unknown; direct?: Record<string, unknown> }>;
+        })
+      | undefined;
     expect(telegram?.dm).toBeUndefined();
     expect(telegram?.direct?.["123"]).toEqual({ requireTopic: true });
     expect(telegram?.accounts?.work?.dm).toBeUndefined();
@@ -232,7 +237,12 @@ describe("telegram doctor", () => {
       } as never,
     });
 
-    const telegram = result.config.channels?.telegram;
+    const telegram = result.config.channels?.telegram as
+      | (NonNullable<typeof result.config.channels>["telegram"] & {
+          dm?: unknown;
+          accounts?: Record<string, { dm?: unknown }>;
+        })
+      | undefined;
     expect(telegram?.dm).toBeUndefined();
     expect(telegram?.accounts?.work?.dm).toBeUndefined();
     expect(result.changes).toEqual([

@@ -175,6 +175,8 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  sidebarLiveActivity: boolean;
+  setSidebarLiveActivity: (enabled: boolean) => void;
   lobsterPetVisits?: boolean;
   setLobsterPetVisits?: (enabled: boolean) => void;
   lobsterPetSounds?: boolean;
@@ -1169,6 +1171,27 @@ function renderLobsterPetSection(props: ConfigProps) {
   `;
 }
 
+function renderSidebarPreferencesSection(props: ConfigProps) {
+  return html`
+    <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.sidebarPrefs.title")}</h2>
+      </div>
+      <p class="settings-section__desc">
+        ${t("configView.sidebarPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("configView.sidebarPrefs.liveActivity"),
+          description: t("configView.sidebarPrefs.liveActivityHint"),
+          checked: props.sidebarLiveActivity,
+          onChange: props.setSidebarLiveActivity,
+        })}
+      </div>
+    </section>
+  `;
+}
+
 function renderAppearanceSection(props: ConfigProps) {
   const viewState = props.viewState;
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
@@ -1363,7 +1386,8 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </section>
 
-      ${renderLobsterPetSection(props)} ${renderChatPreferencesSection(props)}
+      ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
+      ${renderChatPreferencesSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <div class="settings-section__header">

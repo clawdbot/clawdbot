@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import { toCssPlacement } from "../../lib/board/grid.ts";
@@ -9,6 +10,7 @@ import type {
   BoardWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
+import { getBuiltinWidgetRenderer } from "../../lib/board/widgets/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../web-awesome.ts";
 
@@ -37,6 +39,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
+  @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
+  @property({ type: String }) sessionKey = "";
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -227,6 +231,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     if (widget.grantState === "rejected") {
       return this.renderRejected(widget, callbacks);
     }
+    if (widget.contentKind === "builtin") {
+      const renderer = getBuiltinWidgetRenderer(widget.builtin);
+      if (!renderer) {
+        throw new Error(t("board.widget.frameResolverMissing"));
+      }
+      return renderer({ sessions: this.sessions, sessionKey: this.sessionKey });
+    }
     return this.renderFrame(widget);
   }
 
@@ -266,7 +277,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     widget: BoardWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
-    if (event.target !== event.currentTarget) {
+    if (event.target !== event.currentTarget || widget.readOnly) {
       return;
     }
     const direction =
@@ -306,6 +317,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       bodyErrored = true;
     }
     const label = widget.title || widget.name;
+    const readOnly = widget.readOnly === true;
     const bodyScrollable =
       bodyErrored ||
       this.actionError !== "" ||
@@ -319,28 +331,32 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         tabindex=${this.focusTabIndex}
         aria-posinset=${this.positionInSet}
         aria-setsize=${this.setSize}
-        aria-label=${t("board.widget.cellLabel", { title: label })}
+        aria-label=${readOnly ? label : t("board.widget.cellLabel", { title: label })}
         data-widget-name=${widget.name}
         data-test-id="board-widget"
         @focus=${() => callbacks.focusChanged(widget.name)}
         @keydown=${(event: KeyboardEvent) => this.handleKeyDown(event, widget, callbacks)}
       >
         <header class="board-widget__bar">
-          <span
-            class="board-widget__drag-handle"
-            aria-hidden="true"
-            title=${t("board.widget.moveHandle", { title: label })}
-            @pointerdown=${(event: PointerEvent) => callbacks.movePointerDown(widget, event)}
-          >
-            <span aria-hidden="true">⠿</span>
-          </span>
+          ${readOnly
+            ? nothing
+            : html`<span
+                class="board-widget__drag-handle"
+                aria-hidden="true"
+                title=${t("board.widget.moveHandle", { title: label })}
+                @pointerdown=${(event: PointerEvent) => callbacks.movePointerDown(widget, event)}
+              >
+                <span aria-hidden="true">⠿</span>
+              </span>`}
           <span class="board-widget__title" title=${label}>${label}</span>
-          <span class="board-widget__kind"
-            >${widget.contentKind === "mcp-app"
-              ? t("board.widget.kindMcp")
-              : t("board.widget.kindHtml")}</span
-          >
-          ${this.renderMenu(widget, callbacks)}
+          ${widget.contentKind === "builtin"
+            ? nothing
+            : html`<span class="board-widget__kind"
+                >${widget.contentKind === "mcp-app"
+                  ? t("board.widget.kindMcp")
+                  : t("board.widget.kindHtml")}</span
+              >`}
+          ${readOnly ? nothing : this.renderMenu(widget, callbacks)}
         </header>
         <div
           class=${`board-widget__body ${bodyScrollable ? "board-widget__body--scrollable" : ""}`}
@@ -352,12 +368,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               </div>`
             : nothing}
         </div>
-        <span
-          class="board-widget__resize-handle"
-          aria-hidden="true"
-          title=${t("board.widget.resizeHandle", { title: label })}
-          @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
-        ></span>
+        ${readOnly
+          ? nothing
+          : html`<span
+              class="board-widget__resize-handle"
+              aria-hidden="true"
+              title=${t("board.widget.resizeHandle", { title: label })}
+              @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
+            ></span>`}
       </section>
     `;
   }

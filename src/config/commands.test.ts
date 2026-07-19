@@ -278,16 +278,12 @@ describe("isCommandFlagEnabled", () => {
   });
 });
 
-describe("deprecated commands compatibility", () => {
-  it("ignores legacy modelsWrite during validation", () => {
+describe("retired commands config", () => {
+  it("rejects legacy modelsWrite during validation", () => {
     const result = validateConfigObjectWithPlugins({
       commands: { text: true, modelsWrite: false },
     });
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.commands?.text).toBe(true);
-      expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
-    }
+    expect(result.ok).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import {
+  DoctorSqliteMaintenanceLockUnavailableError,
   isDestructiveDoctorSessionSqliteMode,
   withDoctorSqliteMaintenanceLock,
 } from "./doctor-sqlite-maintenance-lock.js";
@@ -70,16 +71,16 @@ describe("doctor SQLite maintenance lock", () => {
     const run = vi.fn();
 
     try {
-      await expect(
-        withDoctorSqliteMaintenanceLock(
-          {
-            env: fixture.env,
-            operation: "state SQLite compaction",
-            run,
-          },
-          { lockOptions: fixture.lockOptions },
-        ),
-      ).rejects.toThrow(/Gateway or another SQLite maintenance command owns/);
+      const result = withDoctorSqliteMaintenanceLock(
+        {
+          env: fixture.env,
+          operation: "state SQLite compaction",
+          run,
+        },
+        { lockOptions: fixture.lockOptions },
+      );
+      await expect(result).rejects.toBeInstanceOf(DoctorSqliteMaintenanceLockUnavailableError);
+      await expect(result).rejects.toThrow(/Gateway or another SQLite maintenance command owns/);
       expect(run).not.toHaveBeenCalled();
     } finally {
       await gatewayLock.release();

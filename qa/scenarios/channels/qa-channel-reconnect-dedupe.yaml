@@ -23,6 +23,8 @@ scenario:
     - extensions/qa-lab/src/suite-runtime-gateway.ts
   execution:
     kind: flow
+    suiteIsolation: isolated
+    isolationReason: Gateway restart assertions require a dedicated qa-channel bus and state root.
     summary: Verify qa-channel Gateway restart recovery does not replay consumed messages.
     channel: qa-channel
     config:

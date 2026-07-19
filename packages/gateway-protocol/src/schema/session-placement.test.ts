@@ -205,8 +205,22 @@ describe("session dispatch protocol schemas", () => {
         state: "reclaimed",
         ...basePlacement,
         ...workerOwnedFields,
+        workspaceResultConflict: {
+          paths: ["src/local.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
       }),
     ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        state: "reclaimed",
+        ...basePlacement,
+        workspaceResultConflict: {
+          paths: [],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("requires recovery evidence for failed placement", () => {

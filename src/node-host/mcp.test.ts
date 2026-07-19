@@ -245,7 +245,7 @@ describe("node host MCP manager", () => {
   it("clamps oversized configured and requested MCP tool timeouts", async () => {
     const client = createClient({ tools: [tool("search")] });
     const manager = await startNodeHostMcpManager(
-      { docs: { command: "docs", timeout: 1e306 } },
+      { docs: { command: "docs", requestTimeoutMs: 1e306 } },
       { createClient: () => client, resolveTransport: () => transport, warn: vi.fn() },
     );
 

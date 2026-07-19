@@ -15,7 +15,7 @@ import {
   type NormalizedUsage,
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
-import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
+import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
 type UsageSnapshot = {
   input?: number;
@@ -232,7 +232,7 @@ export function buildUsageAgentMetaFields(params: {
     ? lastAssistantUsage
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
-      : toLastCallUsage(params.usageAccumulator);
+      : undefined;
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastRunPromptUsage,
   });

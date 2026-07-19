@@ -67,6 +67,7 @@ import {
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import {
@@ -1099,6 +1100,7 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
       <span class="chat-queue__icon" aria-hidden="true">
         ${failed ? icons.alertTriangle : icons.clock}
       </span>
+      ${renderChatAuthorAvatar(item.sender)}
       ${steered
         ? html`<span class="chat-queue__badge chat-queue__badge--steered"
             >${t("chat.queue.steered")}</span

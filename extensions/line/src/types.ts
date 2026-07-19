@@ -15,10 +15,6 @@ interface LineThreadBindingsConfig {
   maxAgeHours?: number;
   spawnSessions?: boolean;
   defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
-  spawnAcpSessions?: boolean;
 }
 
 interface LineAccountBaseConfig {

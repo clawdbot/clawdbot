@@ -904,6 +904,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
     const parsedConfig = { $include: "memory-search.json" };
     const resolvedConfig = {
+      cron: { webhook: "https://example.invalid/cron-finished" },
       agents: {
         defaults: {
           memorySearch: {
@@ -940,6 +941,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
+        cron: expect.objectContaining({ webhook: "https://example.invalid/cron-finished" }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({
             memorySearch: {

@@ -46,10 +46,6 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
-  if (typeof next.connect_timeout === "number" && typeof next.connectTimeout !== "number") {
-    next.connectTimeout = next.connect_timeout;
-    delete next.connect_timeout;
-  }
   if (
     typeof next.supports_parallel_tool_calls === "boolean" &&
     typeof next.supportsParallelToolCalls !== "boolean"

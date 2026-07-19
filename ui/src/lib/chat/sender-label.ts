@@ -1,7 +1,15 @@
-type SenderIdentity = {
+export type SenderIdentity = {
+  id?: string;
+  name?: string;
+  username?: string;
+  profileAvatarUrl?: string;
+};
+
+type SenderIdentityInput = {
   id?: unknown;
   name?: unknown;
   username?: unknown;
+  profileAvatarUrl?: unknown;
 };
 
 function normalizeLabelPart(value: unknown): string | null {
@@ -19,4 +27,34 @@ export function formatSenderLabel(sender: SenderIdentity | null | undefined): st
     return null;
   }
   return /^([^@\s]+)@[^@\s]+$/.exec(id)?.[1] ?? id;
+}
+
+export function normalizeSenderIdentity(
+  sender: SenderIdentityInput | null | undefined,
+): SenderIdentity | null {
+  const id = normalizeLabelPart(sender?.id);
+  const name = normalizeLabelPart(sender?.name);
+  const username = normalizeLabelPart(sender?.username);
+  const profileAvatarUrl = normalizeLabelPart(sender?.profileAvatarUrl);
+  if (!id && !name && !username && !profileAvatarUrl) {
+    return null;
+  }
+  return {
+    ...(id ? { id } : {}),
+    ...(name ? { name } : {}),
+    ...(username ? { username } : {}),
+    ...(profileAvatarUrl ? { profileAvatarUrl } : {}),
+  };
+}
+
+export function senderIdentityKey(sender: SenderIdentity | null | undefined): string | null {
+  if (!sender) {
+    return null;
+  }
+  return [
+    sender.id ?? "",
+    sender.name ?? "",
+    sender.username ?? "",
+    sender.profileAvatarUrl ?? "",
+  ].join("\u0000");
 }

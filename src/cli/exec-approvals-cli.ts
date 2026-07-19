@@ -20,6 +20,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
@@ -35,7 +36,6 @@ import {
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
-import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";

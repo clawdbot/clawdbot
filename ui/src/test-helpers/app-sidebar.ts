@@ -26,11 +26,13 @@ type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
 
 export type SidebarLifecycleState = HTMLElement & {
+  activeRouteId?: string;
   connected: boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
+  sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
@@ -171,6 +173,12 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   );
   const refresh = vi.fn(() => Promise.resolve());
   const refreshReplacement = vi.fn(() => Promise.resolve());
+  const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
+    Promise.resolve({ key, agentId: options?.agentId ?? null }),
+  );
+  const unsubscribeMessages = vi.fn(
+    (_subscription: Parameters<SessionCapability["unsubscribeMessages"]>[0]) => Promise.resolve(),
+  );
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
     Promise.resolve<SessionsListResult | null>(null),
   );
@@ -197,6 +205,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     list,
     refresh,
     refreshReplacement,
+    subscribeMessages,
+    unsubscribeMessages,
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -216,6 +226,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     list,
     refresh,
     refreshReplacement,
+    subscribeMessages,
+    unsubscribeMessages,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;

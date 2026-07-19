@@ -23,7 +23,7 @@
         "@mistralai/mistralai": "2.4.0",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
-        "@openclaw/fs-safe": "0.4.1",
+        "@openclaw/fs-safe": "0.4.4",
         "@openclaw/proxyline": "0.3.3",
         "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
@@ -434,16 +434,16 @@
       }
     },
     "node_modules/@openclaw/fs-safe": {
-      "version": "0.4.1",
-      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.1.tgz",
-      "integrity": "sha512-hQi+BxO10KdRFlYUot1syC+hTaUnGeQNdqX5kwkKJig8CFq1tKsYJLPm+zkiiGsSKOprPAquQl/txejEhpKPgg==",
+      "version": "0.4.4",
+      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.4.tgz",
+      "integrity": "sha512-QklFGshaQDXl7RFyxPeSN/1moYq/X+SJcmX/nY3oXJO/tzVasL9i1g3m4nJqIfd6qUTJQjeu+41aIqw8+SbUww==",
       "license": "MIT",
       "engines": {
         "node": ">=22"
       },
       "optionalDependencies": {
         "jszip": "^3.10.1",
-        "tar": "7.5.19"
+        "tar": "7.5.20"
       }
     },
     "node_modules/@openclaw/proxyline": {

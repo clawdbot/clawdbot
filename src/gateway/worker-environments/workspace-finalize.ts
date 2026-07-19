@@ -2,12 +2,13 @@ import type {
   WorkerWorkspaceQuiescence,
   WorkerWorkspaceReconcileResult,
 } from "./tunnel-contract.js";
+import type { WorkerWorkspaceApplyResult } from "./workspace-reconcile.js";
 
 /** Rechecks both owners after renewing the remote quiescence lease. */
 export async function verifyReconciledWorkspaceFinal(
   reconciliation: WorkerWorkspaceReconcileResult,
   quiescence: WorkerWorkspaceQuiescence,
-): Promise<void> {
+): Promise<WorkerWorkspaceApplyResult | undefined> {
   if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
     try {
       await reconciliation.verifyStable();
@@ -21,15 +22,16 @@ export async function verifyReconciledWorkspaceFinal(
       await reconciliation.verifyStable();
       await reconciliation.verifyLocalStable();
       await reconciliation.publishStagedResult();
+      return reconciliation.getAppliedWorkspaceResult?.();
     } catch (error) {
       await reconciliation.discardPreparedStagedResult?.().catch(() => undefined);
       throw error;
     }
-    return;
   }
   await reconciliation.verifyStable();
   await reconciliation.verifyLocalStable();
   await quiescence.assertActive();
   await reconciliation.verifyStable();
   await reconciliation.verifyLocalStable();
+  return reconciliation.getAppliedWorkspaceResult?.();
 }

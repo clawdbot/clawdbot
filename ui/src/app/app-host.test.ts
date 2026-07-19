@@ -64,6 +64,12 @@ type ShellLazySurfaceState = ShellKeyboardState & {
   terminalPanelElement: TestOptionalCustomElement;
 };
 
+type ShellApprovalLazyState = {
+  approvalOverlay?: { show: () => void };
+  execApprovalElement: TestOptionalCustomElement;
+  openApprovals: () => void;
+};
+
 type ShellUiCommandState = ShellKeyboardState & {
   handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
 };
@@ -505,6 +511,25 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
       expect(browserToggle).toHaveBeenCalledWith(browserEvent);
     });
+  });
+
+  it("opens approvals after the modal module loads on demand", async () => {
+    const element = createLazyElementSpec("exec approval modal");
+    const show = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellApprovalLazyState;
+    shell.execApprovalElement = element;
+    Object.defineProperty(shell, "updateComplete", {
+      configurable: true,
+      get: () => Promise.resolve(true),
+    });
+    Object.defineProperty(shell, "approvalOverlay", {
+      configurable: true,
+      get: () => (customElements.get(element.tagName) ? { show } : undefined),
+    });
+
+    shell.openApprovals();
+
+    await vi.waitFor(() => expect(show).toHaveBeenCalledOnce());
   });
 
   it("routes UI commands to navigation, panels, and chat fallback", () => {

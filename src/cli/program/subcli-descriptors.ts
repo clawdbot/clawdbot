@@ -72,6 +72,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "users",
+    description: "Manage durable user profiles and email aliases",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "node",
     description: "Run and manage the headless node host service",
     hasSubcommands: true,

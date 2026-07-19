@@ -532,6 +532,8 @@ type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
   toolOwner?: string;
   toolCallId?: string;
   paramsSummary?: DiagnosticToolParamsSummary;
+  /** Deterministic mutation classification computed before tool execution. */
+  mutatingAction?: boolean;
 };
 
 export type DiagnosticToolExecutionStartedEvent = DiagnosticToolExecutionBaseEvent & {

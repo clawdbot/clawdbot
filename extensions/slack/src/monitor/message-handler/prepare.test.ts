@@ -277,8 +277,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
             enabled: true,
             accounts: {
               soltea: {
+                dm: { enabled: true },
                 dmPolicy: "open",
-                dm: { enabled: true, policy: "open" },
               },
             },
           },
@@ -293,8 +293,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareSlackMessage({
       ctx,
       account: createSlackAccount({
+        dm: { enabled: true },
         dmPolicy: "open",
-        dm: { enabled: true, policy: "open" },
       }),
       message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
       opts: { source: "message" },
@@ -2142,18 +2142,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       }),
       createSlackAccount({ replyToMode: "all", replyToModeByChatType: { channel: "all" } }),
       createSlackMessage({ channel: "C123", channel_type: "channel" }),
-    );
-
-    assertPrepared(prepared);
-    expect(prepared.replyToMode).toBe("off");
-    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
-  });
-
-  it("respects dm.replyToMode legacy override for DMs", async () => {
-    const prepared = await prepareMessageWith(
-      createReplyToAllSlackCtx(),
-      createSlackAccount({ replyToMode: "all", dm: { replyToMode: "off" } }),
-      createSlackMessage({}), // DM
     );
 
     assertPrepared(prepared);
@@ -4471,7 +4459,7 @@ describe("prepareSlackMessage sender prefix", () => {
 
   it("detects /new as control command when prefixed with Slack mention", async () => {
     const ctx = createSenderPrefixCtx({
-      channels: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
+      channels: { dm: { enabled: true }, dmPolicy: "open", allowFrom: ["*"] },
       allowFrom: ["U1"],
       useAccessGroups: true,
       slashCommand: {

@@ -10,6 +10,7 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import {
   scopedAgentIdForSession,
   visibleSessionMatches,
@@ -316,7 +317,13 @@ export async function dispatchChatSlashCommand(
   }
 
   if (result.pendingCurrentRun && host.chatRunId && targetIsCurrent()) {
-    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
+    enqueuePendingRunMessage(
+      host,
+      `/${name} ${args}`.trim(),
+      host.chatRunId,
+      undefined,
+      resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+    );
   }
 
   if (result.sessionPatch && "modelOverride" in result.sessionPatch) {

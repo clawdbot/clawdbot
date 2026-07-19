@@ -11,7 +11,6 @@ import {
 } from "../secrets/ref-contract.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
-import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -1017,15 +1016,6 @@ const MediaUnderstandingAttachmentsSchema = z
   .strict()
   .optional();
 
-const DeepgramAudioSchema = z
-  .object({
-    detectLanguage: z.boolean().optional(),
-    punctuate: z.boolean().optional(),
-    smartFormat: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 const ProviderOptionsSchema = z
   .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
@@ -1036,7 +1026,6 @@ const MediaUnderstandingRuntimeFields = {
   timeoutSeconds: z.number().int().positive().optional(),
   language: z.string().optional(),
   providerOptions: ProviderOptionsSchema,
-  deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   request: ConfiguredProviderRequestSchema,
@@ -1078,30 +1067,12 @@ export const ToolsMediaSchema = z
   .object({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
-    asyncCompletion: z
-      .object({
-        directSend: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
     image: ToolsMediaUnderstandingSchema.optional(),
     audio: ToolsMediaUnderstandingSchema.optional(),
     video: ToolsMediaUnderstandingSchema.optional(),
   })
   .strict()
   .optional();
-type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-const toolsMediaAsyncCompletionSchemaContract: [
-  AssertAssignable<
-    ToolsMediaConfigFromSchema["asyncCompletion"],
-    MediaToolsConfig["asyncCompletion"]
-  >,
-  AssertAssignable<
-    MediaToolsConfig["asyncCompletion"],
-    ToolsMediaConfigFromSchema["asyncCompletion"]
-  >,
-] = [] as never;
-void toolsMediaAsyncCompletionSchemaContract;
 const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),

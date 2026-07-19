@@ -2205,6 +2205,7 @@ export function buildGatewaySessionRow(params: {
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
+    swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     worktree: entry?.worktree,

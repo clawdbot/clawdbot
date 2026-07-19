@@ -2,6 +2,8 @@
  * Chat message types for the UI layer.
  */
 
+import type { SenderIdentity } from "./sender-label.ts";
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -41,6 +43,7 @@ export type ChatQueueItem = {
   sendRequestStartedAtMs?: number;
   sessionKey?: string;
   agentId?: string;
+  sender?: SenderIdentity;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
@@ -89,6 +92,7 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
+  sender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
@@ -126,6 +130,7 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
+  sender?: SenderIdentity;
   audioAsVoice?: boolean;
   replyTarget?:
     | {

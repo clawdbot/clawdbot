@@ -26,7 +26,6 @@ import {
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
-  resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
@@ -65,40 +64,6 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
       }),
     ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
-  });
-});
-
-describe("resolveTuiFooterHostLabel", () => {
-  it("hides connection host by default", () => {
-    expect(
-      resolveTuiFooterHostLabel({
-        config: {},
-        connectionUrl: "wss://gateway.example.com/ws",
-      }),
-    ).toBeNull();
-  });
-
-  it("renders only remote hosts when explicitly enabled", () => {
-    const config = { tui: { footer: { showRemoteHost: true } } } satisfies OpenClawConfig;
-
-    expect(
-      resolveTuiFooterHostLabel({
-        config,
-        connectionUrl: "wss://user:secret@gateway.example.com/ws?token=hidden",
-      }),
-    ).toBe("host gateway.example.com");
-    expect(
-      resolveTuiFooterHostLabel({
-        config,
-        connectionUrl: "ws://127.0.0.1:18789",
-      }),
-    ).toBeNull();
-    expect(
-      resolveTuiFooterHostLabel({
-        config,
-        connectionUrl: "local embedded",
-      }),
-    ).toBeNull();
   });
 });
 

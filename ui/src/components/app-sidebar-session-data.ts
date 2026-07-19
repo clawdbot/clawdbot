@@ -6,6 +6,10 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import {
+  deriveApprovalBadgeSnapshot,
+  type ApprovalBadgeSnapshot,
+} from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
   CATALOG_SESSION_CONTINUED_EVENT,
@@ -84,6 +88,9 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private sessionCatalogRevision = 0;
   private readonly sessionCatalogPageDepths = new Map<string, number>();
   private readonly sessionCatalogRevisions = new Map<string, number>();
+  private approvalBadgeQueue: ApplicationContext<RouteId>["overlays"]["snapshot"]["approvalQueue"] =
+    [];
+  private approvalBadges: ApprovalBadgeSnapshot = deriveApprovalBadgeSnapshot([]);
 
   abstract dismissTransientMenus(): boolean;
   protected abstract expandedAgentId(): string;
@@ -130,7 +137,20 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       .watch(
         () => this.context?.agentSelection,
         (agentSelection, notify) => agentSelection.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.overlays,
+        (overlays, notify) => overlays.subscribe(notify),
       );
+  }
+
+  protected approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
+    const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
+    if (queue !== this.approvalBadgeQueue) {
+      this.approvalBadgeQueue = queue;
+      this.approvalBadges = deriveApprovalBadgeSnapshot(queue);
+    }
+    return this.approvalBadges;
   }
 
   override connectedCallback() {

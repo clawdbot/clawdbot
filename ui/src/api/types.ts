@@ -475,6 +475,8 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Collector swarm group that owns this child session, when applicable. */
+  swarmGroupId?: string;
   parentSessionKey?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: { id: string; branch: string; repoRoot: string };

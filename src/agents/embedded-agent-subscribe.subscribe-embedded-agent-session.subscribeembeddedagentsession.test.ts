@@ -312,6 +312,31 @@ describe("subscribeEmbeddedAgentSession", () => {
       cacheWrite: undefined,
       total: 120,
     });
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 100,
+      output: 20,
+      total: 120,
+    });
+  });
+
+  it("retains the last nonzero call when a later aborted message reports zero usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = { input: 38_333, output: 66, cacheRead: 120_320, totalTokens: 158_719 };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({ type: "message_end", message: { role: "assistant", usage } });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", stopReason: "aborted", usage: makeZeroUsageSnapshot() },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 38_333,
+      output: 66,
+      cacheRead: 120_320,
+      total: 158_719,
+    });
   });
 
   it.each(THINKING_TAG_CASES)(

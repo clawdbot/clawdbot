@@ -20,13 +20,19 @@ vi.mock("../infra/tailscale.js", () => ({
   hasTailscaleFunnelRouteForPort: mocks.hasTailscaleFunnelRouteForPort,
 }));
 
+import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 function createLogger() {
   return { info: vi.fn(), warn: vi.fn() };
 }
 
+function resetMcpAppChannelOrigin() {
+  prepareMcpAppChannelOrigin({ origin: "https://reset.test", reachability: "tailnet" })();
+}
+
 afterEach(() => {
+  resetMcpAppChannelOrigin();
   for (const fn of Object.values(mocks)) {
     fn.mockReset();
   }
@@ -149,6 +155,46 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
 
     expect(mocks.disableTailscaleFunnel).toHaveBeenCalledWith();
     expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
+  });
+
+  it("prepares one tailnet-only Serve origin for the Gateway lifecycle", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
+
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      logTailscale: createLogger(),
+    });
+
+    expect(getMcpAppChannelOrigin()).toEqual({
+      origin: "https://node.tailnet.ts.net",
+      reachability: "tailnet",
+    });
+    await cleanup?.();
+    expect(getMcpAppChannelOrigin()).toBeUndefined();
+    expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
+  });
+
+  it("marks preserved Funnel as internet reachable without taking route ownership", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
+    mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(true);
+
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      preserveFunnel: true,
+      resetOnExit: true,
+      logTailscale: createLogger(),
+    });
+
+    expect(getMcpAppChannelOrigin()).toEqual({
+      origin: "https://node.tailnet.ts.net",
+      reachability: "internet",
+    });
+    await cleanup?.();
+    expect(getMcpAppChannelOrigin()).toBeUndefined();
+    expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
+    expect(mocks.disableTailscaleFunnel).not.toHaveBeenCalled();
   });
 
   it.each([

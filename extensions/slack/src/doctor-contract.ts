@@ -34,6 +34,31 @@ function hasLegacySlackThreadMentionPolicy(value: unknown): boolean {
   return Boolean(thread && Object.hasOwn(thread, "requireExplicitMention"));
 }
 
+function hasLegacyDmReplyMode(value: unknown): boolean {
+  return Object.hasOwn(asObjectRecord(asObjectRecord(value)?.dm) ?? {}, "replyToMode");
+}
+
+function migrateDmReplyMode(
+  entry: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): boolean {
+  const dm = asObjectRecord(entry.dm);
+  if (!dm || !Object.hasOwn(dm, "replyToMode")) {
+    return false;
+  }
+  const byType = asObjectRecord(entry.replyToModeByChatType) ?? {};
+  if (byType.direct === undefined) {
+    byType.direct = dm.replyToMode;
+    entry.replyToModeByChatType = byType;
+    changes.push(`Moved ${path}.dm.replyToMode → ${path}.replyToModeByChatType.direct.`);
+  } else {
+    changes.push(`Removed ${path}.dm.replyToMode (replyToModeByChatType.direct already set).`);
+  }
+  delete dm.replyToMode;
+  return true;
+}
+
 function normalizeSlackThreadMentionPolicy(params: {
   value: Record<string, unknown>;
   pathPrefix: string;
@@ -113,6 +138,19 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "slack"],
     message:
+      'channels.slack.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
+    match: hasLegacyDmReplyMode,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
+    match: (value) =>
+      Object.values(asObjectRecord(value) ?? {}).some((account) => hasLegacyDmReplyMode(account)),
+  },
+  {
+    path: ["channels", "slack"],
+    message:
       'channels.slack.thread.requireExplicitMention is legacy; use channels.slack.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
     match: hasLegacySlackThreadMentionPolicy,
   },
@@ -163,6 +201,7 @@ export function normalizeCompatibilityConfig({
   }
   let updated = rawEntry;
   let changed = aliases.config !== cfg;
+  changed = migrateDmReplyMode(updated, "channels.slack", changes) || changed;
 
   const normalizedThreadPolicy = normalizeSlackThreadMentionPolicy({
     value: updated,
@@ -195,6 +234,10 @@ export function normalizeCompatibilityConfig({
       let account = asObjectRecord(accountValue);
       if (!account) {
         continue;
+      }
+      if (migrateDmReplyMode(account, `channels.slack.accounts.${accountId}`, changes)) {
+        nextAccounts[accountId] = account;
+        accountsChanged = true;
       }
       const normalizedAccountThreadPolicy = normalizeSlackThreadMentionPolicy({
         value: account,

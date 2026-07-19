@@ -42,7 +42,9 @@ function createConfig(): OpenClawConfig {
   return {
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        dm: { enabled: true },
+        dmPolicy: "open",
+        allowFrom: ["*"],
       },
     },
   } as OpenClawConfig;
@@ -87,7 +89,9 @@ function createConfiguredAcpCase(params: {
           ? {
               channels: {
                 discord: {
-                  dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+                  dm: { enabled: true },
+                  dmPolicy: "open",
+                  allowFrom: ["*"],
                 },
               },
             }
@@ -622,7 +626,9 @@ describe("Discord native plugin command dispatch", () => {
     const cfg = {
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["user:owner"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["user:owner"],
         },
       },
     } as OpenClawConfig;
@@ -647,7 +653,9 @@ describe("Discord native plugin command dispatch", () => {
       },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -872,9 +880,9 @@ describe("Discord native plugin command dispatch", () => {
       },
       channels: {
         discord: {
+          dmPolicy: "open",
           dm: {
             enabled: true,
-            policy: "open",
             groupEnabled: true,
             groupChannels: ["allowed-group"],
           },

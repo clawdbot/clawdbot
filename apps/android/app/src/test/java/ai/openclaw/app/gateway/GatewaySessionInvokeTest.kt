@@ -603,7 +603,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun bootstrapConnect_filtersOperatorHandoffScopesFromConnectRequest() =
+  fun bootstrapConnect_requestsCanonicalLimitedOperatorHandoffScopes() =
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -637,6 +637,7 @@ class GatewaySessionInvokeTest {
             listOf(
               "operator.approvals",
               "operator.pairing",
+              "operator.questions",
               "operator.read",
               "operator.talk.secrets",
               "operator.write",
@@ -656,6 +657,7 @@ class GatewaySessionInvokeTest {
         assertEquals(
           listOf(
             "operator.approvals",
+            "operator.questions",
             "operator.read",
             "operator.talk.secrets",
             "operator.write",

@@ -26,17 +26,10 @@ jobs:
         if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          fetch-depth: 1
+          fetch-depth: 2
           fetch-tags: false
           persist-credentials: false
           submodules: false
-
-      - name: Ensure base commit
-        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Detect changed paths
         id: scope
@@ -52,14 +45,12 @@ jobs:
               return;
             }
 
-            const baseSha = context.payload.pull_request?.base?.sha;
-            if (!baseSha) {
-              throw new Error("missing pull request base SHA");
-            }
+            // pull_request checks out GitHub's synthetic merge commit. Its first
+            // parent is the exact base tree used to produce the tested result.
             const result = await exec.getExecOutput("git", [
               "diff",
               "--quiet",
-              baseSha,
+              "HEAD^1",
               "HEAD",
               "--",
               "apps/macos/",

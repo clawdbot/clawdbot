@@ -69,4 +69,35 @@ describe("session row placement badges", () => {
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(2);
     expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
   });
+
+  it("renders a warning-colored approval-needed indicator", () => {
+    render(
+      renderSessionRowBadges({
+        hasApproval: true,
+        hasAutomation: false,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".session-row-badge--approval");
+    expect(badge?.getAttribute("aria-label")).toBe("Approval needed");
+    expect(badge?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("keeps child-only worktree and placement badges hidden while showing approval", () => {
+    render(
+      renderSessionRowBadges({
+        isChild: true,
+        worktreeId: "worktree-1",
+        hasAutomation: true,
+        hasApproval: true,
+        placementState: "active",
+      }),
+      container,
+    );
+
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+    expect(container.querySelector(".session-row-badge--approval")).not.toBeNull();
+    expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
+  });
 });

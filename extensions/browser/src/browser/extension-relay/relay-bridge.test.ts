@@ -1,5 +1,5 @@
 // Extension relay bridge: CDP target synthesis and extension command routing.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import type { ExtensionToRelayMessage, RelayToExtensionMessage } from "./relay-protocol.js";
 
@@ -386,6 +386,123 @@ describe("ExtensionRelayBridge", () => {
     await flush();
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.error).toBeTruthy();
+  });
+
+  it("delivers a valid page share and acknowledges success", async () => {
+    const onPageShare = vi.fn(async () => undefined);
+    const bridge = new ExtensionRelayBridge({ onPageShare });
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+    const payload = {
+      url: "https://example.com/article",
+      title: "Example",
+      content: "Article body",
+    };
+
+    handlers.onMessage(JSON.stringify({ type: "pageShare", requestId: 41, payload }));
+    await flush();
+
+    expect(onPageShare).toHaveBeenCalledWith(payload);
+    expect(socket.frames()).toContainEqual({
+      type: "pageShareResult",
+      requestId: 41,
+      ok: true,
+    });
+  });
+
+  it("returns the delivery error when the page-share handler rejects", async () => {
+    const bridge = new ExtensionRelayBridge({
+      onPageShare: async () => {
+        throw new Error("queue unavailable");
+      },
+    });
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 42,
+        payload: { url: "https://example.com", title: "Example", content: "Body" },
+      }),
+    );
+    await flush();
+
+    expect(socket.frames()).toContainEqual({
+      type: "pageShareResult",
+      requestId: 42,
+      ok: false,
+      error: "queue unavailable",
+    });
+  });
+
+  it("explains that page shares require a gateway-hosted relay", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 43,
+        payload: { url: "https://example.com", title: "Example", content: "Body" },
+      }),
+    );
+    await flush();
+
+    expect(socket.frames()).toContainEqual({
+      type: "pageShareResult",
+      requestId: 43,
+      ok: false,
+      error:
+        "Send to OpenClaw needs the extension relay hosted by the Gateway (pair on the Gateway host or use direct Gateway pairing). Node-hosted relays are not supported yet.",
+    });
+  });
+
+  it("rejects invalid and oversized page-share payloads before delivery", async () => {
+    const onPageShare = vi.fn(async () => undefined);
+    const bridge = new ExtensionRelayBridge({ onPageShare });
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 44,
+        payload: { url: "https://example.com", title: 7, content: "Body" },
+      }),
+    );
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 45,
+        payload: {
+          url: "https://example.com",
+          title: "Example",
+          content: "c".repeat(200_000),
+          selection: "s".repeat(100_001),
+        },
+      }),
+    );
+    await flush();
+
+    expect(onPageShare).not.toHaveBeenCalled();
+    expect(socket.frames()).toEqual(
+      expect.arrayContaining([
+        {
+          type: "pageShareResult",
+          requestId: 44,
+          ok: false,
+          error: "Invalid page-share payload.",
+        },
+        {
+          type: "pageShareResult",
+          requestId: 45,
+          ok: false,
+          error: "Invalid page-share payload.",
+        },
+      ]),
+    );
   });
 
   it("requires a hello frame before other extension messages", () => {

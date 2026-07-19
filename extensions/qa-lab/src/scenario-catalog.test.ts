@@ -171,11 +171,17 @@ describe("qa scenario catalog", () => {
   it("loads explicit suite isolation metadata from per-scenario YAML", () => {
     const staleLinks = requireFlowScenario(readQaScenarioById("subagent-stale-child-links"));
     const kitchenSink = requireFlowScenario(readQaScenarioById("kitchen-sink-live-openai"));
+    const cronRestart = requireFlowScenario(
+      readQaScenarioById("cron-model-created-one-shot-recurring"),
+    );
 
     expect(staleLinks.execution.suiteIsolation).toBe("isolated");
     expect(staleLinks.execution.isolationReason).toContain("gateway session");
     expect(kitchenSink.execution.suiteIsolation).toBe("isolated");
     expect(kitchenSink.execution.isolationReason).toContain("plugin/channel/tool config");
+    expect(cronRestart.execution.suiteIsolation).toBe("isolated");
+    expect(cronRestart.execution.retryCount).toBe(0);
+    expect(JSON.stringify(cronRestart.execution.flow)).toContain("liveTurnTimeoutMs(env, 180000)");
   });
 
   it("requires explicit suite isolation for gateway state restart scenarios", () => {
@@ -191,6 +197,7 @@ describe("qa scenario catalog", () => {
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
       "matrix-restart-resume",
+      "qa-channel-reconnect-dedupe",
       "remember-across-conversations",
       "slack-restart-resume",
       "subagent-stale-child-links",

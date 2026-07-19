@@ -486,9 +486,6 @@ async function runAutoUpdateCommand(params: {
   try {
     const res = await runCommandWithTimeout(argv, {
       timeoutMs: params.timeoutMs,
-      env: {
-        OPENCLAW_AUTO_UPDATE: "1",
-      },
     });
     return {
       ok: res.code === 0,

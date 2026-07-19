@@ -2895,6 +2895,21 @@ td.data-table-key-col {
   animation: scale-in 0.2s var(--ease-out);
 }
 
+.exec-approval-modal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+}
+
+.exec-approval-card--inline {
+  padding: 14px 16px;
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 5%, var(--card));
+  animation: none;
+}
+
 .exec-approval-header {
   display: flex;
   align-items: center;
@@ -2979,6 +2994,78 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.exec-approval-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.exec-approval-list {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.exec-approval-list__heading {
+  padding: 2px 4px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.exec-approval-list__item {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.25fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.exec-approval-list__item:hover,
+.exec-approval-list__item:focus-visible {
+  border-color: var(--border);
+  background: var(--secondary);
+}
+
+.exec-approval-list__item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+}
+
+.exec-approval-list__agent,
+.exec-approval-list__command {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-approval-list__agent {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exec-approval-list__command {
+  font-size: 12px;
+}
+
+.exec-approval-list__expiry {
+  color: var(--warning);
+  font: 11px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ===========================================
@@ -5116,6 +5203,20 @@ td.data-table-key-col {
 
 .session-row-badge--cloud[data-placement-state="active"] {
   color: var(--ok);
+}
+
+.session-row-badge--approval,
+.session-approval-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warning);
+}
+
+.session-approval-badge svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
 }
 
 .session-row-badge--cloud[data-placement-state="failed"] {

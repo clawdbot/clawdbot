@@ -1751,6 +1751,107 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("allows cancellation of detached script work targeting the main session", async () => {
+    vi.useFakeTimers();
+    try {
+      resetTaskRegistryForTests();
+      resetActiveCronTaskRunsForTests();
+
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-07-18T12:00:00.000Z");
+      const cronJob: CronJob = {
+        id: "main-script-cancel-boundary",
+        name: "main script cancel boundary",
+        enabled: true,
+        createdAtMs: scheduledAt - 60_000,
+        updatedAtMs: scheduledAt - 60_000,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "script", script: "return { notify: 'done' }", timeoutSeconds: 0 },
+        state: { nextRunAtMs: scheduledAt },
+      };
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let abortObserved = false;
+      let timerSettled = false;
+      const runnerStarted = createDeferred<void>();
+      const runnerResult = createDeferred<{
+        status: "ok";
+        notify: string;
+        wake: "now";
+      }>();
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        cronConfig: { triggers: { enabled: true } },
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => scheduledAt,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+        runScriptJob: vi.fn(async ({ abortSignal }) => {
+          runnerStarted.resolve();
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              abortObserved = true;
+            },
+            { once: true },
+          );
+          // Deliberately ignore abort so the cron boundary must suppress any
+          // late notify/wake result after operator cancellation has settled.
+          return await runnerResult.promise;
+        }),
+      });
+
+      const timerPromise = onTimer(state).then(() => {
+        timerSettled = true;
+      });
+      await runnerStarted.promise;
+
+      const task = findCronTaskByBaseRunId(`cron:${cronJob.id}:${scheduledAt}`);
+      if (!task) {
+        throw new Error("Expected main-target script cron task row");
+      }
+
+      installCronCancellationControlRuntime();
+      const cancelResult = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+      expect(cancelResult.found).toBe(true);
+      expect(cancelResult.cancelled).toBe(true);
+      expect(abortObserved).toBe(true);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (timerSettled) {
+          break;
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+      }
+      expect(timerSettled).toBe(true);
+      await timerPromise;
+      expect(listTaskRecords().find((entry) => entry.taskId === task.taskId)?.status).toBe(
+        "cancelled",
+      );
+
+      runnerResult.resolve({ status: "ok", notify: "stale", wake: "now" });
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+    } finally {
+      resetActiveCronTaskRunsForTests();
+      resetTaskRegistryControlRuntimeForTests();
+      resetTaskRegistryForTests();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps main-session cron wrappers visible across restart generation advance", async () => {
     vi.useFakeTimers();
     try {
@@ -1822,6 +1923,60 @@ describe("cron service timer regressions", () => {
       resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
       vi.useRealTimers();
+    }
+  });
+
+  it("retires main-target script work across restart generation advance", async () => {
+    resetActiveCronTaskRunsForTests();
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-07-18T12:05:00.000Z");
+    const cronJob: CronJob = {
+      id: "main-script-generation-retire",
+      name: "main script generation retire",
+      enabled: true,
+      createdAtMs: scheduledAt - 60_000,
+      updatedAtMs: scheduledAt - 60_000,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "script", script: "return { notify: 'stale' }", timeoutSeconds: 0 },
+      state: { nextRunAtMs: scheduledAt },
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    const entered = createDeferred<void>();
+    const release = createDeferred<{ status: "ok"; notify: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      runScriptJob: vi.fn(async () => {
+        entered.resolve();
+        return await release.promise;
+      }),
+    });
+
+    try {
+      const timerPromise = onTimer(state);
+      await entered.promise;
+      expect(isCronJobActive(cronJob.id)).toBe(true);
+
+      advanceCronActiveJobGeneration();
+      expect(isCronJobActive(cronJob.id)).toBe(false);
+      release.resolve({ status: "ok", notify: "stale" });
+      await timerPromise;
+
+      const persisted = await loadCronStore(store.storePath);
+      expect(persisted.jobs[0]?.state.lastStatus).not.toBe("ok");
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+    } finally {
+      resetActiveCronTaskRunsForTests();
     }
   });
 

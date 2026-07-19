@@ -32,11 +32,11 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
-  it("resolves operator timeout aliases and parallel capability", () => {
+  it("resolves canonical timeouts and parallel capability", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
-      timeout: 7,
-      connectTimeout: 2,
+      requestTimeoutMs: 7_000,
+      connectionTimeoutMs: 2_000,
       supportsParallelToolCalls: true,
     });
 
@@ -49,25 +49,14 @@ describe("resolveMcpTransportConfig", () => {
     );
   });
 
-  it("clamps oversized MCP request timeout aliases to the Node timer maximum", () => {
-    const seconds = resolveMcpTransportConfig("probe", {
-      command: "node",
-      connectTimeout: 1e306,
-      timeout: 1e306,
-    });
-    const milliseconds = resolveMcpTransportConfig("probe", {
+  it("clamps oversized canonical MCP timeouts to the Node timer maximum", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       connectionTimeoutMs: 1e306,
       requestTimeoutMs: 1e306,
     });
 
-    expect(seconds).toEqual(
-      expect.objectContaining({
-        connectionTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-        requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-      }),
-    );
-    expect(milliseconds).toEqual(
+    expect(resolved).toEqual(
       expect.objectContaining({
         connectionTimeoutMs: MAX_TIMER_TIMEOUT_MS,
         requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,

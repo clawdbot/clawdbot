@@ -58,7 +58,7 @@ export type ResolvedSessionMaintenanceConfigInput = Omit<
   Partial<Pick<ResolvedSessionMaintenanceConfig, "modelRunPruneAfterMs">>;
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
-  const raw = maintenance?.pruneAfter ?? maintenance?.pruneDays;
+  const raw = maintenance?.pruneAfter;
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;

@@ -288,7 +288,7 @@ describe("web inbound media saves with extension", () => {
       monitorWebInbox({
         cfg: {
           channels: { whatsapp: { allowFrom: ["*"] } },
-          messages: { messagePrefix: undefined, responsePrefix: undefined },
+          messages: { responsePrefix: undefined },
           web: { whatsapp: { connectTimeoutMs: 12_345 } },
         } as never,
         verbose: false,
@@ -309,7 +309,7 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -362,7 +362,7 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -410,7 +410,7 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -447,7 +447,7 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,

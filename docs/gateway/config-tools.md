@@ -318,9 +318,6 @@ Configures inbound media understanding (image/audio/video):
   tools: {
     media: {
       concurrency: 2,
-      asyncCompletion: {
-        directSend: false, // deprecated: completions stay agent-mediated
-      },
       audio: {
         enabled: true,
         maxBytes: 20971520,
@@ -371,10 +368,6 @@ Configures inbound media understanding (image/audio/video):
     - Failures fall back to the next entry.
 
     Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
-
-    **Async completion fields:**
-
-    - `asyncCompletion.directSend`: deprecated compatibility flag. Completed async media tasks stay requester-session mediated so the agent receives the result, decides how to tell the user, and uses the message tool when source delivery requires it.
 
   </Accordion>
 </AccordionGroup>

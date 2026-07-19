@@ -19,6 +19,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
@@ -185,8 +186,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   }
   const replayContent = (message as { content?: unknown }).content;
   if (typeof replayContent === "string") {
-    const media = message as unknown as { MediaPath?: string; MediaPaths?: string[] };
-    return replayContent.trim() || media.MediaPath || media.MediaPaths?.length ? message : null;
+    return replayContent.trim() || hasPersistedMedia(message) ? message : null;
   }
   if (!Array.isArray(replayContent)) {
     return message;
@@ -208,7 +208,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
     return false;
   });
   if (sanitizedContent.length === 0) {
-    return null;
+    return hasPersistedMedia(message) ? ({ ...message, content: "" } as AgentMessage) : null;
   }
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }

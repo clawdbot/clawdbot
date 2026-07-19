@@ -520,14 +520,26 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/ios-periphery-comment.yml",
     ["test/scripts/ios-periphery-comment-workflow.test.ts"],
   ],
-  [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
+  [
+    ".github/workflows/ios-periphery.yml",
+    [
+      "test/scripts/ios-periphery-comment-workflow.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
+  ],
   [
     ".github/workflows/macos-periphery.yml",
-    ["test/scripts/ios-periphery-comment-workflow.test.ts"],
+    [
+      "test/scripts/ios-periphery-comment-workflow.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
   ],
   [
     ".github/workflows/shared-openclawkit-periphery.yml",
-    ["test/scripts/periphery-intersection.test.ts"],
+    [
+      "test/scripts/periphery-intersection.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
   ],
   [
     ".github/workflows/live-media-runner-image.yml",

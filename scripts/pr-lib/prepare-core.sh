@@ -49,6 +49,7 @@ verify_prep_branch_matches_prepared_head() {
 
 prepare_init() {
   local pr="$1"
+  mark_pr_operation_side_effects_started
   enter_worktree "$pr" true
 
   require_artifact .local/pr-meta.env
@@ -105,6 +106,7 @@ prepare_validate_commit() {
   enter_worktree "$pr" false
   require_artifact .local/pr-meta.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091
@@ -135,6 +137,7 @@ prepare_push() {
   require_artifact .local/prep-context.env
   require_artifact .local/gates.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091
@@ -222,6 +225,7 @@ prepare_sync_head() {
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091

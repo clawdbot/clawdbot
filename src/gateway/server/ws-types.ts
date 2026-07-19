@@ -33,6 +33,11 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
   authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+  };
   clientIp?: string;
   internal?: {
     approvalRuntime?: boolean;

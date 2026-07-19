@@ -266,7 +266,9 @@ describe("createDiscordNativeCommand option wiring", () => {
     const cfg = {
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -502,7 +504,8 @@ describe("createDiscordNativeCommand option wiring", () => {
       session: { dmScope: "main" },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "disabled" },
+          dm: { enabled: true },
+          dmPolicy: "disabled",
         },
       },
     } as OpenClawConfig;
@@ -510,7 +513,9 @@ describe("createDiscordNativeCommand option wiring", () => {
       session: { dmScope: "per-channel-peer" },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -607,9 +612,9 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   it("returns no autocomplete choices for group DMs outside dm.groupChannels", async () => {
     const discordConfig = {
+      dmPolicy: "open",
       dm: {
         enabled: true,
-        policy: "open",
         groupEnabled: true,
         groupChannels: ["allowed-group"],
       },

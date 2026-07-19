@@ -26,6 +26,7 @@ import {
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
+  type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
 import {
   workerWorkspaceResultStaging,
@@ -673,8 +674,9 @@ export function createWorkerWorkspaceActions(
             currentManifestRaw: currentRaw,
           })
         : undefined;
+      let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
       if (!stagedResult) {
-        await applyStagedWorkerWorkspace({
+        appliedWorkspaceResult = await applyStagedWorkerWorkspace({
           root: request.localPath,
           stagingRoot,
           baseManifestRef: request.baseManifestRef,
@@ -689,7 +691,12 @@ export function createWorkerWorkspaceActions(
         changed: true,
         verifyStable: async () => await verifyStable(currentRef),
         verifyLocalStable: async () =>
-          await assertWorkspaceResultStable({ root: request.localPath, base, current }),
+          appliedWorkspaceResult
+            ? await appliedWorkspaceResult.verifyLocalStable()
+            : await assertWorkspaceResultStable({ root: request.localPath, base, current }),
+        ...(appliedWorkspaceResult
+          ? { getAppliedWorkspaceResult: () => appliedWorkspaceResult }
+          : {}),
         ...stagedResult,
       };
     } finally {

@@ -16,6 +16,7 @@ import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import {
   canArchiveSessionRow,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
@@ -361,6 +362,8 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       gatewayVersion: this.gatewayVersion,
       themeMode: this.themeMode,
       agentUnreadCount: (agentId) => this.agentUnreadCount(agentId),
+      agentApprovalCount: (agentId) =>
+        this.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ?? 0,
       onFilterChange: (next) => {
         this.agentMenuFilter = next;
       },

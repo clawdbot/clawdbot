@@ -1,45 +1,25 @@
 // Defines Google Chat provider schema fragments.
 import { z } from "zod";
-import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
-import { ChannelHealthMonitorSchema } from "./zod-schema.channels.js";
+import {
+  ChannelBotLoopProtectionSchema,
+  ChannelDangerouslyAllowNameMatchingSchema,
+  buildChannelAllowBotsSchema,
+  buildCommonChannelAccountShape,
+} from "./zod-schema.channel-messaging-common.js";
 import {
   ChannelDeliveryStreamingConfigSchema,
-  DmConfigSchema,
   DmPolicySchema,
-  GroupPolicySchema,
-  ReplyToModeSchema,
   SecretRefSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-/** DM policy schema for Google Chat accounts. */
 const GoogleChatDmSchema = z
   .object({
     enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.policy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.googlechat.dm.policy="open" requires channels.googlechat.dm.allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: value.policy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.googlechat.dm.policy="allowlist" requires channels.googlechat.dm.allowFrom to contain at least one sender ID',
-    });
-  });
+  .strict();
 
 const GoogleChatGroupSchema = z
   .object({
@@ -51,20 +31,18 @@ const GoogleChatGroupSchema = z
   })
   .strict();
 
-const GoogleChatAccountSchema = z
+const GoogleChatAccountSchemaBase = z
   .object({
-    name: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
-    allowBots: z.boolean().optional(),
+    ...buildCommonChannelAccountShape({
+      groupPolicyDefault: true,
+      omit: ["mentionPatterns"],
+      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+    }),
+    allowBots: buildChannelAllowBotsSchema(),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
-    dangerouslyAllowNameMatching: z.boolean().optional(),
+    dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     requireMention: z.boolean().optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), GoogleChatGroupSchema.optional()).optional(),
-    defaultTo: z.string().optional(),
     serviceAccount: z
       .union([z.string(), z.record(z.string(), z.unknown()), SecretRefSchema])
       .optional()
@@ -77,27 +55,53 @@ const GoogleChatAccountSchema = z
     webhookPath: z.string().optional(),
     webhookUrl: z.string().optional(),
     botUser: z.string().optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-    mediaMaxMb: z.number().positive().optional(),
-    replyToMode: ReplyToModeSchema.optional(),
-    actions: z
-      .object({
-        reactions: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
     dm: GoogleChatDmSchema.optional(),
-    healthMonitor: ChannelHealthMonitorSchema,
     typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
-    responsePrefix: z.string().optional(),
   })
   .strict();
 
-export const GoogleChatConfigSchema = GoogleChatAccountSchema.extend({
-  accounts: z.record(z.string(), GoogleChatAccountSchema.optional()).optional(),
+export const GoogleChatConfigSchema = GoogleChatAccountSchemaBase.extend({
+  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  accounts: z.record(z.string(), GoogleChatAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
+}).superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.googlechat.dmPolicy="open" requires channels.googlechat.allowFrom to include "*"',
+  });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.googlechat.dmPolicy="allowlist" requires channels.googlechat.allowFrom to contain at least one sender ID',
+  });
+  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+    if (!account) {
+      continue;
+    }
+    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
+    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
+    requireOpenAllowFrom({
+      policy: effectivePolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.googlechat.accounts.*.dmPolicy="open" requires channels.googlechat.accounts.*.allowFrom (or channels.googlechat.allowFrom) to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: effectivePolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.googlechat.accounts.*.dmPolicy="allowlist" requires channels.googlechat.accounts.*.allowFrom (or channels.googlechat.allowFrom) to contain at least one sender ID',
+    });
+  }
 });

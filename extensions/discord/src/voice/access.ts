@@ -103,9 +103,7 @@ export async function authorizeDiscordVoiceIngress(params: {
   });
 
   const admissionAllowList = normalizeDiscordAllowList(
-    params.admissionAllowFrom ??
-      params.discordConfig.allowFrom ??
-      params.discordConfig.dm?.allowFrom,
+    params.admissionAllowFrom ?? params.discordConfig.allowFrom ?? params.discordConfig.allowFrom,
     ["discord:", "user:", "pk:"],
   );
   const admissionAllowed = admissionAllowList

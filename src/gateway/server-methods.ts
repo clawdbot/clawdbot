@@ -69,6 +69,10 @@ const loadAuditHandlers = lazyHandlerModule(
   () => import("./server-methods/audit.js"),
   (module) => module.auditHandlers,
 );
+const loadUsersHandlers = lazyHandlerModule(
+  () => import("./server-methods/users.js"),
+  (module) => module.usersHandlers,
+);
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
   (module) => module.attachHandlers,
@@ -574,6 +578,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.steer",
       "talk.session.close",
       "talk.client.create",
+      "talk.client.transcript",
+      "talk.client.close",
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.catalog",
@@ -586,6 +592,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["audit.list", "audit.activity.list"],
     loadHandlers: loadAuditHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "users.list",
+      "users.self",
+      "users.linkEmail",
+      "users.setDisplayName",
+      "users.setAvatar",
+    ],
+    loadHandlers: loadUsersHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],

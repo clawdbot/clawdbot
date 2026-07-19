@@ -1210,6 +1210,70 @@
       ]
     },
     {
+      "locale": "id",
+      "source": "Collapsed",
+      "translations": [
+        "Ciut",
+        "Diciutkan"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Collapsed",
+      "translations": [
+        "折りたたみ",
+        "折りたたみ済み"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Collapsed",
+      "translations": [
+        "접힘",
+        "축소됨"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Collapsed",
+      "translations": [
+        "Ihopfälld",
+        "Komprimerad"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Collapsed",
+      "translations": [
+        "ยุบอยู่",
+        "ยุบแล้ว"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Collapsed",
+      "translations": [
+        "Daraltıldı",
+        "Daraltılmış"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Collapsed",
+      "translations": [
+        "Thu gọn",
+        "Đã thu gọn"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Collapsed",
+      "translations": [
+        "已折叠",
+        "已收起"
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "Command",
       "translations": [
@@ -1537,6 +1601,22 @@
       "translations": [
         "正在連線",
         "連線中"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Connecting...",
+      "translations": [
+        "Connessione in corso...",
+        "Connessione..."
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Connecting...",
+      "translations": [
+        "Verbinden...",
+        "Verbinding maken..."
       ]
     },
     {
@@ -3259,39 +3339,23 @@
       "source": "Gateway connected",
       "translations": [
         "Gateway متصل",
-        "تم اتصال Gateway"
+        "تم الاتصال بـ Gateway"
       ]
     },
     {
-      "locale": "fa",
+      "locale": "tr",
       "source": "Gateway connected",
       "translations": [
-        "Gateway متصل است",
-        "Gateway متصل شد"
+        "Gateway bağlandı",
+        "Gateway bağlı"
       ]
     },
     {
-      "locale": "ja-JP",
+      "locale": "vi",
       "source": "Gateway connected",
       "translations": [
-        "Gateway に接続しました",
-        "Gatewayに接続済み"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway połączony",
-        "Połączono z Gateway"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway подключен",
-        "Gateway подключён"
+        "Gateway đã kết nối",
+        "Đã kết nối Gateway"
       ]
     },
     {
@@ -8614,6 +8678,14 @@
       "translations": [
         "Стан",
         "Статус"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Stop",
+      "translations": [
+        "Berhenti",
+        "Hentikan"
       ]
     },
     {

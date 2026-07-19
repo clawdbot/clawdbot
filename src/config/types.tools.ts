@@ -45,12 +45,6 @@ export type MediaUnderstandingAttachmentsConfig = {
 type MediaProviderRequestConfig = {
   /** Optional provider-specific query params (merged into requests). */
   providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
   /** Optional base URL override for provider requests. */
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
@@ -152,13 +146,6 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
-  asyncCompletion?: {
-    /**
-     * Deprecated compatibility flag. Async media generation completions stay
-     * requester-session mediated so source delivery policy remains agent-owned.
-     */
-    directSend?: boolean;
-  };
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
@@ -776,11 +763,6 @@ export type ToolsConfig = {
 };
 
 export type MessageToolsConfig = {
-  /**
-   * @deprecated Use tools.message.crossContext settings.
-   * Allows cross-context sends across providers.
-   */
-  allowCrossContextSend?: boolean;
   crossContext?: {
     /** Allow sends to other channels within the same provider (default: true). */
     allowWithinProvider?: boolean;

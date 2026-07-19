@@ -211,11 +211,8 @@ describe("slack config schema", () => {
     );
   });
 
-  it('accepts legacy dm.policy="open" with top-level allowFrom alias', () => {
-    expectSlackConfigValid({
-      dm: { policy: "open", allowFrom: ["U123"] },
-      allowFrom: ["*"],
-    });
+  it("rejects legacy nested DM access keys", () => {
+    expectSlackConfigIssue({ dm: { policy: "open", allowFrom: ["U123"] } }, "dm");
   });
 
   it("accepts user token config fields", () => {

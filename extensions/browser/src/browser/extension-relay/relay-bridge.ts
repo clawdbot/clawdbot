@@ -8,10 +8,16 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import {
   type ExtensionToRelayMessage,
+  PAGE_SHARE_MAX_NOTE_CHARS,
+  PAGE_SHARE_MAX_TITLE_CHARS,
+  PAGE_SHARE_MAX_URL_CHARS,
+  type PageSharePayload,
   parseExtensionMessage,
   type RelayCommandBody,
+  type RelayPageShareResultMessage,
   type RelayTabInfo,
   type RelayToExtensionMessage,
 } from "./relay-protocol.js";
@@ -22,6 +28,7 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 const EXTENSION_COMMAND_TIMEOUT_MS = 15_000;
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
+const PAGE_SHARE_MAX_BODY_CHARS = 300_000;
 
 /** Synthetic targetId for the emulated browser target. */
 const BROWSER_TARGET_ID = "openclaw-extension-relay";
@@ -103,9 +110,16 @@ export class ExtensionRelayBridge {
   private nextSessionOrdinal = 1;
   private pingTimer: NodeJS.Timeout | null = null;
   private readonly onStateChange?: () => void;
+  private readonly onPageShare?: (payload: PageSharePayload) => Promise<void>;
 
-  constructor(opts: { onStateChange?: () => void } = {}) {
+  constructor(
+    opts: {
+      onStateChange?: () => void;
+      onPageShare?: (payload: PageSharePayload) => Promise<void>;
+    } = {},
+  ) {
     this.onStateChange = opts.onStateChange;
+    this.onPageShare = opts.onPageShare;
   }
 
   /** True once an extension socket completed its hello handshake. */
@@ -209,6 +223,10 @@ export class ExtensionRelayBridge {
         this.syncTabs(msg.tabs);
         return;
       }
+      case "pageShare": {
+        void this.handlePageShare(msg.requestId, msg.payload);
+        return;
+      }
       case "detached": {
         const tab = this.tabs.get(msg.tabId);
         if (tab?.attached) {
@@ -220,6 +238,54 @@ export class ExtensionRelayBridge {
       case "pong":
       case "hello":
         break;
+    }
+  }
+
+  private async handlePageShare(requestId: number, payload: PageSharePayload): Promise<void> {
+    const validRequestId = Number.isSafeInteger(requestId) && requestId >= 0;
+    const validPayload =
+      payload !== null &&
+      typeof payload === "object" &&
+      typeof payload.url === "string" &&
+      payload.url.length <= PAGE_SHARE_MAX_URL_CHARS &&
+      typeof payload.title === "string" &&
+      payload.title.length <= PAGE_SHARE_MAX_TITLE_CHARS &&
+      typeof payload.content === "string" &&
+      (payload.selection === undefined || typeof payload.selection === "string") &&
+      (payload.note === undefined ||
+        (typeof payload.note === "string" && payload.note.length <= PAGE_SHARE_MAX_NOTE_CHARS)) &&
+      payload.content.length + (payload.selection?.length ?? 0) <= PAGE_SHARE_MAX_BODY_CHARS;
+
+    if (!validRequestId || !validPayload) {
+      this.sendPageShareResult({
+        requestId: validRequestId ? requestId : 0,
+        ok: false,
+        error: "Invalid page-share payload.",
+      });
+      return;
+    }
+    if (!this.onPageShare) {
+      this.sendPageShareResult({ requestId, ok: false, error: PAGE_SHARE_GATEWAY_REQUIRED_ERROR });
+      return;
+    }
+
+    try {
+      await this.onPageShare(payload);
+      this.sendPageShareResult({ requestId, ok: true });
+    } catch (err) {
+      this.sendPageShareResult({
+        requestId,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private sendPageShareResult(result: Omit<RelayPageShareResultMessage, "type">): void {
+    try {
+      this.sendToExtension({ type: "pageShareResult", ...result });
+    } catch (err) {
+      log.warn(`failed to send page-share result: ${String(err)}`);
     }
   }
 

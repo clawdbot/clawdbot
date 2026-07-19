@@ -470,7 +470,7 @@ describe("worker turn launcher", () => {
     },
   );
 
-  it("launches the active worker with projected history and releases its claim", async () => {
+  it("reports keep-local workspace conflicts and releases its claim", async () => {
     const initialized = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {
       timeoutMs: 10_000,
     });
@@ -572,6 +572,12 @@ describe("worker turn launcher", () => {
           changed: false,
           verifyStable: async () => {},
           verifyLocalStable: async () => {},
+          getAppliedWorkspaceResult: () => ({
+            manifestRef: MANIFEST_REF,
+            manifest: { version: 1 as const, baseCommit: null, entries: [] },
+            conflictPaths: ["src/local.ts"],
+            verifyLocalStable: async () => {},
+          }),
         };
       }),
       stop: vi.fn(async () => {}),
@@ -586,6 +592,9 @@ describe("worker turn launcher", () => {
     };
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const onAgentEvent = vi.fn(() => {
+      throw new Error("supplemental event failed");
+    });
 
     const result = await provider.executeTurn(
       {
@@ -594,13 +603,36 @@ describe("worker turn launcher", () => {
         agentId: "main",
         runId: "run-worker-turn",
       },
-      { ...turn(), transcriptPrompt: "Canonical transcript request" },
+      { ...turn(), transcriptPrompt: "Canonical transcript request", onAgentEvent },
       runLocal,
     );
 
     expect(runLocal).not.toHaveBeenCalled();
-    expect(result.payloads).toEqual([{ text: "Worker reply" }]);
+    const conflictSummary =
+      "Cloud result applied with 1 conflict(s); kept local versions: src/local.ts. Cloud versions staged at refs/openclaw/worker-results/";
+    expect(result.payloads).toEqual([
+      { text: expect.stringContaining(`Worker reply\n\n${conflictSummary}`) },
+    ]);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    expect(placements.get(SESSION_ID)?.workspaceResultConflict).toMatchObject({
+      paths: ["src/local.ts"],
+      stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\//u),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "assistant",
+      data: {
+        text: expect.stringContaining(conflictSummary),
+        delta: expect.stringContaining(conflictSummary),
+      },
+    });
+    expect(
+      SessionManager.open(sessionFile)
+        .getBranch()
+        .some(
+          (entry) =>
+            entry.type === "custom_message" && entry.customType === "cloud-workspace-conflict",
+        ),
+    ).toBe(true);
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.initialMessages).toEqual([
@@ -1260,6 +1292,151 @@ describe("worker turn launcher", () => {
     expect(hasLoneSurrogate(placement?.recoveryError ?? "")).toBe(false);
     expect(stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
     expect(destroy).toHaveBeenCalledWith(ENVIRONMENT_ID);
+  });
+
+  it("waits before returning an actionable pending-result claim error", async () => {
+    seedActivePlacement();
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const priorClaim = placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      claimId: "prior-result-claim",
+      runId: "prior-result-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placements.markWorkspaceResultPending(priorClaim);
+    const waitForRelease = vi
+      .spyOn(placements, "waitForTurnClaimRelease")
+      .mockRejectedValue(new Error("timed out"));
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: priorClaim.runId,
+        },
+        turn(priorClaim.runId),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow("already has an active turn claim");
+    expect(waitForRelease).not.toHaveBeenCalled();
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "next-run",
+        },
+        turn("next-run"),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow(
+      "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.",
+    );
+    expect(waitForRelease).toHaveBeenCalledWith(SESSION_ID, { timeoutMs: 15_000 });
+  });
+
+  it("retries admission when a collided claim releases before inspection", async () => {
+    seedActivePlacement();
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const priorClaim = placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      claimId: "released-before-inspection",
+      runId: "prior-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    vi.spyOn(placements, "listPendingWorkspaceResults").mockImplementationOnce(() => {
+      placements.releaseTurn(priorClaim);
+      return [];
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "next-run",
+        },
+        turn("next-run"),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow("Active worker placement does not match its attached environment");
+  });
+
+  it("does not claim a stale worker after pending-result recovery reclaims it", async () => {
+    seedActivePlacement();
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const priorClaim = placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      claimId: "reclaimed-result-claim",
+      runId: "reclaimed-result-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placements.markWorkspaceResultPending(priorClaim);
+    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementationOnce(async () => {
+      placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
+      placements.acceptWorkspaceResult(priorClaim);
+      placements.completeWorkspaceResultAndReleaseTurn(priorClaim, { reclaim: true });
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "next-after-reclaim",
+        },
+        turn("next-after-reclaim"),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow(
+      "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.",
+    );
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
   });
 
   it("launches only one worker loop for concurrent admission of the same run", async () => {

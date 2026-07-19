@@ -176,7 +176,7 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("accepts deprecated dm peer kind for backward compatibility", () => {
+  it("accepts the canonical direct peer kind", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
@@ -185,7 +185,7 @@ describe("ACP binding cutover schema", () => {
           match: {
             channel: "plugin-chat",
             accountId: "default",
-            peer: { kind: "dm", id: "legacy-peer" },
+            peer: { kind: "direct", id: "peer" },
           },
         },
       ],

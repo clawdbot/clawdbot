@@ -47,7 +47,6 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatModelFooter,
-  formatRemoteConnectionHostFooter,
   sanitizeRenderableText,
   formatTokens,
 } from "./tui-formatters.js";
@@ -220,16 +219,6 @@ export function resolveTuiSessionKey(params: {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
-}
-
-export function resolveTuiFooterHostLabel(params: {
-  config: OpenClawConfig;
-  connectionUrl: string;
-}): string | null {
-  if (params.config.tui?.footer?.showRemoteHost !== true) {
-    return null;
-  }
-  return formatRemoteConnectionHostFooter(params.connectionUrl);
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -1300,9 +1289,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
-    const hostLabel = resolveTuiFooterHostLabel({ config, connectionUrl: client.connection.url });
     const footerParts = [
-      hostLabel,
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
