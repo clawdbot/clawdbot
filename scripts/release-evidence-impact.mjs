@@ -15,7 +15,9 @@ function matchesAny(path, patterns) {
 }
 
 export function classifyReleaseEvidenceImpact(paths) {
-  const changedPaths = [...new Set(paths.filter(Boolean))].toSorted();
+  const changedPaths = [...new Set(paths.filter(Boolean))].toSorted((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
   if (changedPaths.length === 1 && changedPaths[0] === "CHANGELOG.md") {
     return {
       schemaVersion: 1,
