@@ -185,7 +185,7 @@ export const NodePendingDrainParamsSchema = closedObject({
 });
 
 /** One queued node-work item returned by pending-work drain calls. */
-export const NodePendingDrainItemSchema = closedObject({
+const NodePendingDrainItemSchema = closedObject({
   id: NonEmptyString,
   type: NodePendingWorkTypeSchema,
   priority: Type.String({ enum: ["default", "normal", "high"] }),

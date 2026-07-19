@@ -74,7 +74,7 @@ export const UpdateRunParamsSchema = closedObject({
 });
 
 /** UI metadata attached to config schema paths. */
-export const ConfigUiHintSchema = closedObject({
+const ConfigUiHintSchema = closedObject({
   label: Type.Optional(Type.String()),
   help: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
@@ -95,7 +95,7 @@ export const ConfigSchemaResponseSchema = closedObject({
 });
 
 /** Child entry returned when looking up a config schema path. */
-export const ConfigSchemaLookupChildSchema = closedObject({
+const ConfigSchemaLookupChildSchema = closedObject({
   key: NonEmptyString,
   path: NonEmptyString,
   type: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())])),

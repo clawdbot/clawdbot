@@ -768,8 +768,11 @@ describe("worker inference provider runtime", () => {
 
   it("preserves adaptive provider policy while lowering the core stream effort", async () => {
     const runtime = setup();
-    const inferenceRequest = request();
-    inferenceRequest.options.reasoning = "adaptive";
+    const baseRequest = request();
+    const inferenceRequest = {
+      ...baseRequest,
+      options: { ...baseRequest.options, reasoning: "adaptive" as const },
+    };
 
     expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
       type: "done",

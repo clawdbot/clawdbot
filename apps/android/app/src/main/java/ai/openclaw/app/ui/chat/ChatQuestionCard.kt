@@ -138,7 +138,7 @@ private fun QuestionSection(
     )
     Text(text = question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
     question.options.forEach { option ->
-      val selected = option.label in draft.selectedOptions[question.id].orEmpty()
+      val selected = option.label in draft.selectedOptions[question.questionId].orEmpty()
       Surface(
         onClick = { onDraftChanged(draft.toggle(question, option.label)) },
         enabled = enabled,
@@ -166,7 +166,7 @@ private fun QuestionSection(
     }
     if (question.options.isEmpty() || question.isOther == true) {
       OutlinedTextField(
-        value = draft.otherText[question.id].orEmpty(),
+        value = draft.otherText[question.questionId].orEmpty(),
         onValueChange = { onDraftChanged(draft.setOther(question, it)) },
         modifier = Modifier.fillMaxWidth(),
         enabled = enabled,
@@ -229,7 +229,7 @@ internal fun terminalQuestionAnswer(
   if (status == ChatQuestionStatus.Cancelled) return nativeString("Skipped")
   if (status == ChatQuestionStatus.Expired) return nativeString("Expired")
   if (status == ChatQuestionStatus.Unavailable) return nativeString("Unavailable")
-  prompt.record.answers?.answers?.get(question.id)?.answers?.takeIf { it.isNotEmpty() }?.let {
+  prompt.record.answers?.answers?.get(question.questionId)?.takeIf { it.isNotEmpty() }?.let {
     return it.joinToString(", ")
   }
   return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")

@@ -126,9 +126,7 @@ export async function listPairedNode(params: {
         ...page,
         sessions: page.sessions.map((session) => {
           const adopted = params.adoptedSessions.get(adoptedSourceKey(hostId, session.threadId));
-          return adopted
-            ? Object.assign({}, session, { openClawSessionKey: adopted.key })
-            : session;
+          return adopted ? Object.assign({}, session, { sessionKey: adopted.key }) : session;
         }),
       };
     })

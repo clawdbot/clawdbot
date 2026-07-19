@@ -228,4 +228,23 @@ describe("findSettingsSearchBlocks", () => {
       }),
     ).toEqual([]);
   });
+
+  it("only exposes the identity block when the connection has an identity", () => {
+    const search = (identityAvailable: boolean) =>
+      findSettingsSearchBlocks({
+        query: "avatar",
+        schema: null,
+        value: null,
+        uiHints: {},
+        identityAvailable,
+      });
+
+    expect(search(false)).toEqual([]);
+    expect(search(true)).toEqual([
+      expect.objectContaining({
+        routeId: "profile",
+        hash: "#settings-profile-identity",
+      }),
+    ]);
+  });
 });

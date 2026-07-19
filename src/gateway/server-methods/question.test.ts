@@ -41,8 +41,8 @@ async function call(method: string, params: Record<string, unknown>) {
 const requestParams = {
   questions: [
     {
-      id: "destination",
-      header: "Longer than twelve",
+      questionId: "destination",
+      header: "Destination",
       question: "Where next?",
       options: [],
       multiSelect: false,
@@ -56,7 +56,7 @@ const requestParams = {
 };
 
 describe("question gateway methods", () => {
-  it("requests normalized questions, then gets and lists them", async () => {
+  it("requests questions, then gets and lists them", async () => {
     const requested = await call("question.request", {
       ...requestParams,
       id: "client-question-id",
@@ -68,7 +68,7 @@ describe("question gateway methods", () => {
       "question.requested",
       expect.objectContaining({
         id,
-        questions: [expect.objectContaining({ header: "Longer than " })],
+        questions: [expect.objectContaining({ header: "Destination" })],
         status: "pending",
       }),
     );
@@ -88,7 +88,7 @@ describe("question gateway methods", () => {
   it("broadcasts answered and expired terminal states", async () => {
     const requested = await call("question.request", requestParams);
     const id = (requested[1] as { id: string }).id;
-    const answers = { answers: { destination: { answers: ["Home"] } } };
+    const answers = { answers: { destination: ["Home"] } };
 
     expect(await call("question.resolve", { id, answers, resolvedBy: "control-ui" })).toEqual([
       true,
@@ -173,7 +173,7 @@ describe("question gateway methods", () => {
 
     const resolved = await call("question.resolve", {
       id,
-      answers: { answers: { destination: { answers: ["Somewhere else"] } } },
+      answers: { answers: { destination: ["Somewhere else"] } },
     });
 
     expect(resolved[0]).toBe(false);

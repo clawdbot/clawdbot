@@ -1940,10 +1940,18 @@ html.openclaw-native-macos
   margin-left: 1px;
 }
 
-.viewer-facepile--footer .viewer-avatar {
+.viewer-avatar--footer,
+.viewer-facepile--footer .viewer-avatar--overflow {
   width: 20px;
   height: 20px;
   font-size: 8px;
+}
+
+.viewer-avatar--profile {
+  width: 40px;
+  height: 40px;
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-recent-session__name {
@@ -2923,6 +2931,36 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-footer-bar .viewer-facepile {
   margin-left: 1px;
+}
+
+.sidebar-footer-bar__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 132px;
+  padding: 2px 5px 2px 2px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-footer-bar__identity:hover,
+.sidebar-footer-bar__identity:focus-visible {
+  background: var(--bg-hover);
+}
+
+.sidebar-footer-bar__identity-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 550;
 }
 
 .sidebar-footer-bar .sidebar-footer-build {

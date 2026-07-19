@@ -264,7 +264,7 @@ describe("AppSidebar session catalog pagination", () => {
                 name: "Claude session",
                 status: "stored",
                 archived: false,
-                openClawSessionKey: backingSessionKey,
+                sessionKey: backingSessionKey,
                 canContinue: true,
                 canArchive: false,
               },

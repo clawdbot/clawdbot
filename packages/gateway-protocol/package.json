@@ -5,6 +5,7 @@
   "files": [
     "dist"
   ],
+  "sideEffects": false,
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",

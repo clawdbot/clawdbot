@@ -1778,7 +1778,7 @@
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
     "prompt:snapshots:gen": "node --import tsx scripts/generate-prompt-snapshots.ts --write",
     "prompt:snapshots:sync-codex-model": "node --import tsx scripts/sync-codex-model-prompt-fixture.ts",
-    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && pnpm protocol:gen:kotlin && git diff --exit-code -- dist/protocol.schema.json apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
+    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && pnpm protocol:gen:kotlin && node scripts/check-protocol-since.mjs && git diff --exit-code -- dist/protocol.schema.json apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
     "protocol:check:kotlin": "pnpm protocol:gen:kotlin && git diff --exit-code -- apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:kotlin": "node --import tsx scripts/protocol-gen-kotlin.ts",

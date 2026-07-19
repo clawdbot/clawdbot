@@ -1449,7 +1449,7 @@ function toGenericClaudeHost(
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
-        ...(continuable && existingSessionKey ? { openClawSessionKey: existingSessionKey } : {}),
+        ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
         canContinue: continuable,
         canArchive: false,
         canOpenTerminal: terminal.canOpenTerminal,

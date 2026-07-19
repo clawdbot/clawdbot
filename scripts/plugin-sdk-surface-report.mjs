@@ -291,7 +291,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: config-backed main-session resolver for Gateway-hosted plugin services.
       // +9: outbound echo identity type and record/query helpers across
       // channel-outbound and its two compatibility barrels.
-      8206,
+      // Net +1: public session catalog locator types after the protocol cleanup harvest.
+      8207,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

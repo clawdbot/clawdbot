@@ -177,6 +177,21 @@ describe("session catalog Gateway methods", () => {
     }
   });
 
+  it("rejects host cursors without a catalog selector", async () => {
+    const respond = await call("sessions.catalog.list", {
+      cursors: { "gateway:local": "next" },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "catalogId is required when cursors are provided",
+      }),
+    );
+  });
+
   it("normalizes search once before dispatching every provider", async () => {
     const alphaList = vi.fn(async () => []);
     const zetaList = vi.fn(async () => []);

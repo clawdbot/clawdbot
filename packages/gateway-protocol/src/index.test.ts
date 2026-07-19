@@ -8,37 +8,29 @@ import {
   validateChatHistoryParams,
   validateChatMetadataParams,
   validateChatSendParams,
-  validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
   validateModelsProbeParams,
-  validateNodeEventResult,
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
-  validateNodePresenceAlivePayload,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
-  validateTalkCatalogResult,
   validateTalkConfigResult,
-  validateTalkEvent,
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
-  validateTalkAgentControlResult,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
   validateTalkSessionCancelTurnParams,
   validateTalkSessionCreateParams,
   validateTalkSessionJoinParams,
-  validateTalkSessionJoinResult,
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionSteerParams,
   validateTalkSessionTurnParams,
-  validateTalkSessionTurnResult,
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
@@ -472,32 +464,6 @@ describe("validateTalkConfigResult", () => {
   });
 });
 
-describe("validateTalkCatalogResult", () => {
-  it("accepts provider registry aliases", () => {
-    expect(
-      validateTalkCatalogResult({
-        modes: ["realtime"],
-        transports: ["gateway-relay"],
-        brains: ["agent-consult"],
-        speech: { providers: [] },
-        transcription: { providers: [] },
-        realtime: {
-          ready: true,
-          activeProvider: "google",
-          providers: [
-            {
-              id: "google",
-              aliases: ["gemini-live"],
-              label: "Google Live Voice",
-              configured: true,
-            },
-          ],
-        },
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("validateTalkClientCreateParams", () => {
   it("accepts provider, model, voice, mode, transport, and brain overrides", () => {
     expect(
@@ -536,80 +502,6 @@ describe("validateTalkClientCreateParams", () => {
   });
 });
 
-describe("validateTalkEvent", () => {
-  it("pins the common Talk event envelope used by relay and surface adapters", () => {
-    expect(
-      validateTalkEvent({
-        id: "talk-session:1",
-        type: "capture.started",
-        sessionId: "talk-session",
-        turnId: "turn-1",
-        captureId: "capture-1",
-        seq: 1,
-        timestamp: "2026-05-05T12:00:00.000Z",
-        mode: "stt-tts",
-        transport: "managed-room",
-        brain: "agent-consult",
-        provider: "openai",
-        final: false,
-        callId: "call-1",
-        itemId: "item-1",
-        parentId: "parent-1",
-        payload: { source: "ptt" },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects stale or vendor-shaped event payloads without required correlation", () => {
-    expect(
-      validateTalkEvent({
-        type: "output.audio.delta",
-        sessionId: "talk-session",
-        seq: 0,
-        timestamp: "2026-05-05T12:00:00.000Z",
-        mode: "realtime-duplex",
-        transport: "webrtc-sdp",
-        brain: "agent-consult",
-        payload: { byteLength: 12 },
-      }),
-    ).toBe(false);
-    expect(formatValidationErrors(validateTalkEvent.errors)).toContain("must have required");
-  });
-
-  it("requires turnId and captureId for scoped Talk events", () => {
-    expect(
-      validateTalkEvent({
-        id: "talk-session:1",
-        type: "turn.started",
-        sessionId: "talk-session",
-        seq: 1,
-        timestamp: "2026-05-05T12:00:00.000Z",
-        mode: "stt-tts",
-        transport: "managed-room",
-        brain: "agent-consult",
-        payload: {},
-      }),
-    ).toBe(false);
-    expect(formatValidationErrors(validateTalkEvent.errors)).toContain("must have required");
-
-    expect(
-      validateTalkEvent({
-        id: "talk-session:2",
-        type: "capture.started",
-        sessionId: "talk-session",
-        turnId: "turn-1",
-        seq: 2,
-        timestamp: "2026-05-05T12:00:01.000Z",
-        mode: "stt-tts",
-        transport: "managed-room",
-        brain: "agent-consult",
-        payload: {},
-      }),
-    ).toBe(false);
-    expect(formatValidationErrors(validateTalkEvent.errors)).toContain("must have required");
-  });
-});
-
 describe("validateTalkSession", () => {
   it("accepts session-scoped provider, model, and voice selection", () => {
     expect(
@@ -623,38 +515,6 @@ describe("validateTalkSession", () => {
         mode: "realtime",
         transport: "managed-room",
         brain: "agent-consult",
-      }),
-    ).toBe(true);
-    expect(
-      validateTalkSessionJoinResult({
-        id: "session-1",
-        roomId: "talk_room-1",
-        roomUrl: "/talk/rooms/talk_handoff-1",
-        sessionKey: "agent:main:main",
-        provider: "openai",
-        model: "gpt-realtime-2",
-        voice: "alloy",
-        mode: "realtime",
-        transport: "managed-room",
-        brain: "agent-consult",
-        createdAt: 1,
-        expiresAt: 2,
-        room: {
-          activeClientId: "conn-1",
-          recentTalkEvents: [
-            {
-              id: "talk_handoff-1:1",
-              type: "session.ready",
-              sessionId: "talk_handoff-1",
-              seq: 1,
-              timestamp: "2026-05-05T12:00:00.000Z",
-              mode: "realtime",
-              transport: "managed-room",
-              brain: "agent-consult",
-              payload: {},
-            },
-          ],
-        },
       }),
     ).toBe(true);
   });
@@ -672,7 +532,7 @@ describe("validateTalkSession", () => {
     expect(validateTalkSessionCreateParams({ mode: "realtime", language: "de-DE" })).toBe(false);
   });
 
-  it("accepts managed-room join, turn lifecycle params, and results", () => {
+  it("accepts managed-room join and turn lifecycle params", () => {
     expect(
       validateTalkSessionJoinParams({
         sessionId: "session-1",
@@ -690,26 +550,6 @@ describe("validateTalkSession", () => {
         sessionId: "session-1",
         turnId: "turn-1",
         reason: "barge-in",
-      }),
-    ).toBe(true);
-    expect(
-      validateTalkSessionTurnResult({
-        ok: true,
-        turnId: "turn-1",
-        events: [
-          {
-            id: "talk_handoff-1:2",
-            type: "turn.started",
-            sessionId: "talk_handoff-1",
-            turnId: "turn-1",
-            seq: 2,
-            timestamp: "2026-05-05T12:00:00.000Z",
-            mode: "realtime",
-            transport: "managed-room",
-            brain: "agent-consult",
-            payload: {},
-          },
-        ],
       }),
     ).toBe(true);
   });
@@ -730,7 +570,7 @@ describe("validateTalkClientToolCallParams", () => {
 });
 
 describe("validateTalkAgentControlParams", () => {
-  it("accepts client and session steering params plus structured outcomes", () => {
+  it("accepts client and session steering params", () => {
     expect(
       validateTalkClientSteerParams({
         sessionKey: "agent:main:main",
@@ -744,24 +584,6 @@ describe("validateTalkAgentControlParams", () => {
         sessionKey: "agent:main:main",
         text: "status",
         mode: "status",
-      }),
-    ).toBe(true);
-    expect(
-      validateTalkAgentControlResult({
-        ok: true,
-        mode: "cancel",
-        sessionKey: "agent:main:main",
-        sessionId: "session-1",
-        active: true,
-        aborted: true,
-        message: "Cancelled the active OpenClaw run.",
-        speak: true,
-        show: true,
-        suppress: false,
-        providerResult: {
-          status: "cancelled",
-          message: "Cancelled the active OpenClaw run.",
-        },
       }),
     ).toBe(true);
   });
@@ -860,91 +682,6 @@ describe("validateWakeParams", () => {
   });
 });
 
-describe("validateChatEvent", () => {
-  it("accepts an explicitly yielded final turn", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-yielded",
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "final",
-        stopReason: "end_turn",
-        yielded: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts v4 chat delta text and replacement markers", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "delta",
-        deltaText: "hello",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
-      }),
-    ).toBe(true);
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "agent:main:main",
-        seq: 2,
-        state: "delta",
-        deltaText: "replacement",
-        replace: true,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "replacement" }],
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts selected-agent chat events", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "global",
-        agentId: "work",
-        seq: 1,
-        state: "delta",
-        deltaText: "hello",
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts an argument-free diagnostic on aborted chat events", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "agent:main:main",
-        seq: 2,
-        state: "aborted",
-        errorMessage: "edit tool validation failed: path: must be string",
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects v3-style chat deltas without deltaText", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "delta",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("validateChatSendParams", () => {
   it("accepts one-turn fast:auto cutoff seconds", () => {
     const base = {
@@ -1027,33 +764,6 @@ describe("validateTasksListParams", () => {
   });
 });
 
-describe("validateNodePresenceAlivePayload", () => {
-  it("accepts a closed trigger and known metadata fields", () => {
-    expect(
-      validateNodePresenceAlivePayload({
-        trigger: "silent_push",
-        sentAtMs: 123,
-        displayName: "Peter's iPhone",
-        version: "2026.4.28",
-        platform: "iOS 18.4.0",
-        deviceFamily: "iPhone",
-        modelIdentifier: "iPhone17,1",
-        pushTransport: "relay",
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects unknown triggers and extra fields", () => {
-    expect(validateNodePresenceAlivePayload({ trigger: "push", sentAtMs: 123 })).toBe(false);
-    expect(
-      validateNodePresenceAlivePayload({
-        trigger: "silent_push",
-        arbitrary: true,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("validateNodePresenceActivityPayload", () => {
   it("accepts bounded input idle time", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: 12 })).toBe(true);
@@ -1066,18 +776,5 @@ describe("validateNodePresenceActivityPayload", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
-  });
-});
-
-describe("validateNodeEventResult", () => {
-  it("accepts structured handled results", () => {
-    expect(
-      validateNodeEventResult({
-        ok: true,
-        event: "node.presence.alive",
-        handled: true,
-        reason: "persisted",
-      }),
-    ).toBe(true);
   });
 });

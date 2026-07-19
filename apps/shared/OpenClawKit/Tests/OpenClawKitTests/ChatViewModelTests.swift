@@ -1325,7 +1325,7 @@ private func chatQuestionRecord(
         id: id,
         questions: [
             Question(
-                id: "choice",
+                questionid: "choice",
                 header: "Choice",
                 question: "Choose",
                 options: [QuestionOption(label: "One"), QuestionOption(label: "Two")]),
@@ -1494,7 +1494,7 @@ struct ChatViewModelTests {
 
     @Test @MainActor func `missing pending question uses question get fallback`() async {
         let answers = QuestionAnswers(answers: [
-            "choice": AnyCodable(["answers": ["Two"]]),
+            "choice": AnyCodable(["Two"]),
         ])
         let transport = TestChatTransport(
             historyResponses: [],

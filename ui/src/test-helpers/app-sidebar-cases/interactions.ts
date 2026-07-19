@@ -619,7 +619,7 @@ describe("AppSidebar catalog session rows", () => {
           {
             threadId: "thread-1",
             name: "Release checklist",
-            openClawSessionKey: "agent:main:adopted-codex",
+            sessionKey: "agent:main:adopted-codex",
           },
         ]),
         ["agent:main:main", "agent:main:adopted-codex"],

@@ -86,18 +86,16 @@ const GENERAL_SETTINGS_BLOCKS = {
   },
   personal: {
     routeId: "profile",
-    labelKey: "quickSettings.personal.title",
+    labelKey: "profilePage.identity.title",
     hash: `#${PROFILE_SETTINGS_TARGET_IDS.identity}`,
     searchKeys: [
-      "quickSettings.personal.user",
-      "quickSettings.personal.assistant",
-      "quickSettings.personal.localIdentity",
-      "quickSettings.personal.assistantIdentity",
-      "quickSettings.personal.avatarText",
-      "quickSettings.personal.chooseImage",
-      "quickSettings.personal.browserOnly",
+      "profilePage.identity.description",
+      "profilePage.identity.avatar",
+      "profilePage.identity.chooseAvatar",
+      "profilePage.identity.displayName",
+      "profilePage.identity.linkedEmails",
     ],
-    aliases: "avatar image",
+    aliases: "profile avatar image email",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
@@ -271,6 +269,7 @@ export function findSettingsSearchBlocks(params: {
   schema: unknown;
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
+  identityAvailable?: boolean;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -278,9 +277,11 @@ export function findSettingsSearchBlocks(params: {
   const criteria = parseConfigSearchQuery(params.query);
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
-      ? STATIC_SETTINGS_BLOCKS.map(resolveStaticSettingsBlock).filter((block) =>
-          settingsSearchTextMatches(block.searchText, criteria.text),
+      ? STATIC_SETTINGS_BLOCKS.filter(
+          (block) => params.identityAvailable || block !== GENERAL_SETTINGS_BLOCKS.personal,
         )
+          .map(resolveStaticSettingsBlock)
+          .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema =
     params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)

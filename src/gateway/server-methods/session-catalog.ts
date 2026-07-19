@@ -168,6 +168,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogListParams;
+    if (request.cursors !== undefined && request.catalogId === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      );
+      return;
+    }
     let selected: SessionCatalogProvider[];
     if (request.catalogId) {
       const provider = providerOrRespond(request.catalogId, respond);
@@ -216,7 +224,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             search,
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
-            ...("cursors" in request ? { cursors: request.cursors } : {}),
+            ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
             ...(onHost ? { onHost } : {}),
           });
           return catalogResult(provider, hosts, undefined, createSession);

@@ -863,12 +863,12 @@ describe("getHealthSnapshot", () => {
     buildTelegramHealthSummaryForTest = (snapshot) => ({
       accountId: snapshot.accountId,
       configured: Boolean(snapshot.configured),
-      probe: { ok: true, token: "summary-secret" },
+      probe: { ok: true, token: "test-token" },
     });
     probeTelegramAccountForTestOverride = async () => ({
       ok: true,
       bot: { username: "runtime_bot" },
-      token: "probe-secret",
+      token: "test-token",
     });
 
     const snap = await getHealthSnapshot({

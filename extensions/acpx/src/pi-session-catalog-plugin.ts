@@ -77,7 +77,7 @@ function isNodeSession(value: unknown): value is SessionCatalogSession {
     isOptionalString(value.modelProvider) &&
     isOptionalString(value.cliVersion) &&
     isOptionalString(value.gitBranch) &&
-    isOptionalString(value.openClawSessionKey) &&
+    isOptionalString(value.sessionKey) &&
     isOptionalNumber(value.createdAt) &&
     isOptionalNumber(value.updatedAt) &&
     isOptionalNumber(value.recencyAt)

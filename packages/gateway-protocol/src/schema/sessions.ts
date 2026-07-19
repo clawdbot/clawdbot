@@ -18,7 +18,7 @@ export { SessionsCreateParamsSchema };
  */
 
 /** Reason a compaction checkpoint was created. */
-export const SessionCompactionCheckpointReasonSchema = Type.Union([
+const SessionCompactionCheckpointReasonSchema = Type.Union([
   Type.Literal("manual"),
   Type.Literal("auto-threshold"),
   Type.Literal("overflow-retry"),
@@ -38,7 +38,7 @@ export const SessionOperationEventSchema = closedObject({
 });
 
 /** Reference to the transcript location before or after compaction. */
-export const SessionCompactionTranscriptReferenceSchema = closedObject({
+const SessionCompactionTranscriptReferenceSchema = closedObject({
   sessionId: NonEmptyString,
   sessionFile: Type.Optional(NonEmptyString),
   leafId: Type.Optional(NonEmptyString),
@@ -649,9 +649,20 @@ export const SessionsUsageParamsSchema = closedObject({
   /** Usage row grouping. `family` rolls up known rotated session ids for a logical key. */
   groupBy: Type.Optional(Type.Union([Type.Literal("instance"), Type.Literal("family")])),
   /** Backward-compatible alias for requesting family grouping. */
-  includeHistorical: Type.Optional(Type.Boolean()),
+  includeHistorical: Type.Optional(
+    Type.Boolean({
+      deprecated: true,
+      description: "Deprecated alias for groupBy: family.",
+    }),
+  ),
   /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
-  utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+  utcOffset: Type.Optional(
+    Type.String({
+      pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$",
+      deprecated: true,
+      description: "Deprecated compatibility fallback; use timeZone.",
+    }),
+  ),
   /** IANA time zone for `specific`; preferred over `utcOffset`, which remains a compatibility fallback. */
   timeZone: Type.Optional(NonEmptyString),
   /** Maximum sessions to return (default 50). */

@@ -14,7 +14,7 @@ private func makeGatewayGenerationSnapshot(version: String) -> HelloOk {
         features: [:],
         snapshot: Snapshot(
             presence: [],
-            health: OpenClawProtocol.AnyCodable([String: OpenClawProtocol.AnyCodable]()),
+            health: [String: OpenClawProtocol.AnyCodable](),
             stateversion: StateVersion(presence: 0, health: 0),
             uptimems: 0,
             configpath: nil,

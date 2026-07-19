@@ -719,6 +719,24 @@ textarea.settings-input {
   font-size: var(--control-ui-text-xs);
 }
 
+/* Identity composes existing row controls; these wrappers only keep the
+   avatar/file action and name/save action aligned as one control cluster. */
+.identity-avatar-control,
+.identity-name-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identity-name-control .settings-input {
+  width: min(260px, 38vw);
+}
+
+.identity-error .settings-row__desc {
+  color: var(--danger);
+}
+
 /* ── Mobile ── */
 
 @media (max-width: 640px) {

@@ -1,5 +1,6 @@
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
+import type { AuthenticatedUser } from "./user-profile.ts";
 
 export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
@@ -15,6 +16,8 @@ export type ApplicationGatewaySnapshot = {
   sessionKey: string;
   lastError: string | null;
   lastErrorCode: string | null;
+  /** Identity projected from this browser connection's own presence entry. */
+  selfUser?: AuthenticatedUser | null;
 };
 
 export type ApplicationGatewayConnection = {
@@ -39,4 +42,5 @@ export type ApplicationGateway = {
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
   subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
+  updateSelfUser?: (patch: Partial<Omit<AuthenticatedUser, "id">>) => void;
 };

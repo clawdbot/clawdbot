@@ -24,7 +24,7 @@ export type CodexSessionCatalogSession = {
   cliVersion?: string;
   gitBranch?: string;
   /** Existing locked OpenClaw chat already mapped to this native source thread. */
-  openClawSessionKey?: string;
+  sessionKey?: string;
   archived: boolean;
 };
 

@@ -60,7 +60,7 @@ describe("ask_user normalization", () => {
 
     expect(normalized.timeoutSeconds).toBe(30);
     expect(normalized.questions[0]).toMatchObject({
-      id: "deploy_target",
+      questionId: "deploy_target",
       header: "Deployment t",
       isOther: true,
     });
@@ -260,7 +260,7 @@ describe("ask_user prompt delivery", () => {
 
 describe("ask_user execution", () => {
   it("returns answered details plus readable answer lines", async () => {
-    const answers = { answers: { deploy_target: { answers: ["Staging (Recommended)"] } } };
+    const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
     const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
         return { id: params.id, expiresAtMs: Date.now() + 30_000 };
@@ -599,7 +599,7 @@ describe("ask_user execution", () => {
     if (!reservation) {
       throw new Error("expected prompt reservation");
     }
-    const answers = { answers: { deploy_target: { answers: ["Production"] } } };
+    const answers = { answers: { deploy_target: ["Production"] } };
     let waitCalls = 0;
     const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
@@ -735,7 +735,7 @@ describe("ask_user execution", () => {
       {},
       {
         id: questionId,
-        answers: { answers: { deploy_target: { answers: ["A custom destination"] } } },
+        answers: { answers: { deploy_target: ["A custom destination"] } },
         resolvedBy: "plain-text",
       },
     );

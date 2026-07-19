@@ -115,7 +115,7 @@ describe("AppSidebar live narration", () => {
       id: "question-narration-priority",
       agentId: "main",
       sessionKey: key,
-      questions: [{ id: "confirm", header: "Confirm", question: "Continue?", options: [] }],
+      questions: [{ questionId: "confirm", header: "Confirm", question: "Continue?", options: [] }],
       createdAtMs: Date.now(),
       expiresAtMs: Date.now() + 60_000,
       status: "pending",

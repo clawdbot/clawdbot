@@ -1290,6 +1290,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       schema: runtimeConfig.configSchema,
       value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
       uiHints: runtimeConfig.configUiHints,
+      identityAvailable: Boolean(gatewaySnapshot.selfUser),
     });
     const onboarding = this.onboardingMode;
     const navDrawerOpen = this.navDrawerOpen && !onboarding;

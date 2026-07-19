@@ -95,12 +95,12 @@ public enum OpenClawChatGatewayRequests {
         id: String,
         answers: [String: [String]]) -> OpenClawChatGatewayRequest
     {
-        let values = answers.mapValues { AnyCodable(["answers": AnyCodable($0)]) }
+        let values = answers.mapValues(AnyCodable.init)
         return OpenClawChatGatewayRequest(
             method: "question.resolve",
             params: [
                 "id": AnyCodable(id),
-                "answers": AnyCodable(["answers": AnyCodable(values)]),
+                "answers": AnyCodable(values),
             ],
             timeoutMs: self.mutationTimeoutMs)
     }

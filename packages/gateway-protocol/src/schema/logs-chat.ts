@@ -86,12 +86,11 @@ export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
 
 /** Opaque, out-of-band plugin bindings carried separately from model input. */
-export const RunToolBindingsSchema = Type.Record(
+const RunToolBindingsSchema = Type.Record(
   Type.String({ minLength: 1, maxLength: 128 }),
   Type.Unknown(),
   { maxProperties: 16 },
 );
-export type RunToolBindings = Static<typeof RunToolBindingsSchema>;
 
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({

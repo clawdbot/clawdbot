@@ -26,7 +26,7 @@ let server: ControlUiE2eServer;
 function questionRecord(
   id: string,
   questions: Array<{
-    id: string;
+    questionId: string;
     header: string;
     question: string;
     options: Array<{ label: string; description?: string }>;
@@ -129,7 +129,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await composer.fill("Keep this release note draft");
     const request = questionRecord("question-deploy-target", [
       {
-        id: "deploy_target",
+        questionId: "deploy_target",
         header: "Deploy",
         question: "Where should I deploy?",
         options: [
@@ -211,7 +211,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       id: request.id,
       answers: {
         answers: {
-          deploy_target: { answers: ["Staging (Recommended)"] },
+          deploy_target: ["Staging (Recommended)"],
         },
       },
     });
@@ -221,7 +221,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       status: "answered",
       answers: {
         answers: {
-          deploy_target: { answers: ["Staging (Recommended)"] },
+          deploy_target: ["Staging (Recommended)"],
         },
       },
     });
@@ -243,7 +243,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     const { gateway, page } = await openQuestionPage();
     const request = questionRecord("question-release-checks", [
       {
-        id: "release_checks",
+        questionId: "release_checks",
         header: "Checks",
         question: "Which release checks should I run?",
         options: [
@@ -275,7 +275,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       id: request.id,
       answers: {
         answers: {
-          release_checks: { answers: ["Tests", "Metrics"] },
+          release_checks: ["Tests", "Metrics"],
         },
       },
     });
@@ -285,7 +285,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     const { gateway, page } = await openQuestionPage();
     const elsewhere = questionRecord("question-external-answer", [
       {
-        id: "approval_path",
+        questionId: "approval_path",
         header: "Approval",
         question: "Who should approve the release?",
         options: [{ label: "Maintainer" }, { label: "Release manager" }],
@@ -293,7 +293,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     ]);
     const expired = questionRecord("question-expired-window", [
       {
-        id: "release_window",
+        questionId: "release_window",
         header: "Window",
         question: "When should the release start?",
         options: [{ label: "Now" }, { label: "Tomorrow" }],
@@ -304,7 +304,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await gateway.emitGatewayEvent("question.resolved", {
       id: elsewhere.id,
       status: "answered",
-      answers: { answers: { approval_path: { answers: ["Release manager"] } } },
+      answers: { answers: { approval_path: ["Release manager"] } },
     });
     await emitRequested(gateway, expired);
     await gateway.emitGatewayEvent("question.resolved", {
@@ -314,14 +314,14 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
 
     const stepper = questionRecord("question-release-plan", [
       {
-        id: "channel",
+        questionId: "channel",
         header: "Channel",
         question: "Which release channel should I use?",
         options: [{ label: "Beta" }, { label: "Stable" }],
         isOther: true,
       },
       {
-        id: "notes",
+        questionId: "notes",
         header: "Notes",
         question: "Which notes should I include?",
         options: [{ label: "Highlights" }, { label: "Full details" }],

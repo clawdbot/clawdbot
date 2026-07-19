@@ -60,7 +60,7 @@ describe("AppSidebar session attention", () => {
       sessionKey,
       questions: [
         {
-          id: "confirm",
+          questionId: "confirm",
           header: "Confirm",
           question: "Continue?",
           options: [{ label: "Continue", description: "Resume the run." }],
@@ -193,7 +193,7 @@ describe("AppSidebar session attention", () => {
       id: "question-child",
       agentId: "main",
       sessionKey: childKey,
-      questions: [{ id: "confirm", header: "Confirm", question: "Continue?", options: [] }],
+      questions: [{ questionId: "confirm", header: "Confirm", question: "Continue?", options: [] }],
       createdAtMs: Date.now(),
       expiresAtMs: Date.now() + 60_000,
       status: "pending",

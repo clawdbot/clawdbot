@@ -131,7 +131,6 @@ import {
   ChatEventSchema,
   ChatHistoryParamsSchema,
   ChatMetadataParamsSchema,
-  ChatMessageGetResultSchema,
   ChatMessageGetParamsSchema,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
@@ -442,6 +441,7 @@ import {
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
   SessionCatalogHostSchema,
+  SessionCatalogLocatorSchema,
   SessionCatalogSessionSchema,
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogArchiveParamsSchema,
@@ -628,23 +628,15 @@ export const validateWorkerLiveEventParams = lazyCompile(
   checkWorkerProtocolJson,
 );
 export const validateGatewaySuspendPrepareParams = lazyCompile(GatewaySuspendPrepareParamsSchema);
-export const validateGatewaySuspendPrepareResult = lazyCompile(GatewaySuspendPrepareResultSchema);
 export const validateGatewaySuspendStatusParams = lazyCompile(GatewaySuspendStatusParamsSchema);
-export const validateGatewaySuspendStatusResult = lazyCompile(GatewaySuspendStatusResultSchema);
 export const validateGatewaySuspendResumeParams = lazyCompile(GatewaySuspendResumeParamsSchema);
-export const validateGatewaySuspendResumeResult = lazyCompile(GatewaySuspendResumeResultSchema);
 export const validateRequestFrame = lazyCompile(RequestFrameSchema);
-export const validateResponseFrame = lazyCompile(ResponseFrameSchema);
-export const validateEventFrame = lazyCompile(EventFrameSchema);
 export const validateMessageActionParams = lazyCompile(MessageActionParamsSchema);
 export const validateSendParams = lazyCompile(SendParamsSchema);
 export const validateConversationListParams = lazyCompile(ConversationListParamsSchema);
-export const validateConversationListResult = lazyCompile(ConversationListResultSchema);
 export const validateConversationSendParams = lazyCompile(ConversationSendParamsSchema);
-export const validateConversationSendResult = lazyCompile(ConversationSendResultSchema);
 export const validateConversationTurnCancelParams = lazyCompile(ConversationTurnCancelParamsSchema);
 export const validateConversationTurnParams = lazyCompile(ConversationTurnParamsSchema);
-export const validateConversationTurnResult = lazyCompile(ConversationTurnResultSchema);
 export const validatePollParams = lazyCompile(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
 export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
@@ -705,12 +697,9 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
-export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
-export const validateNodeEventResult = lazyCompile(NodeEventResultSchema);
-export const validateNodePresenceAlivePayload = lazyCompile(NodePresenceAlivePayloadSchema);
 export const validateNodePresenceActivityPayload = lazyCompile(NodePresenceActivityPayloadSchema);
 export const validateNodePendingDrainParams = lazyCompile(NodePendingDrainParamsSchema);
 export const validateNodePendingEnqueueParams = lazyCompile(NodePendingEnqueueParamsSchema);
@@ -729,14 +718,12 @@ export const validateSecretsResolveParams = lazyCompile(SecretsResolveParamsSche
 export const validateSecretsResolveResult = lazyCompile(SecretsResolveResultSchema);
 export const validateSessionsListParams = lazyCompile(SessionsListParamsSchema);
 export const validateSessionsCatalogListParams = lazyCompile(SessionsCatalogListParamsSchema);
-export const validateSessionsCatalogHostEvent = lazyCompile(SessionsCatalogHostEventSchema);
 export const validateSessionsCatalogReadParams = lazyCompile(SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = lazyCompile(
   SessionsCatalogContinueParamsSchema,
 );
 export const validateSessionsCatalogArchiveParams = lazyCompile(SessionsCatalogArchiveParamsSchema);
 export const validateSessionsSearchParams = lazyCompile(SessionsSearchParamsSchema);
-export const validateSessionsSearchResult = lazyCompile(SessionsSearchResultSchema);
 export const validateSessionsCleanupParams = lazyCompile(SessionsCleanupParamsSchema);
 export const validateSessionsPreviewParams = lazyCompile(SessionsPreviewParamsSchema);
 export const validateSessionsDescribeParams = lazyCompile(SessionsDescribeParamsSchema);
@@ -749,9 +736,7 @@ export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
-export const validateSessionsDispatchResult = lazyCompile(SessionsDispatchResultSchema);
 export const validateSessionsReclaimParams = lazyCompile(SessionsReclaimParamsSchema);
-export const validateSessionsReclaimResult = lazyCompile(SessionsReclaimResultSchema);
 export const validateSessionsMessagesSubscribeParams = lazyCompile(
   SessionsMessagesSubscribeParamsSchema,
 );
@@ -810,9 +795,7 @@ export const validateWizardNextParams = lazyCompile(WizardNextParamsSchema);
 export const validateWizardCancelParams = lazyCompile(WizardCancelParamsSchema);
 export const validateWizardStatusParams = lazyCompile(WizardStatusParamsSchema);
 export const validateTalkModeParams = lazyCompile(TalkModeParamsSchema);
-export const validateTalkEvent = lazyCompile(TalkEventSchema);
 export const validateTalkCatalogParams = lazyCompile(TalkCatalogParamsSchema);
-export const validateTalkCatalogResult = lazyCompile(TalkCatalogResultSchema);
 export const validateTalkConfigParams = lazyCompile(TalkConfigParamsSchema);
 export const validateTalkConfigResult = lazyCompile(TalkConfigResultSchema);
 export const validateTalkClientCreateParams = lazyCompile(TalkClientCreateParamsSchema);
@@ -823,11 +806,8 @@ export const validateTalkClientToolCallParams = lazyCompile(TalkClientToolCallPa
 export const validateTalkClientToolCallResult = lazyCompile(TalkClientToolCallResultSchema);
 export const validateTalkClientTranscriptParams = lazyCompile(TalkClientTranscriptParamsSchema);
 export const validateTalkClientSteerParams = lazyCompile(TalkClientSteerParamsSchema);
-export const validateTalkAgentControlResult = lazyCompile(TalkAgentControlResultSchema);
 export const validateTalkSessionCreateParams = lazyCompile(TalkSessionCreateParamsSchema);
-export const validateTalkSessionCreateResult = lazyCompile(TalkSessionCreateResultSchema);
 export const validateTalkSessionJoinParams = lazyCompile(TalkSessionJoinParamsSchema);
-export const validateTalkSessionJoinResult = lazyCompile(TalkSessionJoinResultSchema);
 export const validateTalkSessionAppendAudioParams = lazyCompile(TalkSessionAppendAudioParamsSchema);
 export const validateTalkSessionAcknowledgeMarkParams = lazyCompile(
   TalkSessionAcknowledgeMarkParamsSchema,
@@ -837,17 +817,13 @@ export const validateTalkSessionCancelTurnParams = lazyCompile(TalkSessionCancel
 export const validateTalkSessionCancelOutputParams = lazyCompile(
   TalkSessionCancelOutputParamsSchema,
 );
-export const validateTalkSessionTurnResult = lazyCompile(TalkSessionTurnResultSchema);
 export const validateTalkSessionSteerParams = lazyCompile(TalkSessionSteerParamsSchema);
 export const validateTalkSessionSubmitToolResultParams = lazyCompile(
   TalkSessionSubmitToolResultParamsSchema,
 );
 export const validateTalkSessionCloseParams = lazyCompile(TalkSessionCloseParamsSchema);
-export const validateTalkSessionOkResult = lazyCompile(TalkSessionOkResultSchema);
 export const validateTalkSpeakParams = lazyCompile(TalkSpeakParamsSchema);
-export const validateTalkSpeakResult = lazyCompile(TalkSpeakResultSchema);
 export const validateTtsSpeakParams = lazyCompile(TtsSpeakParamsSchema);
-export const validateTtsSpeakResult = lazyCompile(TtsSpeakResultSchema);
 export const validateChannelsStatusParams = lazyCompile(ChannelsStatusParamsSchema);
 export const validateChannelsStartParams = lazyCompile(ChannelsStartParamsSchema);
 export const validateChannelsStopParams = lazyCompile(ChannelsStopParamsSchema);
@@ -894,21 +870,7 @@ export const validateDevicePairSetupCodeParams = lazyCompile(DevicePairSetupCode
 export const validateDevicePairRenameParams = lazyCompile(DevicePairRenameParamsSchema);
 export const validateDeviceTokenRotateParams = lazyCompile(DeviceTokenRotateParamsSchema);
 export const validateDeviceTokenRevokeParams = lazyCompile(DeviceTokenRevokeParamsSchema);
-export const validateApprovalKind = lazyCompile(ApprovalKindSchema);
-export const validateApprovalDecision = lazyCompile(ApprovalDecisionSchema);
-export const validateApprovalAllowDecision = lazyCompile(ApprovalAllowDecisionSchema);
-export const validateApprovalTerminalReason = lazyCompile(ApprovalTerminalReasonSchema);
-export const validatePluginApprovalSeverity = lazyCompile(PluginApprovalSeveritySchema);
-export const validateExecApprovalPresentation = lazyCompile(ExecApprovalPresentationSchema);
-export const validatePluginApprovalPresentation = lazyCompile(PluginApprovalPresentationSchema);
 export const validateApprovalPresentation = lazyCompile(ApprovalPresentationSchema);
-export const validatePendingApprovalSnapshot = lazyCompile(PendingApprovalSnapshotSchema);
-export const validateAllowedApprovalSnapshot = lazyCompile(AllowedApprovalSnapshotSchema);
-export const validateDeniedApprovalSnapshot = lazyCompile(DeniedApprovalSnapshotSchema);
-export const validateExpiredApprovalSnapshot = lazyCompile(ExpiredApprovalSnapshotSchema);
-export const validateCancelledApprovalSnapshot = lazyCompile(CancelledApprovalSnapshotSchema);
-export const validateApprovalSnapshot = lazyCompile(ApprovalSnapshotSchema);
-export const validateTerminalApprovalSnapshot = lazyCompile(TerminalApprovalSnapshotSchema);
 export const validateApprovalGetParams = lazyCompile(ApprovalGetParamsSchema);
 export const validateApprovalHistoryParams = lazyCompile(ApprovalHistoryParamsSchema);
 export const validateApprovalResolveParams = lazyCompile(ApprovalResolveParamsSchema);
@@ -918,31 +880,18 @@ export const validateExecApprovalGetParams = lazyCompile(ExecApprovalGetParamsSc
 export const validateExecApprovalRequestParams = lazyCompile(ExecApprovalRequestParamsSchema);
 export const validateExecApprovalResolveParams = lazyCompile(ExecApprovalResolveParamsSchema);
 export const validateQuestionRequestParams = lazyCompile(QuestionRequestParamsSchema);
-export const validateQuestionRequestResult = lazyCompile(QuestionRequestResultSchema);
 export const validateQuestionWaitAnswerParams = lazyCompile(QuestionWaitAnswerParamsSchema);
-export const validateQuestionWaitAnswerResult = lazyCompile(QuestionWaitAnswerResultSchema);
 export const validateQuestionResolveParams = lazyCompile(QuestionResolveParamsSchema);
-export const validateQuestionResolveResult = lazyCompile(QuestionResolveResultSchema);
 export const validateQuestionGetParams = lazyCompile(QuestionGetParamsSchema);
-export const validateQuestionGetResult = lazyCompile(QuestionGetResultSchema);
 export const validateQuestionListParams = lazyCompile(QuestionListParamsSchema);
-export const validateQuestionListResult = lazyCompile(QuestionListResultSchema);
-export const validateQuestionRequestedEvent = lazyCompile(QuestionRequestedEventSchema);
-export const validateQuestionResolvedEvent = lazyCompile(QuestionResolvedEventSchema);
 export const validatePluginApprovalRequestParams = lazyCompile(PluginApprovalRequestParamsSchema);
 export const validatePluginApprovalResolveParams = lazyCompile(PluginApprovalResolveParamsSchema);
 export const validatePluginsListParams = lazyCompile(PluginsListParamsSchema);
-export const validatePluginsListResult = lazyCompile(PluginsListResultSchema);
 export const validatePluginsRefreshParams = lazyCompile(PluginsRefreshParamsSchema);
-export const validatePluginsRefreshResult = lazyCompile(PluginsRefreshResultSchema);
 export const validatePluginsSearchParams = lazyCompile(PluginsSearchParamsSchema);
-export const validatePluginsSearchResult = lazyCompile(PluginsSearchResultSchema);
 export const validatePluginsInstallParams = lazyCompile(PluginsInstallParamsSchema);
-export const validatePluginsInstallResult = lazyCompile(PluginsInstallResultSchema);
 export const validatePluginsSetEnabledParams = lazyCompile(PluginsSetEnabledParamsSchema);
-export const validatePluginsSetEnabledResult = lazyCompile(PluginsSetEnabledResultSchema);
 export const validatePluginsUninstallParams = lazyCompile(PluginsUninstallParamsSchema);
-export const validatePluginsUninstallResult = lazyCompile(PluginsUninstallResultSchema);
 export const validatePluginsUiDescriptorsParams = lazyCompile(PluginsUiDescriptorsParamsSchema);
 export const validatePluginsUiDescriptorsResult = lazyCompile(PluginsUiDescriptorsResultSchema);
 export const validatePluginsSessionActionParams = lazyCompile(PluginsSessionActionParamsSchema);
@@ -959,8 +908,6 @@ export const validateChatToolTitlesParams = lazyCompile(ChatToolTitlesParamsSche
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
 export const validateChatAbortParams = lazyCompile(ChatAbortParamsSchema);
 export const validateChatInjectParams = lazyCompile(ChatInjectParamsSchema);
-export const validateChatEvent = lazyCompile(ChatEventSchema);
-export const validateChatMessageGetResult = lazyCompile(ChatMessageGetResultSchema);
 export const validateUpdateStatusParams = lazyCompile(UpdateStatusParamsSchema);
 export const validateUpdateRunParams = lazyCompile(UpdateRunParamsSchema);
 export const validateUiCommandParams = lazyCompile(UiCommandParamsSchema);
@@ -1098,6 +1045,7 @@ export {
   SessionCatalogDescriptorSchema,
   SessionCatalogSessionSchema,
   SessionCatalogHostSchema,
+  SessionCatalogLocatorSchema,
   SessionCatalogSchema,
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogListParamsSchema,

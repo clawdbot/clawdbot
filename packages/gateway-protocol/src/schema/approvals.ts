@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 export { isWellFormedApprovalId } from "./approval-id.js";
 
@@ -260,32 +261,41 @@ const SessionApprovalEventCommonFields = {
 };
 
 /** Sanitized pending transition delivered only to an opted-in session audience. */
-export const PendingSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("pending"),
-  approval: PendingApprovalSnapshotSchema,
-});
+export const PendingSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("pending"),
+    approval: PendingApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized terminal transition delivered only to an opted-in session audience. */
-export const TerminalSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("terminal"),
-  approval: TerminalApprovalSnapshotSchema,
-});
+export const TerminalSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("terminal"),
+    approval: TerminalApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized approval transition delivered only to an opted-in session audience. */
-export const SessionApprovalEventSchema = Type.Union([
-  PendingSessionApprovalEventSchema,
-  TerminalSessionApprovalEventSchema,
-]);
+export const SessionApprovalEventSchema = withSince(
+  "2026.7",
+  Type.Union([PendingSessionApprovalEventSchema, TerminalSessionApprovalEventSchema]),
+);
 
 /** Authoritative pending approval set returned when a session stream subscribes. */
-export const SessionApprovalReplaySchema = closedObject({
-  sessionKey: NonEmptyString,
-  updatedAtMs: Type.Integer({ minimum: 0 }),
-  approvals: Type.Array(PendingApprovalSnapshotSchema),
-  truncated: Type.Boolean(),
-});
+export const SessionApprovalReplaySchema = withSince(
+  "2026.7",
+  closedObject({
+    sessionKey: NonEmptyString,
+    updatedAtMs: Type.Integer({ minimum: 0 }),
+    approvals: Type.Array(PendingApprovalSnapshotSchema),
+    truncated: Type.Boolean(),
+  }),
+);
 
 // Owner-local wire types derived directly from local schema consts so the
 // public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.

@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -85,7 +87,10 @@ function createSessionsResult(): SessionsUsageResult {
   };
 }
 
-function createConnectedContext(request: GatewayBrowserClient["request"]) {
+function createConnectedContext(
+  request: GatewayBrowserClient["request"],
+  selfUser: AuthenticatedUser | null = null,
+) {
   let snapshot: ApplicationGatewaySnapshot = {
     client: { request } as GatewayBrowserClient,
     connected: true,
@@ -95,6 +100,7 @@ function createConnectedContext(request: GatewayBrowserClient["request"]) {
     sessionKey: "agent:main:main",
     lastError: null,
     lastErrorCode: null,
+    selfUser,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const subscribe = () => () => undefined;
@@ -103,9 +109,24 @@ function createConnectedContext(request: GatewayBrowserClient["request"]) {
       get snapshot() {
         return snapshot;
       },
+      connection: {
+        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
       subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
         listeners.add(listener);
         return () => listeners.delete(listener);
+      },
+      updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
+        if (!snapshot.selfUser) {
+          return;
+        }
+        snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
+        for (const listener of listeners) {
+          listener(snapshot);
+        }
       },
     },
     agents: {
@@ -150,6 +171,7 @@ beforeEach(async () => {
 afterEach(async () => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   await i18n.setLocale("en");
 });
 
@@ -266,4 +288,164 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
   visibility.mockReturnValue("visible");
   window.dispatchEvent(new Event("focus"));
   await waitForFast(() => expect(request).toHaveBeenCalledTimes(8));
+});
+
+it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "usage.cost" ? createCostSummary() : createSessionsResult(),
+  );
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  await Promise.resolve();
+
+  expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
+  expect(page.querySelector("#settings-profile-identity")).toBeNull();
+});
+
+it("bootstraps and refreshes the connected user's profile through users.self", async () => {
+  let profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test", "ada@work.test"],
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "usage.cost") {
+      return createCostSummary();
+    }
+    if (method === "sessions.usage") {
+      return createSessionsResult();
+    }
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.setDisplayName") {
+      expect(params).toEqual({ profileId: "profile-1", displayName: "Augusta Ada" });
+      profile = { ...profile, displayName: "Augusta Ada", updatedAt: 3 };
+      return { profile };
+    }
+    if (method === "users.setAvatar") {
+      profile = {
+        ...profile,
+        displayName: "Augusta Ada",
+        avatarMime: "image/png",
+        hasAvatar: true,
+        updatedAt: 4,
+      };
+      return { profile };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "profile-1",
+    email: "ada@example.test",
+    name: "Ada",
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
+  const identityState = page as unknown as {
+    selfUser: AuthenticatedUser | null;
+    ownProfile: UserProfile | null;
+  };
+  expect(identityState.selfUser?.id).toBe(profile.id);
+  expect(identityState.ownProfile?.id).toBe(profile.id);
+  expect(page.textContent).toContain("ada@example.test, ada@work.test");
+  expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
+
+  const input = page.querySelector<HTMLInputElement>('.identity-name-control input[type="text"]');
+  input!.value = "Augusta Ada";
+  input!.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>('.identity-name-control button[type="submit"]')?.click();
+
+  await waitForFast(() =>
+    expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
+  );
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
+  );
+  await page.updateComplete;
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+    "Augusta Ada",
+  );
+  expect(harness.context.gateway.snapshot.selfUser?.name).toBe("Augusta Ada");
+
+  const displayNameInput = page.querySelector<HTMLInputElement>(".identity-name-control input")!;
+  displayNameInput.value = "Unsaved draft";
+  displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  class StubUrl extends URL {
+    static override createObjectURL = vi.fn(() => "blob:avatar");
+    static override revokeObjectURL = vi.fn();
+  }
+  class StubImage {
+    decoding = "auto";
+    src = "";
+    naturalWidth = 512;
+    naturalHeight = 256;
+    decode = vi.fn(async () => undefined);
+  }
+  vi.stubGlobal("URL", StubUrl);
+  vi.stubGlobal("Image", StubImage);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
+    callback(new Blob([new Uint8Array([1, 2, 3])], { type: type ?? "image/png" }));
+  });
+  const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(avatarInput, "files", {
+    configurable: true,
+    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
+  });
+  avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForFast(() =>
+    expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(true),
+  );
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(3),
+  );
+  await page.updateComplete;
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain(
+    "/api/users/profile-1/avatar?v=4",
+  );
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+    "Unsaved draft",
+  );
+
+  request.mockClear();
+  page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
+  await waitForFast(() =>
+    expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(true),
+  );
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+      false,
+    ),
+  );
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+    "Unsaved draft",
+  );
+
+  const pageWithState = page as ProfilePageElement & {
+    identityBusy: "display-name" | "avatar" | null;
+  };
+  pageWithState.identityBusy = "avatar";
+  request.mockClear();
+  page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
+  await Promise.resolve();
+  expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
 });

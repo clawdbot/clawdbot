@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 
 const testConfig = { session: { store: "/tmp/x" } };
@@ -92,6 +94,7 @@ describe("getHealthSnapshot plugin state", () => {
 
     const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
 
+    expect(Value.Check(SnapshotSchema.properties.health, snap)).toBe(true);
     expect(snap.plugins?.unavailable).toEqual([
       {
         id: "discord",

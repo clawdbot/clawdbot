@@ -313,7 +313,7 @@ function parseOptionalCatalogString(
 
 function parseCatalogSession(
   value: unknown,
-  options: { allowOpenClawSessionKey?: boolean } = {},
+  options: { allowSessionKey?: boolean } = {},
 ): CodexSessionCatalogSession {
   if (
     !isRecord(value) ||
@@ -365,12 +365,8 @@ function parseCatalogSession(
     MAX_METADATA_LENGTH,
   );
   const gitBranch = parseOptionalCatalogString(value.gitBranch, "Git branch", MAX_METADATA_LENGTH);
-  const openClawSessionKey = options.allowOpenClawSessionKey
-    ? parseOptionalCatalogString(
-        value.openClawSessionKey,
-        "OpenClaw session key",
-        MAX_SESSION_KEY_LENGTH,
-      )
+  const sessionKey = options.allowSessionKey
+    ? parseOptionalCatalogString(value.sessionKey, "OpenClaw session key", MAX_SESSION_KEY_LENGTH)
     : undefined;
   const createdAt = readFiniteNumber(value.createdAt);
   const updatedAt = readFiniteNumber(value.updatedAt);
@@ -390,13 +386,13 @@ function parseCatalogSession(
     ...(modelProvider !== undefined ? { modelProvider } : {}),
     ...(cliVersion !== undefined ? { cliVersion } : {}),
     ...(gitBranch !== undefined ? { gitBranch } : {}),
-    ...(openClawSessionKey !== undefined ? { openClawSessionKey } : {}),
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
   };
 }
 
 export function parseCatalogPage(
   value: unknown,
-  options: { allowOpenClawSessionKey?: boolean } = {},
+  options: { allowSessionKey?: boolean } = {},
 ): CodexSessionCatalogPage {
   if (
     !isRecord(value) ||

@@ -1157,12 +1157,12 @@ export async function runCopilotAttempt(
   // its own private files; OpenClaw-side audit state is addressed only by
   // session identity so missing identity cannot silently recreate JSONL state.
   const openClawSessionIdForMirror = readString(input.sessionId);
-  const openClawSessionKeyForMirror = readString((input as { sessionKey?: unknown }).sessionKey);
+  const sessionKeyForMirror = readString((input as { sessionKey?: unknown }).sessionKey);
   const openClawStorePathForMirror = readString(input.sessionTarget?.storePath);
   const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
   if (
     openClawSessionIdForMirror &&
-    openClawSessionKeyForMirror &&
+    sessionKeyForMirror &&
     openClawStorePathForMirror &&
     messagesSnapshot.length > 0
   ) {
@@ -1191,7 +1191,7 @@ export async function runCopilotAttempt(
     });
     await dualWriteCopilotTranscriptBestEffort({
       sessionId: openClawSessionIdForMirror,
-      sessionKey: openClawSessionKeyForMirror,
+      sessionKey: sessionKeyForMirror,
       agentId: readString(input.agentId),
       storePath: openClawStorePathForMirror,
       messages: taggedMessages,

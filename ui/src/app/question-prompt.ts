@@ -67,16 +67,33 @@ function readTimestamp(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+const MAX_HEADER_GRAPHEMES = 12;
+
+function clampHeaderGraphemes(header: string): string {
+  const segments = [...new Intl.Segmenter().segment(header)];
+  if (segments.length <= MAX_HEADER_GRAPHEMES) {
+    return header;
+  }
+  return segments
+    .slice(0, MAX_HEADER_GRAPHEMES)
+    .map((part) => part.segment)
+    .join("");
+}
+
 function parseQuestion(value: unknown): Question | null {
   if (!isRecord(value)) {
     return null;
   }
-  const id = readNonEmptyString(value.id);
+  const questionId = readNonEmptyString(value.questionId);
   const header = typeof value.header === "string" ? value.header : null;
   const question = readNonEmptyString(value.question);
-  if (!id || !/^[a-z][a-z0-9_]*$/.test(id) || header === null || header.length > 12 || !question) {
+  if (!questionId || !/^[a-z][a-z0-9_]*$/.test(questionId) || header === null || !question) {
     return null;
   }
+  // Clamp instead of reject: the gateway enforces the 12-cap with grapheme
+  // semantics, and any re-count here (UTF-16, code points, or a second grapheme
+  // impl) can disagree at the boundary and silently drop the whole prompt.
+  const clampedHeader = clampHeaderGraphemes(header);
   if (!Array.isArray(value.options) || value.options.length > 4) {
     return null;
   }
@@ -104,8 +121,8 @@ function parseQuestion(value: unknown): Question | null {
     }
   }
   return {
-    id,
-    header,
+    questionId,
+    header: clampedHeader,
     question,
     options,
     ...(value.multiSelect === true ? { multiSelect: true } : {}),
@@ -118,18 +135,14 @@ function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
     return null;
   }
   const answers: QuestionAnswers["answers"] = {};
-  for (const [id, answerValue] of Object.entries(value.answers)) {
-    if (
-      !/^[a-z][a-z0-9_]*$/.test(id) ||
-      !isRecord(answerValue) ||
-      !Array.isArray(answerValue.answers)
-    ) {
+  for (const [questionId, answerValue] of Object.entries(value.answers)) {
+    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !Array.isArray(answerValue)) {
       return null;
     }
-    if (!answerValue.answers.every((answer) => typeof answer === "string")) {
+    if (!answerValue.every((answer) => typeof answer === "string")) {
       return null;
     }
-    answers[id] = { answers: [...answerValue.answers] };
+    answers[questionId] = [...answerValue];
   }
   return { answers };
 }
@@ -148,9 +161,9 @@ function questionAnswersEqual(
     leftIds.every(
       (id, index) =>
         id === rightIds[index] &&
-        left.answers[id]?.answers.length === right.answers[id]?.answers.length &&
-        left.answers[id]?.answers.every((answer, answerIndex) =>
-          Object.is(answer, right.answers[id]?.answers[answerIndex]),
+        left.answers[id]?.length === right.answers[id]?.length &&
+        left.answers[id]?.every((answer, answerIndex) =>
+          Object.is(answer, right.answers[id]?.[answerIndex]),
         ),
     )
   );
@@ -173,7 +186,7 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   if (questions.some((question) => question === null)) {
     return null;
   }
-  const questionIds = new Set(questions.map((question) => question?.id));
+  const questionIds = new Set(questions.map((question) => question?.questionId));
   if (questionIds.size !== questions.length) {
     return null;
   }
@@ -554,9 +567,7 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
 
 function buildAnswers(values: QuestionAnswerValues): QuestionAnswers {
   return {
-    answers: Object.fromEntries(
-      Object.entries(values).map(([id, answers]) => [id, { answers: [...answers] }]),
-    ),
+    answers: Object.fromEntries(Object.entries(values).map(([id, answers]) => [id, [...answers]])),
   };
 }
 

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type {
+  QuestionAnswers,
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/schema/questions.js";
@@ -91,11 +92,16 @@ async function resolvePendingAgentQuestionAnswers(
   state: PendingAgentQuestion,
   answers: AgentHarnessUserInputAnswers,
 ): Promise<boolean> {
+  const gatewayAnswers: QuestionAnswers = {
+    answers: Object.fromEntries(
+      Object.entries(answers.answers).map(([questionId, answer]) => [questionId, answer.answers]),
+    ),
+  };
   try {
     await state.gatewayCall(
       "question.resolve",
       {},
-      { id: state.questionId, answers, resolvedBy: "plain-text" },
+      { id: state.questionId, answers: gatewayAnswers, resolvedBy: "plain-text" },
     );
     return true;
   } catch (error) {
@@ -277,8 +283,9 @@ export async function runAgentHarnessGatewayQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
-  const questions: QuestionRequestQuestion[] = params.questions.map((question) => ({
+  const questions: QuestionRequestQuestion[] = params.questions.map(({ id, ...question }) => ({
     ...question,
+    questionId: id,
     options: [...(question.options ?? [])],
   }));
   let aborted = false;

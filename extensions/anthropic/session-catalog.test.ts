@@ -511,7 +511,7 @@ describe("Claude session catalog", () => {
     registerClaudeSessionCatalog(api);
 
     const hosts = await provider?.list({});
-    expect(hosts?.[0]?.sessions[0]?.openClawSessionKey).toBe("agent:main:claude-bound");
+    expect(hosts?.[0]?.sessions[0]?.sessionKey).toBe("agent:main:claude-bound");
   });
 
   it("continues a local Desktop-app row and lists it as continuable", async () => {

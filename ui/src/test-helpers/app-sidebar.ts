@@ -36,7 +36,7 @@ export type SidebarLifecycleState = HTMLElement & {
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
-  onNavigate: (routeId: string, options?: { search?: string }) => void;
+  onNavigate: (routeId: string, options?: { search?: string; hash?: string }) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
@@ -86,6 +86,17 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     subscribeEvents(listener: (event: { event: string; payload: unknown }) => void) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
+    },
+    updateSelfUser(
+      patch: Partial<Omit<NonNullable<ApplicationGatewaySnapshot["selfUser"]>, "id">>,
+    ) {
+      if (!snapshot.selfUser) {
+        return;
+      }
+      snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
     },
   } as unknown as ApplicationGateway;
   return {

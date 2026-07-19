@@ -18,8 +18,11 @@ const HELLO: GatewayHelloOk = {
 class FakeGatewayClient {
   started = 0;
   stopped = 0;
+  readonly instanceId: string;
 
-  constructor(readonly opts: GatewayBrowserClientOptions) {}
+  constructor(readonly opts: GatewayBrowserClientOptions) {
+    this.instanceId = opts.instanceId ?? "";
+  }
 
   start() {
     this.started += 1;
@@ -163,6 +166,88 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     // The superseded client cannot demote the fresh attempt's snapshot.
     expect(gateway.snapshot.reconnecting).toBe(true);
+  });
+
+  it("projects only this browser connection's optional presence identity", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const instanceId = current().opts.instanceId;
+    current().opts.onHello?.({
+      ...HELLO,
+      snapshot: {
+        presence: [
+          { instanceId: "someone-else", user: { id: "other", name: "Other" } },
+          {
+            instanceId,
+            user: { id: "profile-1", email: "ada@example.test", name: "Ada" },
+          },
+        ],
+      },
+    });
+
+    expect(gateway.snapshot.selfUser).toEqual({
+      id: "profile-1",
+      email: "ada@example.test",
+      name: "Ada",
+    });
+
+    gateway.updateSelfUser?.({ name: "Augusta Ada", avatarUrl: "/api/users/profile-1/avatar?v=2" });
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Augusta Ada",
+      avatarUrl: "/api/users/profile-1/avatar?v=2",
+    });
+
+    current().opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: {
+        presence: [
+          {
+            instanceId,
+            user: {
+              id: "profile-1",
+              email: "ada@example.test",
+              name: "Ada Lovelace",
+              avatarUrl: "/api/users/profile-1/avatar?v=3",
+            },
+          },
+        ],
+      },
+      seq: 1,
+      stateVersion: { presence: 1, health: 1 },
+    });
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Ada Lovelace",
+      avatarUrl: "/api/users/profile-1/avatar?v=3",
+    });
+
+    current().opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: { presence: [{ instanceId: "anonymous" }] },
+      seq: 2,
+      stateVersion: { presence: 2, health: 1 },
+    });
+    expect(gateway.snapshot.selfUser).toBeNull();
+  });
+
+  it("clears identity while disconnected", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.({
+      ...HELLO,
+      snapshot: {
+        presence: [
+          { instanceId: current().opts.instanceId, user: { id: "profile-1", name: "Ada" } },
+        ],
+      },
+    });
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+
+    expect(gateway.snapshot.selfUser).toBeNull();
   });
 
   it("does not copy selected-remote settings into an ephemeral document Gateway", () => {

@@ -3,8 +3,8 @@
  * Quick Settings now renders through the shared settings design language
  * (ui/src/styles/settings.css). This file keeps only genuinely page-specific
  * rules: the logs-page fill layout, the Simple/Advanced view toggle, the
- * advanced-view accordion nav (used by view.ts), and the two documented
- * escape hatches (identity blocks, gateway-host stats grid).
+ * advanced-view accordion nav (used by view.ts), and the documented
+ * gateway-host stats-grid escape hatch.
  */
 
 .content:has(openclaw-logs-page) {
@@ -145,141 +145,6 @@ openclaw-logs-page {
 .config-accordion-group__item-icon svg {
   width: 14px;
   height: 14px;
-}
-
-/* ── Escape hatch: Personal identity blocks (avatar-led rows) ──
-   The standard settings row (text left, one control right) cannot lead with
-   an avatar preview; these blocks stay inside one .settings-group and match
-   the row paddings. */
-
-.config-identity {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  min-width: 0;
-}
-
-.config-identity + .config-identity {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.config-identity__avatar {
-  width: 48px;
-  height: 48px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  object-fit: cover;
-  object-position: center;
-}
-
-.config-identity__avatar--text,
-.config-identity__avatar--default {
-  display: grid;
-  place-items: center;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--control-ui-text-md);
-  font-weight: 650;
-}
-
-.config-identity__avatar--fallback {
-  padding: var(--space-2);
-  background: color-mix(in srgb, var(--bg) 84%, var(--bg-elevated) 16%);
-  object-fit: contain;
-}
-
-.config-identity__avatar--default svg {
-  width: 18px;
-  height: 18px;
-  fill: currentColor;
-}
-
-.config-identity__copy {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.config-identity__eyebrow {
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.config-identity__title {
-  font-size: var(--control-ui-text-md);
-  font-weight: 500;
-  color: var(--text-strong);
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.config-identity__sub {
-  margin-top: 2px;
-  font-size: var(--control-ui-text-sm);
-  color: var(--muted);
-  line-height: 1.45;
-}
-
-.config-identity__source {
-  display: grid;
-  gap: 2px;
-  margin-top: var(--space-2);
-  font-size: var(--control-ui-text-xs);
-  color: var(--muted);
-}
-
-.config-identity__source code {
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  overflow-wrap: anywhere;
-}
-
-.config-identity__issue {
-  margin-top: var(--space-2);
-}
-
-.config-identity__error {
-  margin-top: var(--space-2);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.35;
-}
-
-.config-identity__repair {
-  display: grid;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-}
-
-.config-identity__field {
-  display: grid;
-  gap: var(--space-1);
-  max-width: 320px;
-}
-
-.config-identity__field-label {
-  font-size: var(--control-ui-text-sm);
-  color: var(--muted);
-}
-
-.config-identity__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.config-identity__actions .btn {
-  width: fit-content;
-}
-
-.config-identity__hint {
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
 }
 
 /* ── Escape hatch: Gateway host identity + metered stats grid ──

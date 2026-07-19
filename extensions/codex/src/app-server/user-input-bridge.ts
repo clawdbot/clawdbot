@@ -153,7 +153,7 @@ export function createCodexUserInputBridge(params: {
           signal: abort.signal,
         });
         return result.status === "answered"
-          ? (result.answers as unknown as JsonObject)
+          ? gatewayAnswersToCodexResponse(result.answers.answers)
           : emptyUserInputResponse();
       } catch (error) {
         embeddedAgentLog.warn("failed to bridge codex user input through gateway", { error });
@@ -289,6 +289,14 @@ function buildUserInputResponse(
   inputText: string,
 ): JsonObject {
   return buildAgentHarnessUserInputAnswers(questions, inputText) as unknown as JsonObject;
+}
+
+function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonObject {
+  return {
+    answers: Object.fromEntries(
+      Object.entries(answers).map(([questionId, values]) => [questionId, { answers: values }]),
+    ),
+  };
 }
 
 function emptyUserInputResponse(): JsonObject {

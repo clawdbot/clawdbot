@@ -1048,7 +1048,7 @@ public struct StateVersion: Codable, Sendable {
 
 public struct Snapshot: Codable, Sendable {
     public let presence: [PresenceEntry]
-    public let health: AnyCodable
+    public let health: [String: AnyCodable]
     public let stateversion: StateVersion
     public let uptimems: Int
     public let appliedconfighash: AnyCodable?
@@ -1060,7 +1060,7 @@ public struct Snapshot: Codable, Sendable {
 
     public init(
         presence: [PresenceEntry],
-        health: AnyCodable,
+        health: [String: AnyCodable],
         stateversion: StateVersion,
         uptimems: Int,
         appliedconfighash: AnyCodable? = nil,
@@ -3779,7 +3779,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let cliversion: String?
     public let gitbranch: String?
     public let archived: Bool
-    public let openclawsessionkey: String?
+    public let sessionkey: String?
     public let cancontinue: Bool
     public let canarchive: Bool
     public let canopenterminal: Bool?
@@ -3797,7 +3797,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         cliversion: String? = nil,
         gitbranch: String? = nil,
         archived: Bool,
-        openclawsessionkey: String? = nil,
+        sessionkey: String? = nil,
         cancontinue: Bool,
         canarchive: Bool,
         canopenterminal: Bool? = nil)
@@ -3814,7 +3814,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.cliversion = cliversion
         self.gitbranch = gitbranch
         self.archived = archived
-        self.openclawsessionkey = openclawsessionkey
+        self.sessionkey = sessionkey
         self.cancontinue = cancontinue
         self.canarchive = canarchive
         self.canopenterminal = canopenterminal
@@ -3833,7 +3833,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case cliversion = "cliVersion"
         case gitbranch = "gitBranch"
         case archived
-        case openclawsessionkey = "openClawSessionKey"
+        case sessionkey = "sessionKey"
         case cancontinue = "canContinue"
         case canarchive = "canArchive"
         case canopenterminal = "canOpenTerminal"
@@ -3952,39 +3952,39 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
 
 public struct SessionsCatalogListParams: Codable, Sendable {
     public let catalogid: String?
+    public let cursors: [String: AnyCodable]?
     public let agentid: String?
     public let progressid: String?
     public let search: String?
     public let limitperhost: Int?
     public let hostids: [String]?
-    public let cursors: [String: AnyCodable]?
 
     public init(
         catalogid: String? = nil,
+        cursors: [String: AnyCodable]? = nil,
         agentid: String? = nil,
         progressid: String? = nil,
         search: String? = nil,
         limitperhost: Int? = nil,
-        hostids: [String]? = nil,
-        cursors: [String: AnyCodable]? = nil)
+        hostids: [String]? = nil)
     {
         self.catalogid = catalogid
+        self.cursors = cursors
         self.agentid = agentid
         self.progressid = progressid
         self.search = search
         self.limitperhost = limitperhost
         self.hostids = hostids
-        self.cursors = cursors
     }
 
     private enum CodingKeys: String, CodingKey {
         case catalogid = "catalogId"
+        case cursors
         case agentid = "agentId"
         case progressid = "progressId"
         case search
         case limitperhost = "limitPerHost"
         case hostids = "hostIds"
-        case cursors
     }
 }
 
@@ -13525,7 +13525,7 @@ public struct QuestionOption: Codable, Sendable {
 }
 
 public struct Question: Codable, Sendable {
-    public let id: String
+    public let questionid: String
     public let header: String
     public let question: String
     public let options: [QuestionOption]
@@ -13534,7 +13534,7 @@ public struct Question: Codable, Sendable {
     public let issecret: Bool?
 
     public init(
-        id: String,
+        questionid: String,
         header: String,
         question: String,
         options: [QuestionOption],
@@ -13542,7 +13542,7 @@ public struct Question: Codable, Sendable {
         isother: Bool? = nil,
         issecret: Bool? = nil)
     {
-        self.id = id
+        self.questionid = questionid
         self.header = header
         self.question = question
         self.options = options
@@ -13552,7 +13552,7 @@ public struct Question: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id
+        case questionid = "questionId"
         case header
         case question
         case options
@@ -13563,7 +13563,7 @@ public struct Question: Codable, Sendable {
 }
 
 public struct QuestionRequestQuestion: Codable, Sendable {
-    public let id: String
+    public let questionid: String
     public let header: String
     public let question: String
     public let options: [QuestionOption]
@@ -13572,7 +13572,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
     public let issecret: Bool?
 
     public init(
-        id: String,
+        questionid: String,
         header: String,
         question: String,
         options: [QuestionOption],
@@ -13580,7 +13580,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         isother: Bool? = nil,
         issecret: Bool? = nil)
     {
-        self.id = id
+        self.questionid = questionid
         self.header = header
         self.question = question
         self.options = options
@@ -13590,7 +13590,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id
+        case questionid = "questionId"
         case header
         case question
         case options

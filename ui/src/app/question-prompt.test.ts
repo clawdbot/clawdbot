@@ -27,7 +27,7 @@ function requestedPayload(overrides: Record<string, unknown> = {}) {
     id: "question-1",
     questions: [
       {
-        id: "format",
+        questionId: "format",
         header: "Format",
         question: "Which format should I use?",
         options: [{ label: "Compact", description: "Keep it brief" }, { label: "Detailed" }],
@@ -70,7 +70,7 @@ describe("question event parsing", () => {
       id: "question-1",
       sessionKey: "agent:main:main",
       status: "pending",
-      questions: [{ id: "format", options: [{ label: "Compact" }, { label: "Detailed" }] }],
+      questions: [{ questionId: "format", options: [{ label: "Compact" }, { label: "Detailed" }] }],
     });
     expect(
       handleQuestionPromptEvent(state, {
@@ -78,13 +78,13 @@ describe("question event parsing", () => {
         payload: {
           id: "question-1",
           status: "answered",
-          answers: { answers: { format: { answers: ["Compact"] } } },
+          answers: { answers: { format: ["Compact"] } },
         },
       }),
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
-      answers: { answers: { format: { answers: ["Compact"] } } },
+      answers: { answers: { format: ["Compact"] } },
     });
   });
 
@@ -100,7 +100,7 @@ describe("question event parsing", () => {
       handleQuestionPromptEvent(state, {
         event: "question.requested",
         payload: requestedPayload({
-          questions: [{ id: "Bad ID", header: "Bad", question: "Bad?", options: [] }],
+          questions: [{ questionId: "Bad ID", header: "Bad", question: "Bad?", options: [] }],
         }),
       }),
     ).toBe(false);
@@ -110,7 +110,7 @@ describe("question event parsing", () => {
         payload: {
           id: "question-1",
           status: "answered",
-          answers: { answers: { format: { answers: "Compact" } } },
+          answers: { answers: { format: "Compact" } },
         },
       }),
     ).toBe(false);
@@ -146,14 +146,14 @@ describe("question prompt state", () => {
       payload: {
         id: "question-1",
         status: "answered",
-        answers: { answers: { format: { answers: ["Detailed"] } } },
+        answers: { answers: { format: ["Detailed"] } },
       },
     });
 
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: { answers: ["Detailed"] } } },
+      answers: { answers: { format: ["Detailed"] } },
     });
   });
 
@@ -178,7 +178,7 @@ describe("question prompt state", () => {
       payload: {
         id: "question-1",
         status: "answered",
-        answers: { answers: { format: { answers: ["Compact"] } } },
+        answers: { answers: { format: ["Compact"] } },
       },
     });
     releaseRequest();
@@ -213,7 +213,7 @@ describe("question prompt state", () => {
       payload: {
         id: "question-1",
         status: "answered",
-        answers: { answers: { format: { answers: ["Detailed"] } } },
+        answers: { answers: { format: ["Detailed"] } },
       },
     });
     rejectRequest(new Error("question already resolved"));
@@ -224,7 +224,7 @@ describe("question prompt state", () => {
       answeredElsewhere: true,
       localResolutionConfirmed: false,
       submitting: false,
-      answers: { answers: { format: { answers: ["Detailed"] } } },
+      answers: { answers: { format: ["Detailed"] } },
     });
   });
 
@@ -249,7 +249,7 @@ describe("question prompt state", () => {
       payload: {
         id: "question-1",
         status: "answered",
-        answers: { answers: { format: { answers: ["Compact"] } } },
+        answers: { answers: { format: ["Compact"] } },
       },
     });
     rejectRequest(new Error("connection closed"));
@@ -259,7 +259,7 @@ describe("question prompt state", () => {
       status: "answered",
       answeredElsewhere: false,
       submitting: false,
-      answers: { answers: { format: { answers: ["Compact"] } } },
+      answers: { answers: { format: ["Compact"] } },
     });
   });
 
@@ -334,9 +334,9 @@ describe("question RPC helpers", () => {
       id: "question-1",
       answers: {
         answers: {
-          format: { answers: ["Compact"] },
-          destination: { answers: ["My own target"] },
-          extras: { answers: ["Tests", "Docs"] },
+          format: ["Compact"],
+          destination: ["My own target"],
+          extras: ["Tests", "Docs"],
         },
       },
     });
@@ -420,7 +420,7 @@ describe("refreshPendingQuestions", () => {
       payload: {
         id: "question-1",
         status: "answered",
-        answers: { answers: { format: { answers: ["Detailed"] } } },
+        answers: { answers: { format: ["Detailed"] } },
       },
     });
     finishList({ questions: [requestedPayload()] });
@@ -439,7 +439,7 @@ describe("refreshPendingQuestions", () => {
         : Promise.resolve({
             question: requestedPayload({
               status: "answered",
-              answers: { answers: { format: { answers: ["Detailed"] } } },
+              answers: { answers: { format: ["Detailed"] } },
             }),
           }),
     );
@@ -453,7 +453,7 @@ describe("refreshPendingQuestions", () => {
       payload: {
         id: "question-1",
         status: "answered",
-        answers: { answers: { format: { answers: ["Detailed"] } } },
+        answers: { answers: { format: ["Detailed"] } },
       },
     });
     finishList({ questions: [] });
@@ -463,7 +463,7 @@ describe("refreshPendingQuestions", () => {
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: { answers: ["Detailed"] } } },
+      answers: { answers: { format: ["Detailed"] } },
     });
     expect(state.unmatchedResolutions.size).toBe(0);
   });
@@ -476,7 +476,7 @@ describe("refreshPendingQuestions", () => {
       return {
         question: requestedPayload({
           status: "answered",
-          answers: { answers: { format: { answers: ["Detailed"] } } },
+          answers: { answers: { format: ["Detailed"] } },
         }),
       };
     });
@@ -495,7 +495,7 @@ describe("refreshPendingQuestions", () => {
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: { answers: ["Detailed"] } } },
+      answers: { answers: { format: ["Detailed"] } },
     });
   });
 
@@ -512,7 +512,7 @@ describe("refreshPendingQuestions", () => {
       return {
         question: requestedPayload({
           status: "answered",
-          answers: { answers: { format: { answers: ["Detailed"] } } },
+          answers: { answers: { format: ["Detailed"] } },
         }),
       };
     });
@@ -533,7 +533,7 @@ describe("refreshPendingQuestions", () => {
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: { answers: ["Detailed"] } } },
+      answers: { answers: { format: ["Detailed"] } },
     });
   });
 
@@ -573,7 +573,7 @@ describe("refreshPendingQuestions", () => {
         : {
             question: requestedPayload({
               status: "answered",
-              answers: { answers: { format: { answers: ["Detailed"] } } },
+              answers: { answers: { format: ["Detailed"] } },
             }),
           },
     );
@@ -597,7 +597,7 @@ describe("refreshPendingQuestions", () => {
       status: "answered",
       locallyExpired: false,
       answeredElsewhere: true,
-      answers: { answers: { format: { answers: ["Detailed"] } } },
+      answers: { answers: { format: ["Detailed"] } },
     });
   });
 
@@ -630,7 +630,7 @@ describe("refreshPendingQuestions", () => {
     finishGet({
       question: requestedPayload({
         status: "answered",
-        answers: { answers: { format: { answers: ["Detailed"] } } },
+        answers: { answers: { format: ["Detailed"] } },
       }),
     });
 
@@ -655,7 +655,7 @@ describe("refreshPendingQuestions", () => {
       return Promise.resolve({
         question: requestedPayload({
           status: "answered",
-          answers: { answers: { format: { answers: ["Detailed"] } } },
+          answers: { answers: { format: ["Detailed"] } },
         }),
       });
     });

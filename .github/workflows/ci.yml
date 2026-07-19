@@ -1433,6 +1433,7 @@ jobs:
         env:
           GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
+          PROTOCOL_SINCE_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
           RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
           RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
@@ -1450,6 +1451,13 @@ jobs:
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
+              if [[ -n "${PROTOCOL_SINCE_BASE_SHA:-}" ]]; then
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
+              else
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+refs/heads/main:refs/remotes/origin/main"
+              fi
               pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)

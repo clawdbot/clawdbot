@@ -16,7 +16,7 @@ private func questionRecord(
         id: "ask_123",
         questions: [
             Question(
-                id: "meal",
+                questionid: "meal",
                 header: "Meal",
                 question: "Choose dinner",
                 options: [
@@ -145,7 +145,7 @@ private func questionRecord(
 
     let data = try JSONEncoder().encode(model.record.answers)
     let json = try #require(String(data: data, encoding: .utf8))
-    #expect(json.contains("\"meal\":{\"answers\":[\"Pizza\"]}"))
+    #expect(json.contains("\"meal\":[\"Pizza\"]"))
     #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Pizza")
 }
 
@@ -173,7 +173,7 @@ private func questionRecord(
 @MainActor
 @Test func `question card terminal summaries prefer resolved answers`() {
     let answers = QuestionAnswers(answers: [
-        "meal": AnyCodable(["answers": ["Pizza", "extra hot"]]),
+        "meal": AnyCodable(["Pizza", "extra hot"]),
     ])
     let answered = OpenClawQuestionCardModel(record: questionRecord(status: .answered, answers: answers))
     let question = answered.record.questions[0]

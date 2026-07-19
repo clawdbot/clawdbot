@@ -14,7 +14,7 @@ import { NonEmptyString } from "./primitives.js";
  */
 
 /** Model option shown in selectors and model catalog results. */
-export const GatewayAgentRuntimeSchema = closedObject({
+const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   source: Type.Union([

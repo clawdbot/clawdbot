@@ -391,7 +391,7 @@ async function listGatewayHost(params: {
       ...page,
       sessions: page.sessions.map((session) => {
         const adopted = adoptedSessions.get(session.threadId);
-        return adopted ? Object.assign({}, session, { openClawSessionKey: adopted.key }) : session;
+        return adopted ? Object.assign({}, session, { sessionKey: adopted.key }) : session;
       }),
     };
   } catch (error) {
@@ -1230,7 +1230,7 @@ function toGenericCatalogHost(
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
-        ...(session.openClawSessionKey ? { openClawSessionKey: session.openClawSessionKey } : {}),
+        ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
         canContinue,
         canArchive,
         canOpenTerminal,

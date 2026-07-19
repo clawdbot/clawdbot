@@ -1367,7 +1367,7 @@ describe("Codex supervision catalog", () => {
 
     expect(result.hosts[0]?.sessions[0]).toMatchObject({
       threadId: "source-thread",
-      openClawSessionKey: sessionKey,
+      sessionKey,
     });
     expect(result.hosts[1]?.sessions[0]).toEqual({
       threadId: "source-thread",
@@ -1403,7 +1403,7 @@ describe("Codex supervision catalog", () => {
 
     const result = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
 
-    expect(result.hosts[0]?.sessions[0]).not.toHaveProperty("openClawSessionKey");
+    expect(result.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
   });
 
   it("ignores a public marker retarget and trusts the private source binding", async () => {
@@ -1440,7 +1440,7 @@ describe("Codex supervision catalog", () => {
         threadId: "source-thread",
         status: "idle",
         archived: false,
-        openClawSessionKey: sessionKey,
+        sessionKey,
       },
       { threadId: "forged-thread", status: "idle", archived: false },
     ]);
@@ -1497,7 +1497,7 @@ describe("Codex supervision catalog", () => {
         (candidate) => candidate.threadId === source.threadId,
       );
       expect(session).toBeDefined();
-      expect(session).not.toHaveProperty("openClawSessionKey");
+      expect(session).not.toHaveProperty("sessionKey");
     }
     for (const source of sources) {
       await expect(
@@ -1735,7 +1735,7 @@ describe("Codex supervision actions", () => {
     expect(createSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alpha" }));
     expect(catalog.hosts[0]?.sessions[0]).toMatchObject({
       threadId: "thread-1",
-      openClawSessionKey: created.sessionKey,
+      sessionKey: created.sessionKey,
     });
   });
 
@@ -1765,7 +1765,7 @@ describe("Codex supervision actions", () => {
     });
 
     const duringImport = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
-    expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("openClawSessionKey");
+    expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
     expect(entries[0]?.entry.initializationPending).toBe(true);
     let secondSettled = false;
     const secondContinue = continueLocalCodexSession({
@@ -3062,7 +3062,7 @@ describe("Codex supervision actions", () => {
       clientScopes: ["operator.admin"],
     });
     const pendingList = await provider?.list({ hostIds: ["node:devbox"] });
-    expect(pendingList?.[0]?.sessions[0]?.openClawSessionKey).toBeUndefined();
+    expect(pendingList?.[0]?.sessions[0]?.sessionKey).toBeUndefined();
     await first?.afterConversationBound?.();
     runtimeConfig = {
       agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
@@ -3129,7 +3129,7 @@ describe("Codex supervision actions", () => {
     const listed = await provider?.list({ hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({
       threadId: "thread-remote",
-      openClawSessionKey: first?.sessionKey,
+      sessionKey: first?.sessionKey,
     });
   });
 

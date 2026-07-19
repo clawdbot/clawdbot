@@ -107,7 +107,7 @@ struct MacGatewayChatTransportMappingTests {
     @Test func `snapshot maps to health`() {
         let snapshot = Snapshot(
             presence: [],
-            health: OpenClawProtocol.AnyCodable(["ok": OpenClawProtocol.AnyCodable(false)]),
+            health: ["ok": OpenClawProtocol.AnyCodable(false)],
             stateversion: StateVersion(presence: 1, health: 1),
             uptimems: 123,
             configpath: nil,

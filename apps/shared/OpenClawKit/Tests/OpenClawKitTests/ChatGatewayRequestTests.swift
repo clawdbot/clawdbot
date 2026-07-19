@@ -239,7 +239,7 @@ struct ChatGatewayRequestTests {
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
     }
 
-    @Test func `question resolve request preserves nested answer contract`() throws {
+    @Test func `question resolve request preserves answer arrays`() throws {
         let request = OpenClawChatGatewayRequests.resolveQuestion(
             id: "ask_123",
             answers: ["meal": ["Pizza", "Salad"]])
@@ -248,9 +248,7 @@ struct ChatGatewayRequestTests {
         let data = try JSONEncoder().encode(request.params)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let answers = try #require(object["answers"] as? [String: Any])
-        let values = try #require(answers["answers"] as? [String: Any])
-        let meal = try #require(values["meal"] as? [String: Any])
-        #expect(meal["answers"] as? [String] == ["Pizza", "Salad"])
+        #expect(answers["meal"] as? [String] == ["Pizza", "Salad"])
     }
 
     @Test func `question get request carries id`() {

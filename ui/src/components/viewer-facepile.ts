@@ -4,7 +4,7 @@ import type { PresenceEntry } from "../api/types.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import "./tooltip.ts";
 
-type PresenceViewer = {
+export type PresenceViewer = {
   id: string;
   name?: string;
   email?: string;
@@ -87,7 +87,7 @@ function projectPresencePayload(value: unknown, selfInstanceId?: string) {
   return cachedPresenceProjection;
 }
 
-function presenceViewerLabel(user: PresenceViewer): string {
+export function presenceViewerLabel(user: PresenceViewer): string {
   return user.name ?? user.email ?? user.id;
 }
 
@@ -112,6 +112,30 @@ function avatarColor(userId: string): string {
   return `hsl(${(hash >>> 0) % 360} 48% 42%)`;
 }
 
+export type ViewerAvatarVariant = "session" | "footer" | "profile";
+
+class ViewerAvatar extends OpenClawLightDomContentsElement {
+  @property({ attribute: false }) user: PresenceViewer | null = null;
+  @property() variant: ViewerAvatarVariant = "session";
+
+  override render() {
+    const user = this.user;
+    if (!user) {
+      return nothing;
+    }
+    const label = presenceViewerLabel(user);
+    return html`<span
+      class="viewer-avatar viewer-avatar--${this.variant}"
+      data-viewer-id=${user.id}
+      aria-label=${label}
+    >
+      ${user.avatarUrl
+        ? html`<img src=${user.avatarUrl} alt="" referrerpolicy="no-referrer" />`
+        : html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`}
+    </span>`;
+  }
+}
+
 class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) presencePayload: unknown;
   @property({ attribute: false }) selfInstanceId?: string;
@@ -126,7 +150,9 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
       ? projection.users.filter(
           (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
         )
-      : projection.users;
+      : this.variant === "footer"
+        ? projection.users.filter((user) => user.id !== projection.selfUserId)
+        : projection.users;
     if (users.length === 0) {
       return nothing;
     }
@@ -140,13 +166,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
       ${visible.map((user) => {
         const label = presenceViewerLabel(user);
         return html`<openclaw-tooltip .content=${label}>
-          <span class="viewer-avatar" data-viewer-id=${user.id} aria-label=${label}>
-            ${user.avatarUrl
-              ? html`<img src=${user.avatarUrl} alt="" referrerpolicy="no-referrer" />`
-              : html`<span style=${`background: ${avatarColor(user.id)}`}
-                  >${initialsFor(user)}</span
-                >`}
-          </span>
+          <openclaw-viewer-avatar .user=${user} .variant=${this.variant}></openclaw-viewer-avatar>
         </openclaw-tooltip>`;
       })}
       ${overflow.length > 0
@@ -162,12 +182,18 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   }
 }
 
-if (globalThis.customElements && !customElements.get("openclaw-viewer-facepile")) {
-  customElements.define("openclaw-viewer-facepile", ViewerFacepile);
+if (globalThis.customElements) {
+  if (!customElements.get("openclaw-viewer-avatar")) {
+    customElements.define("openclaw-viewer-avatar", ViewerAvatar);
+  }
+  if (!customElements.get("openclaw-viewer-facepile")) {
+    customElements.define("openclaw-viewer-facepile", ViewerFacepile);
+  }
 }
 
 declare global {
   interface HTMLElementTagNameMap {
+    "openclaw-viewer-avatar": ViewerAvatar;
     "openclaw-viewer-facepile": ViewerFacepile;
   }
 }

@@ -9,6 +9,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -295,6 +296,14 @@ class AppSidebar extends AppSidebarSessionListElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
+    const selfUser = this.connected
+      ? resolveCurrentSelfUser({
+          snapshotUser: this.context?.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.presenceInstanceId,
+        })
+      : null;
+    const selfLabel = selfUser?.name ?? selfUser?.email ?? selfUser?.id;
     return html`
       <div class="sidebar-footer-bar">
         <span class="sidebar-brand__logo-slot sidebar-footer-bar__logo">
@@ -306,6 +315,21 @@ class AppSidebar extends AppSidebarSessionListElement {
           />
           <openclaw-lobster-logo-standin .visit=${this.logoVisit}></openclaw-lobster-logo-standin>
         </span>
+        ${selfUser && selfLabel
+          ? html`<button
+              type="button"
+              class="sidebar-footer-bar__identity"
+              title=${selfLabel}
+              aria-label=${t("profilePage.identity.openSettings", { name: selfLabel })}
+              @click=${() => this.onNavigate?.("profile", { hash: "#settings-profile-identity" })}
+            >
+              <openclaw-viewer-avatar
+                .user=${{ ...selfUser, watchedSessions: [] }}
+                variant="footer"
+              ></openclaw-viewer-avatar>
+              <span class="sidebar-footer-bar__identity-name">${selfLabel}</span>
+            </button>`
+          : nothing}
         <openclaw-viewer-facepile
           .presencePayload=${this.presencePayload}
           .selfInstanceId=${this.presenceInstanceId}

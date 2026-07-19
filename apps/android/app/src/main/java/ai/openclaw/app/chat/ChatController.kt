@@ -7,7 +7,6 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.QuestionAnswers
-import ai.openclaw.app.gateway.QuestionAnswersAnswersValue
 import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
@@ -2144,7 +2143,7 @@ class ChatController internal constructor(
                     "answers",
                     buildJsonObject {
                       answers.orEmpty().forEach { (questionId, values) ->
-                        put(questionId, buildJsonObject { put("answers", JsonArray(values.map(::JsonPrimitive))) })
+                        put(questionId, JsonArray(values.map(::JsonPrimitive)))
                       }
                     },
                   )
@@ -2160,10 +2159,7 @@ class ChatController internal constructor(
                 record =
                   prompt.record.copy(
                     status = if (cancel) "cancelled" else "answered",
-                    answers =
-                      answers?.let { values ->
-                        QuestionAnswers(values.mapValues { QuestionAnswersAnswersValue(it.value) })
-                      },
+                    answers = answers?.let(::QuestionAnswers),
                   ),
                 submitting = false,
                 skipping = false,

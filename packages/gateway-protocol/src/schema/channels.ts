@@ -644,7 +644,7 @@ export const ChannelsStatusParamsSchema = closedObject({
  * This is intentionally schema-light so new channel-specific metadata can ship
  * without a gateway protocol update; known fields stay documented for UI use.
  */
-export const ChannelAccountSnapshotSchema = Type.Object(
+const ChannelAccountSnapshotSchema = Type.Object(
   {
     accountId: NonEmptyString,
     name: Type.Optional(Type.String()),
@@ -685,7 +685,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
 );
 
 /** UI label and icon metadata for one channel. */
-export const ChannelUiMetaSchema = closedObject({
+const ChannelUiMetaSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   detailLabel: NonEmptyString,
@@ -693,7 +693,7 @@ export const ChannelUiMetaSchema = closedObject({
 });
 
 /** Event-loop health snapshot included with channel status responses. */
-export const ChannelEventLoopHealthSchema = closedObject({
+const ChannelEventLoopHealthSchema = closedObject({
   degraded: Type.Boolean(),
   reasons: Type.Array(
     Type.Union([

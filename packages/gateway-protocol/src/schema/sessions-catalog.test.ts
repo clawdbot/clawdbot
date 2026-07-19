@@ -64,10 +64,10 @@ describe("SessionsCatalogListParamsSchema", () => {
     ).toBe(true);
   });
 
-  it("requires a catalog selector for host cursors", () => {
+  it("accepts flat optional catalog cursor fields", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, { cursors: { "gateway:local": "1" } }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {
         catalogId: "claude",

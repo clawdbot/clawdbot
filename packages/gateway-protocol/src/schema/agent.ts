@@ -29,7 +29,7 @@ const CONVERSATION_REF_PATTERN = "^conv_[a-f0-9]{32}$";
  * because older CLI/channel clients may continue sending them across releases.
  */
 /** Generated media/file attachment metadata carried by internal agent events. */
-export const AgentGeneratedAttachmentSchema = closedObject({
+const AgentGeneratedAttachmentSchema = closedObject({
   type: Type.Optional(Type.String({ enum: ["image", "audio", "video", "file"] })),
   path: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
@@ -40,7 +40,7 @@ export const AgentGeneratedAttachmentSchema = closedObject({
 });
 
 /** Internal completion event surfaced when child automation reports back to a parent run. */
-export const AgentInternalEventSchema = closedObject({
+const AgentInternalEventSchema = closedObject({
   type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
   source: Type.String({ enum: [...AGENT_INTERNAL_EVENT_SOURCES] }),
   childSessionKey: Type.String(),
@@ -68,7 +68,7 @@ export const AgentEventSchema = closedObject({
 });
 
 /** Caller-supplied routing hints. Authorization must use trusted runtime context. */
-export const MessageActionToolContextSchema = closedObject({
+const MessageActionToolContextSchema = closedObject({
   currentChannelId: Type.Optional(Type.String()),
   currentMessagingTarget: Type.Optional(Type.String()),
   currentGraphChannelId: Type.Optional(Type.String()),
