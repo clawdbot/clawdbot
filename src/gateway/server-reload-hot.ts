@@ -458,6 +458,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await params.stopChannel(channel, undefined, {
               manual: false,
               restartPending: false,
+              preserveKnownAccount: true,
             });
             if (isPluginReloadAborted()) {
               pluginReloadAborted = true;
