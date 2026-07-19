@@ -210,6 +210,7 @@ describe("runPrCiSweeper", () => {
       core: core as never,
       dryRun: true,
       appSlug: "openclaw-barnacle",
+      now: NOW,
     });
     expect(results).toEqual([
       { number: 7, sha: "a".repeat(12), action: "refire", reason: "ci-startup-failure" },
@@ -230,6 +231,7 @@ describe("runPrCiSweeper", () => {
       context: context as never,
       core: core as never,
       appSlug: "openclaw-barnacle",
+      now: NOW,
     });
     expect(results).toEqual([
       { number: 9, sha: "c".repeat(12), action: "refire", reason: "ci-run-missing" },
