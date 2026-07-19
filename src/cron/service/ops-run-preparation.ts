@@ -72,6 +72,7 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   taskRunId?: string;
   activeJobMarker?: CronActiveJobMarker;
   executionJob: CronJob;
+  preserveExpiredPacedSlot?: boolean;
 };
 
 export type ManualRunOptions = {
@@ -533,6 +534,7 @@ export async function activatePreparedManualRun(
       taskRunId,
       activeJobMarker,
       executionJob,
+      preserveExpiredPacedSlot: mode === "force",
     } as const;
   });
 }

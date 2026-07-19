@@ -253,11 +253,12 @@ async function finishPreparedManualRun(
         snapshot: postRunSnapshot,
         removed: postRunRemoved,
       });
-      // A manual run reaches this path with operator origin, so it never owns
-      // the scheduler-consuming force-preserve semantics; repair expired slots
-      // without pinning a paced job the way a scheduled force run would.
+      // A forced operator run pins its own expired paced slot so the pending
+      // scheduled fire is preserved; a plain due run repairs expired slots
+      // normally without pinning (#83538, #111331).
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
+        ...(prepared.preserveExpiredPacedSlot ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
       });
       await persistOrRestore(state, rollbackSnapshot);
       if (removedJob) {
