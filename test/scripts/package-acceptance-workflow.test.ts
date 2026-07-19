@@ -4060,7 +4060,7 @@ describe("package artifact reuse", () => {
       "\n              if promote_windows_release_assets; then\n",
     );
     const publishReleaseCall = releaseWorkflow.lastIndexOf(
-      "\n              publish_github_release\n",
+      "\n                publish_github_release\n",
     );
     expect(createDraftCall).toBeGreaterThan(-1);
     expect(promoteWindowsCall).toBeGreaterThan(createDraftCall);
@@ -4196,7 +4196,7 @@ describe("package artifact reuse", () => {
       "\n              if promote_android_release_asset; then\n",
     );
     const publishReleaseCall = releaseWorkflow.lastIndexOf(
-      "\n              publish_github_release\n",
+      "\n                publish_github_release\n",
     );
     expect(createDraftCall).toBeGreaterThan(-1);
     expect(promoteAndroidCall).toBeGreaterThan(createDraftCall);
