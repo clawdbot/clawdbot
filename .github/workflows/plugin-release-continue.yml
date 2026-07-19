@@ -251,6 +251,12 @@ jobs:
 
           target_base_correlation() {
             local target="$1"
+            if [[ "${target}" == "bootstrap" ]]; then
+              # Bootstrap authorization is parent-attempt-bound. Excluding the
+              # attempt can select a prior-attempt child that cannot authenticate.
+              echo "${RELEASE_PUBLISH_RUN_ID}-${RELEASE_PUBLISH_RUN_ATTEMPT}-${RELEASE_SHA}-${target}"
+              return
+            fi
             echo "${RELEASE_PUBLISH_RUN_ID}-${RELEASE_SHA}-${target}"
           }
 
