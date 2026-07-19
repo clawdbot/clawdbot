@@ -6,7 +6,14 @@ import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
-const sleepMock = vi.hoisted(() => vi.fn(async () => {}));
+const sleepMock = vi.hoisted(() =>
+  vi.fn(
+    async (ms: number) =>
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+  ),
+);
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
@@ -35,7 +42,12 @@ describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
     sleepMock.mockReset();
-    sleepMock.mockImplementation(async () => {});
+    sleepMock.mockImplementation(
+      async (ms: number) =>
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+    );
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
