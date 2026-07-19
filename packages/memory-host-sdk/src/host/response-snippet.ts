@@ -204,7 +204,7 @@ async function readResponseTextWithLimit(
     } catch {}
   }
 
-  return new TextDecoder().decode(joinChunks(chunks, length));
+  return new TextDecoder("utf-8", { fatal: true }).decode(joinChunks(chunks, length));
 }
 
 async function cancelResponseBody(res: Response): Promise<void> {
