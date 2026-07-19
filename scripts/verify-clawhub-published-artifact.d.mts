@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+export class PermanentReadbackError extends Error {}
+export class RetryableReadbackError extends Error {
+  retryAfterMs: number | undefined;
+  constructor(message: string, requestedDelayMs?: number);
+}
 export function verifyPublishedClawHubArtifacts(options: unknown): Promise<{
   schemaVersion: number;
   repository: unknown;
