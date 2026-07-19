@@ -740,7 +740,28 @@ describe("package acceptance workflow", () => {
     expect(continuationRun).toContain("dispatch_target normal");
     expect(continuationRun).toContain("dispatch_target bootstrap");
     expect(continuationRun).toContain("return_run_details: true");
-    expect(continuationRun).toContain('status: "ecosystem-converged"');
+    expect(continuationRun).toContain('continuation_status="clawhub-dispatched"');
+    expect(continuationRun).toContain('continuation_status="ecosystem-dispatch-failed"');
+    expect(continuationRun).toContain("cancel_and_drain");
+    expect(continuationRun).toContain('continuation_status="ecosystem-cleanup-incomplete"');
+    expect(continuationRun).toContain("did not reach a terminal state during cleanup");
+    expect(continuationRun).toContain("continuation_id");
+    expect(continuationRun).toContain("display_title == $expected_title");
+    expect(continuationRun).not.toContain(".head_sha == $expected_sha");
+    expect(continuationRun).toContain("Unable to reconcile ClawHub");
+    expect(continuationRun).toContain('echo "UNRESOLVED:${target}"');
+    expect(continuationRun).toContain("mark_target_pending normal");
+    expect(continuationRun).toContain("clear_target_pending normal");
+    expect(continuationRun).toContain("mark_target_pending bootstrap");
+    expect(continuationRun).toContain("clear_target_pending bootstrap");
+    expect(continuationRun).toContain("unresolvedCorrelations: $unresolved_correlations");
+    expect(continuationRun).toContain('reconcile_target "${target}" 60');
+    expect(continuationRun).toContain('if [[ "${watch_failed}" == "true" ]]; then');
+    expect(continuationRun).toContain('watch_run "${run_id}" "${watch_log}" &');
+    expect(continuationRun).toContain('for index in "${!watch_pids[@]}"; do');
+    expect(continuationRun).toContain("all dispatched child outcomes were collected");
+    expect(continuationRun).toContain('continuation_status="ecosystem-converged"');
+    expect(workflowStep(job, "Upload continuation evidence").if).toBe("${{ always() }}");
   });
 
   it("emits an immutable parent-bound plugin npm handoff", () => {
