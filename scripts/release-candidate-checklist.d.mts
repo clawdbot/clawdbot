@@ -184,6 +184,14 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
  * Builds the final release publish workflow command once validation evidence is ready.
  */
 export function buildPublishCommand(options: unknown): string;
+export function buildPublishFields(options: unknown): Array<[string, unknown]>;
+export function validatePublishEvidence(
+  evidence: unknown,
+  expected: unknown,
+): {
+  status: string;
+  completionState: string;
+};
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
 export function preflightCorePackageTarballs(manifest: {
   corePackageTarballs?: unknown;
