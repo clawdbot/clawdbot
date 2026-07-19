@@ -246,10 +246,16 @@ function buildLineSendResult(
   // each returned id with its own message's kind; the first stays primary.
   const parts = sentMessages.map((sent, index) => ({
     messageId: sent.id,
-    kind: resolveLineReceiptKind([messages[index]]),
+    kind: resolveLineReceiptKind(messages.slice(index, index + 1)),
   }));
+  const [primary] = parts;
+  if (!primary) {
+    // LINE documents one SentMessage per delivered message, so an empty list on
+    // a resolved send is a contract violation rather than a state to paper over.
+    throw new Error("LINE returned no sent messages for a delivered send");
+  }
   return {
-    messageId: parts[0].messageId,
+    messageId: primary.messageId,
     chatId,
     receipt: createLineSendReceipt({ parts, chatId, messageCount: messages.length }),
   };
