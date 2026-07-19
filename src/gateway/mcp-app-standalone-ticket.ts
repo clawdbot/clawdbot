@@ -9,7 +9,7 @@ const MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS = 15_000;
 const MCP_APP_STANDALONE_TICKET_MAX_ENTRIES = 256;
 const ticketSecret = randomBytes(32);
 
-export type McpAppStandaloneTicketBinding = {
+type McpAppStandaloneTicketBinding = {
   nonce: string;
   sessionKey: string;
   sessionId: string;
