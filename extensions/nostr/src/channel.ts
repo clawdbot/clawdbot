@@ -32,10 +32,7 @@ import {
 } from "./gateway.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
-import {
-  collectRuntimeConfigAssignments,
-  secretTargetRegistryEntries,
-} from "./secret-contract.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupAdapter, nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
 import {
