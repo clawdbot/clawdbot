@@ -1304,6 +1304,17 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     expect(plan.clawHubWorkflowRef).toBe("v2026.4.1-beta.1");
     expect(plan.bootstrapWorkflowSha).toBe("d".repeat(40));
     expect(plan.releasePublishBranch).toBe("main");
+    expect(plan.pluginNpm).toEqual({
+      workflow: "plugin-npm-release.yml",
+      inputs: {
+        publish_scope: "all-publishable",
+        ref: "a".repeat(40),
+        plugins: "",
+        release_publish_run_id: "12345",
+        preflight_only: "false",
+        npm_dist_tag: "default",
+      },
+    });
     expect(plan.normal).toEqual({
       workflow: "plugin-clawhub-release.yml",
       ref: "v2026.4.1-beta.1",

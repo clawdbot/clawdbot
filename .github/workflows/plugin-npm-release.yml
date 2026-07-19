@@ -1366,6 +1366,64 @@ jobs:
             echo "- Configure the GitHub trusted publisher for \`plugin-npm-release.yml\` and environment \`npm-release\` before the next OIDC publish."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  record_release_handoff:
+    name: Record plugin npm release handoff
+    needs: [preview_plugins_npm, publish_plugins_npm]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && inputs.release_publish_run_id != '' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Write immutable release handoff
+        env:
+          HANDOFF_PATH: ${{ runner.temp }}/plugin-npm-release-handoff.json
+          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGINS: ${{ inputs.plugins }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+          PUBLISH_SCOPE: ${{ inputs.publish_scope }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg plugins "${PLUGINS}" \
+            --arg npm_dist_tag "${NPM_DIST_TAG}" \
+            --arg preflight_only "${PREFLIGHT_ONLY}" \
+            --arg publish_scope "${PUBLISH_SCOPE}" \
+            --arg release_publish_run_id "${RELEASE_PUBLISH_RUN_ID}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg workflow_sha "${WORKFLOW_SHA}" '{
+              schemaVersion: 1,
+              kind: "openclaw-plugin-npm-release-handoff",
+              repository: $repository,
+              workflow: "Plugin NPM Release",
+              workflowSha: $workflow_sha,
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releasePublishRunId: $release_publish_run_id,
+              sourceSha: $source_sha,
+              inputs: {
+                publish_scope: $publish_scope,
+                ref: $source_sha,
+                plugins: $plugins,
+                release_publish_run_id: $release_publish_run_id,
+                preflight_only: $preflight_only,
+                npm_dist_tag: $npm_dist_tag
+              }
+            }' > "${HANDOFF_PATH}"
+
+      - name: Upload immutable release handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-npm-release-handoff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plugin-npm-release-handoff.json
+          if-no-files-found: error
+          retention-days: 30
+
   verify_plugins_npm:
     needs: [preview_plugins_npm, publish_plugins_npm]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
