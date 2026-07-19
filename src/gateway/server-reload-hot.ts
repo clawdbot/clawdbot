@@ -452,10 +452,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
-            const stopOptions = getChannelAutostartSuppression()
-              ? { manual: false, restartPending: false }
-              : { manual: false };
-            await params.stopChannel(channel, undefined, stopOptions);
+            // The paired post-replace restart owns this handoff. Do not expose
+            // the pre-replace stop as a health-monitor restart candidate while
+            // secret activation or plugin preparation is still in flight.
+            await params.stopChannel(channel, undefined, {
+              manual: false,
+              restartPending: false,
+            });
             if (isPluginReloadAborted()) {
               pluginReloadAborted = true;
             }
