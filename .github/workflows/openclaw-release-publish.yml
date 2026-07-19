@@ -730,6 +730,17 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
 
+      - name: Upload ClawHub release plan
+        id: clawhub_plan_artifact
+        if: ${{ steps.clawhub_plan.outcome == 'success' }}
+        continue-on-error: ${{ inputs.publish_openclaw_npm && (contains(inputs.tag, '-alpha.') || contains(inputs.tag, '-beta.')) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-release-clawhub-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload ClawHub bootstrap approval
         if: ${{ steps.clawhub_plan.outputs.bootstrap_should_dispatch == 'true' }}
         continue-on-error: ${{ inputs.publish_openclaw_npm && (contains(inputs.tag, '-alpha.') || contains(inputs.tag, '-beta.')) }}
@@ -828,6 +839,7 @@ jobs:
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
           CLAWHUB_PLAN_OUTCOME: ${{ steps.clawhub_plan.outcome }}
+          CLAWHUB_PLAN_ARTIFACT_OUTCOME: ${{ steps.clawhub_plan_artifact.outcome }}
         run: |
           set -euo pipefail
 
@@ -922,9 +934,9 @@ jobs:
             dispatch_body="$(jq -cn \
               --arg ref "$workflow_ref" \
               --argjson inputs "$inputs_json" \
-              '{ref: $ref, inputs: $inputs}')"
-            # API 2026-03-10 removed return_run_details and always returns the
-            # workflow_run_id, API run_url, and browser html_url in a 200 response.
+              '{ref: $ref, inputs: $inputs, return_run_details: true}')"
+            # Request the exact created run; without this opt-in the API returns
+            # 204 and forces ambiguous polling after a mutating dispatch.
             dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
               --method POST \
               -H "Accept: application/vnd.github+json" \
@@ -1398,6 +1410,13 @@ jobs:
             clawhub_plan_path="${CLAWHUB_PLAN_PATH}"
             if [[ ! -s "${clawhub_plan_path}" ]] ||
               ! jq -e '
+                (.pluginNpm.workflow == "plugin-npm-release.yml") and
+                (.pluginNpm.inputs.publish_scope == "selected" or .pluginNpm.inputs.publish_scope == "all-publishable") and
+                (.pluginNpm.inputs.ref | test("^[a-f0-9]{40}$")) and
+                (.pluginNpm.inputs.plugins | type == "string") and
+                (.pluginNpm.inputs.release_publish_run_id | test("^[1-9][0-9]*$")) and
+                (.pluginNpm.inputs.preflight_only == "false") and
+                (.pluginNpm.inputs.npm_dist_tag == "default") and
                 (.normal.shouldDispatch | type == "boolean") and
                 (.bootstrap.shouldDispatch | type == "boolean") and
                 (.summary.normalPlugins | type == "string") and
@@ -1993,6 +2012,7 @@ jobs:
               --arg validation_url "${validation_url}" \
               --arg validation_workflow_ref "${validation_workflow_ref}" \
               --arg npm_preflight_run_id "${PREFLIGHT_RUN_ID}" \
+              --arg plugin_ecosystem_continuation_run_id "${plugin_ecosystem_continuation_run_id}" \
               --arg plugin_publish_scope "${PLUGIN_PUBLISH_SCOPE}" \
               --arg plugins "${PLUGINS}" \
               --arg release_profile "${release_profile}" \
@@ -2002,6 +2022,7 @@ jobs:
                 .npmPreflightRunId = $npm_preflight_run_id |
                 .fullReleaseValidationRunId = $validation_run_id |
                 .fullReleaseValidationRunAttempt = $validation_run_attempt |
+                .pluginEcosystemContinuationRunId = (if $plugin_ecosystem_continuation_run_id == "" then null else $plugin_ecosystem_continuation_run_id end) |
                 .pluginPublishScope = $plugin_publish_scope |
                 .plugins = ($plugins | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | sort) |
                 .releaseProfile = $release_profile |
@@ -2051,7 +2072,7 @@ jobs:
           }
 
           append_release_proof_to_github_release() {
-            local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line windows_line
+            local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line windows_line continuation_line
 
             release_version="${RELEASE_TAG#v}"
             proof_file="${RUNNER_TEMP}/release-verification.md"
@@ -2070,6 +2091,10 @@ jobs:
             write_clawhub_runtime_state false "${clawhub_runtime_state_path}"
             clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
             clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
+            continuation_line=""
+            if [[ -n "${plugin_ecosystem_continuation_run_id// }" ]]; then
+              continuation_line="- plugin ecosystem continuation: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_ecosystem_continuation_run_id}"
+            fi
             windows_line=""
             if [[ -n "${windows_node_run_id// }" ]]; then
               windows_line="- Windows Hub promotion: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${windows_node_run_id} from openclaw/openclaw-windows-node@${WINDOWS_NODE_TAG}"
@@ -2094,6 +2119,7 @@ jobs:
               OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id}" \
               CLAWHUB_LINE="${clawhub_line}" \
               CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
+              PLUGIN_ECOSYSTEM_CONTINUATION_LINE="${continuation_line}" \
               TELEGRAM_LINE="${telegram_line}" \
               ANDROID_LINE="${android_line}" \
               WINDOWS_LINE="${windows_line}" \
@@ -2121,6 +2147,9 @@ jobs:
               : `- plugin ecosystem: asynchronous repair required (https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID})`,
             process.env.CLAWHUB_LINE,
             process.env.CLAWHUB_BOOTSTRAP_LINE,
+            ...(process.env.PLUGIN_ECOSYSTEM_CONTINUATION_LINE
+              ? [process.env.PLUGIN_ECOSYSTEM_CONTINUATION_LINE]
+              : []),
             // Resumed publishes reuse the already-published npm package and
             // have no core npm run of their own to cite.
             ...(process.env.OPENCLAW_NPM_RUN_ID
@@ -2226,6 +2255,8 @@ jobs:
           plugin_clawhub_bootstrap_completed="false"
           plugin_npm_run_id=""
           plugin_npm_succeeded="false"
+          plugin_ecosystem_continuation_run_id=""
+          plugin_ecosystem_detached="false"
           ecosystem_failed=0
           release_ecosystem_converged="false"
           plugin_ecosystem_setup_ready="true"
@@ -2250,6 +2281,13 @@ jobs:
             if plugin_ecosystem_is_required; then
               exit 1
             fi
+          elif [[ "${CLAWHUB_PLAN_ARTIFACT_OUTCOME}" != "success" ]]; then
+            ecosystem_failed=1
+            plugin_ecosystem_setup_ready="false"
+            echo "::warning::ClawHub release plan upload failed; prerelease ecosystem repair is required."
+            if plugin_ecosystem_is_required; then
+              exit 1
+            fi
           elif ! resolve_clawhub_release_plan; then
             ecosystem_failed=1
             plugin_ecosystem_setup_ready="false"
@@ -2271,10 +2309,10 @@ jobs:
             fi
           fi
 
-          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
-          if [[ -n "${PLUGINS}" ]]; then
-            npm_args+=(-f plugins="${PLUGINS}")
-          fi
+          npm_args=()
+          while IFS=$'\t' read -r key value; do
+            npm_args+=(-f "${key}=${value}")
+          done < <(jq -r '.pluginNpm.inputs | to_entries[] | [.key, .value] | @tsv' "${clawhub_plan_path}")
 
           if [[ "${plugin_ecosystem_setup_ready}" == "true" ]]; then
             if ! plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"; then
@@ -2287,55 +2325,75 @@ jobs:
           fi
           echo "- Plugin npm run ID: \`${plugin_npm_run_id:-none}\`" >> "$GITHUB_STEP_SUMMARY"
 
-          if [[ -n "${plugin_npm_run_id}" ]] && wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
-            plugin_npm_succeeded="true"
-          elif [[ -n "${plugin_npm_run_id}" ]]; then
-            ecosystem_failed=1
-            echo "::warning::Plugin npm publish failed; ClawHub publish was not dispatched."
-            echo "- Plugin ecosystem: npm publish failed; repair asynchronously" >> "$GITHUB_STEP_SUMMARY"
-            if plugin_ecosystem_is_required; then
-              exit 1
+          if [[ -n "${plugin_npm_run_id}" ]] && ! is_stable_release &&
+            [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WAIT_FOR_CLAWHUB}" != "true" ]]; then
+            # Default prerelease: a separate trusted workflow preserves npm ->
+            # ClawHub ordering without keeping beta-live on that critical path.
+            plugin_ecosystem_detached="true"
+            if ! plugin_ecosystem_continuation_run_id="$(dispatch_workflow plugin-release-continue.yml \
+              -f plugin_npm_run_id="${plugin_npm_run_id}" \
+              -f release_publish_run_id="${GITHUB_RUN_ID}" \
+              -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
+              -f release_sha="${TARGET_SHA}" \
+              -f parent_workflow_sha="${PARENT_WORKFLOW_SHA}")"; then
+              ecosystem_failed=1
+              echo "::warning::Plugin ecosystem continuation dispatch failed; beta core publish continues."
             fi
           fi
 
-          if [[ "${plugin_npm_succeeded}" == "true" && "${normal_should_dispatch}" == "true" ]]; then
-            clawhub_dispatch_args=()
-            append_clawhub_dispatch_args normal
-            if ! plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
-              "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
-              "${TARGET_SHA}" \
-              "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
-              "${clawhub_dispatch_args[@]}")"; then
+          if [[ "${plugin_ecosystem_detached}" != "true" ]]; then
+            if [[ -n "${plugin_npm_run_id}" ]] && wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
+              plugin_npm_succeeded="true"
+            elif [[ -n "${plugin_npm_run_id}" ]]; then
               ecosystem_failed=1
-              echo "::warning::Plugin ClawHub dispatch failed."
+              echo "::warning::Plugin npm publish failed; ClawHub publish was not dispatched."
+              echo "- Plugin ecosystem: npm publish failed; repair asynchronously" >> "$GITHUB_STEP_SUMMARY"
               if plugin_ecosystem_is_required; then
                 exit 1
               fi
             fi
-          else
-            echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [[ "${plugin_npm_succeeded}" == "true" && "${bootstrap_should_dispatch}" == "true" ]]; then
-            clawhub_dispatch_args=()
-            append_clawhub_dispatch_args bootstrap
-            if ! plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
-              "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
-              "${bootstrap_workflow_sha}" \
-              "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")" \
-              "${clawhub_dispatch_args[@]}")"; then
-              ecosystem_failed=1
-              echo "::warning::Plugin ClawHub bootstrap dispatch failed."
-              if plugin_ecosystem_is_required; then
-                exit 1
+
+            if [[ "${plugin_npm_succeeded}" == "true" && "${normal_should_dispatch}" == "true" ]]; then
+              clawhub_dispatch_args=()
+              append_clawhub_dispatch_args normal
+              if ! plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
+                "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
+                "${TARGET_SHA}" \
+                "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
+                "${clawhub_dispatch_args[@]}")"; then
+                ecosystem_failed=1
+                echo "::warning::Plugin ClawHub dispatch failed."
+                if plugin_ecosystem_is_required; then
+                  exit 1
+                fi
               fi
+            else
+              echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
             fi
+            if [[ "${plugin_npm_succeeded}" == "true" && "${bootstrap_should_dispatch}" == "true" ]]; then
+              clawhub_dispatch_args=()
+              append_clawhub_dispatch_args bootstrap
+              if ! plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
+                "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
+                "${bootstrap_workflow_sha}" \
+                "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")" \
+                "${clawhub_dispatch_args[@]}")"; then
+                ecosystem_failed=1
+                echo "::warning::Plugin ClawHub bootstrap dispatch failed."
+                if plugin_ecosystem_is_required; then
+                  exit 1
+                fi
+              fi
+            else
+              echo "- plugin-clawhub-new.yml: no bootstrap candidates" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            {
+              echo "- Plugin ClawHub run ID: \`${plugin_clawhub_run_id:-none}\`"
+              echo "- Plugin ClawHub bootstrap run ID: \`${plugin_clawhub_bootstrap_run_id:-none}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- plugin-clawhub-new.yml: no bootstrap candidates" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Plugin ecosystem continuation run ID: \`${plugin_ecosystem_continuation_run_id:-dispatch-failed}\`" >> "$GITHUB_STEP_SUMMARY"
           fi
-          {
-            echo "- Plugin ClawHub run ID: \`${plugin_clawhub_run_id:-none}\`"
-            echo "- Plugin ClawHub bootstrap run ID: \`${plugin_clawhub_bootstrap_run_id:-none}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]] && should_wait_for_plugin_ecosystem; then
             echo "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish."
