@@ -52,7 +52,9 @@ public enum ShareGatewayRelaySettings {
         if config.gatewayStableID?.isEmpty == false {
             return config
         }
-        let identity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) else {
+            return config
+        }
         DeviceAuthStore.discardUnscopedTokens(
             deviceId: identity.deviceId,
             profile: .shareExtension)

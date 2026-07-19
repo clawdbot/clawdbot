@@ -10,6 +10,7 @@ import {
   warmCurrentProviderAuthStateOffMainThread,
 } from "../agents/model-provider-auth.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
@@ -42,6 +43,9 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
+  hasActiveSecretsRuntimeSnapshotLineage,
+  hasSameSecretReloadContract,
+  restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
@@ -83,7 +87,10 @@ import {
   type SharedGatewaySessionGenerationOwnership,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import {
+  publishRuntimeSecretsStateTransition,
+  type ActivateRuntimeSecrets,
+} from "./server-startup-config.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
@@ -94,6 +101,22 @@ import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 // increments the generation so a new lifecycle never clears an abort intended for a
 // previous lifecycle's deferred reload.
 let currentReloadGeneration = 0;
+
+type RuntimeSecretsPreflightParams = Omit<
+  Parameters<ActivateRuntimeSecrets>[1],
+  "activate" | "canPublishFailureAsDegraded"
+>;
+
+type CurrentRuntimeSecretsPreparation = {
+  snapshot: PreparedSecretsRuntimeSnapshot;
+  expectedRevision: number;
+};
+
+function isRuntimeSecretsPreparationCurrent(
+  preparation: CurrentRuntimeSecretsPreparation,
+): boolean {
+  return getActiveSecretsRuntimeSnapshotRevision() === preparation.expectedRevision;
+}
 let abortGeneration: number | undefined = undefined;
 const RESTART_EMISSION_RETRY_MS = 1_000;
 
@@ -116,13 +139,18 @@ async function activateSecretsRuntimeSnapshotIfCurrent(
   options?: {
     canActivate?: () => boolean;
     onActivated?: () => void;
+    runtimeSourceConfig?: OpenClawConfig;
   },
 ): Promise<boolean> {
   const runtime = await import("../secrets/runtime.js");
   if (options?.canActivate && !options.canActivate()) {
     return false;
   }
-  if (!runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision)) {
+  if (
+    !runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, {
+      runtimeSourceConfig: options?.runtimeSourceConfig,
+    })
+  ) {
     return false;
   }
   options?.onActivated?.();
@@ -133,10 +161,14 @@ async function restoreSecretsRuntimeSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
   expectedRevision: number,
   ownedSnapshot: PreparedSecretsRuntimeSnapshot,
-  options?: { onActivated?: () => void },
+  options?: { onActivated?: () => void; runtimeSourceConfig?: OpenClawConfig },
 ): Promise<boolean> {
   const runtime = await import("../secrets/runtime.js");
-  if (!runtime.restoreSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, ownedSnapshot)) {
+  if (
+    !runtime.restoreSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, ownedSnapshot, {
+      runtimeSourceConfig: options?.runtimeSourceConfig,
+    })
+  ) {
     return false;
   }
   options?.onActivated?.();
@@ -562,6 +594,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     resetDirectoryCache();
 
     const channelsToRestart = new Set(plan.restartChannels);
+    const restartChannelAccounts =
+      plan.restartChannelAccounts ?? new Map<ChannelKind, Set<string>>();
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
@@ -578,6 +612,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const shouldSkipChannelRestart =
       isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_PROVIDERS);
+    const channelReloadTargets = () =>
+      new Set<ChannelKind>([...channelsToRestart, ...restartChannelAccounts.keys()]);
     const getChannelAutostartSuppression = () => params.getChannelAutostartSuppression?.() ?? null;
     const logSuppressedChannelRestart = (
       channels: ReadonlySet<ChannelKind>,
@@ -757,16 +793,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         for (const channel of channels) {
           channelsToRestart.add(channel);
         }
-        if (channelsToRestart.size === 0 || shouldSkipChannelRestart) {
+        const targets = channelReloadTargets();
+        if (targets.size === 0 || shouldSkipChannelRestart) {
           return;
         }
-        if (
-          await waitForActiveWorkBeforeChannelReload(
-            channelsToRestart,
-            nextConfig,
-            isTransactionCurrent,
-          )
-        ) {
+        if (await waitForActiveWorkBeforeChannelReload(targets, nextConfig, isTransactionCurrent)) {
           params.logChannels.info(
             "channel reload before plugin replace cancelled by config supersession or restart",
           );
@@ -870,9 +901,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     }
 
-    if (!plan.reloadPlugins && channelsToRestart.size > 0 && !shouldSkipChannelRestart) {
+    const channelTargets = channelReloadTargets();
+    const hasLiveChannelTargets = [...channelTargets].some(
+      (channel) => !channelsStoppedBeforePluginReload.has(channel),
+    );
+    // Plugin replacement can admit new agent work while an account monitor stays live.
+    // Recheck that work here; durable ingress replay remains owned by the fresh monitor drain.
+    if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
       pluginReloadAborted = await waitForActiveWorkBeforeChannelReload(
-        channelsToRestart,
+        channelTargets,
         nextConfig,
         isTransactionCurrent,
       );
@@ -946,7 +983,48 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     }
 
-    if (channelsToRestart.size > 0) {
+    // Suppressed and normal reloads share fallback selection so stale account
+    // ids always reach the wholesale path that evicts their old runtime.
+    const collectChannelAccountTargets = (): Array<[ChannelKind, string]> => {
+      const targets: Array<[ChannelKind, string]> = [];
+      for (const [channel, accountIds] of restartChannelAccounts) {
+        if (
+          channelsToRestart.has(channel) ||
+          (plan.reloadPlugins && activePluginChannelsAfterReload?.has(channel) === false)
+        ) {
+          continue;
+        }
+        const plugin = getChannelPlugin(channel);
+        let listedAccountIds: Set<string>;
+        try {
+          listedAccountIds = new Set(plugin?.config.listAccountIds(nextConfig) ?? []);
+        } catch (err) {
+          scheduleRecoveryRestart(`channel account enumeration (${channel})`, err);
+          continue;
+        }
+        if ([...accountIds].some((accountId) => !listedAccountIds.has(accountId))) {
+          channelsToRestart.add(channel);
+          continue;
+        }
+        try {
+          for (const accountId of accountIds) {
+            plugin?.config.resolveAccount(nextConfig, accountId);
+          }
+        } catch (err) {
+          params.logChannels.info(
+            `promoting ${channel} account reload to whole-channel restart after account resolution failed: ${formatErrorMessage(err)}`,
+          );
+          channelsToRestart.add(channel);
+          continue;
+        }
+        for (const accountId of accountIds) {
+          targets.push([channel, accountId]);
+        }
+      }
+      return targets;
+    };
+
+    if (channelsToRestart.size > 0 || restartChannelAccounts.size > 0) {
       if (shouldSkipChannelRestart) {
         params.logChannels.info(
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
@@ -956,6 +1034,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (cancelledByRestart) {
           params.logChannels.info("channel restart cancelled by in-process restart");
         } else {
+          const accountStops = collectChannelAccountTargets();
+          const accountStopFailures: string[] = [];
+          for (const [channel, accountId] of accountStops) {
+            try {
+              params.logChannels.info(
+                `stopping ${channel} account ${accountId} before suppressed hot reload`,
+              );
+              await params.stopChannel(channel, accountId, { manual: false });
+            } catch (err) {
+              accountStopFailures.push(`${channel}[${accountId}]`);
+              params.logChannels.error(
+                `failed to stop ${channel} account ${accountId} during suppressed hot reload: ${formatErrorMessage(err)}`,
+              );
+            }
+          }
           const stopFailures = await collectChannelOperationFailures({
             channels: channelsToRestart,
             run: async (channel) => {
@@ -976,16 +1069,36 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               );
             },
           });
-          if (stopFailures.length > 0) {
-            scheduleRecoveryRestart(`channel stop (${stopFailures.join(", ")})`);
+          const allStopFailures = [...accountStopFailures, ...stopFailures];
+          if (allStopFailures.length > 0) {
+            scheduleRecoveryRestart(`channel stop (${allStopFailures.join(", ")})`);
           }
-          logSuppressedChannelRestart(channelsToRestart, "channel restart during hot reload");
+          logSuppressedChannelRestart(channelReloadTargets(), "channel restart during hot reload");
         }
       } else {
         const cancelledByRestart = pluginReloadAborted;
         if (cancelledByRestart) {
           params.logChannels.info("channel restart cancelled by in-process restart");
         } else {
+          const accountRestarts = collectChannelAccountTargets();
+          const accountRestartFailures: string[] = [];
+          for (const [channel, accountId] of accountRestarts) {
+            try {
+              params.logChannels.info(`restarting ${channel} account ${accountId}`);
+              await params.stopChannel(channel, accountId, { manual: false });
+              if (isLifecycleReloadAborted()) {
+                continue;
+              }
+              await runOutsideGatewayRootWorkAdmission(() =>
+                params.startChannel(channel, accountId),
+              );
+            } catch (err) {
+              accountRestartFailures.push(`${channel}[${accountId}]`);
+              params.logChannels.error(
+                `failed to restart ${channel} account ${accountId} during hot reload: ${formatErrorMessage(err)}`,
+              );
+            }
+          }
           const restartChannel = async (name: ChannelKind) => {
             if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
               return;
@@ -1008,8 +1121,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               );
             },
           });
-          if (restartFailures.length > 0) {
-            scheduleRecoveryRestart(`channel restart (${restartFailures.join(", ")})`);
+          const allRestartFailures = [...accountRestartFailures, ...restartFailures];
+          if (allRestartFailures.length > 0) {
+            scheduleRecoveryRestart(`channel restart (${allRestartFailures.join(", ")})`);
           }
         }
       }
@@ -1552,6 +1666,39 @@ export function startManagedGatewayConfigReloader(
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
   let stopped = false;
+  const tryPrepareRuntimeSecrets = async (
+    config: OpenClawConfig,
+    transactionOwnership: GatewayConfigReloadTransactionOwnership,
+    activationParams: RuntimeSecretsPreflightParams,
+  ): Promise<CurrentRuntimeSecretsPreparation | null> => {
+    if (!transactionOwnership.isCurrent()) {
+      throw new GatewayConfigReloadSupersededError();
+    }
+    const expectedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    try {
+      const snapshot = await params.activateRuntimeSecrets(config, {
+        ...activationParams,
+        activate: false,
+        canPublishFailureAsDegraded: () =>
+          transactionOwnership.isCurrent() &&
+          getActiveSecretsRuntimeSnapshotRevision() === expectedRevision,
+      });
+      if (!transactionOwnership.isCurrent()) {
+        throw new GatewayConfigReloadSupersededError();
+      }
+      return getActiveSecretsRuntimeSnapshotRevision() === expectedRevision
+        ? { snapshot, expectedRevision }
+        : null;
+    } catch (error) {
+      if (!transactionOwnership.isCurrent()) {
+        throw new GatewayConfigReloadSupersededError();
+      }
+      if (getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision) {
+        return null;
+      }
+      throw error;
+    }
+  };
   let activeGmailRestartAbortController: GatewayGmailRestartAbortController | null = null;
   const abortActiveGmailRestart = () => {
     activeGmailRestartAbortController?.abort();
@@ -1639,37 +1786,37 @@ export function startManagedGatewayConfigReloader(
     try {
       for (;;) {
         assertCurrent();
-        const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
         const ownership = captureSharedGatewaySessionGenerationOwnership(
           params.sharedGatewaySessionGenerationState,
         );
         const previousRequired = params.sharedGatewaySessionGenerationState.required;
-        const prepared = await params.activateRuntimeSecrets(
+        const prepared = await tryPrepareRuntimeSecrets(
           prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+          transactionOwnership,
           {
             reason: "restart-check",
-            activate: false,
+            publishFailureAsDegraded: true,
             ...(transactionOwnership.runtimeEnv
               ? { env: transactionOwnership.runtimeEnv.env }
               : {}),
           },
         );
         assertCurrent();
-        const snapshotChanged =
-          getActiveSecretsRuntimeSnapshotRevision() !== previousSnapshotRevision;
         const generationChanged = !isSharedGatewaySessionGenerationOwnershipCurrent(
           params.sharedGatewaySessionGenerationState,
           ownership,
         );
-        if (snapshotChanged || generationChanged) {
+        if (!prepared || !isRuntimeSecretsPreparationCurrent(prepared) || generationChanged) {
           continue;
         }
         preparation = {
           ownership,
           previousRequired,
           previousCurrent: ownership.generation,
-          nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(prepared.config),
-          runtimeConfig: prepared.config,
+          nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(
+            prepared.snapshot.config,
+          ),
+          runtimeConfig: prepared.snapshot.config,
         };
         break;
       }
@@ -1711,18 +1858,23 @@ export function startManagedGatewayConfigReloader(
         ...restartOptions,
         debtConfig: sourceConfig,
         prepareRuntimeConfig: async () => {
-          const prepared = await params.activateRuntimeSecrets(
-            prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig, transactionOwnership),
-            {
-              reason: "restart-check",
-              activate: false,
-              ...(transactionOwnership.runtimeEnv
-                ? { env: transactionOwnership.runtimeEnv.env }
-                : {}),
-            },
-          );
-          assertCurrent();
-          return prepared.config;
+          for (;;) {
+            const prepared = await tryPrepareRuntimeSecrets(
+              prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig, transactionOwnership),
+              transactionOwnership,
+              {
+                reason: "restart-check",
+                publishFailureAsDegraded: true,
+                ...(transactionOwnership.runtimeEnv
+                  ? { env: transactionOwnership.runtimeEnv.env }
+                  : {}),
+              },
+            );
+            assertCurrent();
+            if (prepared && isRuntimeSecretsPreparationCurrent(prepared)) {
+              return prepared.snapshot.config;
+            }
+          }
         },
       });
       if (restartTransaction.status === "recovery-pending") {
@@ -1755,6 +1907,16 @@ export function startManagedGatewayConfigReloader(
   const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
+    // Single notification point for every persisted config change — gateway
+    // RPC writes, agent/CLI config_set, doctor, and hand edits all land here
+    // once the candidate is accepted. Hash-only; clients refresh via config.get.
+    onConfigCandidateCommitted: (info) => {
+      params.broadcast(
+        "config.changed",
+        { path: info.path, hash: info.persistedHash, ts: Date.now() },
+        { dropIfSlow: true },
+      );
+    },
     ...(params.prepareConfigCandidate
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
@@ -1778,17 +1940,23 @@ export function startManagedGatewayConfigReloader(
         runtimeConfig: prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
         sourceConfig,
         prepareRuntimeConfig: async () => {
-          const prepared = await params.activateRuntimeSecrets(
-            prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
-            {
-              reason: "restart-check",
-              activate: false,
-              ...(transactionOwnership.runtimeEnv
-                ? { env: transactionOwnership.runtimeEnv.env }
-                : {}),
-            },
-          );
-          return prepared.config;
+          for (;;) {
+            const prepared = await tryPrepareRuntimeSecrets(
+              prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+              transactionOwnership,
+              {
+                reason: "restart-check",
+                publishFailureAsDegraded: true,
+                ...(transactionOwnership.runtimeEnv
+                  ? { env: transactionOwnership.runtimeEnv.env }
+                  : {}),
+              },
+            );
+            assertCurrent();
+            if (prepared && isRuntimeSecretsPreparationCurrent(prepared)) {
+              return prepared.snapshot.config;
+            }
+          }
         },
       });
       let rollbackSource: (() => Promise<void>) | undefined;
@@ -1862,63 +2030,184 @@ export function startManagedGatewayConfigReloader(
     onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
     onConfigRevisionApplied: publishAppliedConfigHash,
     onEffectiveConfigUnchanged: async (nextConfig, transactionOwnership, sourceConfig) => {
-      if (!transactionOwnership.isCurrent()) {
-        throw new GatewayConfigReloadSupersededError();
-      }
-      const metadata = getRuntimeConfigSnapshotMetadata();
-      const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
-      const previousSecretsSourceConfig = getActiveSecretsRuntimeSnapshot()?.sourceConfig;
-      const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
-      if (
-        !metadata ||
-        !previousRuntimeSourceConfig ||
-        !setSecretsRuntimeSourceSnapshotIfCurrent({
-          expectedSecretsRevision: previousSecretsRevision,
-          expectedRuntimeConfigRevision: metadata.revision,
-          runtimeSourceConfig: sourceConfig,
-          secretsSourceConfig: prepareRuntimeCandidate(
-            nextConfig,
-            sourceConfig,
-            transactionOwnership,
-          ),
-        }) ||
-        !transactionOwnership.isCurrent()
-      ) {
-        throw new GatewayConfigReloadSupersededError();
-      }
-      const committedMetadata = getRuntimeConfigSnapshotMetadata();
-      const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
-      return async () => {
-        if (
-          !committedMetadata ||
-          !setSecretsRuntimeSourceSnapshotIfCurrent({
-            expectedSecretsRevision: committedSecretsRevision,
-            expectedRuntimeConfigRevision: committedMetadata.revision,
-            runtimeSourceConfig: previousRuntimeSourceConfig,
-            secretsSourceConfig: previousSecretsSourceConfig ?? previousRuntimeSourceConfig,
-          })
-        ) {
+      for (;;) {
+        if (!transactionOwnership.isCurrent()) {
           throw new GatewayConfigReloadSupersededError();
         }
-      };
+        const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
+        const previousSecretsSnapshot = getActiveSecretsRuntimeSnapshot();
+        const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
+        const previousRuntimeMetadata = getRuntimeConfigSnapshotMetadata();
+        const nextSecretsSourceConfig = prepareRuntimeCandidate(
+          nextConfig,
+          sourceConfig,
+          transactionOwnership,
+        );
+        if (
+          previousRuntimeMetadata &&
+          previousRuntimeSourceConfig &&
+          previousSecretsSnapshot &&
+          hasSameSecretReloadContract(previousSecretsSnapshot.sourceConfig, nextSecretsSourceConfig)
+        ) {
+          const sourceOnlySnapshot = {
+            ...previousSecretsSnapshot,
+            sourceConfig: nextSecretsSourceConfig,
+          };
+          if (!isDeepStrictEqual(sourceOnlySnapshot.config, nextConfig)) {
+            throw new GatewayConfigReloadSupersededError();
+          }
+          if (!transactionOwnership.isCurrent()) {
+            throw new GatewayConfigReloadSupersededError();
+          }
+          if (
+            !setSecretsRuntimeSourceSnapshotIfCurrent({
+              expectedSecretsRevision: previousSecretsRevision,
+              expectedRuntimeConfigRevision: previousRuntimeMetadata.revision,
+              runtimeSourceConfig: sourceConfig,
+              secretsSourceConfig: nextSecretsSourceConfig,
+            })
+          ) {
+            continue;
+          }
+          const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
+          const rollbackPublishedSource = async () => {
+            if (
+              !restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
+                expectedLineageRevision: committedSecretsRevision,
+                runtimeSourceConfig: previousRuntimeSourceConfig,
+                secretsSourceConfig: previousSecretsSnapshot.sourceConfig,
+              })
+            ) {
+              throw new GatewayConfigReloadSupersededError();
+            }
+          };
+          if (!transactionOwnership.isCurrent()) {
+            await rollbackPublishedSource();
+            throw new GatewayConfigReloadSupersededError();
+          }
+          return {
+            rollback: rollbackPublishedSource,
+            commit: () =>
+              publishRuntimeSecretsStateTransition(
+                params.activateRuntimeSecrets,
+                sourceOnlySnapshot,
+                {
+                  sourceOnly: true,
+                  expectedRevision: committedSecretsRevision,
+                },
+              ),
+          };
+        }
+        const preparation = await tryPrepareRuntimeSecrets(
+          nextSecretsSourceConfig,
+          transactionOwnership,
+          {
+            reason: "reload",
+            publishFailureAsDegraded: true,
+            ...(transactionOwnership.runtimeEnv
+              ? { env: transactionOwnership.runtimeEnv.env }
+              : {}),
+            includeAuthStoreRefs: true,
+          },
+        );
+        if (!previousRuntimeMetadata || !transactionOwnership.isCurrent()) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+        if (getRuntimeConfigSnapshotMetadata()?.revision !== previousRuntimeMetadata.revision) {
+          if (hasActiveSecretsRuntimeSnapshotLineage(previousSecretsRevision)) {
+            continue;
+          }
+          throw new GatewayConfigReloadSupersededError();
+        }
+        if (
+          !preparation ||
+          preparation.expectedRevision !== previousSecretsRevision ||
+          !isRuntimeSecretsPreparationCurrent(preparation)
+        ) {
+          continue;
+        }
+        const preparedSecrets = preparation.snapshot;
+        if (!transactionOwnership.isCurrent()) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+        if (!isDeepStrictEqual(preparedSecrets.config, nextConfig)) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+        if (!previousRuntimeSourceConfig || !previousSecretsSnapshot) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+        const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
+        const activated = activateIfCurrent
+          ? await activateIfCurrent(
+              preparedSecrets,
+              previousSecretsRevision,
+              {
+                reason: "reload",
+                activate: true,
+                deferStatePublication: true,
+                runtimeSourceConfig: sourceConfig,
+              },
+              undefined,
+              transactionOwnership.isCurrent,
+            )
+          : (await activateSecretsRuntimeSnapshotIfCurrent(
+                preparedSecrets,
+                previousSecretsRevision,
+                {
+                  canActivate: transactionOwnership.isCurrent,
+                  runtimeSourceConfig: sourceConfig,
+                },
+              ))
+            ? preparedSecrets
+            : null;
+        if (!activated) {
+          continue;
+        }
+        const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
+        const rollbackPublishedSource = async () => {
+          if (
+            !(await restoreSecretsRuntimeSnapshotIfCurrent(
+              previousSecretsSnapshot,
+              committedSecretsRevision,
+              activated,
+              { runtimeSourceConfig: previousRuntimeSourceConfig },
+            ))
+          ) {
+            throw new GatewayConfigReloadSupersededError();
+          }
+        };
+        if (!transactionOwnership.isCurrent()) {
+          await rollbackPublishedSource();
+          throw new GatewayConfigReloadSupersededError();
+        }
+        return {
+          rollback: rollbackPublishedSource,
+          commit: () =>
+            publishRuntimeSecretsStateTransition(params.activateRuntimeSecrets, activated),
+        };
+      }
     },
     onNoopConfigCommit: async (plan, nextConfig, transactionOwnership, sourceConfig) => {
       for (;;) {
         if (!transactionOwnership.isCurrent()) {
           throw new GatewayConfigReloadSupersededError();
         }
-        const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
-        const prepared = await params.activateRuntimeSecrets(
+        const preparation = await tryPrepareRuntimeSecrets(
           prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+          transactionOwnership,
           {
             reason: "reload",
-            activate: false,
+            publishFailureAsDegraded: true,
             ...(transactionOwnership.runtimeEnv
               ? { env: transactionOwnership.runtimeEnv.env }
               : {}),
             includeAuthStoreRefs: transactionOwnership.runtimeRefresh?.includeAuthStoreRefs,
           },
         );
+        if (!preparation || !isRuntimeSecretsPreparationCurrent(preparation)) {
+          continue;
+        }
+        const { expectedRevision: previousSnapshotRevision, snapshot: prepared } = preparation;
         if (!transactionOwnership.isCurrent()) {
           throw new GatewayConfigReloadSupersededError();
         }
@@ -1960,17 +2249,26 @@ export function startManagedGatewayConfigReloader(
           params.sharedGatewaySessionGenerationState,
         );
         const previousSharedGatewaySessionGeneration = previousGenerationOwnership.generation;
-        const prepared = await params.activateRuntimeSecrets(
+        const preparation = await tryPrepareRuntimeSecrets(
           prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+          transactionOwnership,
           {
             reason: "reload",
-            activate: false,
+            publishFailureAsDegraded: true,
             ...(transactionOwnership.runtimeEnv
               ? { env: transactionOwnership.runtimeEnv.env }
               : {}),
             includeAuthStoreRefs: transactionOwnership.runtimeRefresh?.includeAuthStoreRefs,
           },
         );
+        if (
+          !preparation ||
+          preparation.expectedRevision !== previousSnapshotRevision ||
+          !isRuntimeSecretsPreparationCurrent(preparation)
+        ) {
+          continue;
+        }
+        const prepared = preparation.snapshot;
         if (!transactionOwnership.isCurrent()) {
           throw new GatewayConfigReloadSupersededError();
         }
@@ -1995,20 +2293,25 @@ export function startManagedGatewayConfigReloader(
               : {}),
             sourceConfig,
             prepareRestartRuntimeConfig: async () => {
-              const restartPrepared = await params.activateRuntimeSecrets(
-                prepareRuntimeCandidate(prepared.config, sourceConfig, transactionOwnership),
-                {
-                  reason: "restart-check",
-                  activate: false,
-                  ...(transactionOwnership.runtimeEnv
-                    ? { env: transactionOwnership.runtimeEnv.env }
-                    : {}),
-                },
-              );
-              if (!transactionOwnership.isCurrent()) {
-                throw new GatewayConfigReloadSupersededError();
+              for (;;) {
+                const restartPrepared = await tryPrepareRuntimeSecrets(
+                  prepareRuntimeCandidate(prepared.config, sourceConfig, transactionOwnership),
+                  transactionOwnership,
+                  {
+                    reason: "restart-check",
+                    publishFailureAsDegraded: true,
+                    ...(transactionOwnership.runtimeEnv
+                      ? { env: transactionOwnership.runtimeEnv.env }
+                      : {}),
+                  },
+                );
+                if (!transactionOwnership.isCurrent()) {
+                  throw new GatewayConfigReloadSupersededError();
+                }
+                if (restartPrepared && isRuntimeSecretsPreparationCurrent(restartPrepared)) {
+                  return restartPrepared.snapshot.config;
+                }
               }
-              return restartPrepared.config;
             },
             publish: async (commit, isCommitted) => {
               const claimGenerationOwnership = () => {

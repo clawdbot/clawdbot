@@ -28,6 +28,11 @@ type FeishuDispatchReplyMock = Mock<
   (args: {
     ctx: FeishuDispatchReplyContext;
     dispatcher: FeishuDispatchReplyDispatcher;
+    replyOptions?: {
+      turnAdoptionLifecycle?: {
+        onAdopted: () => void | Promise<void>;
+      };
+    };
   }) => Promise<{ queuedFinal: boolean; counts: FeishuDispatchReplyCounts }>
 >;
 type RuntimeReplyDispatcher = NonNullable<
@@ -111,7 +116,12 @@ function installFeishuLifecycleRuntime(params: {
       reply: {
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
         formatAgentEnvelope: vi.fn((value: { body: string }) => value.body),
-        dispatchReplyWithBufferedBlockDispatcher: async ({ cfg, ctx, dispatcherOptions }) => {
+        dispatchReplyWithBufferedBlockDispatcher: async ({
+          cfg,
+          ctx,
+          dispatcherOptions,
+          replyOptions,
+        }) => {
           // ReplyDispatcher enqueue methods are synchronous; settlement owns async delivery.
           const pendingDeliveries: Promise<unknown>[] = [];
           const dispatcher: RuntimeReplyDispatcher = {
@@ -137,6 +147,7 @@ function installFeishuLifecycleRuntime(params: {
                 cfg,
                 ctx: ctx as Parameters<typeof params.dispatchReplyFromConfig>[0]["ctx"],
                 dispatcher,
+                replyOptions,
               }),
           });
         },
@@ -188,16 +199,19 @@ export function mockFeishuReplyOnceDispatch(params: {
   replyText: string;
   shouldSendFinalReply?: (ctx: unknown) => boolean;
 }) {
-  params.dispatchReplyFromConfigMock.mockImplementation(async ({ ctx, dispatcher }) => {
-    const shouldSendFinalReply = params.shouldSendFinalReply?.(ctx) ?? true;
-    if (shouldSendFinalReply && typeof dispatcher?.sendFinalReply === "function") {
-      await dispatcher.sendFinalReply({ text: params.replyText });
-    }
-    return {
-      queuedFinal: false,
-      counts: { final: shouldSendFinalReply ? 1 : 0 },
-    };
-  });
+  params.dispatchReplyFromConfigMock.mockImplementation(
+    async ({ ctx, dispatcher, replyOptions }) => {
+      await replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      const shouldSendFinalReply = params.shouldSendFinalReply?.(ctx) ?? true;
+      if (shouldSendFinalReply && typeof dispatcher?.sendFinalReply === "function") {
+        await dispatcher.sendFinalReply({ text: params.replyText });
+      }
+      return {
+        queuedFinal: false,
+        counts: { final: shouldSendFinalReply ? 1 : 0 },
+      };
+    },
+  );
 }
 
 export function createFeishuLifecycleConfig(params: {

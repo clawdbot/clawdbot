@@ -39,6 +39,7 @@
     },
     "channel": {
       "id": "discord",
+      "approvalFlags": ["native"],
       "label": "Discord",
       "selectionLabel": "Discord (Bot API)",
       "detailLabel": "Discord Bot",

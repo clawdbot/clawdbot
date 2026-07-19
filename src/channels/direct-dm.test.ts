@@ -60,4 +60,38 @@ describe("dispatchInboundDirectDm", () => {
       }),
     );
   });
+
+  it("threads a durable ingress adoption lifecycle into the turn plan", async () => {
+    const turnAdoptionLifecycle = {
+      admission: "exclusive" as const,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+      abortSignal: new AbortController().signal,
+    };
+
+    await dispatchInboundDirectDm({
+      cfg: {} as OpenClawConfig,
+      channel: "nostr",
+      channelLabel: "Nostr",
+      accountId: "account-1",
+      peer: { kind: "direct", id: "peer-1" },
+      senderId: "peer-1",
+      senderAddress: "nostr:peer-1",
+      recipientAddress: "nostr:bot-1",
+      conversationLabel: "peer-1",
+      rawBody: "hello",
+      messageId: "event-1",
+      turnAdoptionLifecycle,
+      deliver: async () => undefined,
+      onRecordError: vi.fn(),
+      onDispatchError: vi.fn(),
+    });
+
+    expect(mocks.dispatchChannelInboundTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
+      }),
+    );
+  });
 });

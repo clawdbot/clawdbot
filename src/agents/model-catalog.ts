@@ -791,10 +791,11 @@ export async function loadModelCatalogSnapshot(
       logStage("agent-discovery-imported");
       const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
-      const authStorage = agentDiscovery.discoverAuthStorage(
-        agentDir,
-        readOnly ? { readOnly: true } : undefined,
-      );
+      const authStorage = agentDiscovery.discoverAuthStorage(agentDir, {
+        ...(readOnly ? { readOnly: true } : {}),
+        config: cfg,
+        workspaceDir,
+      });
       logStage("auth-storage-ready");
       const registry = agentDiscovery.discoverModels(authStorage, agentDir, {
         config: cfg,

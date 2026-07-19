@@ -25,7 +25,7 @@ import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
   type SchemaLike = {
-    anyOf?: Array<{ type?: string }>;
+    anyOf?: Array<SchemaLike>;
     description?: string;
     properties?: Record<string, SchemaLike>;
     type?: string;
@@ -701,6 +701,14 @@ describe("cron tool", () => {
     expect(tool.description).toContain("trigger.state");
     expect(tool.description).toContain("fire:false saves state only; no payload/history");
     expect(tool.description).toContain("fired state saves only after payload success");
+    expect(tool.description).toContain("every actionable state, including failures/timeouts");
+    expect(tool.description).toContain("success-only watchers go silent when broken");
+    expect(tool.description).toContain(
+      "Dedupe by comparing trigger.state and returning new state, never memory",
+    );
+    expect(tool.description).toContain("scripts read-only; actions belong in payload");
+    expect(tool.description).toContain("message must be self-contained");
+    expect(tool.description).toContain("the fired run's entire context");
     expect(tool.description).toContain('Silent watcher: top-level delivery.mode="none"');
     expect(tool.description).toContain("missing route may fail");
     expect(tool.description).toContain("once:true disables after first successful fire");
@@ -736,6 +744,8 @@ describe("cron tool", () => {
     const patch = parameters.properties?.patch;
     const payload = patch?.properties?.payload;
     const delivery = patch?.properties?.delivery;
+    const jobPacing = parameters.properties?.job?.properties?.pacing;
+    const patchPacing = patch?.properties?.pacing?.anyOf?.find((entry) => entry.type === "object");
 
     expect(jobDelivery?.properties?.channel?.anyOf).toBeUndefined();
     expect(jobDelivery?.properties?.channel?.type).toBe("string");
@@ -769,6 +779,8 @@ describe("cron tool", () => {
       "object",
       "null",
     ]);
+    expect(jobPacing?.description).toContain("at least one of min or max is required");
+    expect(patchPacing?.description).toContain("at least one of min or max is required");
   });
 
   it.each([
@@ -921,6 +933,31 @@ describe("cron tool", () => {
         patch: { displayName: "   " },
       }),
     ).rejects.toThrow("displayName must be a non-empty string or null");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "add",
+      {
+        action: "add",
+        job: { ...buildReminderAgentTurnJob(), pacing: {} },
+      },
+    ],
+    [
+      "update",
+      {
+        action: "update",
+        jobId: "paced-job",
+        patch: { pacing: {} },
+      },
+    ],
+  ])("rejects empty pacing on cron.%s before calling the gateway", async (_action, args) => {
+    const tool = createTestCronTool();
+
+    await expect(tool.execute("call-empty-pacing", args)).rejects.toThrow(
+      "cron pacing requires at least one of min or max",
+    );
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1084,6 +1121,34 @@ describe("cron tool", () => {
       }),
     ).rejects.toThrow("cron command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows script payloads without treating them as shell commands", async () => {
+    const tool = createTestCronTool();
+
+    await tool.execute("call-script-add", {
+      action: "add",
+      job: {
+        name: "script",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "script",
+          script: "return { notify: 'done' }",
+          timeoutSeconds: 300,
+          toolBudget: 50,
+        },
+      },
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
+      payload: {
+        kind: "script",
+        script: "return { notify: 'done' }",
+        timeoutSeconds: 300,
+        toolBudget: 50,
+      },
+    });
   });
 
   it("rejects on-exit schedules from the agent cron tool on add", async () => {

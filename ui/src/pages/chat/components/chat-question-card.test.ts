@@ -64,11 +64,17 @@ describe("shared question panel", () => {
       onSkip?: () => void | Promise<void>;
     } = {},
   ) {
+    let collapsed = false;
     const redraw = () => {
       render(
         html`<openclaw-chat-question-panel
           .props=${createGatewayQuestionPanelProps(prompt, {
             nowMs: 2_000,
+            collapsed,
+            onCollapsedChange: (nextCollapsed) => {
+              collapsed = nextCollapsed;
+              redraw();
+            },
             onChange: redraw,
             onSubmit: callbacks.onSubmit ?? vi.fn(),
             onSkip: callbacks.onSkip ?? vi.fn(),
@@ -235,6 +241,7 @@ describe("shared question panel", () => {
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
     await panel.updateComplete;
+    expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
     container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")?.click();
     expect(onSkip).toHaveBeenCalledOnce();
   });
@@ -252,6 +259,24 @@ describe("shared question panel", () => {
       container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.disabled,
     ).toBe(true);
     expect(container.querySelector(".chat-question-panel__skip")).toBeNull();
+  });
+
+  it("manages collapse state when no controlled callback is supplied", async () => {
+    render(
+      html`<openclaw-chat-question-panel
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), { nowMs: 2_000 })}
+      ></openclaw-chat-question-panel>`,
+      container,
+    );
+    const panel = await panelIn(container);
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
+    await panel.updateComplete;
+    expect(container.querySelector(".chat-question-panel--collapsed")).not.toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
+    await panel.updateComplete;
+    expect(container.querySelector(".chat-question-panel--collapsed")).toBeNull();
   });
 
   it("retains answers with submit-only wiring", async () => {

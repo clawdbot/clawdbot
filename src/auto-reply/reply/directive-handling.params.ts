@@ -23,6 +23,7 @@ type HandleDirectiveOnlyCoreParams = {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Awaited<
     ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
@@ -69,6 +70,7 @@ export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams 
     allowedModelCatalog: Awaited<
       ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
     >;
+    policyAliasIndex?: ModelAliasIndex;
     resetModelOverride: boolean;
   };
 };

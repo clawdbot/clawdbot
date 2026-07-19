@@ -433,6 +433,15 @@ describe("setup migration recovery", () => {
     await expect(buildSetupMigrationPlanSourceSnapshot(buildPlan(root))).resolves.not.toBe(initial);
   });
 
+  it("treats source paths beneath a non-directory as missing", async () => {
+    const root = await makeTempRoot();
+    const plan = buildPlan(root);
+    const missingSnapshot = await buildSetupMigrationPlanSourceSnapshot(plan);
+    await fs.writeFile(path.join(root, "hermes"), "not a directory");
+
+    await expect(buildSetupMigrationPlanSourceSnapshot(plan)).resolves.toBe(missingSnapshot);
+  });
+
   it("snapshots meaningful target changes but ignores migration reports", async () => {
     const stateDir = await makeTempRoot();
     const workspaceDir = path.join(stateDir, "workspace");
@@ -491,6 +500,21 @@ describe("setup migration recovery", () => {
     ).resolves.not.toBe(workspaceChanged);
   });
 
+  it("treats target paths beneath a non-directory as missing", async () => {
+    const stateDir = await makeTempRoot();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const missingSnapshot = await buildSetupMigrationTargetSnapshot({
+      config: {},
+      stateDir,
+      workspaceDir,
+    });
+    await fs.writeFile(workspaceDir, "not a directory");
+
+    await expect(
+      buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir }),
+    ).resolves.toBe(missingSnapshot);
+  });
+
   it("fails closed when the newest recovery record is malformed", async () => {
     const stateDir = await makeTempRoot();
     const reportDir = path.join(stateDir, "migration", "hermes", "2026-07-13T10-00-00Z");
@@ -505,5 +529,22 @@ describe("setup migration recovery", () => {
         targetSnapshotHash: BEFORE_HASH,
       }),
     ).rejects.toThrow("Invalid onboarding migration recovery record");
+  });
+
+  it("treats a not-directory migration root as no recovery record", async () => {
+    // A file at the provider report path makes readdir return ENOTDIR; recovery
+    // treats that unavailable child path like a missing report directory.
+    const stateDir = await makeTempRoot();
+    await fs.mkdir(path.join(stateDir, "migration"), { recursive: true });
+    await fs.writeFile(path.join(stateDir, "migration", "hermes"), "not a directory");
+
+    await expect(
+      resolveSetupMigrationRecovery({
+        stateDir,
+        providerId: "hermes",
+        workspaceDir: path.join(stateDir, "workspace"),
+        targetSnapshotHash: BEFORE_HASH,
+      }),
+    ).resolves.toEqual({ kind: "none" });
   });
 });

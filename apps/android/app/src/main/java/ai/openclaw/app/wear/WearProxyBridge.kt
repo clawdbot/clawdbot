@@ -210,6 +210,12 @@ internal class WearProxyBridge(
     }
   }
 
+  fun publishResync() {
+    synchronized(overflowLock) {
+      publishEventLocked(WearEventType.Resync)
+    }
+  }
+
   /** Test-only actor barrier; proves every operation queued before this call has settled. */
   internal suspend fun awaitIdleForTests() {
     val completion = CompletableDeferred<Unit>()
@@ -220,7 +226,7 @@ internal class WearProxyBridge(
   /** Projection/reset, sequence allocation, and actor insertion share [overflowLock]. */
   private fun publishEventLocked(
     type: WearEventType,
-    payload: JsonElement,
+    payload: JsonElement? = null,
     terminal: Boolean = false,
   ) {
     val event =

@@ -3,7 +3,8 @@ import Observation
 import OpenClawKit
 import OSLog
 
-private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
+// Module-internal: ChatViewModel extension files share this logger.
+let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
 @MainActor
 @Observable
@@ -57,12 +58,6 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var slashFilterCache: SlashFilterCache?
 
-    struct SlashFilterCache {
-        let query: String
-        let filter: OpenClawChatCommandFilter
-        let result: [OpenClawChatCommandChoice]
-    }
-
     private struct DeferredDeliveryIdentity {
         let activeAgentID: String?
         let sessionRoutingContract: String?
@@ -75,12 +70,16 @@ public final class OpenClawChatViewModel {
     private var deferredExternalSessionKey: String?
     private var deferredDeliveryIdentity: DeferredDeliveryIdentity?
     var isSubmittingDraft = false
-    private var attachmentStagingCount = 0
+    var attachmentStagingCount = 0
     public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [OpenClawPendingAttachment] = []
     /// Setter is module-internal for the health/outbox extension only.
     public internal(set) var healthOK: Bool = false
+    /// Bumped after every successful group-catalog mutation so views keyed on it
+    /// refetch; catalog-only changes (e.g. creating an empty group) alter no
+    /// session rows and would otherwise stay stale until reconnect.
+    public internal(set) var sessionGroupsRevision = 0
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
@@ -91,8 +90,10 @@ public final class OpenClawChatViewModel {
     public internal(set) var questionCards: [OpenClawQuestionCardModel] = []
     var questionRefreshGeneration: UInt64 = 0
     var questionStateRevision: UInt64 = 0
-    var questionEvictionTasks: [String: Task<Void, Never>] = [:]
-    var questionEvictionDeadlines: [String: Date] = [:]
+    var questionExpiryTasks: [String: Task<Void, Never>] = [:]
+    var questionExpiryDeadlines: [String: Date] = [:]
+    var questionRefreshRetryTask: Task<Void, Never>?
+    var questionRefreshRetryDelaysMs: [Int64] = [1000, 2000, 4000]
     var hasActiveSessionRunWithoutChatSnapshot = false
 
     public private(set) var sessionKey: String {
@@ -180,7 +181,8 @@ public final class OpenClawChatViewModel {
     let onVerboseLevelChanged: (@MainActor @Sendable (String) -> Void)?
     let onVerbosePreferenceChanged: (@MainActor @Sendable (String?) -> Void)?
     private let diagnosticsLog: (@MainActor @Sendable (String) -> Void)?
-    private let attachmentOwnerIsActive: @MainActor () -> Bool
+    let onToolActivity: OpenClawChatToolActivityHandler?
+    let attachmentOwnerIsActive: @MainActor () -> Bool
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -395,6 +397,7 @@ public final class OpenClawChatViewModel {
     var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
             guard self.pendingToolCallsById != oldValue else { return }
+            reportToolActivityChanges(from: oldValue, to: self.pendingToolCallsById)
             self.pendingToolCalls = self.pendingToolCallsById.values
                 .sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
             markTimelineChanged()
@@ -417,6 +420,7 @@ public final class OpenClawChatViewModel {
         initialVerboseLevel: String? = nil,
         onSessionChanged: (@MainActor (String) -> Void)? = nil,
         onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
+        onToolActivity: OpenClawChatToolActivityHandler? = nil,
         onThinkingPreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil,
         onVerboseLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
         onVerbosePreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil,
@@ -459,6 +463,7 @@ public final class OpenClawChatViewModel {
         self.emittedVerbosePreference = initialVerbosePreference
         self.onSessionChanged = onSessionChanged
         self.onThinkingLevelChanged = onThinkingLevelChanged
+        self.onToolActivity = onToolActivity
         self.onThinkingPreferenceChanged = onThinkingPreferenceChanged
         self.onVerboseLevelChanged = onVerboseLevelChanged
         self.onVerbosePreferenceChanged = onVerbosePreferenceChanged
@@ -489,12 +494,14 @@ public final class OpenClawChatViewModel {
     }
 
     isolated deinit {
+        self.reportToolActivityChanges(from: self.pendingToolCallsById, to: [:])
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
         self.outboxRetryTask?.cancel()
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
-        for (_, task) in self.questionEvictionTasks {
+        self.questionRefreshRetryTask?.cancel()
+        for (_, task) in self.questionExpiryTasks {
             task.cancel()
         }
         for (_, task) in self.pendingRunOwnerTasks {
@@ -610,12 +617,12 @@ public final class OpenClawChatViewModel {
         let agentChanged = self.activeAgentId != nextAgentId
         let contractChanged = self.sessionRoutingContract != nextContract
         guard agentChanged || contractChanged else {
-            if self.blocksAttachmentOwnerChange {
+            if blocksAttachmentOwnerChange {
                 self.deferredDeliveryIdentity = nil
             }
             return
         }
-        if self.blocksAttachmentOwnerChange {
+        if blocksAttachmentOwnerChange {
             self.deferredDeliveryIdentity = DeferredDeliveryIdentity(
                 activeAgentID: nextAgentId,
                 sessionRoutingContract: nextContract)
@@ -718,78 +725,6 @@ public final class OpenClawChatViewModel {
         OpenClawChatThinkingLevelOption(id: "medium", label: "medium"),
         OpenClawChatThinkingLevelOption(id: "high", label: "high"),
     ]
-
-    public func addAttachments(urls: [URL]) {
-        self.beginAttachmentStaging()
-        Task {
-            defer { self.endAttachmentStaging() }
-            await self.loadAttachments(urls: urls)
-        }
-    }
-
-    public func addImageAttachment(data: Data, fileName: String, mimeType: String) {
-        self.beginAttachmentStaging()
-        Task {
-            defer { self.endAttachmentStaging() }
-            await self.addImageAttachment(url: nil, data: data, fileName: fileName, mimeType: mimeType)
-        }
-    }
-
-    public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
-        self.attachments.removeAll { $0.id == id }
-        applyDeferredExternalStateIfReady()
-    }
-
-    public var canSend: Bool {
-        !self.isSubmittingDraft && !self.isSending && !self.hasBlockingRunActivity && self.hasDraftToSend
-    }
-
-    public var hasDraftToSend: Bool {
-        let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty || !self.attachments.isEmpty
-    }
-
-    /// True while replacing this model could move an attachment across chats.
-    public var isAttachmentOwnerPinned: Bool {
-        self.blocksAttachmentOwnerChange
-    }
-
-    private var blocksAttachmentOwnerChange: Bool {
-        self.attachmentOwnerIsActive() ||
-            self.isSendingAttachmentDraft ||
-            self.attachmentStagingCount > 0 ||
-            !self.attachments.isEmpty
-    }
-
-    func canCreateSessionForImmediateSwitch() -> Bool {
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return false
-        }
-        return true
-    }
-
-    var hasBlockingRunActivity: Bool {
-        self.pendingRunCount > 0 || self.hasActiveSessionRunWithoutChatSnapshot
-    }
-
-    /// Applies external owner changes once recording or staging releases them.
-    public func attachmentOwnerActivityChanged() {
-        applyDeferredExternalStateIfReady()
-    }
-
-    /// File reads and image processing suspend before the attachment exists.
-    /// Keep their original chat owner pinned until staging succeeds or fails.
-    func beginAttachmentStaging() {
-        self.attachmentStagingCount += 1
-    }
-
-    func endAttachmentStaging() {
-        precondition(self.attachmentStagingCount > 0)
-        self.attachmentStagingCount -= 1
-        applyDeferredExternalStateIfReady()
-    }
 }
 
 extension OpenClawChatViewModel {
@@ -1141,7 +1076,7 @@ extension OpenClawChatViewModel {
             }
             return
         }
-        if self.blocksAttachmentOwnerChange {
+        if blocksAttachmentOwnerChange {
             switch intent {
             case .externalSync:
                 self.deferredExternalSessionKey = next
@@ -1154,17 +1089,17 @@ extension OpenClawChatViewModel {
         self.deferredExternalSessionKey = nil
         self.prepareComposerForSessionSwitch(to: next)
         self.advanceSessionGeneration()
+        self.clearSessionOwnedState()
         self.sessionKey = next
         self.restoreComposerAfterSessionSwitch()
         if intent == .userInitiated {
             self.onSessionChanged?(next)
         }
-        self.clearSessionOwnedState()
         self.startBootstrap(sessionKey: next)
     }
 
     func applyDeferredExternalStateIfReady() {
-        guard !self.blocksAttachmentOwnerChange else { return }
+        guard !blocksAttachmentOwnerChange else { return }
         if let identity = deferredDeliveryIdentity {
             self.deferredDeliveryIdentity = nil
             self.syncDeliveryIdentity(
@@ -1176,44 +1111,16 @@ extension OpenClawChatViewModel {
         self.applySessionSwitch(to: sessionKey, intent: .externalSync)
     }
 
-    func performStartNewSession(worktree: Bool) async {
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return
-        }
-        let requested = self.generatedNewSessionKey()
-        let parentSessionKey = self.sessionKey
-        let next: String
-        do {
-            let created = try await transport.createSession(
-                key: requested,
-                label: nil,
-                parentSessionKey: parentSessionKey,
-                worktree: worktree ? true : nil)
-            let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
-            next = createdKey.isEmpty ? requested : createdKey
-        } catch {
-            if Self.isUnsupportedCreateSessionError(error) {
-                chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
-                await self.performReset()
-                return
-            }
-            chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
-            self.errorText = error.localizedDescription
-            return
-        }
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return
-        }
+    /// Adopts a freshly created session key: full composer-preserving switch plus
+    /// session-owned state reset. Module-internal so the session-actions extension
+    /// does not need access to the private switch members.
+    func adoptCreatedSession(_ next: String) {
         self.prepareComposerForSessionSwitch(to: next)
         self.advanceSessionGeneration()
+        self.clearSessionOwnedState()
         self.sessionKey = next
         self.restoreComposerAfterSessionSwitch()
         self.onSessionChanged?(next)
-        self.clearSessionOwnedState()
         self.errorText = nil
         self.startBootstrap()
     }
@@ -1237,12 +1144,6 @@ extension OpenClawChatViewModel {
         clearPendingRuns(reason: nil)
     }
 
-    private static func isUnsupportedCreateSessionError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return nsError.domain == "OpenClawChatTransport"
-            && nsError.localizedDescription == "sessions.create not supported by this transport"
-    }
-
     func performReset() async {
         self.isLoading = true
         self.errorText = nil
@@ -1264,7 +1165,7 @@ extension OpenClawChatViewModel {
 
     func performCompact() async {
         guard !self.isCompacting else { return }
-        guard !self.isSending, !self.hasBlockingRunActivity, !self.isAborting else {
+        guard !self.isSending, !hasBlockingRunActivity, !self.isAborting else {
             self.errorText = "Wait for the current response before compacting the session."
             return
         }
@@ -1572,9 +1473,11 @@ extension OpenClawChatViewModel {
         return normalized
     }
 
-    private func generatedNewSessionKey() -> String {
+    /// Module-internal: the session-actions extension derives new-session keys.
+    func generatedNewSessionKey(agentID explicitAgentID: String? = nil) -> String {
         let baseKey = "ios-\(UUID().uuidString.lowercased())"
-        guard let agentID = OpenClawChatSessionKey.agentID(from: sessionKey) ??
+        guard let agentID = explicitAgentID ??
+            OpenClawChatSessionKey.agentID(from: sessionKey) ??
             activeAgentId ??
             OpenClawChatSessionKey.agentID(from: resolvedMainSessionKey) ??
             sessions.lazy.compactMap({ OpenClawChatSessionKey.agentID(from: $0.key) }).first

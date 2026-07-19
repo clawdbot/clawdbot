@@ -17,7 +17,10 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
   "Blacksmith ARM Testbox",
   "Workflow Sanity",
 ];
-const WORKFLOW_RUNS_PAGE_SIZE = 100;
+// Full workflow-run objects are large enough for a 100-row response to exceed
+// the Octopool relay cap on busy SHAs. Keep each REST page bounded and retain
+// the existing 1,000-result search window through pagination.
+const WORKFLOW_RUNS_PAGE_SIZE = 30;
 const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
 const COMPARE_COMMITS_PAGE_SIZE = 100;
 export const HOSTED_GATE_MAX_AGE_HOURS = 24;
@@ -333,7 +336,7 @@ export function parseWorkflowRunPage(raw) {
 export function workflowRunPageCount(totalCount) {
   return Math.min(
     Math.ceil(totalCount / WORKFLOW_RUNS_PAGE_SIZE),
-    MAX_WORKFLOW_RUN_SEARCH_RESULTS / WORKFLOW_RUNS_PAGE_SIZE,
+    Math.ceil(MAX_WORKFLOW_RUN_SEARCH_RESULTS / WORKFLOW_RUNS_PAGE_SIZE),
   );
 }
 

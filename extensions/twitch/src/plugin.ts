@@ -12,15 +12,13 @@ import {
   createChatChannelPlugin,
   stripChannelTargetPrefix,
 } from "openclaw/plugin-sdk/channel-core";
+import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  buildPassiveProbedChannelStatusSummary,
-  runStoppablePassiveMonitor,
-} from "openclaw/plugin-sdk/extension-shared";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -221,7 +219,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
           // supervisor reads the settled task as `channel exited without an
           // error` and triggers a restart loop. See #60071.
           try {
-            await runStoppablePassiveMonitor({
+            await runPassiveAccountLifecycle({
               abortSignal: ctx.abortSignal,
               start: async () => {
                 // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
@@ -233,6 +231,9 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
                   runtime: ctx.runtime,
                   abortSignal: ctx.abortSignal,
                 });
+              },
+              stop: async (monitor) => {
+                await monitor.stop();
               },
             });
           } catch (error) {

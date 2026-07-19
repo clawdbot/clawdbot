@@ -271,13 +271,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         throw err;
       }
       const admission = params.admission ?? { kind: "dispatch" as const };
-      const dispatchResult =
-        admission.kind === "observeOnly"
-          ? (params.observeOnlyDispatchResult ?? {
-              queuedFinal: false,
-              counts: { tool: 0, block: 0, final: 0 },
-            })
-          : await params.runDispatch();
+      let dispatchResult;
+      if (admission.kind === "observeOnly") {
+        await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
+        dispatchResult = params.observeOnlyDispatchResult ?? {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+      } else {
+        dispatchResult = await params.runDispatch();
+      }
       return {
         admission,
         dispatched: true,
@@ -344,9 +347,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       let dispatchResult;
       if ("runDispatch" in resolved) {
-        if (params.turnAdoptionLifecycle) {
+        const lifecycle = resolved.runDispatchLifecycle;
+        if (!lifecycle) {
           throw new Error(
-            "runChannelInboundEvent cannot apply turnAdoptionLifecycle to a prepared turn; attach the lifecycle when creating runDispatch",
+            "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
+          );
+        }
+        if (
+          params.turnAdoptionLifecycle &&
+          lifecycle.turnAdoptionLifecycle !== params.turnAdoptionLifecycle
+        ) {
+          throw new Error(
+            "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
           );
         }
         const prepared =

@@ -1,3 +1,4 @@
+import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 // Qqbot type declarations define plugin contracts.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { EngineLogger } from "../types.js";
@@ -7,6 +8,11 @@ import type { GatewayAccount as _GatewayAccount } from "../types.js";
 export type GatewayAccount = _GatewayAccount;
 
 export interface GatewayPluginRuntime {
+  state: {
+    openChannelIngressQueue: <TPayload>(options: {
+      accountId: string;
+    }) => ChannelIngressQueue<TPayload>;
+  };
   channel: {
     activity: {
       record: (params: {
@@ -87,9 +93,19 @@ export type { RefAttachmentSummary } from "../ref/types.js";
 export interface WSPayload {
   op: number;
   d: unknown;
+  /** Stable delivery id on gateway dispatch envelopes. */
+  id?: string;
   s?: number;
   t?: string;
 }
+
+export type QQBotIngressLifecycle = {
+  abortSignal: AbortSignal;
+  onAdopted: () => void | Promise<void>;
+  onDeferred: () => void;
+  onAdoptionFinalizing: () => void;
+  onAbandoned: () => void | Promise<void>;
+};
 
 interface RawMessageAttachment {
   content_type: string;

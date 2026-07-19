@@ -129,7 +129,10 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
 If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth, then static token, then API key**).
-- **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
+- **Secondary key for OAuth:** profiles with a currently usable access token before
+  profiles whose access token is expired. Expired OAuth profiles stay eligible so
+  the runtime can refresh them when no usable peer is available.
+- **Next key:** `usageStats.lastUsed` (oldest first, within each type/state tier).
 - **Cooldown/disabled profiles** are moved to the end, ordered by soonest expiry.
 
 ### Session stickiness (cache-friendly)

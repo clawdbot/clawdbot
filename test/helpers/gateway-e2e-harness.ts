@@ -121,8 +121,8 @@ export async function connectNode(
   inst: GatewayInstance,
   label: string,
 ): Promise<{ client: GatewayClient; nodeId: string }> {
-  const identityPath = path.join(inst.homeDir, `${label}-device.json`);
-  const deviceIdentity = loadOrCreateDeviceIdentity(identityPath);
+  const identityPath = path.join(inst.homeDir, `${label}-device.sqlite`);
+  const deviceIdentity = loadOrCreateDeviceIdentity({ path: identityPath });
   const nodeId = deviceIdentity.deviceId;
   const client = await connectGatewayClient({
     url: `ws://127.0.0.1:${inst.port}`,

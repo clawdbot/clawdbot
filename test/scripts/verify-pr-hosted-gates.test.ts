@@ -925,8 +925,8 @@ describe("verify-pr-hosted-gates", () => {
         recentSha: previousSha,
       }),
     ).toEqual([
-      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=100&page=1`,
-      `repos/openclaw/openclaw/actions/runs?head_sha=${previousSha}&per_page=100&page=1`,
+      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=30&page=1`,
+      `repos/openclaw/openclaw/actions/runs?head_sha=${previousSha}&per_page=30&page=1`,
     ]);
     expect(HOSTED_GATE_MAX_AGE_HOURS).toBe(24);
   });
@@ -939,14 +939,17 @@ describe("verify-pr-hosted-gates", () => {
         headBranch: "codex/relax hosted gates",
       }),
     ).toEqual([
-      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=100&page=1`,
-      "repos/openclaw/openclaw/actions/runs?branch=codex%2Frelax%20hosted%20gates&event=pull_request&per_page=100&page=1",
+      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=30&page=1`,
+      "repos/openclaw/openclaw/actions/runs?branch=codex%2Frelax%20hosted%20gates&event=pull_request&per_page=30&page=1",
     ]);
   });
 
-  it("bounds workflow-run pagination to GitHub's search result limit", () => {
+  it("uses relay-safe pages and bounds pagination to GitHub's search result limit", () => {
     expect(workflowRunPageCount(0)).toBe(0);
-    expect(workflowRunPageCount(101)).toBe(2);
-    expect(workflowRunPageCount(10_000)).toBe(10);
+    expect(workflowRunPageCount(101)).toBe(4);
+    expect(workflowRunPageCount(10_000)).toBe(34);
+    expect(workflowRunQueryPaths("openclaw/openclaw", { sha, recentSha: "" }, 34)).toEqual([
+      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=30&page=34`,
+    ]);
   });
 });

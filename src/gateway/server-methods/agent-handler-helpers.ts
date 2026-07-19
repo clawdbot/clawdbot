@@ -28,7 +28,6 @@ import {
 import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
 export type RestoredCronContinuation = {

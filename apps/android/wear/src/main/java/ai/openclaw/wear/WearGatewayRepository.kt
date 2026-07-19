@@ -48,6 +48,7 @@ internal data class WearSession(
   val hasActiveRun: Boolean,
   val phoneNodeId: String,
   val agentId: String? = null,
+  val modelRef: String? = null,
 )
 
 internal data class WearSessionList(
@@ -57,6 +58,25 @@ internal data class WearSessionList(
   val eventStreamId: String? = null,
   val activeAgentId: String? = null,
   val selectedSessionValid: Boolean = false,
+)
+
+internal data class WearModel(
+  val ref: String,
+  val name: String,
+)
+
+internal data class WearModelList(
+  val models: List<WearModel>,
+  val eventSequence: Long?,
+  val phoneNodeId: String,
+  val eventStreamId: String? = null,
+)
+
+internal data class WearModelSelection(
+  val selectedModelRef: String,
+  val eventSequence: Long?,
+  val phoneNodeId: String,
+  val eventStreamId: String? = null,
 )
 
 internal data class WearChatMessage(
@@ -71,6 +91,7 @@ internal data class WearTranscript(
   val messages: List<WearChatMessage>,
   val activeRunId: String?,
   val activeText: String?,
+  val selectedModelRef: String?,
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
@@ -177,6 +198,63 @@ internal class WearGatewayRepository(
     )
   }
 
+  suspend fun models(
+    expectedNodeId: String,
+    capabilities: Set<WearProxyCapability>,
+    selectedModelRef: String? = null,
+  ): WearModelList {
+    capabilities.require(WearProxyCapability.ModelControls)
+    val response =
+      requester.request(
+        WearRpcMethod.ModelsList,
+        buildJsonObject {
+          selectedModelRef?.let { put("selectedModelRef", it) }
+        },
+        expectedNodeId,
+        requirePreferredNode = true,
+      )
+    val result = response.payload.asObject("models.list")
+    return WearModelList(
+      models =
+        (result["models"] as? JsonArray)
+          .orEmpty()
+          .mapNotNull(::parseModel),
+      eventStreamId = response.eventStreamId,
+      eventSequence = response.eventSequence,
+      phoneNodeId = response.sourceNodeId,
+    )
+  }
+
+  suspend fun selectModel(
+    sessionKey: String,
+    modelRef: String,
+    phoneNodeId: String,
+    capabilities: Set<WearProxyCapability>,
+  ): WearModelSelection {
+    capabilities.require(WearProxyCapability.ModelControls)
+    val response =
+      requester.request(
+        WearRpcMethod.ModelsSelect,
+        buildJsonObject {
+          put("sessionKey", sessionKey)
+          put("modelRef", modelRef)
+        },
+        phoneNodeId,
+        requirePreferredNode = true,
+      )
+    val selectedModelRef =
+      response.payload
+        .asObject("models.select")
+        .string("selectedModelRef")
+        ?: throw WearProxyException("invalid_response", "models.select returned invalid data")
+    return WearModelSelection(
+      selectedModelRef = selectedModelRef,
+      eventStreamId = response.eventStreamId,
+      eventSequence = response.eventSequence,
+      phoneNodeId = response.sourceNodeId,
+    )
+  }
+
   suspend fun setGatewayEnabled(
     enabled: Boolean,
     phoneNodeId: String,
@@ -258,6 +336,7 @@ internal class WearGatewayRepository(
       messages = (result["messages"] as? JsonArray).orEmpty().mapNotNull(::parseChatMessage),
       activeRunId = inFlight?.string("runId"),
       activeText = inFlight?.string("text"),
+      selectedModelRef = result.string("selectedModelRef"),
       eventStreamId = response.eventStreamId,
       eventSequence = response.eventSequence,
       phoneNodeId = response.sourceNodeId,
@@ -362,6 +441,16 @@ private fun parseSession(
     hasActiveRun = source.boolean("hasActiveRun") ?: false,
     phoneNodeId = phoneNodeId,
     agentId = source.string("agentId"),
+    modelRef = source.string("modelRef"),
+  )
+}
+
+private fun parseModel(element: JsonElement): WearModel? {
+  val source = element as? JsonObject ?: return null
+  val ref = source.string("ref") ?: return null
+  return WearModel(
+    ref = ref,
+    name = source.string("name") ?: ref,
   )
 }
 

@@ -28,6 +28,7 @@ import {
   createSessionEntryWithTranscript,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
+import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -125,34 +126,6 @@ export function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
-function inheritSessionSelection(parentEntry: SessionEntry | undefined): Partial<SessionEntry> {
-  if (!parentEntry) {
-    return {};
-  }
-  return {
-    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
-    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
-    ...(parentEntry.modelOverrideSource
-      ? { modelOverrideSource: parentEntry.modelOverrideSource }
-      : {}),
-    ...(parentEntry.agentRuntimeOverride
-      ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
-      : {}),
-    ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
-    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
-    ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
-    ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
-    ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
-    ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
-    ...(parentEntry.authProfileOverride
-      ? { authProfileOverride: parentEntry.authProfileOverride }
-      : {}),
-    ...(parentEntry.authProfileOverrideSource
-      ? { authProfileOverrideSource: parentEntry.authProfileOverrideSource }
-      : {}),
-  };
-}
-
 type CreatedGatewaySession = {
   key: string;
   agentId: string;
@@ -203,6 +176,11 @@ export async function createGatewaySession(params: {
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
+  /**
+   * Controls whether a distinct child terminates its parent. Omission preserves
+   * the legacy rollover; callers use `false` for a parallel child.
+   */
+  succeedsParent?: boolean;
   emitCommandHooks?: boolean;
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
@@ -216,6 +194,7 @@ export async function createGatewaySession(params: {
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
+  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
@@ -227,6 +206,29 @@ export async function createGatewaySession(params: {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
     };
+  }
+  if (params.succeedsParent !== undefined) {
+    if (!parentSessionKey) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires parentSessionKey"),
+      };
+    }
+    if (params.emitCommandHooks !== true) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires emitCommandHooks"),
+      };
+    }
+    if (params.succeedsParent && params.fork === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent conflicts with fork: a fork runs in parallel to its parent",
+        ),
+      };
+    }
   }
   if (requestedKey) {
     const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
@@ -305,13 +307,24 @@ export async function createGatewaySession(params: {
     };
   }
 
-  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   if (params.fork === true && !parentSessionKey) {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "fork requires parentSessionKey"),
     };
   }
+  const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId);
+  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+  // Dashboard sessions parent to main for flow-up notices and sidebar threads.
+  // Isolated DM scopes lack the shared watcher; global scope lacks a per-agent main.
+  const dashboardParentSessionKey =
+    !parentSessionKey &&
+    params.fork !== true &&
+    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    params.cfg.session?.scope !== "global" &&
+    targetSessionKey !== agentMainSessionKey
+      ? agentMainSessionKey
+      : undefined;
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
   let parentSelectedAgentId: string | undefined;
@@ -504,7 +517,7 @@ export async function createGatewaySession(params: {
       });
     }
 
-    const key = explicitTargetKey ?? buildDashboardSessionKey(agentId);
+    const key = targetSessionKey;
     const target = resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
@@ -646,22 +659,27 @@ export async function createGatewaySession(params: {
         };
         sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
-        if (!canonicalParentSessionKey) {
+        const storedParentSessionKey =
+          canonicalParentSessionKey ??
+          normalizeOptionalString(initializedEntry.parentSessionKey) ??
+          dashboardParentSessionKey;
+        if (!storedParentSessionKey) {
           return initialized;
         }
         const inheritedSelection =
-          catalogModel || normalizeOptionalString(params.model)
+          !canonicalParentSessionKey || catalogModel || normalizeOptionalString(params.model)
             ? {}
             : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...initializedEntry,
           ...inheritedSelection,
-          parentSessionKey: canonicalParentSessionKey,
+          parentSessionKey: storedParentSessionKey,
         };
         if (params.fork !== true) {
           return { ...initialized, entry };
         }
-        if (!currentParentSessionEntry || !parentSessionTarget) {
+        const forkParentSessionKey = canonicalParentSessionKey;
+        if (!forkParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return {
             ok: false,
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to resolve parent session for fork"),
@@ -687,7 +705,7 @@ export async function createGatewaySession(params: {
         const fork = await forkSessionFromParent({
           parentEntry: currentParentSessionEntry,
           agentId: parentSessionTarget.agentId,
-          parentSessionKey: canonicalParentSessionKey,
+          parentSessionKey: forkParentSessionKey,
           sessionKey: target.canonicalKey,
           storePath: parentSessionTarget.storePath,
           // Keep the fork transcript owned by the child store across agent boundaries.
@@ -735,17 +753,21 @@ export async function createGatewaySession(params: {
       const parentEntry = currentParentSessionEntry;
       const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
         await loadSessionLifecycleRuntime();
-      emitGatewaySessionEndPluginHook({
-        cfg: params.cfg,
-        sessionKey: canonicalParentSessionKey,
-        sessionId: parentEntry?.sessionId,
-        storePath: parentSessionTarget.storePath,
-        sessionFile: parentEntry?.sessionFile,
-        agentId: parentSessionTarget.agentId,
-        reason: "new",
-        nextSessionId: created.entry.sessionId,
-        nextSessionKey: target.canonicalKey,
-      });
+      // Child key shape does not establish lifecycle ownership. The caller owns
+      // that fact; omission keeps the shipped rollover for out-of-tree clients.
+      if (params.succeedsParent !== false) {
+        emitGatewaySessionEndPluginHook({
+          cfg: params.cfg,
+          sessionKey: canonicalParentSessionKey,
+          sessionId: parentEntry?.sessionId,
+          storePath: parentSessionTarget.storePath,
+          sessionFile: parentEntry?.sessionFile,
+          agentId: parentSessionTarget.agentId,
+          reason: "new",
+          nextSessionId: created.entry.sessionId,
+          nextSessionKey: target.canonicalKey,
+        });
+      }
       emitGatewaySessionStartPluginHook({
         cfg: params.cfg,
         sessionKey: target.canonicalKey,

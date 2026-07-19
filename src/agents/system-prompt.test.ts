@@ -1275,11 +1275,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Plain /approve only when");
   });
 
-  it("suppresses plain chat approval commands for native approval channels", () => {
+  it("suppresses plain chat approval commands for native approval runtimes", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
-        channel: "slack",
+        channel: "whatsapp",
+        capabilities: ["nativeApprovals"],
       },
     });
 

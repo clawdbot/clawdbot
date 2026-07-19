@@ -8,6 +8,7 @@ struct RootTabs: View {
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.rootTabsUserInterfaceIdiomOverride) private var userInterfaceIdiomOverride
     @Environment(\.scenePhase) private var scenePhase
@@ -66,10 +67,9 @@ struct RootTabs: View {
         switch arguments[valueIndex].lowercased() {
         case "control", "overview":
             return .control
-        case "chat":
+        // These shipped launch aliases now target the unified conversational surface.
+        case "chat", "talk", "voice":
             return .chat
-        case "talk", "voice":
-            return .talk
         case "agent", "agents":
             return .agent
         case "settings":
@@ -151,65 +151,6 @@ struct RootTabs: View {
         } else {
             self.phoneTabContent
         }
-    }
-
-    private var phoneTabContent: some View {
-        TabView(selection: self.phoneTabSelection) {
-            PhoneTabSettingsHost(resetRequestID: self.phoneChatSettingsResetRequestID) { openSettingsRoute in
-                ChatProTab(
-                    headerLeadingAction: self.phoneChatReturnAction,
-                    ownsNavigationStack: false,
-                    openSettings: { openSettingsRoute(.gateway) })
-            }
-            .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
-            .tag(AppTab.chat)
-
-            PhoneTabSettingsHost { openSettingsRoute in
-                TalkProTab(
-                    ownsNavigationStack: false,
-                    openSettings: { openSettingsRoute(.gateway) },
-                    openVoiceSettings: { openSettingsRoute(.voice) })
-            }
-            .tabItem {
-                Label(
-                    "Talk",
-                    systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
-                    .font(OpenClawType.captionSemiBold)
-            }
-            .tag(AppTab.talk)
-
-            RootTabsPhoneControlHub(
-                groups: Self.phoneControlGroups,
-                initialDestination: Self.requestedInitialSidebarDestination,
-                navigationRequest: self.phoneControlNavigationRequest,
-                openRootDestination: { self.selectSidebarDestination($0) },
-                openChatFromControlDetail: { self.openChatFromControlDetail($0) })
-                .tabItem { Label("Control", systemImage: "square.grid.2x2") }
-                .badge(self.appModel.pendingExecApprovalCount)
-                .tag(AppTab.control)
-
-            PhoneTabSettingsHost { openSettingsRoute in
-                AgentProTab(
-                    directRoute: .agents,
-                    openSettings: { openSettingsRoute(.gateway) })
-            }
-            .tabItem { Label("Agent", systemImage: "person.2.fill") }
-            .tag(AppTab.agent)
-
-            SettingsProTab(
-                initialRoute: self.selectedSettingsRoute,
-                acceptsGatewaySetupRequests: !self.showOnboarding &&
-                    self.selectedTab == .settings &&
-                    self.selectedSettingsRoute == .gateway,
-                onRouteChange: self.handleSettingsRouteChange,
-                onApprovalNotificationsRoute: self.suppressExecApprovalPromptForNotificationSettings,
-                gatewaySetupRequest: self.gatewaySetupRequest,
-                onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
-                .id(self.settingsTabViewID)
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
-                .tag(AppTab.settings)
-        }
-        .openClawTabBarBehavior()
     }
 
     private var sidebarSplitContent: some View {
@@ -433,12 +374,6 @@ struct RootTabs: View {
                 showsAgentBadge: false,
                 ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
-        case .talk:
-            TalkProTab(
-                headerLeadingAction: self.sidebarHeaderLeadingAction,
-                ownsNavigationStack: false,
-                openSettings: { self.selectSidebarDestination(.gateway) },
-                openVoiceSettings: { self.selectSettingsRoute(.voice) })
         case .overview:
             CommandCenterTab(
                 ownsNavigationStack: false,
@@ -960,6 +895,71 @@ struct RootTabs: View {
 }
 
 extension RootTabs {
+    private var phoneTabContent: some View {
+        TabView(selection: self.phoneTabSelection) {
+            PhoneTabSettingsHost(resetRequestID: self.phoneChatSettingsResetRequestID) { openSettingsRoute in
+                ChatProTab(
+                    headerLeadingAction: self.phoneChatReturnAction,
+                    ownsNavigationStack: false,
+                    openSettings: { openSettingsRoute(.gateway) })
+            }
+            .tabItem {
+                Label {
+                    Text("Chat")
+                        .font(OpenClawType.caption)
+                } icon: {
+                    UnifiedChatVoiceTabIcon.image(
+                        state: self.phoneChatVoiceIconState,
+                        colorScheme: self.colorScheme)
+                }
+                .accessibilityLabel(
+                    self.appModel.talkMode.isEnabled ? "Chat, voice active" : "Chat")
+            }
+            .tag(AppTab.chat)
+
+            RootTabsPhoneControlHub(
+                groups: Self.phoneControlGroups,
+                initialDestination: self.selectedSidebarDestination,
+                navigationRequest: self.phoneControlNavigationRequest,
+                openRootDestination: { self.selectSidebarDestination($0) },
+                openChatFromControlDetail: { self.openChatFromControlDetail($0) })
+                .tabItem { Label("Control", systemImage: "square.grid.2x2") }
+                .badge(self.appModel.pendingExecApprovalCount)
+                .tag(AppTab.control)
+
+            PhoneTabSettingsHost { openSettingsRoute in
+                AgentProTab(
+                    directRoute: .agents,
+                    openSettings: { openSettingsRoute(.gateway) })
+            }
+            .tabItem { Label("Agent", systemImage: "person.2.fill") }
+            .tag(AppTab.agent)
+
+            SettingsProTab(
+                initialRoute: self.selectedSettingsRoute,
+                acceptsGatewaySetupRequests: !self.showOnboarding &&
+                    self.selectedTab == .settings &&
+                    self.selectedSettingsRoute == .gateway,
+                onRouteChange: self.handleSettingsRouteChange,
+                onApprovalNotificationsRoute: self.suppressExecApprovalPromptForNotificationSettings,
+                gatewaySetupRequest: self.gatewaySetupRequest,
+                onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
+                .id(self.settingsTabViewID)
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tag(AppTab.settings)
+        }
+        .openClawTabBarBehavior()
+    }
+
+    private var phoneChatVoiceIconState: UnifiedChatVoiceTabIcon.State {
+        guard self.appModel.talkMode.isEnabled else { return .inactive }
+        if self.appModel.talkMode.isSpeaking { return .speaking }
+        if self.appModel.talkMode.isListening { return .listening }
+        return .active
+    }
+}
+
+extension RootTabs {
     private func updateCanvasState() {
         self.updateHomeCanvasState()
         self.updateCanvasDebugStatus()
@@ -998,11 +998,11 @@ extension RootTabs {
                 eyebrow: "\(gatewayLabel) online",
                 title: "Command center",
                 subtitle:
-                "Use Chat for code work, Talk for realtime voice, and gateway tools for approved device actions.",
+                "Use Chat for code work or realtime voice, plus gateway tools for approved device actions.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
                 activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
-                activeAgentCaption: "Routes chat and talk",
+                activeAgentCaption: "Routes chat and voice",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(6)),
                 footer: "OpenClaw only runs phone-side capabilities while the app is connected and permitted.")
@@ -1388,59 +1388,6 @@ extension RootTabs {
         guard shouldPresent else { return }
         self.presentedSheet = .quickSetup
     }
-}
-
-/// Phone tabs push Settings routes (gateway, voice) onto their own stack so
-/// Back returns to the tab content the user navigated from; only global flows
-/// (deep links, onboarding, problem banner) jump to the canonical Settings tab.
-private struct PhoneTabSettingsHost<Content: View>: View {
-    @State private var settingsPath: [SettingsRoute] = []
-    private let resetRequestID: Int
-    private let content: (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content
-
-    init(
-        resetRequestID: Int = 0,
-        @ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content)
-    {
-        self.resetRequestID = resetRequestID
-        self.content = content
-    }
-
-    var body: some View {
-        NavigationStack(path: self.$settingsPath) {
-            self.content { route in
-                self.settingsPath.append(route)
-            }
-            .navigationDestination(for: SettingsRoute.self) { route in
-                SettingsProTab(directRoute: route)
-            }
-        }
-        .onChange(of: self.resetRequestID) { _, _ in
-            self.settingsPath.removeAll()
-        }
-    }
-}
-
-private struct RootTabsHomeCanvasPayload: Codable {
-    var gatewayState: String
-    var eyebrow: String
-    var title: String
-    var subtitle: String
-    var gatewayLabel: String
-    var activeAgentName: String
-    var activeAgentBadge: String
-    var activeAgentCaption: String
-    var agentCount: Int
-    var agents: [RootTabsHomeCanvasAgentCard]
-    var footer: String
-}
-
-private struct RootTabsHomeCanvasAgentCard: Codable {
-    var id: String
-    var name: String
-    var badge: String
-    var caption: String
-    var isActive: Bool
 }
 
 private struct RootCameraFlashOverlay: View {

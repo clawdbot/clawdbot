@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { callGateway } from "../gateway/call.js";
+import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import {
   listApprovedPairedDeviceRoles,
   listDevicePairing,
@@ -103,11 +104,6 @@ type LocalDeviceAuthIssue = {
   role: string;
   message: string;
   fixHint: string;
-};
-
-type StoredDeviceIdentity = {
-  version: 1;
-  deviceId: string;
 };
 
 function hasNumberVersion(value: object): value is { version: number } {
@@ -407,24 +403,12 @@ function readJsonFile(filePath: string): unknown {
   return tryReadJsonSync(filePath);
 }
 
-function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): StoredDeviceIdentity | null {
-  const filePath = path.join(resolveStateDir(env), "identity", "device.json");
-  const identity = readJsonFile(filePath);
-  if (
-    !identity ||
-    typeof identity !== "object" ||
-    !hasNumberVersion(identity) ||
-    identity.version !== 1 ||
-    !("deviceId" in identity) ||
-    typeof identity.deviceId !== "string" ||
-    !identity.deviceId.trim()
-  ) {
+function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: string } | null {
+  try {
+    return loadDeviceIdentityIfPresent({ env });
+  } catch {
     return null;
   }
-  return {
-    version: 1,
-    deviceId: identity.deviceId,
-  };
 }
 
 function readLocalDeviceAuthStore(env: NodeJS.ProcessEnv = process.env): DeviceAuthStore | null {

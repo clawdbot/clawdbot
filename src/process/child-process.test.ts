@@ -19,8 +19,7 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
   });
 
   it("drains active descendant output after the parent exits", async () => {
-    const command =
-      'printf "HEAD\\n"; ( for i in 1 2 3 4 5 6; do sleep 0.05; printf "TICK$i\\n"; done ) &';
+    const command = 'printf "HEAD\\n"; ( sleep 0.05; printf "TAIL\\n" ) &';
     child = execa("/bin/sh", ["-c", command], {
       buffer: false,
       detached: true,
@@ -33,9 +32,18 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
       output += chunk.toString();
     });
 
+    // Simulate a contended worker after the direct child exits. The descendant
+    // writes while JS is parked, so its pipe data and the idle timer are both
+    // ready when the event loop resumes.
+    await new Promise<void>((resolve) => {
+      child?.once("exit", () => {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+        resolve();
+      });
+    });
     await child.finally(releaseOutput);
     expect(output).toContain("HEAD");
-    expect(output).toContain("TICK6");
+    expect(output).toContain("TAIL");
   });
 
   it("releases a quiet inherited pipe after the idle grace", async () => {

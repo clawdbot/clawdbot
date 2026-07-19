@@ -285,6 +285,7 @@ function parseNodeStartResult(raw: unknown): {
 export async function leaveChromeMeet(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
+  meetingSessionId: string;
   meetingUrl: string;
   tab: GoogleMeetBrowserTab;
 }): Promise<{ left: boolean; note: string }> {
@@ -292,6 +293,7 @@ export async function leaveChromeMeet(params: {
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
     callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
     launch: params.config.chrome.launch,
+    meetingSessionId: params.meetingSessionId,
     meetingUrl: params.meetingUrl,
     tab: params.tab,
     timeoutMs: params.config.chrome.joinTimeoutMs,
@@ -356,6 +358,7 @@ export async function leaveChromeMeetOnNode(params: {
   runtime: PluginRuntime;
   nodeId?: string;
   config: GoogleMeetConfig;
+  meetingSessionId: string;
   meetingUrl: string;
   tab: GoogleMeetBrowserTab;
 }): Promise<{ left: boolean; note: string }> {
@@ -377,6 +380,7 @@ export async function leaveChromeMeetOnNode(params: {
         timeoutMs: request.timeoutMs,
       }),
     launch: params.config.chrome.launch,
+    meetingSessionId: params.meetingSessionId,
     meetingUrl: params.meetingUrl,
     tab: params.tab,
     timeoutMs: params.config.chrome.joinTimeoutMs,

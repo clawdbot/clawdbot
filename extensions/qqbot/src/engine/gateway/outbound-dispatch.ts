@@ -12,6 +12,7 @@
 
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -282,10 +283,11 @@ export async function dispatchOutbound(
   // a longer configured ceiling (e.g. slow local ollama models) is not
   // silently undercut by a plugin-local 5-minute cap.
   const responseTimeoutMs = resolveResponseTimeoutMs(cfg);
+  const responseTimeoutError = new Error("Response timeout");
   const timeoutPromise = new Promise<void>((_, reject) => {
     timeoutId = setTimeout(() => {
       if (!hasResponse) {
-        reject(new Error("Response timeout"));
+        reject(responseTimeoutError);
       }
     }, responseTimeoutMs);
   });
@@ -675,6 +677,9 @@ export async function dispatchOutbound(
           },
         },
         replyOptions: {
+          ...(event.turnAdoptionLifecycle
+            ? bindIngressLifecycleToReplyOptions(event.turnAdoptionLifecycle)
+            : {}),
           disableBlockStreaming: useOfficialC2cStream
             ? true
             : account.config?.streaming?.mode === "off",
@@ -698,10 +703,17 @@ export async function dispatchOutbound(
 
   try {
     await Promise.race([dispatchPromise, timeoutPromise]);
-  } catch {
+  } catch (error) {
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
+    }
+    if (error === responseTimeoutError && event.turnAdoptionLifecycle) {
+      // The watchdog cannot cancel a live agent turn. Keep durable settlement with that turn;
+      // releasing here would let a retry overlap its later replies and adoption callback.
+      await dispatchPromise;
+    } else if (event.turnAdoptionLifecycle) {
+      throw error;
     }
   } finally {
     if (timeoutId) {

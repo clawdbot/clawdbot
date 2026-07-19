@@ -41,6 +41,7 @@ type ChatSendRequestParams = {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string;
+  replyToId?: string;
   attachments?: Array<{
     type?: string;
     mimeType?: string;

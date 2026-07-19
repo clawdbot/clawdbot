@@ -140,7 +140,7 @@ function trustedToolAgentId(
 
 function joinRequest(raw: Record<string, unknown>, options?: { allowTimeout?: boolean }) {
   if (!options?.allowTimeout && raw.timeoutMs !== undefined) {
-    throw invalidRequest("timeoutMs is supported only by testSpeech");
+    throw invalidRequest("timeoutMs is supported only by testSpeech or testListen");
   }
   let url: string;
   let timeoutMs: number | undefined;
@@ -365,7 +365,8 @@ export default definePluginEntry({
       ],
       [
         "teamsmeetings.testListen",
-        (rt: TeamsMeetingsRuntime, raw: Record<string, unknown>) => rt.testListen(joinRequest(raw)),
+        (rt: TeamsMeetingsRuntime, raw: Record<string, unknown>) =>
+          rt.testListen(joinRequest(raw, { allowTimeout: true })),
       ],
     ] as const) {
       api.registerGatewayMethod(

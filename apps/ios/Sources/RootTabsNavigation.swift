@@ -31,14 +31,12 @@ extension RootTabs {
     enum AppTab: Hashable {
         case control
         case chat
-        case talk
         case agent
         case settings
     }
 
     enum SidebarDestination: String, CaseIterable, Hashable, Identifiable {
         case chat
-        case talk
         case overview
         case activity
         case agents
@@ -62,7 +60,6 @@ extension RootTabs {
         var title: String {
             switch self {
             case .chat: String(localized: "Chat")
-            case .talk: String(localized: "Talk")
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
             case .agents: String(localized: "Agents")
@@ -91,7 +88,6 @@ extension RootTabs {
         var systemImage: String {
             switch self {
             case .chat: "bubble.left"
-            case .talk: "waveform.circle"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
             case .agents: "person.2"
@@ -114,8 +110,6 @@ extension RootTabs {
             switch self {
             case .chat:
                 .chat
-            case .talk:
-                .talk
             case .agents:
                 .agent
             case .settings, .gateway:
@@ -132,7 +126,7 @@ extension RootTabs {
             switch self {
             case .gateway:
                 .gateway
-            case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
+            case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .files,
                  .dreaming,
                  .usage, .cron, .terminal, .settings, .docs:
@@ -209,7 +203,7 @@ extension RootTabs {
 
     static func shouldOpenRootTabFromPhoneHub(_ destination: SidebarDestination) -> Bool {
         switch destination {
-        case .chat, .talk, .agents, .gateway, .settings:
+        case .chat, .agents, .gateway, .settings:
             true
         case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
              .dreaming,
@@ -225,8 +219,6 @@ extension RootTabs {
             .overview
         case .chat:
             .chat
-        case .talk:
-            .talk
         case .agent:
             .agents
         case .settings:
@@ -287,7 +279,7 @@ extension RootTabs {
     }
 
     static let sidebarGroups: [SidebarGroup] = [
-        SidebarGroup(title: "CHAT", destinations: [.chat, .talk]),
+        SidebarGroup(title: "CHAT", destinations: [.chat]),
         SidebarGroup(
             title: "CONTROL",
             destinations: [
@@ -311,8 +303,7 @@ extension RootTabs {
     ]
 
     static var phoneControlGroups: [SidebarGroup] {
-        // Agents owns a bottom tab and its hub entry duplicated the same destination;
-        // Chat and Talk stay per the tested Control-hub IA contract.
+        // Agents owns a bottom tab and its hub entry duplicated the same destination.
         let tabOwned: Set<SidebarDestination> = [.agents]
         return self.sidebarGroups
             .map { group in

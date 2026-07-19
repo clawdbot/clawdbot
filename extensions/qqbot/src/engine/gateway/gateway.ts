@@ -106,6 +106,10 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
+    if (event.turnAdoptionLifecycle?.abortSignal.aborted) {
+      await event.turnAdoptionLifecycle.onAbandoned();
+      return;
+    }
     log?.info(`Processing message from ${event.senderId}: ${event.content}`, {
       accountId: account.accountId,
       messageId: event.messageId,
@@ -142,6 +146,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         blockReason: inbound.blockReason,
       });
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -163,6 +168,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
           },
         );
         inbound.typing.keepAlive?.stop();
+        await event.turnAdoptionLifecycle?.onAdopted();
         return;
       }
       log?.info(
@@ -175,6 +181,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         },
       );
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -212,6 +219,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         },
       );
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -227,6 +235,9 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (event.turnAdoptionLifecycle) {
+        throw err;
+      }
     } finally {
       inbound.typing.keepAlive?.stop();
       if (event.type === "group" && event.groupOpenid && inbound.group) {

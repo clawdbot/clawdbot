@@ -189,6 +189,8 @@ class TalkModeManager internal constructor(
   private val session: GatewaySession,
   private val isConnected: () -> Boolean,
   private val gatewayStableId: () -> String? = { null },
+  private val preferredAudioInputDevice: () -> String? = { null },
+  private val onAppliedAudioInputChanged: (String?) -> Unit = {},
   private val onBeforeSpeak: suspend () -> Unit = {},
   private val onAfterSpeak: suspend () -> Unit = {},
   private val onStoppedByRelay: () -> Unit = {},
@@ -307,6 +309,7 @@ class TalkModeManager internal constructor(
   private val completedRunTexts = LinkedHashMap<String, String>()
   private var configLoaded = false
   private val startGeneration = AtomicLong(0L)
+  private val audioInputGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
   private var realtimeCaptureJob: Job? = null
@@ -1082,6 +1085,8 @@ class TalkModeManager internal constructor(
   private fun startRealtimeCaptureLocked(sessionId: String) {
     realtimeCaptureJob?.cancel()
     realtimeAppendJob?.cancel()
+    val inputGeneration = audioInputGeneration.incrementAndGet()
+    onAppliedAudioInputChanged(null)
     val audioFrames =
       Channel<ByteArray>(
         capacity = 4,
@@ -1120,7 +1125,17 @@ class TalkModeManager internal constructor(
         var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
-          audioInput = AndroidAudioInputSession.open(context, realtimeSampleRateHz, frameBytes)
+          val openedAudioInput =
+            AndroidAudioInputSession.open(
+              context,
+              realtimeSampleRateHz,
+              frameBytes,
+              preferredAudioInputDevice(),
+              { key ->
+                if (audioInputGeneration.get() == inputGeneration) onAppliedAudioInputChanged(key)
+              },
+            )
+          audioInput = openedAudioInput
           val buffer = ByteArray(frameBytes)
           audioInput.startRecording()
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {

@@ -100,6 +100,7 @@ function registerTwoTargets() {
   const logB = vi.fn();
   const core = {} as PluginRuntime;
   const config = {} as OpenClawConfig;
+  const ingress = { receive: vi.fn(async () => ({ kind: "ignored" as const })) };
 
   const unregisterA = registerGoogleChatWebhookTarget({
     account: baseAccount("A"),
@@ -109,6 +110,7 @@ function registerTwoTargets() {
     path: "/googlechat",
     statusSink: sinkA,
     mediaMaxMb: 5,
+    ingress,
   });
   const unregisterB = registerGoogleChatWebhookTarget({
     account: baseAccount("B"),
@@ -118,6 +120,7 @@ function registerTwoTargets() {
     path: "/googlechat",
     statusSink: sinkB,
     mediaMaxMb: 5,
+    ingress,
   });
   webhookRouteHandler = expectDefined(registry.httpRoutes[0], "Google Chat webhook route").handler;
 
@@ -247,7 +250,10 @@ describe("Google Chat webhook routing", () => {
               user: { name: "users/12345", displayName: "Test User" },
               messagePayload: {
                 space: { name: "spaces/AAA" },
-                message: { text: "Hello from add-on" },
+                message: {
+                  name: "spaces/AAA/messages/add-on-1",
+                  text: "Hello from add-on",
+                },
               },
             },
           },

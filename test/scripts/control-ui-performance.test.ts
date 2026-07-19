@@ -102,6 +102,49 @@ describe("Control UI performance budgets", () => {
     );
   });
 
+  it("includes exact bytes when rounded violation values collide", () => {
+    const metrics = {
+      schemaVersion: 1 as const,
+      startup: {
+        js: { requests: 1, rawBytes: 100, gzipBytes: 43_009, brotliBytes: 30 },
+        css: { requests: 1, rawBytes: 50, gzipBytes: 15, brotliBytes: 12 },
+        assets: [],
+      },
+      total: {
+        js: { requests: 1, rawBytes: 100, gzipBytes: 43_009, brotliBytes: 30 },
+        css: { requests: 1, rawBytes: 50, gzipBytes: 15, brotliBytes: 12 },
+      },
+      largest: {
+        js: {
+          file: "assets/index-a.js",
+          type: "js",
+          rawBytes: 100,
+          gzipBytes: 43_009,
+          brotliBytes: 30,
+        },
+        css: {
+          file: "assets/index-c.css",
+          type: "css",
+          rawBytes: 50,
+          gzipBytes: 15,
+          brotliBytes: 12,
+        },
+      },
+    } satisfies ReturnType<typeof collectControlUiPerformanceMetrics>;
+    const budgets = {
+      startupJsRequests: 1,
+      startupCssRequests: 1,
+      startupJsGzipBytes: 43_008,
+      startupCssGzipBytes: 20,
+      largestJsGzipBytes: 43_008,
+      largestCssGzipBytes: 20,
+    };
+
+    expect(formatControlUiPerformanceReport(metrics, budgets)).toContain(
+      "startup JS gzip: 42.0 KiB exceeds 42.0 KiB (43009 B vs 43008 B)",
+    );
+  });
+
   it("fails when a compressed sidecar is missing", () => {
     const { distDir } = createDistFixture();
     fs.writeFileSync(

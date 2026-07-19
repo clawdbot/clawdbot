@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -11,6 +11,7 @@ import { isCloudWorkerPlacementState } from "../../../components/session-row-bad
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../../lib/format.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
@@ -26,6 +27,8 @@ type ChatPaneHeaderProps = {
   workspaceRoot: string | null;
   workspaceLabel: string | null;
   branch: string | null;
+  branches: SessionBranch[];
+  branchSwitchDisabledReason: string | null;
   platform: string | null;
   canReveal: boolean;
   copiedAction: ChatPaneHeaderAction | null;
@@ -34,12 +37,15 @@ type ChatPaneHeaderProps = {
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
+  faceControl?: TemplateResult | typeof nothing;
+  boardDockAction?: TemplateResult | typeof nothing;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
   onCancelRename: () => void;
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
+  onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;
   onSplitRight?: (paneId: string) => void;
@@ -59,6 +65,11 @@ function revealLabel(platform: string | null): string {
 function pathBasename(value: string): string {
   const trimmed = value.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).pop() || trimmed;
+}
+
+function branchRelativeTime(updatedAt: string | undefined): string {
+  const timestamp = updatedAt ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(timestamp) ? formatRelativeTimestamp(timestamp, { fallback: "" }) : "";
 }
 
 export function resolveChatPaneWorkspace(params: {
@@ -221,8 +232,72 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </wa-dropdown>
           `
         : nothing}
+      ${props.faceControl ?? nothing}
+      ${!props.catalog && props.branches.length > 1
+        ? html`
+            <wa-dropdown
+              class="chat-pane__branches-menu"
+              placement="bottom-end"
+              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                const leafEntryId = event.detail.item.value;
+                const branch = props.branches.find(
+                  (candidate) => candidate.leafEntryId === leafEntryId,
+                );
+                if (leafEntryId && branch && !branch.active && !props.branchSwitchDisabledReason) {
+                  props.onBranchSelect(leafEntryId);
+                }
+              }}
+            >
+              <openclaw-tooltip
+                slot="trigger"
+                .content=${props.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches")}
+              >
+                <button
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger"
+                  type="button"
+                  ?disabled=${Boolean(props.branchSwitchDisabledReason)}
+                  aria-label=${t("chat.sessionHeader.branches")}
+                >
+                  ${icons.gitBranch}
+                </button>
+              </openclaw-tooltip>
+              ${props.branches.map((branch) => {
+                const relativeTime = branchRelativeTime(branch.updatedAt);
+                return html`
+                  <wa-dropdown-item
+                    class="chat-pane__branch-item"
+                    value=${branch.leafEntryId}
+                    ?disabled=${branch.active || Boolean(props.branchSwitchDisabledReason)}
+                    data-active=${branch.active ? "true" : "false"}
+                  >
+                    <span class="chat-pane__branch-copy">
+                      <span class="chat-pane__branch-headline"
+                        >${branch.headline || t("chat.sessionHeader.untitledBranch")}</span
+                      >
+                      <span class="chat-pane__branch-meta"
+                        >${t(
+                          branch.messageCount === 1
+                            ? "chat.sessionHeader.oneMessage"
+                            : "chat.sessionHeader.messages",
+                          { count: String(branch.messageCount) },
+                        )}${relativeTime ? ` · ${relativeTime}` : ""}</span
+                      >
+                    </span>
+                    ${branch.active
+                      ? html`<span
+                          class="chat-pane__branch-active"
+                          aria-label=${t("chat.sessionHeader.activeBranch")}
+                          >${icons.check}</span
+                        >`
+                      : nothing}
+                  </wa-dropdown-item>
+                `;
+              })}
+            </wa-dropdown>
+          `
+        : nothing}
       <div class="chat-pane__actions">
-        ${props.terminalAction}
+        ${props.boardDockAction ?? nothing} ${props.terminalAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}

@@ -584,16 +584,6 @@ struct OpenClawStatusBadge: View {
     }
 }
 
-struct ProStatusDot: View {
-    var color: Color
-
-    var body: some View {
-        Circle()
-            .fill(self.color)
-            .frame(width: 8, height: 8)
-    }
-}
-
 struct ProValuePill: View {
     @Environment(\.colorScheme) private var colorScheme
     let value: String

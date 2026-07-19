@@ -113,4 +113,16 @@ describe("config set input parsing", () => {
       ).toThrow("--batch-file must be a JSON array.");
     });
   });
+
+  it("rejects --batch-file payloads above the config mutation limit", () => {
+    withBatchFile(
+      "openclaw-config-set-input-oversized-",
+      " ".repeat(8 * 1024 * 1024 + 1),
+      (batchPath) => {
+        expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
+          "File exceeds 8388608 bytes",
+        );
+      },
+    );
+  });
 });

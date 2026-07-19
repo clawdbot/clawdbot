@@ -430,9 +430,11 @@ export function registerSkillsCli(program: Command) {
           return;
         }
         for (const entry of results) {
+          const ownerHandle = normalizeOptionalString(entry.ownerHandle);
+          const skillRef = ownerHandle ? `@${ownerHandle}/${entry.slug}` : entry.slug;
           const version = entry.version ? ` v${entry.version}` : "";
           const summary = entry.summary ? `  ${entry.summary}` : "";
-          defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
+          defaultRuntime.log(`${skillRef}${version}  ${entry.displayName}${summary}`);
         }
       } catch (err) {
         defaultRuntime.error(String(err));

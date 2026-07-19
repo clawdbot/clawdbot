@@ -747,11 +747,43 @@
 }
 
 .chat-tool-card__preview-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.chat-tool-card__widget-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-tool-card__widget-actions::part(menu) {
+  min-width: 176px;
+}
+
+.chat-tool-card__widget-actions-trigger {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.chat-tool-card__widget-actions-trigger:hover,
+.chat-tool-card__widget-actions-trigger:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.chat-tool-card__widget-actions-trigger svg {
+  width: 16px;
+  height: 16px;
 }
 
 .chat-tool-card__preview-panel {
@@ -764,7 +796,11 @@
   min-height: 420px;
   border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   border-radius: var(--radius-md);
-  background: #fff;
+  /* Widget documents keep a transparent body; the host provides the themed
+     backdrop so transparent regions match the active theme instead of
+     flashing white in dark mode. Documents from the pre-token wrapper assumed
+     white; accepted tradeoff — they are transient (32-doc LRU) and age out. */
+  background: var(--card);
 }
 
 .chat-tool-card__raw-toggle {

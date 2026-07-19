@@ -18,6 +18,10 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {
   assertNoUnmigratedWorkspaceState,
@@ -61,7 +65,6 @@ const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
-const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -115,7 +118,7 @@ async function readWorkspaceFileWithGuards(params: {
         }
 
         try {
-          const content = syncFs.readFileSync(opened.fd, "utf-8");
+          const content = await readWorkspaceBootstrapFile(opened.fd);
           workspaceFileCache.set(params.filePath, { content, identity });
           return { ok: true, content };
         } finally {

@@ -10,6 +10,11 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import {
+  computeModelPolicyAllowlist,
+  hasModelPolicyAllowlistMigrationMarker,
+  MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER,
+} from "../../../config/model-policy-allowlist-migration.js";
 import { isModelThinkingFormat, type ModelDefinitionConfig } from "../../../config/types.models.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import {
@@ -828,13 +833,16 @@ const MODEL_REF_ARRAY_KEYS = new Set([
   "imageModelFallbacks",
 ]);
 const MODEL_REF_MAP_KEYS = new Set(["models"]);
-
 function pathKey(path: string): string {
   return path.slice(path.lastIndexOf(".") + 1);
 }
 
 function isChannelModelOverridePath(path: string): boolean {
   return path.includes(".modelByChannel.");
+}
+
+function isModelPolicyAllowPath(path: string): boolean {
+  return path.endsWith(".modelPolicy.allow");
 }
 
 function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
@@ -847,7 +855,9 @@ function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
   }
   if (Array.isArray(value)) {
     return value.some((entry, index) =>
-      typeof entry === "string" && key && MODEL_REF_ARRAY_KEYS.has(key)
+      typeof entry === "string" &&
+      key &&
+      (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
         ? Boolean(upgradeRetiredModelRef(entry))
         : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
     );
@@ -861,6 +871,48 @@ function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
   }
   return Object.entries(record).some(([childKey, child]) =>
     scanKnownModelRefs(child, childKey, `${path}.${childKey}`),
+  );
+}
+
+function collectLegacyDefaultModelAllowRefs(raw: Record<string, unknown>): string[] | null {
+  // Marker seeding at the config write boundary ships atomically with metadata-only
+  // model maps. Therefore an unmarked map is legacy even if a general write version advanced.
+  const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  return computeModelPolicyAllowlist({
+    root: raw,
+    defaults,
+  });
+}
+
+function migrateExplicitDefaultModelAllowPolicy(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  if (hasModelPolicyAllowlistMigrationMarker(raw)) {
+    return;
+  }
+  const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  const defaultModelPolicy = getRecord(defaults?.modelPolicy);
+  const defaultNeedsEvaluation =
+    Boolean(getRecord(defaults?.models)) &&
+    !(defaultModelPolicy && Object.hasOwn(defaultModelPolicy, "allow"));
+  if (!defaultNeedsEvaluation) {
+    return;
+  }
+  const defaultAllow = collectLegacyDefaultModelAllowRefs(raw);
+  if (defaultAllow) {
+    const mutableDefaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+    const mutableModelPolicy = ensureRecord(mutableDefaults, "modelPolicy");
+    // The policy builder still retains configured defaults/fallbacks, so copying the
+    // original keys reproduces the legacy effective set, including wildcard expansion.
+    mutableModelPolicy.allow = defaultAllow;
+  }
+  const migrations = ensureRecord(ensureRecord(raw, "meta"), "migrations");
+  migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] = true;
+  changes.push(
+    defaultAllow
+      ? "Copied the legacy default model map to agents.defaults.modelPolicy.allow."
+      : "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
   );
 }
 
@@ -1014,7 +1066,10 @@ function rewriteKnownModelRefs(
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((entry, index) => {
-      if (typeof entry === "string" && MODEL_REF_ARRAY_KEYS.has(key)) {
+      if (
+        typeof entry === "string" &&
+        (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+      ) {
         const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes);
         changed ||= rewritten !== entry;
         return rewritten;
@@ -1192,15 +1247,56 @@ function getMergeableLegacyOpenAIModels(params: {
   });
 }
 
-function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boolean {
+function collectLegacyModelPolicyWildcardPaths(raw: unknown): Map<string, string[]> {
+  const pathsByProvider = new Map<string, string[]>();
+  const agents = getRecord(getRecord(raw)?.agents);
+  const scopes: Array<{ value: unknown; path: string }> = [
+    { value: getRecord(agents?.defaults)?.modelPolicy, path: "agents.defaults.modelPolicy" },
+  ];
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  for (const [index, agent] of list.entries()) {
+    scopes.push({
+      value: getRecord(agent)?.modelPolicy,
+      path: `agents.list.${index}.modelPolicy`,
+    });
+  }
+  for (const scope of scopes) {
+    const allow = getRecord(scope.value)?.allow;
+    if (!Array.isArray(allow)) {
+      continue;
+    }
+    for (const [index, entry] of allow.entries()) {
+      if (typeof entry !== "string" || !entry.trim().endsWith("/*")) {
+        continue;
+      }
+      const provider = normalizeProviderId(entry.trim().slice(0, -2));
+      if (!isLegacyCodexProviderId(provider)) {
+        continue;
+      }
+      const paths = pathsByProvider.get(provider) ?? [];
+      paths.push(`${scope.path}.allow.${index}`);
+      pathsByProvider.set(provider, paths);
+    }
+  }
+  return pathsByProvider;
+}
+
+function hasAutoFixableLegacyOpenAICodexProvider(
+  providersValue: unknown,
+  root?: Record<string, unknown>,
+): boolean {
   const providers = getRecord(providersValue);
   if (!providers) {
     return false;
   }
+  const wildcardPaths = collectLegacyModelPolicyWildcardPaths(root);
   const canonicalEntry = getCanonicalOpenAIProviderEntry(providers);
   for (const [providerId, providerValue] of Object.entries(providers)) {
     const provider = getRecord(providerValue);
     if (!provider || !isLegacyCodexProviderId(providerId)) {
+      continue;
+    }
+    if (wildcardPaths.has(normalizeProviderId(providerId))) {
       continue;
     }
     const normalized = normalizeLegacyOpenAIResponsesApi(providerId, provider, []);
@@ -1246,12 +1342,21 @@ export function collectBlockedLegacyOpenAICodexProviderPlan(
   const models = getRecord(getRecord(raw)?.models);
   const providers = getRecord(models?.providers);
   const canonicalEntry = providers ? getCanonicalOpenAIProviderEntry(providers) : undefined;
-  if (!providers || !canonicalEntry) {
-    return { blockedModelIdentities: [] };
-  }
-
   const blockedModelIdentities = new Set<LegacyCodexModelIdentity>();
   const warningLines: string[] = [];
+  for (const [providerId, paths] of collectLegacyModelPolicyWildcardPaths(raw)) {
+    const identity = legacyCodexProviderIdentityKey(providerId);
+    if (identity) {
+      blockedModelIdentities.add(identity);
+    }
+    warningLines.push(
+      `- ${paths.join(", ")} cannot migrate automatically because ${providerId}/* would become openai/* and authorize unrelated OpenAI models.`,
+    );
+  }
+  if (!providers || !canonicalEntry) {
+    return buildBlockedLegacyOpenAICodexProviderPlan(blockedModelIdentities, warningLines);
+  }
+
   for (const [providerId, providerValue] of Object.entries(providers)) {
     const provider = getRecord(providerValue);
     if (!provider || !isLegacyCodexProviderId(providerId)) {
@@ -1300,6 +1405,13 @@ export function collectBlockedLegacyOpenAICodexProviderPlan(
   // reconciled (the live codex provider is gone, and a hidden resolver/auth
   // shim is forbidden by policy). Only hand-authored models.providers.codex
   // definitions can reach this state; the warning names the exact repair.
+  return buildBlockedLegacyOpenAICodexProviderPlan(blockedModelIdentities, warningLines);
+}
+
+function buildBlockedLegacyOpenAICodexProviderPlan(
+  blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity>,
+  warningLines: string[],
+): BlockedLegacyOpenAICodexProviderPlan {
   return {
     blockedModelIdentities: [...blockedModelIdentities],
     ...(warningLines.length > 0
@@ -1478,9 +1590,13 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
   }
 
   let providersChanged = false;
+  const wildcardPaths = collectLegacyModelPolicyWildcardPaths(raw);
   for (const [providerId, providerValue] of Object.entries({ ...providers })) {
     const provider = getRecord(providers[providerId]) ?? getRecord(providerValue);
     if (!provider) {
+      continue;
+    }
+    if (isLegacyCodexProviderId(providerId) && wildcardPaths.has(normalizeProviderId(providerId))) {
       continue;
     }
 
@@ -1601,7 +1717,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
         path: ["models", "providers"],
         message:
           'models.providers.codex and models.providers.openai-codex are legacy; run "openclaw doctor --fix" to move them to models.providers.openai.',
-        match: (value) => hasAutoFixableLegacyOpenAICodexProvider(value),
+        match: (value, root) => hasAutoFixableLegacyOpenAICodexProvider(value, root),
       },
       {
         path: ["models", "providers"],
@@ -1643,6 +1759,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
         setRecordEntry(raw, key, value);
       }
     },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.defaults.models->agents.defaults.modelPolicy.allow",
+    describe: "Make the legacy model override restriction explicit",
+    legacyRules: [
+      {
+        path: ["agents", "defaults", "models"],
+        message:
+          'agents.defaults.models no longer restricts model overrides; run "openclaw doctor --fix" to preserve the previous restriction in agents.defaults.modelPolicy.allow.',
+        match: (_value, root) => collectLegacyDefaultModelAllowRefs(root) !== null,
+      },
+    ],
+    apply: migrateExplicitDefaultModelAllowPolicy,
   }),
   defineLegacyConfigMigration({
     id: "agents.defaults.models.vllm.params.qwenThinkingFormat->models.providers.vllm.models.compat.thinkingFormat",

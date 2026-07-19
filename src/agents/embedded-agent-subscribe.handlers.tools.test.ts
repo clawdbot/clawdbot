@@ -47,6 +47,7 @@ async function activateAskUserPrompt(toolCallId: string, args: unknown) {
   let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
   const tool = createAskUserTool({
     sessionKey: "agent:unit-session",
+    runId: "run-test",
     gatewayCall: async (method, _opts, params) => {
       if (method === "question.request") {
         if (!params || typeof params !== "object" || !("id" in params)) {

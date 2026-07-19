@@ -30,7 +30,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -187,7 +187,8 @@ export async function sandboxExplainCommand(
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: resolvedAgentId,
   });
-  const sessionEntry = loadSessionEntry({
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  const sessionEntry = loadSessionEntryReadOnly({
     agentId: resolvedAgentId,
     sessionKey,
     storePath,

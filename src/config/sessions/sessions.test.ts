@@ -25,6 +25,7 @@ import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js"
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
 } from "./store.js";
@@ -998,6 +999,38 @@ describe("session store writer queue", () => {
     expect(writeOptions?.mode).toBe(0o600);
     expect(writeOptions?.beforeRename).toBeTypeOf("function");
     writeSpy.mockRestore();
+  });
+
+  it("uses a durable index write before disk-budget eviction deletes transcripts", async () => {
+    const oldKey = "agent:main:subagent:old-worker";
+    const activeKey = "agent:main:main";
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      [oldKey]: { sessionId: "old", updatedAt: now - 1_000 },
+      [activeKey]: { sessionId: "active", updatedAt: now },
+    };
+    const { dir, storePath } = await makeTmpStore(store);
+    await fsPromises.writeFile(path.join(dir, "old.jsonl"), "t".repeat(10 * 1024), "utf-8");
+    await fsPromises.writeFile(path.join(dir, "active.jsonl"), "a".repeat(64), "utf-8");
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    try {
+      await saveSessionStore(storePath, store, {
+        activeSessionKey: activeKey,
+        maintenanceOverride: { mode: "enforce", maxDiskBytes: 100, highWaterBytes: 100 },
+      });
+
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      const [writtenPath, , writeOptions] = requireWriteTextAtomicCall(writeSpy);
+      expect(writtenPath).toBe(storePath);
+      expect(writeOptions?.durable).toBe(true);
+      expect(store[oldKey]).toBeUndefined();
+      await expect(fsPromises.access(path.join(dir, "old.jsonl"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 
   it("can persist a known single entry without touching hydrated prompts from other sessions", async () => {

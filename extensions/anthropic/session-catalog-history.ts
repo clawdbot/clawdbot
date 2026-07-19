@@ -8,7 +8,8 @@ function importedClaudeMessage(
   item: ClaudeTranscriptItem,
   fallbackTimestamp: number,
 ): AgentMessage {
-  const timestamp = item.timestamp ? Date.parse(item.timestamp) : fallbackTimestamp;
+  const parsedTimestamp = item.timestamp ? Date.parse(item.timestamp) : Number.NaN;
+  const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : fallbackTimestamp;
   const text = item.text?.trim() || "[Unsupported Claude transcript item]";
   if (item.type === "userMessage") {
     // Imported native rows are not OpenClaw-authored; mirrorOrigin excludes them

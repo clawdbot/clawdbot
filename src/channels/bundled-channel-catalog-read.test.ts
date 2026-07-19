@@ -74,7 +74,14 @@ function seedRoot(prefix: string): string {
 
 function seedChannelPkg(
   pkgJsonPath: string,
-  opts: { id: string; docsPath: string; label?: string; blurb?: string; markdownCapable?: boolean },
+  opts: {
+    id: string;
+    docsPath: string;
+    label?: string;
+    blurb?: string;
+    markdownCapable?: boolean;
+    approvalFlags?: readonly ["native"];
+  },
 ): void {
   const pluginDir = path.dirname(pkgJsonPath);
   writeJsonFile(pkgJsonPath, {
@@ -86,6 +93,7 @@ function seedChannelPkg(
         docsPath: opts.docsPath,
         blurb: opts.blurb ?? "test blurb",
         ...(opts.markdownCapable !== undefined ? { markdownCapable: opts.markdownCapable } : {}),
+        ...(opts.approvalFlags ? { approvalFlags: opts.approvalFlags } : {}),
       },
     },
   });
@@ -109,6 +117,7 @@ describe("listBundledChannelCatalogEntries", () => {
       id: "telegram",
       docsPath: "/channels/telegram",
       label: "Telegram",
+      approvalFlags: ["native"],
     });
     seedChannelPkg(path.join(extensionsRoot, "imessage", "package.json"), {
       id: "imessage",
@@ -124,6 +133,7 @@ describe("listBundledChannelCatalogEntries", () => {
     const telegram = entries.find((entry) => entry.id === "telegram");
     expect(telegram?.channel.docsPath).toBe("/channels/telegram");
     expect(telegram?.channel.label).toBe("Telegram");
+    expect(telegram?.channel.approvalFlags).toEqual(["native"]);
   });
 
   it("merges the generated official catalog with bundled package metadata", () => {

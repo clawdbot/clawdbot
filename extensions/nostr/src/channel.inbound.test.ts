@@ -4,6 +4,7 @@ import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-help
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { startNostrGatewayAccount } from "./gateway.js";
+import type { NostrIngressLifecycle } from "./nostr-ingress.js";
 import { setNostrRuntime } from "./runtime.js";
 import { buildResolvedNostrAccount } from "./test-fixtures.js";
 
@@ -39,7 +40,7 @@ beforeAll(async () => {
 function createMockBus() {
   return {
     sendDm: vi.fn(async () => {}),
-    close: vi.fn(),
+    close: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),
@@ -187,14 +188,28 @@ describe("nostr inbound gateway path", () => {
         text: string,
         reply: (text: string) => Promise<void>,
         meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
       ) => Promise<void>;
     };
     const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
 
-    await options.onMessage("sender-pubkey", "hello from nostr", sendReply, {
-      eventId: "event-123",
-      createdAt: 1_710_000_000,
-    });
+    await options.onMessage(
+      "sender-pubkey",
+      "hello from nostr",
+      sendReply,
+      {
+        eventId: "event-123",
+        createdAt: 1_710_000_000,
+      },
+      lifecycle,
+    );
 
     expect(mocks.dispatchInboundDirectDm).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -206,6 +221,7 @@ describe("nostr inbound gateway path", () => {
         messageId: "event-123",
         timestamp: 1_710_000_000_000,
         commandAuthorized: true,
+        turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
       }),
     );
     expect(sendReply).toHaveBeenCalledWith("converted:|a|b|");

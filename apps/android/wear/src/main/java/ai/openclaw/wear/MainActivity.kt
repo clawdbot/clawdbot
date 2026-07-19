@@ -295,7 +295,8 @@ internal fun OpenClawWearApp(
         realtimePlaybackFailed = state.realtimePlaybackFailed,
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
         actionBusy =
-          state.sending ||
+          state.loading ||
+            state.sending ||
             state.talkBusy ||
             state.controlBusy ||
             state.activeRunId != null ||
@@ -359,6 +360,10 @@ internal fun OpenClawWearApp(
             leaveConversationContext()
             viewModel.openSession(session)
           }
+        },
+        onSelectModel = { modelRef ->
+          leaveConversationContext()
+          viewModel.selectModel(modelRef)
         },
         onRefresh = viewModel::refresh,
         onGatewayEnabledChange = { enabled ->

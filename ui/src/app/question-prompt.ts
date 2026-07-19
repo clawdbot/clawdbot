@@ -16,6 +16,8 @@ type QuestionDraft = {
   freeText: string;
 };
 
+type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
+
 export type QuestionPrompt = {
   id: string;
   questions: Question[];
@@ -23,7 +25,7 @@ export type QuestionPrompt = {
   sessionKey?: string;
   createdAtMs: number;
   expiresAtMs: number;
-  status: QuestionRecord["status"];
+  status: QuestionPromptStatus;
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
   answeredElsewhere: boolean;
@@ -388,10 +390,12 @@ function isQuestionNotFoundError(error: unknown): boolean {
   );
 }
 
-function markResolvedElsewhere(state: QuestionPromptState, prompt: QuestionPrompt): void {
-  prompt.status = "answered";
+function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPrompt): void {
+  // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
+  // no longer actionable, but not whether it was answered, cancelled, or expired.
+  prompt.status = "unavailable";
   prompt.answers = undefined;
-  prompt.answeredElsewhere = true;
+  prompt.answeredElsewhere = false;
   prompt.localResolutionConfirmed = false;
   prompt.locallyExpired = false;
   prompt.submitting = false;
@@ -474,7 +478,7 @@ async function refreshPendingQuestions(
       missingResult?.status === "rejected" &&
       isQuestionNotFoundError(missingResult.reason)
     ) {
-      markResolvedElsewhere(state, current);
+      markRecoveryUnavailable(state, current);
       continue;
     }
     const record =

@@ -3076,15 +3076,13 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `failed device token write is not reported as an issued role`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let blocker = tempDir.appendingPathComponent("not-a-directory", isDirectory: false)
+        let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
+        let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: false)
         try Data().write(to: blocker)
-        // Repoint the pinned state dir at a plain file to force write failures;
-        // the isolation trait restores the env var after the test.
-        setenv("OPENCLAW_STATE_DIR", blocker.path, 1)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        // Block only the legacy auth directory. SQLite identity creation must
+        // still succeed so this test reaches the token persistence failure.
+        defer { try? FileManager.default.removeItem(at: blocker) }
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",

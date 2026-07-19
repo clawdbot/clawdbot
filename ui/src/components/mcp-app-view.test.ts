@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./mcp-app-security.ts";
 
-const bridgeMocks = vi.hoisted(() => ({ instances: [] as Array<Record<string, unknown>> }));
+const bridgeMocks = vi.hoisted(() => ({
+  instances: [] as Array<Record<string, unknown>>,
+  transports: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
   class AppBridge {
@@ -17,6 +20,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
     sendSandboxResourceReady = vi.fn(async () => undefined);
     sendToolInput = vi.fn(async () => undefined);
     sendToolResult = vi.fn(async () => undefined);
+    onrequestteardown?: () => void;
 
     constructor(
       _client: unknown,
@@ -33,13 +37,23 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
 
     protected replaceRequestHandler() {}
 
+    emit(type: string) {
+      if (type === "requestteardown") {
+        this.onrequestteardown?.();
+      }
+    }
+
     async connect() {
       this.oninitialized?.();
     }
   }
 
   class PostMessageTransport {
-    async close() {}
+    close = vi.fn(async () => undefined);
+
+    constructor() {
+      bridgeMocks.transports.push(this as unknown as Record<string, unknown>);
+    }
   }
 
   return { AppBridge, PostMessageTransport };
@@ -47,6 +61,14 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
 
 const { McpAppView } = await import("./mcp-app-view.ts");
 type McpAppViewElement = InstanceType<typeof McpAppView>;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
 
@@ -59,6 +81,7 @@ customElements.define(MCP_APP_VIEW_ELEMENT_NAME, TestMcpAppView);
 describe("mcp-app-view localization", () => {
   afterEach(async () => {
     bridgeMocks.instances.length = 0;
+    bridgeMocks.transports.length = 0;
     document.body.replaceChildren();
     delete (document as unknown as Record<string, unknown>).activeElement;
     delete document.documentElement.dataset.themeMode;
@@ -79,7 +102,7 @@ describe("mcp-app-view localization", () => {
     });
     const themeListeners = new Set<() => void>();
     const unsubscribe = vi.fn();
-    const request = vi.fn(async () => ({
+    const request = vi.fn(async (_method: string, _params: Record<string, unknown>) => ({
       sandboxUrl: "/mcp-app-sandbox?ticket=test",
       sandboxPort: 8444,
       html: "<!doctype html><button>Send</button>",
@@ -133,11 +156,14 @@ describe("mcp-app-view localization", () => {
           content: Array<{ type: string; text?: string }>;
         }) => Promise<{ isError?: boolean }>;
         setHostContext: ReturnType<typeof vi.fn>;
+        teardownResource: ReturnType<typeof vi.fn>;
+        emit(type: string): void;
       },
       frame,
       request,
       themeListeners,
       unsubscribe,
+      transport: bridgeMocks.transports[0] as { close: ReturnType<typeof vi.fn> },
       view,
     };
   }
@@ -169,6 +195,7 @@ describe("mcp-app-view localization", () => {
 
     for (const content of [
       [{ type: "text", text: "/approve" }],
+      [{ type: "text", text: "!pwd" }],
       [{ type: "text", text: "   " }],
       [{ type: "text", text: "x".repeat(4_001) }],
       [{ type: "image" }],
@@ -179,6 +206,8 @@ describe("mcp-app-view localization", () => {
     ]) {
       expect(await send(content)).toEqual({ isError: true });
     }
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(received).toEqual(["Show details"]);
 
     for (let index = 2; index <= 9; index += 1) {
       expect(await send([{ type: "text", text: `Prompt ${index}` }])).toEqual({});
@@ -239,6 +268,62 @@ describe("mcp-app-view localization", () => {
     await expect.poll(() => disconnect).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(themeListeners.size).toBe(0);
+  });
+
+  it("keeps the frame connected through teardown and installs only the latest replacement", async () => {
+    const pending = deferred<Record<string, never>>();
+    const { bridge, frame, request, transport, view } = await mountBridge(
+      `view-teardown-${crypto.randomUUID()}`,
+    );
+    bridge.teardownResource.mockReturnValueOnce(pending.promise);
+
+    view.viewId = `view-intermediate-${crypto.randomUUID()}`;
+    await view.updateComplete;
+    await expect.poll(() => bridge.teardownResource).toHaveBeenCalledOnce();
+    expect(frame.isConnected).toBe(true);
+    expect(transport.close).not.toHaveBeenCalled();
+
+    const latestViewId = `view-latest-${crypto.randomUUID()}`;
+    view.viewId = latestViewId;
+    await view.updateComplete;
+    pending.resolve({});
+
+    await expect.poll(() => frame.isConnected).toBe(false);
+    await expect.poll(() => request.mock.calls.at(-1)?.[1]).toMatchObject({ viewId: latestViewId });
+    expect(bridge.teardownResource).toHaveBeenCalledOnce();
+    expect(transport.close).toHaveBeenCalledOnce();
+  });
+
+  it("removes the frame after the bounded teardown timeout", async () => {
+    const { bridge, frame, transport, view } = await mountBridge(
+      `view-timeout-${crypto.randomUUID()}`,
+    );
+    bridge.teardownResource.mockReturnValueOnce(new Promise<void>(() => {}));
+
+    view.viewId = `view-after-timeout-${crypto.randomUUID()}`;
+    await view.updateComplete;
+    await expect.poll(() => bridge.teardownResource).toHaveBeenCalledOnce();
+    expect(frame.isConnected).toBe(true);
+
+    await expect.poll(() => transport.close, { timeout: 1_000 }).toHaveBeenCalledOnce();
+    expect(frame.isConnected).toBe(false);
+  });
+
+  it("honors an app-requested teardown before detaching its frame", async () => {
+    const pending = deferred<Record<string, never>>();
+    const { bridge, frame, transport } = await mountBridge(
+      `view-request-teardown-${crypto.randomUUID()}`,
+    );
+    bridge.teardownResource.mockReturnValueOnce(pending.promise);
+
+    bridge.emit("requestteardown");
+    await expect.poll(() => bridge.teardownResource).toHaveBeenCalledOnce();
+    expect(frame.isConnected).toBe(true);
+    expect(transport.close).not.toHaveBeenCalled();
+
+    pending.resolve({});
+    await expect.poll(() => frame.isConnected).toBe(false);
+    expect(transport.close).toHaveBeenCalledOnce();
   });
 
   it("renders gateway failures with localized copy", async () => {

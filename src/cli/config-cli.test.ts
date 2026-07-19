@@ -2426,6 +2426,24 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
+    it("rejects --file patches above the config mutation limit", async () => {
+      const pathname = path.join(
+        os.tmpdir(),
+        `openclaw-config-patch-oversized-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
+      );
+      fs.writeFileSync(pathname, " ".repeat(8 * 1024 * 1024 + 1), "utf8");
+      try {
+        await expect(runConfigCommand(["config", "patch", "--file", pathname])).rejects.toThrow(
+          ExitError,
+        );
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expectErrorIncludes("File exceeds 8388608 bytes");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));

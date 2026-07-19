@@ -2,7 +2,17 @@
 // list of packed group plans. Extracted from .github/workflows/ci.yml so the
 // execution policy is unit-testable and plans can run concurrently.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -150,6 +160,30 @@ export function pruneFsModuleCache(root, maxBytes = FS_MODULE_CACHE_MAX_BYTES) {
   return { beforeBytes, afterBytes: totalBytes, removedFiles };
 }
 
+export function clonePersistentCacheSlots(root, concurrency) {
+  if (!root || concurrency <= 1) {
+    return 0;
+  }
+  const seed = join(root, "vitest-cache-0");
+  if (!existsSync(seed)) {
+    return 0;
+  }
+
+  let clonedSlots = 0;
+  for (let cacheSlot = 1; cacheSlot < concurrency; cacheSlot += 1) {
+    const destination = join(root, `vitest-cache-${cacheSlot}`);
+    rmSync(destination, { force: true, recursive: true });
+    // Clone before workers start. Reflinks make the common Linux path cheap;
+    // unsupported filesystems transparently fall back to a regular copy.
+    cpSync(seed, destination, {
+      mode: constants.COPYFILE_FICLONE,
+      recursive: true,
+    });
+    clonedSlots += 1;
+  }
+  return clonedSlots;
+}
+
 const MAX_PENDING_LINE_CHARS = 1_000_000;
 
 function relayChildStream(stream, label) {
@@ -227,6 +261,12 @@ export async function runShardPlans(plans, options = {}) {
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
+  const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency);
+  if (clonedCacheSlots > 0) {
+    process.stdout.write(
+      `[shard:cache] cloned restored Vitest seed into ${clonedCacheSlots} isolated lane(s)\n`,
+    );
+  }
 
   let nextIndex = 0;
   let exitCode = 0;

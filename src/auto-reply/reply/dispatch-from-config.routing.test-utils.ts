@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  askUserMocks,
   createDispatcher,
   emptyConfig,
   hookMocks,
@@ -400,6 +401,60 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "tool output" });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers ask_user prompts when verbose tool progress is disabled", async () => {
+    setNoAbort();
+    const payload = {
+      text: "Question for you: Where should this deploy?",
+      channelData: { askUser: { questionId: "question-owned-by-agent-runtime" } },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+    const toolDeliveryOrder =
+      vi.mocked(dispatcher.sendToolResult).mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY;
+    expect(
+      vi
+        .mocked(dispatcher.waitForIdle)
+        .mock.invocationCallOrder.some((order) => order > toolDeliveryOrder),
+    ).toBe(true);
+  });
+
+  it("drops ask_user prompts that terminalize before dispatcher delivery", async () => {
+    setNoAbort();
+    askUserMocks.isAskUserPromptPending.mockResolvedValue(false);
+    const payload = {
+      text: "Question for you: Where should this deploy?",
+      channelData: { askUser: { questionId: "question-terminal-before-delivery" } },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(askUserMocks.isAskUserPromptPending).toHaveBeenCalledWith(
+      "question-terminal-before-delivery",
+    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
   it("does not synthesize hidden text-only tool summaries into TTS media", async () => {

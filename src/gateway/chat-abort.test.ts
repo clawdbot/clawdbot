@@ -308,6 +308,23 @@ describe("registerChatAbortController", () => {
 });
 
 describe("abortChatRunById", () => {
+  it("notifies the run-bound approval owner only after an active run abort wins", () => {
+    const { runId, sessionKey, ops } = createAbortRunFixture({});
+    const onRunAborted = vi.fn();
+    ops.onRunAborted = onRunAborted;
+
+    expect(abortChatRunById(ops, { runId: "other-run", sessionKey })).toEqual({
+      aborted: false,
+    });
+    expect(onRunAborted).not.toHaveBeenCalled();
+
+    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
+      aborted: true,
+    });
+    expect(onRunAborted).toHaveBeenCalledOnce();
+    expect(onRunAborted).toHaveBeenCalledWith(runId);
+  });
+
   it("retains terminal persistence ownership observed during abort", () => {
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
     let terminalEvents = 0;

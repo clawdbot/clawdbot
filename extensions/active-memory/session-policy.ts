@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveRememberAcrossConversations } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   normalizePluginsConfig,
   resolvePluginConfigObject,
@@ -127,23 +128,13 @@ function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
 }
 
 function hasRememberAcrossConversationsAgent(cfg: OpenClawConfig): boolean {
-  return (
-    cfg.agents?.defaults?.memorySearch?.rememberAcrossConversations === true ||
-    cfg.agents?.list?.some((agent) => agent.memorySearch?.rememberAcrossConversations === true) ===
-      true
-  );
+  const configuredAgentIds = cfg.agents?.list?.map((agent) => agent.id) ?? [];
+  const agentIds = configuredAgentIds.length > 0 ? configuredAgentIds : ["main"];
+  return agentIds.some((agentId) => resolveRememberAcrossConversations(cfg, agentId));
 }
 
 function shouldRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
-  const normalizedAgentId = agentId.trim().toLowerCase();
-  const agent = cfg.agents?.list?.find(
-    (candidate) => candidate.id?.trim().toLowerCase() === normalizedAgentId,
-  );
-  return (
-    agent?.memorySearch?.rememberAcrossConversations ??
-    cfg.agents?.defaults?.memorySearch?.rememberAcrossConversations ??
-    false
-  );
+  return resolveRememberAcrossConversations(cfg, agentId);
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(

@@ -55,6 +55,7 @@ function collectModelProviderAssignments(params: {
       ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
       requiredForGateway: false,
       disposition: "isolate",
+      contract: provider,
     } satisfies SecretAssignmentOwner;
     collectRuntimeSecretInputAssignment({
       value: provider.apiKey,
@@ -125,6 +126,7 @@ function collectSkillAssignments(params: {
         ownerId: `skill:${skillKey}`,
         requiredForGateway: false,
         disposition: "isolate",
+        contract: entry,
       },
       apply: (value) => {
         entry.apiKey = value;
@@ -215,6 +217,7 @@ function collectGatewayAssignments(params: {
       ownerId: "ingress-auth",
       requiredForGateway: true,
       disposition: "fail-closed",
+      contract: auth,
     } satisfies SecretAssignmentOwner;
     collectRuntimeSecretInputAssignment({
       value: auth.token,
@@ -415,6 +418,7 @@ function collectMediaRequestAssignments(params: {
           ownerId: resolveOwnerId(index),
           requiredForGateway: false,
           disposition: "isolate",
+          contract: rawModel,
         },
       });
     });
@@ -467,6 +471,7 @@ function collectMediaRequestAssignments(params: {
           ownerId: runtimeMediaRequestSecretOwnerId(capability),
           requiredForGateway: false,
           disposition: "isolate",
+          contract: section,
         },
       });
     }
@@ -550,6 +555,7 @@ function collectCronAssignments(params: {
       ownerId: "cron-webhook",
       requiredForGateway: false,
       disposition: "isolate",
+      contract: cron,
     },
     apply: (value) => {
       cron.webhookToken = value;

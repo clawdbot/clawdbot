@@ -11,6 +11,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
+  type ModelAliasIndex,
   buildConfiguredModelCatalog,
   legacyModelKey,
   modelKey,
@@ -64,9 +65,12 @@ type ModelSelectionState = {
   model: string;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
+  policyAliasIndex: ModelAliasIndex;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
   resetModelOverrideReason?: "disallowed" | "stale" | "temporarily-unavailable";
+  modelPolicyConfigPath?: string;
+  modelPolicyRepairConfigPath?: string;
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: (selection?: ThinkingDefaultSelection) => Promise<ThinkLevel>;
   hasConfiguredThinkingDefault?: boolean;
@@ -95,9 +99,12 @@ export function createFastTestModelSelectionState(params: {
     model: params.model,
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
+    policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
     resetModelOverride: false,
     resetModelOverrideRef: undefined,
     resetModelOverrideReason: undefined,
+    modelPolicyConfigPath: undefined,
+    modelPolicyRepairConfigPath: undefined,
     resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
@@ -188,29 +195,31 @@ export async function createModelSelectionState(params: {
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
   const hasOneTurnModelOverride = params.hasOneTurnModelOverride === true;
+  const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
 
-  const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg });
+  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog: [],
+    defaultProvider,
+    defaultModel,
+    agentId: params.agentId,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  });
+  const hasAllowlist = !visibilityPolicy.allowAny;
+  const hasConfiguredModels =
+    Object.keys(agentCfg?.models ?? {}).length > 0 ||
+    Object.keys(agentEntry?.models ?? {}).length > 0;
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg, agentId: params.agentId });
   const defaultProviderVisibleByWildcard = visibility.providerWildcards.has(
     normalizeProviderId(defaultProvider),
   );
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
   const needsModelCatalog =
     params.hasModelDirective ||
-    Boolean(
-      hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard,
-    );
+    (hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard);
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
-  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
-    cfg,
-    catalog: configuredModelCatalog,
-    defaultProvider,
-    defaultModel,
-    agentId: params.agentId,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  });
   let modelCatalog: ModelCatalog | null = null;
   // Whether the loaded catalog is a complete/live snapshot. A degraded catalog
   // (discovery threw, static/empty fallback) must not destroy a pinned override.
@@ -218,7 +227,6 @@ export async function createModelSelectionState(params: {
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
-  const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const normalizedDirectStoredOverride = normalizeStoredOverrideModel({
     providerOverride: sessionEntry?.providerOverride,
     modelOverride: sessionEntry?.modelOverride,
@@ -299,7 +307,7 @@ export async function createModelSelectionState(params: {
       "allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
     );
-  } else if (hasAllowlist) {
+  } else if (hasAllowlist || hasConfiguredModels) {
     visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: configuredModelCatalog,
@@ -431,8 +439,9 @@ export async function createModelSelectionState(params: {
       model,
     });
     if (!allowedInitialSelection) {
+      const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
       throw new Error(
-        `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
+        `Configured default model "${modelKey(provider, model)}" is not allowed by ${policyPath}, and no allowed model is available.`,
       );
     }
     provider = allowedInitialSelection.provider;
@@ -622,9 +631,10 @@ export async function createModelSelectionState(params: {
     });
     if (!modelCatalog && selectedReasoningEntry?.reasoning === undefined) {
       const manifestCatalog = await loadManifestCatalog();
-      const manifestReasoningCatalog = hasAllowlist
-        ? buildThinkingCatalog(manifestCatalog)
-        : manifestCatalog;
+      const manifestReasoningCatalog =
+        hasAllowlist || hasConfiguredModels
+          ? buildThinkingCatalog(manifestCatalog)
+          : manifestCatalog;
       const manifestSelectedEntry = findSelectedCatalogEntry({
         catalog: manifestReasoningCatalog,
         provider,
@@ -671,9 +681,12 @@ export async function createModelSelectionState(params: {
     model,
     allowedModelKeys,
     allowedModelCatalog,
+    policyAliasIndex: visibilityPolicy.policyAliasIndex,
     resetModelOverride,
     resetModelOverrideRef,
     resetModelOverrideReason,
+    modelPolicyConfigPath: visibilityPolicy.allowConfigPath ?? undefined,
+    modelPolicyRepairConfigPath: visibilityPolicy.allowRepairConfigPath,
     resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     hasConfiguredThinkingDefault,

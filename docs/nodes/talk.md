@@ -20,6 +20,14 @@ Client-owned realtime Talk forwards provider tool calls through `talk.client.too
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
 
+Browser Video Talk is available for OpenAI Realtime WebRTC and Google Live
+provider-WebSocket sessions. OpenAI gets a single bounded JPEG when
+`describe_view` asks for visual context; it does not receive a continuous
+camera track. Google Live receives bounded JPEG frames directly from the
+browser at up to one frame per second, while `describe_view` reports the
+camera-stream state. In both cases, camera frames bypass the Gateway, and
+stopping Talk releases the camera and microphone tracks.
+
 ## Behavior (macOS)
 
 - Always-on overlay while Talk mode is enabled.
@@ -115,10 +123,18 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 
 ## Android UI
 
-- Voice tab toggle: **Talk**
-- Manual **Mic** and **Talk** are mutually exclusive capture modes.
-- Manual Mic and realtime Talk prefer a connected Bluetooth Classic or BLE headset microphone; if it disconnects, the app requests another headset input or falls back to the default microphone, restoring the default preference once capture stops.
-- Manual Mic stops when the app leaves the foreground or the user leaves the Voice tab.
+- Android's main navigation is **Home**, **Chat**, and **Settings**. Voice input
+  lives in the Chat composer rather than a separate Voice tab.
+- Tap the composer microphone for on-device dictation. Long-press it to record
+  a voice-note attachment. Start continuous Talk from the Talk waveform.
+- Dictation, voice-note recording, and Talk are mutually exclusive microphone
+  paths; starting one stops or blocks the others.
+- Realtime Talk prefers a connected Bluetooth Classic or BLE headset
+  microphone; if it disconnects, the app requests another headset input or
+  falls back to the default microphone, restoring the default preference once
+  capture stops.
+- Dictation and voice-note recording stop when the app leaves the foreground or
+  the user leaves Chat.
 - Talk Mode keeps running until toggled off or the node disconnects, using Android's microphone foreground-service type while active.
 - Android supports `pcm_16000`, `pcm_22050`, `pcm_24000`, and `pcm_44100` output formats for low-latency `AudioTrack` streaming.
 

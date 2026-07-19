@@ -7,12 +7,11 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
-  fetchProviderOperationResponse,
+  pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -279,42 +278,25 @@ async function pollRunwayTask(params: {
     timeoutMs: params.timeoutMs,
     label: `Runway video generation task ${params.taskId}`,
   });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchProviderOperationResponse({
-      stage: "poll",
-      url: `${params.baseUrl}/v1/tasks/${params.taskId}`,
-      init: {
-        method: "GET",
-        headers: params.headers,
-      },
-      timeoutMs: createProviderOperationTimeoutResolver({
-        deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-      }),
-      fetchFn: params.fetchFn,
-      provider: "runway",
-      requestFailedMessage: "Runway video status request failed",
-    });
-    const payload = await readRunwayJsonResponse<RunwayTaskDetailResponse>(
-      response,
-      "Runway video status request failed",
-    );
-    const status = readRunwayTaskStatus(payload);
-    switch (status) {
-      case "SUCCEEDED":
-        return payload;
-      case "FAILED":
-      case "CANCELLED":
-        throw new Error(
-          readRunwayFailureMessage(payload.failure) ||
-            `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
-        );
-      default:
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        break;
-    }
-  }
-  throw new Error(`Runway video generation task ${params.taskId} did not finish in time`);
+  return await pollProviderOperationJson<RunwayTaskDetailResponse>({
+    url: `${params.baseUrl}/v1/tasks/${params.taskId}`,
+    headers: params.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "Runway video status request failed",
+    timeoutMessage: `Runway video generation task ${params.taskId} did not finish in time`,
+    isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
+    getFailureMessage: (payload) => {
+      const status = readRunwayTaskStatus(payload);
+      return status === "FAILED" || status === "CANCELLED"
+        ? readRunwayFailureMessage(payload.failure) ||
+            `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
+        : undefined;
+    },
+  });
 }
 
 async function downloadRunwayVideos(params: {
@@ -325,16 +307,29 @@ async function downloadRunwayVideos(params: {
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
+    const deadline = createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      label: "Runway generated video download",
+    });
+    const timeoutMs = createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
     const response = await fetchProviderDownloadResponse({
       url,
       init: { method: "GET" },
-      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      deadline,
       fetchFn: params.fetchFn,
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
     });
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `Runway generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
     });

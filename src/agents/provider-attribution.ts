@@ -60,6 +60,7 @@ export type ProviderEndpointClass =
   | "groq-native"
   | "meta-native"
   | "mistral-public"
+  | "minimax-native"
   | "moonshot-native"
   | "modelstudio-native"
   | "nvidia-native"
@@ -163,6 +164,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "groq-native",
   "meta-native",
   "mistral-public",
+  "minimax-native",
   "moonshot-native",
   "modelstudio-native",
   "nvidia-native",
@@ -728,6 +730,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "groq-native" ||
     endpointClass === "meta-native" ||
     endpointClass === "mistral-public" ||
+    endpointClass === "minimax-native" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
     endpointClass === "nvidia-native" ||

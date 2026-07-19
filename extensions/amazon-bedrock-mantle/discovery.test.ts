@@ -710,6 +710,38 @@ describe("bedrock mantle discovery", () => {
     objectArgAt(mockFetch, 0, 1);
   });
 
+  it.each([
+    {
+      name: "the fallback region when the primary env is blank",
+      env: { AWS_REGION: "   ", AWS_DEFAULT_REGION: "eu-west-1" },
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "the default region when both env values are blank",
+      env: { AWS_REGION: "", AWS_DEFAULT_REGION: "\t" },
+      expectedRegion: "us-east-1",
+    },
+  ])("uses $name", async ({ env, expectedRegion }) => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(
+        modelDiscoveryResponse({ data: [{ id: "openai.gpt-oss-120b", object: "model" }] }),
+      );
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: MANTLE_IAM_TOKEN_MARKER,
+        ...env,
+      } as NodeJS.ProcessEnv,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(provider?.baseUrl).toBe(`https://bedrock-mantle.${expectedRegion}.api.aws/v1`);
+    expect(stringArgAt(mockFetch, 0, 0)).toBe(
+      `https://bedrock-mantle.${expectedRegion}.api.aws/v1/models`,
+    );
+  });
+
   // ---------------------------------------------------------------------------
   // Provider merging
   // ---------------------------------------------------------------------------

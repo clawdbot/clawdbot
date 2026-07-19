@@ -793,6 +793,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(args.at(-2)).toBe("--timeout");
   });
 
+  it("forces shutdown of the isolated managed gateways owned by release checks", () => {
+    const source = [
+      "scripts/lib/cross-os-release-checks/lanes.ts",
+      "scripts/lib/cross-os-release-checks/runtime.ts",
+    ]
+      .map((filePath) => readFileSync(filePath, "utf8"))
+      .join("\n");
+
+    expect(source.match(/args: \["gateway", "stop", "--force"\]/g)).toHaveLength(2);
+    expect(source).not.toContain('args: ["gateway", "stop"]');
+  });
+
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {
     const source = [
       "scripts/lib/cross-os-release-checks/agent.ts",

@@ -174,10 +174,10 @@ export function registerControlUiAndPairingSuite(): void {
     let identityPath = operatorIdentityPathByPrefix.get(identityPrefix);
     if (!identityPath) {
       const poolId = process.env.VITEST_POOL_ID ?? "0";
-      identityPath = path.join(os.tmpdir(), `${identityPrefix}${process.pid}-${poolId}.json`);
+      identityPath = path.join(os.tmpdir(), `${identityPrefix}${process.pid}-${poolId}.sqlite`);
       operatorIdentityPathByPrefix.set(identityPrefix, identityPath);
     }
-    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
     return {
       identityPath,
       identity,

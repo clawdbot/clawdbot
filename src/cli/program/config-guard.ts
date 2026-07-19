@@ -4,11 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
+import { createInvalidConfigError } from "../../config/io.invalid-config.js";
+import {
+  resolveIsNixMode,
+  resolveLegacyStateDirs,
+  resolveOAuthDir,
+  resolveStateDir,
+} from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
+import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
@@ -167,6 +174,17 @@ function shouldRequireStartupMigrationCheckpoint(commandPath: string[]): boolean
   );
 }
 
+function isGatewayStartupCommand(commandPath: string[]): boolean {
+  const [commandName, subcommandName] = commandPath;
+  return (
+    commandName === "gateway" &&
+    (subcommandName === undefined ||
+      subcommandName === "run" ||
+      subcommandName === "start" ||
+      subcommandName === "restart")
+  );
+}
+
 async function getConfigSnapshot(options?: { observe: false }) {
   if (options?.observe === false) {
     return readConfigFileSnapshot(options);
@@ -187,15 +205,18 @@ async function getConfigSnapshot(options?: { observe: false }) {
   return configSnapshotPromise;
 }
 
-export async function ensureConfigReady(params: {
-  runtime: RuntimeEnv;
-  commandPath?: string[];
-  suppressDoctorStdout?: boolean;
-  allowInvalid?: boolean;
-  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
-  skipPristineCoreStateMigrations?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
-}): Promise<void> {
+export async function ensureConfigReady(
+  params: {
+    runtime: RuntimeEnv;
+    commandPath?: string[];
+    suppressDoctorStdout?: boolean;
+    allowInvalid?: boolean;
+    beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+    skipPristineCoreStateMigrations?: boolean;
+    skipPristineStartupStateMigrations?: boolean;
+  },
+  recoveryDeps?: InvalidConfigRecoveryDeps,
+): Promise<void> {
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
@@ -319,10 +340,22 @@ export async function ensureConfigReady(params: {
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   params.runtime.error("");
-  const fixHint = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-    ? formatPluginPackagingRuntimeOutputRecoveryHint()
-    : commandText(formatCliCommand("openclaw doctor --fix"));
-  params.runtime.error(`${muted("Fix:")} ${fixHint}`);
+  const isPluginPackagingFailure = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot);
+  const isNixManagedConfig = resolveIsNixMode();
+  const isGatewayStartup = isGatewayStartupCommand(commandPath);
+  const mustBlockInvalid = !allowInvalid || (isGatewayStartup && params.allowInvalid !== true);
+  const shouldOfferRecovery =
+    mustBlockInvalid && !params.suppressDoctorStdout && !isNixManagedConfig;
+  if (isPluginPackagingFailure || isNixManagedConfig || !shouldOfferRecovery) {
+    const fixHint = isPluginPackagingFailure
+      ? formatPluginPackagingRuntimeOutputRecoveryHint()
+      : isNixManagedConfig
+        ? new (await import("../../config/nix-mode-write-guard.js")).NixModeConfigMutationError({
+            configPath: snapshot.path,
+          }).message
+        : commandText(formatCliCommand("openclaw doctor --fix"));
+    params.runtime.error(`${muted("Fix:")} ${fixHint}`);
+  }
   params.runtime.error(
     `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
   );
@@ -331,8 +364,52 @@ export async function ensureConfigReady(params: {
       "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
     ),
   );
-  if (!allowInvalid) {
-    params.runtime.exit(1);
+  if (isPluginPackagingFailure && isGatewayStartup) {
+    params.runtime.exit(78);
+    return;
+  }
+  if (shouldOfferRecovery && !isPluginPackagingFailure) {
+    const { offerInvalidConfigRecovery } = await import("../invalid-config-recovery.js");
+    const recovery = await offerInvalidConfigRecovery({
+      runtime: params.runtime,
+      deps: recoveryDeps,
+      retry: async () => {
+        // Doctor may rewrite config; retry the same legacy/plugin-aware validation without
+        // rerunning startup state migrations.
+        configSnapshotPromise = null;
+        const { runDoctorConfigPreflight } =
+          await import("../../commands/doctor-config-preflight.js");
+        const retrySnapshot = (
+          await runDoctorConfigPreflight({
+            migrateState: false,
+            migrateLegacyConfig: false,
+            invalidConfigNote: false,
+            ...configSnapshotOptions,
+          })
+        ).snapshot;
+        if (retrySnapshot.exists && !retrySnapshot.valid) {
+          const retryIssues = formatConfigIssueLines(retrySnapshot.issues, "-", {
+            normalizeRoot: true,
+          });
+          throw createInvalidConfigError(
+            retrySnapshot.path,
+            retryIssues.join("\n") || "Unknown validation issue.",
+          );
+        }
+        setRuntimeConfigSnapshot(
+          retrySnapshot.runtimeConfig ?? retrySnapshot.config,
+          retrySnapshot.sourceConfig,
+        );
+      },
+    });
+    if (recovery.status === "recovered") {
+      return;
+    }
+    params.runtime.exit(isGatewayStartup ? 78 : 1);
+    return;
+  }
+  if (mustBlockInvalid) {
+    params.runtime.exit(isGatewayStartup ? 78 : 1);
   }
 }
 

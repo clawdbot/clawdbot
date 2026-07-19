@@ -249,7 +249,7 @@ export function resolveApnsRelayConfigFromEnv(
     value: {
       baseUrl: normalizedBaseUrl.value,
       timeoutMs: normalizeTimeoutMs(
-        env.OPENCLAW_APNS_RELAY_TIMEOUT_MS ?? configuredRelay?.timeoutMs,
+        normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_TIMEOUT_MS) ?? configuredRelay?.timeoutMs,
       ),
     },
   };

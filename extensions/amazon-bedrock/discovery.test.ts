@@ -795,6 +795,34 @@ describe("bedrock discovery", () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    {
+      name: "secondary region when the primary env override is blank",
+      env: { AWS_REGION: "   ", AWS_DEFAULT_REGION: "eu-west-1" },
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "plugin default when both region env overrides are blank",
+      env: { AWS_REGION: "", AWS_DEFAULT_REGION: "   " },
+      expectedRegion: "us-east-1",
+    },
+    {
+      name: "primary region when both env overrides are nonblank",
+      env: { AWS_REGION: "ap-southeast-2", AWS_DEFAULT_REGION: "eu-west-1" },
+      expectedRegion: "ap-southeast-2",
+    },
+  ])("uses $name", async ({ env, expectedRegion }) => {
+    mockSingleActiveSummary();
+
+    const provider = await resolveImplicitBedrockProvider({
+      pluginConfig: { discovery: { enabled: true } },
+      env,
+      clientFactory,
+    });
+
+    expect(provider?.baseUrl).toBe(`https://bedrock-runtime.${expectedRegion}.amazonaws.com`);
+  });
+
   // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
   it("resolves au. and apac. prefixes for regional inference profiles", async () => {
     sendMock

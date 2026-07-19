@@ -179,6 +179,8 @@ describe("agents delete command", () => {
         ok: true,
         agentId: "ops",
         removedBindings: 0,
+        removed: [{ path: path.join(stateDir, "agents", "ops", "agent"), method: "trash" }],
+        failed: [{ path: path.join(stateDir, "workspace-ops"), reason: "trash unavailable" }],
       });
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
@@ -193,7 +195,38 @@ describe("agents delete command", () => {
       const output = readJsonLogs()[0];
       expect(output?.agentId).toBe("ops");
       expect(output?.removedBindings).toBe(0);
+      expect(output?.removed).toEqual([
+        { path: path.join(stateDir, "agents", "ops", "agent"), method: "trash" },
+      ]);
+      expect(output?.failed).toEqual([
+        { path: path.join(stateDir, "workspace-ops"), reason: "trash unavailable" },
+      ]);
       expect(output?.transport).toBe("gateway");
+    });
+  });
+
+  it("warns about Gateway cleanup failures without failing committed deletion", async () => {
+    await withStateDirEnv("openclaw-agents-delete-gateway-warning-", async ({ stateDir }) => {
+      const workspace = path.join(stateDir, "workspace-ops");
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "ops", workspace }] },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+      gatewayMocks.callGateway.mockResolvedValue({
+        ok: true,
+        agentId: "ops",
+        removedBindings: 0,
+        removed: [],
+        failed: [{ path: workspace, reason: "trash unavailable" }],
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
     });
   });
 

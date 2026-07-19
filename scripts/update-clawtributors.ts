@@ -1,9 +1,10 @@
 // Update Clawtributors script supports OpenClaw repository automation.
-import { execFileSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pMap, { pMapSkip } from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { execPlainGh } from "./lib/plain-gh.mjs";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
 const REPO = "openclaw/openclaw";
@@ -12,6 +13,9 @@ const AVATAR_PROBE_SIZE = 40;
 const AVATAR_PROBE_MAX_BYTES = 256 * 1024;
 const AVATAR_PROBE_TIMEOUT_MS = 8000;
 const AVATAR_SIZE = 48;
+// The 5,000-PR history query can take about a minute; preserve healthy pagination
+// headroom while bounding a stalled GitHub CLI process.
+const GH_COMMAND_TIMEOUT_MS = 120_000;
 const CLAWTRIBUTORS_START = "<!-- clawtributors:start -->";
 const CLAWTRIBUTORS_END = "<!-- clawtributors:end -->";
 const CLAWTRIBUTORS_HIDDEN_START = "<!-- clawtributors:hidden:start";
@@ -30,7 +34,7 @@ const seedCommit = mapConfig.seedCommit ?? null;
 const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
 const currentReadme = readFileSync(readmePath, "utf8");
 const hiddenReadmeLogins = new Set(parseHiddenReadmeLogins(currentReadme));
-const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
+const raw = runGh(["api", `repos/${REPO}/contributors?per_page=100&anon=1`, "--paginate"]);
 const contributors = parsePaginatedJson(raw) as ApiContributor[];
 const apiByLogin = new Map<string, User>();
 const contributionsByLogin = new Map<string, number>();
@@ -129,9 +133,20 @@ for (const login of ensureLogins) {
 }
 
 const prsByLogin = new Map<string, number>();
-const prRaw = run(
-  `gh pr list -R ${REPO} --state merged --limit 5000 --json author --jq '.[].author.login'`,
-);
+const prRaw = runGh([
+  "pr",
+  "list",
+  "-R",
+  REPO,
+  "--state",
+  "merged",
+  "--limit",
+  "5000",
+  "--json",
+  "author",
+  "--jq",
+  ".[].author.login",
+]);
 for (const login of prRaw.split("\n")) {
   const trimmed = login.trim().toLowerCase();
   if (!trimmed) {
@@ -349,6 +364,16 @@ function run(cmd: string): string {
   }).trim();
 }
 
+function runGh(args: string[]): string {
+  return execPlainGh(args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1024 * 1024 * 200,
+    timeout: GH_COMMAND_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  }).trim();
+}
+
 function parsePaginatedJson(rawLocal: string): unknown[] {
   const items: unknown[] = [];
   for (const line of rawLocal.split("\n")) {
@@ -423,10 +448,7 @@ function fetchUser(login: string): User | null {
     return null;
   }
   try {
-    const data = execFileSync("gh", ["api", `users/${normalized}`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const data = runGh(["api", `users/${normalized}`]);
     const parsed = JSON.parse(data);
     if (!parsed?.login || !parsed?.html_url || !parsed?.avatar_url) {
       return null;

@@ -5,7 +5,7 @@ import Foundation
 // of truth and replace cached rows wholesale.
 
 extension OpenClawChatViewModel {
-    struct SessionSnapshot {
+    struct SessionSnapshot: Equatable {
         var key: String
         var generation: UInt64
         var agentID: String?

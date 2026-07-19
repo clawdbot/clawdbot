@@ -2014,7 +2014,7 @@ describe("launchd install", () => {
         stdout: { write } as unknown as NodeJS.WritableStream,
         onMutation,
       }),
-    ).resolves.toEqual({ outcome: "completed" });
+    ).resolves.toBeUndefined();
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const serviceId = `${domain}/ai.openclaw.gateway`;

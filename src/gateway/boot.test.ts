@@ -170,13 +170,86 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("returns failed when BOOT.md cannot be read", async () => {
+  it("skips when BOOT.md disappears after path resolution", async () => {
+    await withBootWorkspace({ bootContent: "Say hello." }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const realpath = vi.spyOn(fs, "realpath");
+      realpath.mockImplementationOnce(async (inputPath) => {
+        realpath.mockRestore();
+        const resolvedPath = await fs.realpath(inputPath);
+        await fs.rm(resolvedPath);
+        return resolvedPath;
+      });
+
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "missing",
+      });
+      expect(agentCommand).not.toHaveBeenCalled();
+      await expect(fs.access(bootPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("returns failed when BOOT.md exceeds the safe read size limit", async () => {
+    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const oversized = Buffer.alloc(16 * 1024 * 1024 + 1, "x");
+      await fs.writeFile(bootPath, oversized);
+      const result = await runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir });
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") {
+        expect(result.reason).toContain("File exceeds 16777216 bytes");
+      }
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns failed when BOOT.md is not a regular file", async () => {
     await withBootWorkspace({ bootAsDirectory: true }, async (workspaceDir) => {
       const result = await runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir });
       expect(result.status).toBe("failed");
       if (result.status === "failed") {
         expect(result.reason.length).toBeGreaterThan(0);
       }
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs agent command when BOOT.md is a symlink to a regular file", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const targetPath = path.join(workspaceDir, "REAL_BOOT.md");
+      await fs.writeFile(targetPath, "Say hello.", "utf-8");
+      await fs.rm(bootPath, { force: true });
+      await fs.symlink(targetPath, bootPath);
+      agentCommand.mockResolvedValue(undefined);
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "ran",
+      });
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const call = requireAgentCall();
+      expect(call.message).toContain("Say hello.");
+    });
+  });
+
+  it("skips when BOOT.md is a dangling symlink", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const targetPath = path.join(workspaceDir, "MISSING_BOOT.md");
+      await fs.rm(bootPath, { force: true });
+      await fs.symlink(targetPath, bootPath);
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "missing",
+      });
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });

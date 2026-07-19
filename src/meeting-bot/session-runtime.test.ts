@@ -27,6 +27,11 @@ type TestJoinContext = MeetingSessionRuntimeJoinContext<
 
 function createTestRuntime(params: {
   talkBack?: boolean;
+  refreshReusableSession?(
+    session: TestSession,
+    request: TestRequest,
+    resolved: { agentId: string; mode: TestMode; transport: TestTransport; url: string },
+  ): Promise<{ keepBrowserTab: boolean } | void>;
   joinTransport(input: {
     request: TestRequest;
     session: TestSession;
@@ -120,7 +125,8 @@ function createTestRuntime(params: {
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
     refreshBrowserHealth: async () => {},
     refreshStatus: async () => {},
-    refreshReusableSession: async () => {},
+    refreshReusableSession: async (session, request, resolved) =>
+      await params.refreshReusableSession?.(session, request, resolved),
     ensureRealtimeBridge: async () => undefined,
     captureTranscript: async () => undefined,
     speakViaTransport: async () => undefined,
@@ -129,6 +135,40 @@ function createTestRuntime(params: {
 }
 
 describe("MeetingSessionRuntime failed joins", () => {
+  it("cleans an externally ended reusable session before replacing it", async () => {
+    const stop = vi.fn(async () => {});
+    const releaseBrowserTab = vi.fn(async () => true);
+    const joinTransport = vi.fn(
+      async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: session.id, openedByPlugin: true },
+        };
+        context.attachRuntimeHandles(session, { stop });
+        return {};
+      },
+    );
+    const { runtime } = createTestRuntime({
+      joinTransport,
+      refreshReusableSession: async (session) => {
+        session.state = "ended";
+      },
+      releaseBrowserTab,
+    });
+    const first = await runtime.join({ url: "https://meeting.example/room", agentId: "main" });
+
+    const replacement = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    expect(first.session.state).toBe("ended");
+    expect(replacement.session.id).not.toBe(first.session.id);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(releaseBrowserTab).not.toHaveBeenCalled();
+    expect(joinTransport).toHaveBeenCalledTimes(2);
+  });
+
   it("stops attached transport handles and releases the partial browser tab", async () => {
     const joinError = new Error("transport setup failed");
     const stop = vi.fn(async () => {});
@@ -286,6 +326,51 @@ describe("MeetingSessionRuntime failed joins", () => {
 });
 
 describe("MeetingSessionRuntime leave cleanup", () => {
+  it("clears stale in-call health after confirmed browser departure", async () => {
+    const { runtime } = createTestRuntime({
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          health: {
+            inCall: true,
+            micMuted: false,
+            manualActionMessage: "old action",
+            manualActionReason: "old-action",
+            manualActionRequired: true,
+            speechReady: true,
+            speechBlockedMessage: "old speech block",
+            speechBlockedReason: "old-speech-block",
+          },
+          tab: { targetId: "leave-tab", openedByPlugin: true },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    await expect(runtime.leave(session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: {
+        browser: {
+          health: {
+            inCall: false,
+            manualActionRequired: false,
+            speechReady: false,
+          },
+        },
+      },
+    });
+    expect(session.browser?.health?.manualActionReason).toBeUndefined();
+    expect(session.browser?.health?.manualActionMessage).toBeUndefined();
+    expect(session.browser?.health?.micMuted).toBeUndefined();
+    expect(session.browser?.health?.speechBlockedReason).toBeUndefined();
+    expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();
+  });
+
   it("retries a failed transport stop without repeating settled browser cleanup", async () => {
     const stopError = new Error("transport stop failed");
     const stop = vi

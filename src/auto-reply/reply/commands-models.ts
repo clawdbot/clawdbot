@@ -237,6 +237,7 @@ export async function buildModelsProviderData(
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: resolvedDefault.provider,
+    agentId,
   });
   const restrictToProviderWildcards =
     options.view !== "all" && visibilityPolicy.hasProviderWildcards;

@@ -204,6 +204,87 @@ export type SessionTranscriptEventRow = {
   seq: number;
 };
 
+/** Count, byte, and continuation bounds for one raw transcript page. */
+export type SessionTranscriptRawDeltaLimits = {
+  /** Opaque cursor returned by a prior page or reset result. */
+  cursor?: string;
+  /** Maximum serialized JSONL bytes returned by this page. */
+  maxBytes?: number;
+  /** Maximum number of events returned by this page. */
+  maxEvents?: number;
+};
+
+/** Generation-aware outcome for one bounded raw transcript read. */
+export type SessionTranscriptRawDeltaResult =
+  | {
+      kind: "page";
+      /** Cursor positioned after the last returned event. */
+      cursor: string;
+      /** Ordered raw transcript events selected for this page. */
+      events: SessionTranscriptEventRow[];
+      /** True when another event remains after this page. */
+      hasMore: boolean;
+      /** First unread event size when it cannot fit under maxBytes. */
+      requiredBytes?: number;
+      /** Stored JSONL bytes represented by events. */
+      serializedBytes: number;
+    }
+  | {
+      kind: "reset";
+      /** Fresh bootstrap cursor for the current generation. */
+      cursor: string;
+      /** Stable discontinuity that invalidated the supplied cursor. */
+      reason: "generation_mismatch" | "invalid_cursor" | "scope_mismatch";
+    }
+  | { kind: "missing" };
+
+/** Count, byte, and continuation bounds for one visible-message page. */
+export type SessionTranscriptVisibleMessageDeltaLimits = {
+  /** Opaque continuation cursor; store and return it unchanged. */
+  cursor?: string;
+  /** Maximum serialized JSONL bytes returned by this page. */
+  maxBytes?: number;
+  /** Maximum number of visible messages returned by this page. */
+  maxMessages?: number;
+};
+
+/** One active-path message row selected from the materialized projection. */
+export type SessionTranscriptVisibleMessageEventRow = SessionTranscriptEventRow & {
+  /** Raw transcript sequence used only by the opaque continuation cursor. */
+  eventSeq: number;
+  /** Parent id after active-branch normalization; null for the visible root. */
+  parentId: string | null;
+};
+
+/** Generation-aware outcome for one bounded visible-message read. */
+export type SessionTranscriptVisibleMessageDeltaResult =
+  | {
+      kind: "page";
+      /** Cursor positioned after the last returned visible message. */
+      cursor: string;
+      /** Ordered active-path message events selected for this page. */
+      events: SessionTranscriptVisibleMessageEventRow[];
+      /** True when another visible message remains after this page. */
+      hasMore: boolean;
+      /** First unread event size when it cannot fit under maxBytes. */
+      requiredBytes?: number;
+      /** Stored JSONL bytes represented by events. */
+      serializedBytes: number;
+    }
+  | {
+      kind: "reset";
+      /** Fresh bootstrap cursor for the current visible generation. */
+      cursor: string;
+      /** Stable discontinuity that invalidated the supplied cursor. */
+      reason:
+        | "anchor_missing"
+        | "anchor_moved"
+        | "generation_mismatch"
+        | "invalid_cursor"
+        | "scope_mismatch";
+    }
+  | { kind: "missing" };
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Runtime config used for message redaction and transcript header metadata. */
   config?: OpenClawConfig;
@@ -567,6 +648,69 @@ export type SessionCompactionCheckpointMutationResult =
   | { status: "missing-boundary" }
   | { status: "model-selection-locked" }
   | { status: "failed" };
+
+export type SessionMessageCutMutationResult =
+  | {
+      status: "created";
+      key: string;
+      entry: SessionEntry;
+      editorText?: string;
+    }
+  | { status: "missing-session" }
+  | { status: "missing-entry" }
+  | { status: "not-user-message" }
+  | { status: "off-active-path" }
+  | { status: "unsupported-storage" }
+  | { status: "failed" };
+
+export type SessionMessageCutMutationParams = {
+  agentId?: string;
+  entryId: string;
+  env?: NodeJS.ProcessEnv;
+  sessionKey: string;
+  sessionStoreKey?: string;
+  storePath?: string;
+  targetKey?: string;
+};
+
+export type SessionBranchSummary = {
+  leafEntryId: string;
+  headline: string;
+  messageCount: number;
+  updatedAt?: string;
+  active: boolean;
+};
+
+export type SessionBranchListResult =
+  | { status: "ok"; branches: SessionBranchSummary[] }
+  | { status: "missing-session" }
+  | { status: "unsupported-storage" }
+  | { status: "failed" };
+
+export type SessionBranchListParams = Pick<
+  SessionMessageCutMutationParams,
+  "agentId" | "env" | "sessionKey" | "sessionStoreKey" | "storePath"
+>;
+
+export type SessionBranchSwitchMutationResult =
+  | {
+      status: "created";
+      key: string;
+      entry: SessionEntry;
+    }
+  | { status: "missing-session" }
+  | { status: "missing-entry" }
+  | { status: "not-branch-tip" }
+  | { status: "already-active" }
+  | { status: "unsupported-storage" }
+  | { status: "failed" };
+
+export type SessionBranchSwitchMutationParams = Omit<
+  SessionMessageCutMutationParams,
+  "entryId" | "targetKey"
+> & {
+  leafEntryId: string;
+};
 
 export type SessionCompactionCheckpointEntryBuildContext = {
   /** Checkpoint row selected from the current persisted session entry. */

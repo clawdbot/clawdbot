@@ -37,15 +37,19 @@ export type MeetingBrowserJoinSession<Mode extends string> = {
 
 export type MeetingBrowserStatusScriptParams<Mode extends string> =
   MeetingBrowserJoinSession<Mode> & {
+    allowSessionAdoption: boolean;
     autoJoin: boolean;
     captureCaptions: boolean;
     guestName: string;
     readOnly?: boolean;
+    waitForInCallMs: number;
   };
 
 export type MeetingBrowserLeaveStep = {
   departed: boolean;
   leaveAction?: "leave" | "confirm";
+  sessionConflict?: boolean;
+  sessionMatched?: boolean;
   urlMatched?: boolean;
 };
 
@@ -64,8 +68,14 @@ type MeetingBrowserAdapter<
   buildStatusJoinScript(params: MeetingBrowserStatusScriptParams<Mode>): string;
   parseStatus(result: unknown): Health | undefined;
   classifyManualAction(health: Health): MeetingManualAction | undefined;
+  shouldRetryJoinStatus?(health: Health): boolean;
   browserControlUnavailable(error: unknown): MeetingManualAction;
   buildLeaveScript(meetingUrl: string): string;
+  buildSessionLeaveScript?(params: {
+    leaveInitiated: boolean;
+    meetingSessionId: string;
+    meetingUrl: string;
+  }): string;
   parseLeaveResult(result: unknown): MeetingBrowserLeaveStep;
   captions: {
     enabled(mode: Mode): boolean;
@@ -79,7 +89,10 @@ type MeetingBrowserAdapter<
       urlMatched?: boolean;
     };
   };
-  permissions(params: { allowMicrophone: boolean }): MeetingBrowserPermissionPlan | undefined;
+  permissions(params: {
+    allowMicrophone: boolean;
+    meetingUrl: string;
+  }): MeetingBrowserPermissionPlan | undefined;
   permissionNotes(params: {
     allowMicrophone: boolean;
     error?: unknown;

@@ -11,6 +11,7 @@ import {
   appendApnsResponseBodyCapture,
   connectApnsHttp2Session,
   createApnsResponseBodyCapture,
+  getApnsResponseBodyCaptureText,
 } from "./push-apns-http2.js";
 import {
   createApnsAlertPayload,
@@ -304,7 +305,6 @@ async function sendApnsRequest(params: {
     let apnsId: string | undefined;
     const responseBody = createApnsResponseBodyCapture();
 
-    req.setEncoding("utf8");
     req.setTimeout(params.timeoutMs, () => {
       req.close(APNS_HTTP2_CANCEL_CODE);
       fail(new Error(`APNs request timed out after ${params.timeoutMs}ms`));
@@ -318,12 +318,10 @@ async function sendApnsRequest(params: {
       }
     });
     req.on("data", (chunk) => {
-      if (typeof chunk === "string") {
-        appendApnsResponseBodyCapture(responseBody, chunk);
-      }
+      appendApnsResponseBodyCapture(responseBody, chunk);
     });
     req.on("end", () => {
-      finish({ status: statusCode, apnsId, body: responseBody.text });
+      finish({ status: statusCode, apnsId, body: getApnsResponseBodyCaptureText(responseBody) });
     });
     req.on("error", (err) => fail(err));
 

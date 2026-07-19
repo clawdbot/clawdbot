@@ -157,6 +157,12 @@
   pointer-events: auto;
 }
 
+.chat-group:hover .chat-group-footer button:disabled,
+.chat-reply-context-menu button:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
 .chat-group-footer button:hover,
 .chat-message-actions-row button:hover {
   opacity: 1 !important;
@@ -707,8 +713,28 @@ details.msg-meta:not([open]) .msg-meta__details {
   color: #fff;
 }
 
+:root[data-theme="dark"] .chat-delete-confirm__yes {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
+:root[data-theme="openknot"] .chat-delete-confirm__yes,
+:root[data-theme="dash"] .chat-delete-confirm__yes {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
 .chat-delete-confirm__yes:hover {
   background: #dc2626;
+}
+
+:root[data-theme="dark"] .chat-delete-confirm__yes:hover {
+  background: var(--destructive-hover);
+}
+
+:root[data-theme="openknot"] .chat-delete-confirm__yes:hover,
+:root[data-theme="dash"] .chat-delete-confirm__yes:hover {
+  background: var(--destructive-hover);
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {

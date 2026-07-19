@@ -136,9 +136,35 @@ describe("isBotMentionedFromTargets", () => {
     expect(debugMention(msg, cfg).wasMentioned).toBe(expected);
   }
 
-  it("ignores regex matches when other mentions are present", () => {
+  it("honors configured mention patterns when only other members are @-mentioned (#109488)", () => {
+    // Previously a native @-mention of a non-bot member short-circuited the
+    // gate to false before mentionPatterns were evaluated, silently dropping
+    // messages like "marlow, look at @SomeoneElse's message".
     const msg = makeMsg({
       body: "@OpenClaw please help",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, mentionCfg, true);
+  });
+
+  it("still rejects third-party mentions when no configured pattern matches", () => {
+    const msg = makeMsg({
+      body: "look at @SomeoneElse's message",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, mentionCfg, false);
+  });
+
+  it("keeps the self-number digit fallback suppressed when other members are @-mentioned", () => {
+    // An @-tag of another member injects that member's number into the body,
+    // so loose digit matching stays disabled in this shape — only explicit
+    // mentionPatterns can rescue the message (#109488).
+    const msg = makeMsg({
+      body: "call me at +15551234567 and ask @SomeoneElse",
       mentionedJids: ["19998887777@s.whatsapp.net"],
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",

@@ -14,6 +14,7 @@ import {
   AUTOMATION_SECTION_KEYS,
   COMMUNICATION_SECTION_KEYS,
   INFRASTRUCTURE_SECTION_KEYS,
+  MCP_SECTION_KEYS,
   SECURITY_SECTION_KEYS,
 } from "./config-sections.ts";
 import {
@@ -182,8 +183,35 @@ const COMMUNICATION_SETTINGS_BLOCKS = {
       "configView.notifications.subscribed",
       "configView.notifications.notSubscribed",
       "configView.notifications.enable",
+      "configView.notifications.nativeTitle",
+      "configView.notifications.nativeHint",
+      "configView.notifications.openSystemSettings",
     ],
     aliases: "vapid gateway",
+  },
+} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
+
+// Sessions-hub workspace pages have no schema-backed config section, so they
+// only surface in search through these static entries.
+const WORKSPACE_SETTINGS_BLOCKS = {
+  sessions: {
+    routeId: "sessions",
+    labelKey: "sessionsView.title",
+    hash: "",
+    searchKeys: ["sessionsView.subtitle", "sessionsView.archivedOnly"],
+    aliases: "history archive overrides",
+  },
+  worktrees: {
+    routeId: "worktrees",
+    labelKey: "worktrees.title",
+    hash: "",
+    searchKeys: [
+      "worktrees.subtitle",
+      "worktrees.cleanupTitle",
+      "worktrees.cleanupMaxCount",
+      "worktrees.cleanupMaxSize",
+    ],
+    aliases: "git checkout branch cleanup",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
@@ -191,12 +219,14 @@ const STATIC_SETTINGS_BLOCKS: readonly StaticSettingsBlockDescriptor[] = [
   ...Object.values(GENERAL_SETTINGS_BLOCKS),
   ...Object.values(APPEARANCE_SETTINGS_BLOCKS),
   ...Object.values(COMMUNICATION_SETTINGS_BLOCKS),
+  ...Object.values(WORKSPACE_SETTINGS_BLOCKS),
 ];
 
 const COMMUNICATION_SECTIONS = new Set<string>(COMMUNICATION_SECTION_KEYS);
 const APPEARANCE_SECTIONS = new Set<string>(APPEARANCE_SECTION_KEYS);
 const SECURITY_SECTIONS = new Set<string>(SECURITY_SECTION_KEYS);
 const AUTOMATION_SECTIONS = new Set<string>(AUTOMATION_SECTION_KEYS);
+const MCP_SECTIONS = new Set<string>(MCP_SECTION_KEYS);
 const INFRASTRUCTURE_SECTIONS = new Set<string>(INFRASTRUCTURE_SECTION_KEYS);
 const AI_AGENTS_SECTIONS = new Set<string>(AI_AGENTS_SECTION_KEYS);
 
@@ -211,7 +241,7 @@ function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): Stati
 }
 
 function routeForConfigSection(key: string): RouteId {
-  if (key === "mcp") {
+  if (MCP_SECTIONS.has(key)) {
     return "mcp";
   }
   if (COMMUNICATION_SECTIONS.has(key)) {

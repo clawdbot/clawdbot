@@ -976,13 +976,14 @@ describe("tui command handlers", () => {
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(createSessionMock).toHaveBeenCalledTimes(1);
     const createOptions = firstMockArg(createSessionMock, "createSession") as
-      | { key?: string; agentId?: string; parentSessionKey?: string }
+      | { key?: string; agentId?: string; parentSessionKey?: string; succeedsParent?: boolean }
       | undefined;
     if (!createOptions?.key) {
       throw new Error("expected /new to create a TUI session key");
     }
     expect(createOptions.agentId).toBe("main");
     expect(createOptions.parentSessionKey).toBe("agent:main:main");
+    expect(createOptions.succeedsParent).toBe(true);
     expect(createOptions.key.startsWith("tui-")).toBe(true);
     const uuidParts: string[] = createOptions.key.slice("tui-".length).split("-");
     expect(uuidParts.map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
@@ -1025,7 +1026,7 @@ describe("tui command handlers", () => {
     expect(createSession).toHaveBeenCalledWith({
       key: expect.stringMatching(/^tui-/),
       agentId: currentAgentId,
-      ...(expectedParent ? { parentSessionKey: expectedParent } : {}),
+      ...(expectedParent ? { parentSessionKey: expectedParent, succeedsParent: true } : {}),
     });
   });
 

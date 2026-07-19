@@ -471,7 +471,7 @@ export class AcpGatewayAgent implements Agent {
       assertAbsoluteCwd(requestedCwd, "session/list");
     }
     const fallbackCwd = requestedCwd ?? process.cwd();
-    const rawCursor = normalizeOptionalString(params.cursor);
+    const rawCursor = params.cursor;
     const cursor = decodeListSessionsCursor(rawCursor);
     if (rawCursor && cursor.cwd !== requestedCwd) {
       throw new Error("ACP session list cursor does not match the cwd filter.");

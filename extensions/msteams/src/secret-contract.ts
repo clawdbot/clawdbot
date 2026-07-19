@@ -34,6 +34,7 @@ export function collectRuntimeConfigAssignments(params: {
       ownerId: "msteams:default",
       requiredForGateway: false,
       disposition: "isolate",
+      contract: msteams,
     },
     apply: (value) => {
       msteams.appPassword = value;

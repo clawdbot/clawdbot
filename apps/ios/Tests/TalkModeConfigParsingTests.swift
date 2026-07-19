@@ -648,14 +648,15 @@ struct TalkModeManagerTests {
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
-    @Test func `leaves native mode for unsupported realtime brain`() {
+    @Test(arguments: ["direct-tools", "none"])
+    func `leaves native mode for unsupported realtime brain`(brain: String) {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
                     "provider": "google",
                     "mode": "realtime",
                     "transport": "gateway-relay",
-                    "brain": "direct-tools",
+                    "brain": brain,
                 ],
             ],
         ]

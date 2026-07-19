@@ -1,6 +1,7 @@
 // Verifies memory-search config resolution across providers, sync, and batching.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import {
   clearEmbeddingProviders,
   listRegisteredEmbeddingProviders,
@@ -234,8 +235,62 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
-  it("keeps cross-conversation recall off by default", () => {
+  it.each([
+    { name: "unset with main scope", cfg: {}, expected: true },
+    {
+      name: "unset with per-channel-peer scope",
+      cfg: { session: { dmScope: "per-channel-peer" } },
+      expected: false,
+    },
+    {
+      name: "unset with main scope and a binding override",
+      cfg: {
+        session: { dmScope: "main" },
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "telegram" },
+            session: { dmScope: "per-peer" },
+          },
+        ],
+      },
+      expected: false,
+    },
+    {
+      name: "explicit false with main scope",
+      cfg: {
+        session: { dmScope: "main" },
+        agents: { defaults: { memorySearch: { rememberAcrossConversations: false } } },
+      },
+      expected: false,
+    },
+    {
+      name: "explicit true with per-peer scope",
+      cfg: {
+        session: { dmScope: "per-peer" },
+        agents: { defaults: { memorySearch: { rememberAcrossConversations: true } } },
+      },
+      expected: true,
+    },
+  ])("resolves remember-across-conversations for $name", ({ cfg, expected }) => {
+    expect(resolveRememberAcrossConversations(asConfig(cfg as OpenClawConfig), "main")).toBe(
+      expected,
+    );
+  });
+
+  it("enables cross-conversation recall by default for a personal install", () => {
     const resolved = resolveMemorySearchConfig(asConfig({}), "main");
+
+    expect(resolved?.rememberAcrossConversations).toBe(true);
+    expect(resolved?.experimental.sessionMemory).toBe(true);
+    expect(resolved?.sources).toEqual(["memory", "sessions"]);
+  });
+
+  it("keeps cross-conversation recall off by default for isolated DMs", () => {
+    const resolved = resolveMemorySearchConfig(
+      asConfig({ session: { dmScope: "per-channel-peer" } }),
+      "main",
+    );
 
     expect(resolved?.rememberAcrossConversations).toBe(false);
     expect(resolved?.experimental.sessionMemory).toBe(false);
@@ -887,6 +942,7 @@ describe("memory search config", () => {
             id: "main",
             default: true,
             memorySearch: {
+              rememberAcrossConversations: false,
               experimental: { sessionMemory: false },
             },
           },

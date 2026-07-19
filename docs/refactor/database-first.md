@@ -475,13 +475,10 @@ The branch already has a real shared SQLite base:
 - The shared schema reserves an `exec_approvals_config` singleton row, but the
   runtime cutover remains pending. TypeScript and the macOS companion still use
   the state-scoped JSON file and must move to SQLite together.
-- Device identity, device auth, and bootstrap runtime modules now keep their
-  SQLite snapshot readers/writers separate from doctor-only legacy JSON import
-  helpers. Device identity uses typed `device_identities` rows and device auth
-  tokens use typed `device_auth_tokens` rows. Device auth writes reconcile rows
-  by device/role instead of truncating the token table, and runtime no longer
-  routes single-token updates through the old whole-store adapter. The legacy
-  version-1 JSON payloads exist only as doctor import/export shapes.
+- TypeScript device identity now uses typed `device_identities` rows, with
+  doctor-only legacy JSON import kept outside the runtime owner. Device auth is
+  still file-backed pending a coordinated schema and cross-runtime migration;
+  `device_auth_tokens` remains reserved for that follow-up.
 - GitHub Copilot token exchange cache uses the shared SQLite plugin-state table
   under `github-copilot/token-cache/default`. It is provider-owned cache state,
   so it intentionally does not add a host schema table.
@@ -490,20 +487,13 @@ The branch already has a real shared SQLite base:
   tracked SDK session, and OpenClaw keeps durable session/transcript state in
   SQLite instead of compatibility marker files.
 - The shared Swift runtime (`OpenClawKit`) uses the same
-  `state/openclaw.sqlite` rows for device identity and device auth. macOS app
-  helpers import the shared SQLite helpers instead of owning a second JSON or
-  SQLite path. A leftover legacy `identity/device.json` blocks identity creation
-  until doctor imports it into SQLite, matching the TypeScript and Android
-  startup gate.
-- Android device identity uses the same TypeScript-compatible key material
-  stored in typed `state/openclaw.sqlite#table/device_identities` rows. It never
-  reads or writes `openclaw/identity/device.json`; a leftover legacy file blocks
-  startup until doctor imports it into SQLite.
-- Android cached device auth tokens also use typed
-  `state/openclaw.sqlite#table/device_auth_tokens` rows and share the same
-  version-1 token semantics as TypeScript and Swift. Runtime no longer reads `SecurePrefs`
-  `gateway.deviceToken*` compatibility keys; those belong to migration/doctor
-  logic only.
+  `state/openclaw.sqlite#table/device_identities` shape and row keys for device
+  identity. Apple-container legacy files are imported by the Swift migration
+  owner because the TypeScript Doctor cannot access those containers. Swift
+  device auth remains file-backed for the coordinated auth follow-up.
+- Android device identity and cached device auth remain app-local stores. They
+  require a separate Android-owned migration; the host SQLite claims do not
+  describe current Android behavior.
 - Android notification recent-package history uses typed
   `android_notification_recent_packages` rows. Runtime no longer migrates or
   reads the old SharedPreferences CSV keys.
@@ -1248,7 +1238,17 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   logs go to unified logging, and durable Gateway diagnostics stay SQLite-backed.
 - The macOS port-guardian record list now uses typed shared SQLite
   `macos_port_guardian_records` rows instead of an Application Support JSON file
-  or opaque singleton blob.
+  or opaque singleton blob. All macOS app profiles use the same host-global native
+  database because they coordinate machine-local ports. Every ledger operation
+  blocks while an older JSON-writing app copy is running. Migration joins the old
+  ledger's stable file-lock protocol only to snapshot and later revalidate the
+  source. It resolves every legacy row from live command and process-start facts
+  without holding that lock, then rereads authoritative SQLite rows, applies the
+  plan, verifies every receipt, and removes the source. Removal retries replan
+  missing rows so retired stale receipts cannot resurrect. The lock stays
+  short-lived so it cannot strand an older writer after SSH has spawned. Cutover is
+  intentionally one-way: steady-state runtime never reads, projects, or writes JSON,
+  and rollback to JSON-only builds does not preserve newer SQLite receipts.
 - Gateway singleton locks now use typed shared SQLite `state_leases` rows under
   the `gateway_locks` scope instead of temp-dir lock files. Fly and OAuth
   troubleshooting docs now point at the SQLite lease/auth refresh lock instead

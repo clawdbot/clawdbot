@@ -35,6 +35,7 @@ import {
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
 import { createMergePatch } from "../config/io.write-prepare.js";
+import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import {
   normalizeAgentModelRefForConfig,
@@ -112,6 +113,8 @@ const log = createSubsystemLogger("system-agent/setup-inference");
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
+const AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT =
+  "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.";
 
 export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
 export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferenceKind;
@@ -438,7 +441,7 @@ export async function detectSetupInference(
     probe("pi"),
     probe("opencode"),
   ]);
-  if (antigravity.found) {
+  if (antigravity.found && !antigravity.timedOut) {
     unavailableCandidates.push({
       id: "antigravity-cli",
       label: "Antigravity CLI",
@@ -447,7 +450,7 @@ export async function detectSetupInference(
         "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
     });
   }
-  if (pi.found) {
+  if (pi.found && !pi.timedOut) {
     unavailableCandidates.push({
       id: "pi-cli",
       label: "Pi CLI",
@@ -456,7 +459,7 @@ export async function detectSetupInference(
         "Pi CLI is installed, but its whole-agent sessions require separate setup and are not a reusable guided-setup inference route.",
     });
   }
-  if (opencode.found) {
+  if (opencode.found && !opencode.timedOut) {
     unavailableCandidates.push({
       id: "opencode-cli",
       label: "OpenCode CLI",
@@ -1907,11 +1910,17 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
+    const autoLocalModelLeanUpdate = applyAutoLocalModelLean({
+      config: sourceCfg,
+      providerId: testPlan.provider,
+      modelRef: plan.modelRef,
+    });
     const needsPersistence =
       plan.persistModelRef !== undefined ||
       plan.manualAuth !== undefined ||
       codexPluginPatch !== undefined ||
-      pendingCodexInstall !== undefined;
+      pendingCodexInstall !== undefined ||
+      autoLocalModelLeanUpdate.changed;
     if (
       !test.auth.authFingerprint &&
       (!test.auth.runtimeOwnerFingerprint ||
@@ -1966,6 +1975,7 @@ async function activateSetupInferenceUnredacted(
       }
     }
     let committedConfig: OpenClawConfig | undefined;
+    let autoLocalModelLeanApplied = false;
     if (!needsPersistence) {
       const latestSnapshot = await readSnapshot();
       const latestRuntime =
@@ -2050,6 +2060,11 @@ async function activateSetupInferenceUnredacted(
           }
           next = enabledCodex.config;
         }
+        next = applyAutoLocalModelLean({
+          config: next,
+          providerId: testPlan.provider,
+          modelRef: plan.modelRef,
+        }).config;
         next = selectModel ? selectModel(next) : next;
         if (!pendingCodexInstall) {
           return next;
@@ -2185,6 +2200,11 @@ async function activateSetupInferenceUnredacted(
                 "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
               );
             }
+            const autoLocalModelLean = applyAutoLocalModelLean({
+              config: current,
+              providerId: testPlan.provider,
+              modelRef: plan.modelRef,
+            });
             const nextConfig = stageCandidate(current, "source");
             const nextRouteProjection = await projectDefaultInferenceRoute(nextConfig);
             const nextResolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(nextConfig);
@@ -2211,6 +2231,7 @@ async function activateSetupInferenceUnredacted(
             throwIfSetupInferenceCancelled(params);
             params.onCommitStarted?.();
             commitMayHaveStarted = true;
+            autoLocalModelLeanApplied = autoLocalModelLean.enabled;
             return { nextConfig };
           },
         });
@@ -2284,7 +2305,13 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
-    let lines = [`Inference verified: ${plan.modelRef}`];
+    const announceAutoLocalModelLean =
+      autoLocalModelLeanApplied &&
+      committedConfig?.agents?.defaults?.experimental?.localModelLean === true;
+    let lines = [
+      `Inference verified: ${plan.modelRef}`,
+      ...(announceAutoLocalModelLean ? [AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT] : []),
+    ];
     if (params.surface === "gateway" && params.recordSetupAudit !== false) {
       const after = await readSnapshot().catch(() => null);
       try {

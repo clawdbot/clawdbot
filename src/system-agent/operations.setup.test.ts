@@ -3,19 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
-function parseLastJsonLine(raw: string): unknown {
-  const lastLine = raw.trim().split("\n").at(-1);
-  if (!lastLine) {
-    throw new Error("Expected audit log to contain at least one JSON line");
-  }
-  return JSON.parse(lastLine) as unknown;
+function readLastAuditEntry(): unknown {
+  return listSystemAgentAuditEntriesForTests().at(-1)?.value;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -172,6 +170,7 @@ describe("parseSystemAgentOperation", () => {
   });
 
   afterEach(() => {
+    resetPluginStateStoreForTests();
     stateDirSnapshot?.restore();
     vi.unstubAllEnvs();
   });
@@ -232,8 +231,7 @@ describe("parseSystemAgentOperation", () => {
       { commit: expect.any(Function) },
     );
     expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
-    const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    const audit = readLastAuditEntry();
     expectAuditRecord(
       audit,
       {
@@ -556,9 +554,7 @@ describe("parseSystemAgentOperation", () => {
     expect(persisted.channels).toEqual({ telegram: { enabled: true } });
     expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5");
 
-    const audit = parseLastJsonLine(
-      await fs.readFile(path.join(tempDir, "audit", "system-agent.jsonl"), "utf8"),
-    );
+    const audit = readLastAuditEntry();
     expectAuditRecord(
       audit,
       {

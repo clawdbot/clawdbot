@@ -59,11 +59,20 @@ export type PluginDoctorStateMigrationDetection = {
 
 export type PluginDoctorStateMigrationContext = {
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+  /** Doctor-only batch import preserving source age for retention ordering. */
+  importPluginStateEntries?: (
+    options: OpenKeyedStoreOptions,
+    entries: readonly { key: string; value: unknown; createdAt: number }[],
+  ) => void;
+  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
 };
 
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
+  /** Import retired file state only during explicit `doctor --fix` repair. */
+  doctorOnly?: boolean;
   detectLegacyState: (params: {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -216,6 +225,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
   return value.filter(isPluginDoctorStateMigration).map((migration) => ({
     id: migration.id.trim(),
     label: migration.label.trim(),
+    doctorOnly: migration.doctorOnly === true ? true : undefined,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

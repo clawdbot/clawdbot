@@ -257,6 +257,15 @@ vi.mock("../model-auth.js", () => ({
   },
 }));
 
+const minimaxUnderstandImageMock = vi.hoisted(() => vi.fn());
+vi.mock("../minimax-vlm.js", async () => {
+  const mod = await vi.importActual<typeof import("../minimax-vlm.js")>("../minimax-vlm.js");
+  return {
+    ...mod,
+    minimaxUnderstandImage: minimaxUnderstandImageMock,
+  };
+});
+
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(
@@ -359,6 +368,12 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
 }
 
 function stubMinimaxOkFetch() {
+  minimaxUnderstandImageMock.mockReset();
+  vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+  minimaxUnderstandImageMock.mockResolvedValue("ok");
+  // Tests that fall back to the generic image runtime still hit a mocked
+  // global.fetch because media-understanding/image.ts is not behind the
+  // minimax-vlm module mock.
   const fetch = vi.fn().mockImplementation(async () =>
     Response.json({
       content: "ok",
@@ -366,11 +381,22 @@ function stubMinimaxOkFetch() {
     }),
   );
   global.fetch = withFetchPreconnect(fetch);
-  vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-  return fetch;
+  return minimaxUnderstandImageMock;
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
+  minimaxUnderstandImageMock.mockReset();
+  if (baseResp.status_code !== 0) {
+    minimaxUnderstandImageMock.mockRejectedValue(
+      new Error(
+        `MiniMax VLM API error (${baseResp.status_code})${
+          baseResp.status_msg ? `: ${baseResp.status_msg}` : ""
+        }.`,
+      ),
+    );
+  } else {
+    minimaxUnderstandImageMock.mockResolvedValue(content);
+  }
   const fetch = vi.fn().mockImplementation(async () =>
     Response.json({
       content,
@@ -378,7 +404,7 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
     }),
   );
   global.fetch = withFetchPreconnect(fetch);
-  return fetch;
+  return minimaxUnderstandImageMock;
 }
 
 function stubOpenAiCompletionsOkFetch(text = "ok") {
@@ -1952,7 +1978,15 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       });
-      const fetch = stubMinimaxOkFetch();
+      // The generic image runtime still uses global.fetch, so mock it directly.
+      const fetch = vi.fn().mockImplementation(async () =>
+        Response.json({
+          content: "ok",
+          base_resp: { status_code: 0, status_msg: "" },
+        }),
+      );
+      global.fetch = withFetchPreconnect(fetch);
+      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2562,33 +2596,28 @@ describe("image tool data URL support", () => {
 
 describe("image tool MiniMax VLM routing", () => {
   const priorFetch = global.fetch;
-  registerImageToolEnvReset(priorFetch, [
-    "MINIMAX_API_KEY",
-    "COPILOT_GITHUB_TOKEN",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-  ]);
 
   beforeEach(() => {
     installImageUnderstandingProviderStubs(minimaxProvider);
   });
 
   afterEach(() => {
+    global.fetch = priorFetch;
     imageProviderHarness.reset();
     testing.setProviderDepsForTest();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
-    const fetch = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
+    const fetchMock = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
-    return { fetch, tool };
+    return { fetch: fetchMock, tool };
   }
 
-  it("accepts image for single-image requests and calls /v1/coding_plan/vlm", async () => {
+  it("accepts image for single-image requests and calls minimaxUnderstandImage", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
     const res = await tool.execute("t1", {
@@ -2597,15 +2626,16 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchCallAt(fetch, 0) as [
-      unknown,
-      { body?: unknown; headers?: unknown; method?: unknown },
-    ];
-    expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
-    expect(init?.method).toBe("POST");
-    expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
-    expect(String(init?.body)).toContain('"prompt":"Describe the image."');
-    expect(String(init?.body)).toContain('"image_url":"data:image/');
+    const callArgs = fetch.mock.calls[0]?.[0] as {
+      apiKey?: string;
+      prompt?: string;
+      imageDataUrl?: string;
+      provider?: string;
+      modelBaseUrl?: string;
+    };
+    expect(callArgs?.apiKey).toBe("minimax-test");
+    expect(callArgs?.prompt).toBe("Describe the image.");
+    expect(callArgs?.imageDataUrl).toContain("data:image/png;base64,");
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
@@ -2750,7 +2780,7 @@ describe("image tool managed inbound media", () => {
 
   it("resolves media://inbound refs", async () => {
     await withManagedInboundPng(async ({ stateDir, mediaId }) => {
-      installImageUnderstandingProviderStubs();
+      installImageUnderstandingProviderStubs(minimaxProvider);
       const fetch = stubMinimaxOkFetch();
       const workspaceDir = path.join(stateDir, "workspace-agent");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -2770,7 +2800,7 @@ describe("image tool managed inbound media", () => {
 
   it("allows managed inbound absolute paths when workspaceOnly is enabled", async () => {
     await withManagedInboundPng(async ({ mediaPath }) => {
-      installImageUnderstandingProviderStubs();
+      installImageUnderstandingProviderStubs(minimaxProvider);
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const tool = createRequiredImageTool({

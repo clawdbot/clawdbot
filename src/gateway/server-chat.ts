@@ -503,6 +503,7 @@ export function createAgentEventHandler({
               ? {
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
+                  lastRunError: row.lastRunError,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
@@ -525,7 +526,18 @@ export function createAgentEventHandler({
     const activeRunFields = activeRunState
       ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
       : {};
-    const session = row ? { ...row, ...lifecyclePatch, ...activeRunFields } : undefined;
+    const clearsLastRunError =
+      Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
+    const session = row
+      ? {
+          ...row,
+          ...lifecyclePatch,
+          ...activeRunFields,
+          // JSON drops undefined values, so a start/success must send null to
+          // evict a prior failure reason from the subscribed client row.
+          ...(clearsLastRunError ? { lastRunError: null } : {}),
+        }
+      : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
     }
@@ -580,6 +592,7 @@ export function createAgentEventHandler({
       model: row?.model,
       ...activeRunFields,
       status: snapshotSource.status,
+      lastRunError: snapshotSource.lastRunError ?? null,
       startedAt: snapshotSource.startedAt,
       endedAt: snapshotSource.endedAt,
       runtimeMs: snapshotSource.runtimeMs,

@@ -67,7 +67,7 @@ programmatic delivery. Full flag and behavior reference:
 | Flag                        | Description                                                          |
 | --------------------------- | -------------------------------------------------------------------- |
 | `--message <text>`          | Inline message to send                                               |
-| `--message-file <path>`     | Read the message from a valid UTF-8 file                             |
+| `--message-file <path>`     | Read the message from a valid UTF-8 file (max 4 MiB)                 |
 | `--to <dest>`               | Derive session key from a target (phone, chat id)                    |
 | `--session-key <key>`       | Use an explicit session key                                          |
 | `--agent <id>`              | Target a configured agent (uses its `main` session)                  |
@@ -89,7 +89,8 @@ programmatic delivery. Full flag and behavior reference:
 - By default, the CLI goes **through the Gateway**. Add `--local` to force the
   embedded runtime on the current machine.
 - Pass exactly one of `--message` or `--message-file`. File messages preserve
-  multiline content after removing an optional UTF-8 BOM.
+  multiline content after removing an optional UTF-8 BOM. Files larger than
+  4 MiB are rejected before dispatch.
 - If the Gateway request fails, the CLI **falls back** to the local embedded
   run; a Gateway timeout falls back with a fresh session instead of racing the
   original transcript.

@@ -68,7 +68,12 @@ function parseSignalBaseUrl(url: string): URL {
 }
 
 function resolveSignalEndpointUrl(baseUrl: string, pathname: string): URL {
-  return new URL(pathname, parseSignalBaseUrl(baseUrl));
+  const parsed = parseSignalBaseUrl(baseUrl);
+  const basePath = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
+  parsed.pathname = `${basePath}${pathname.replace(/^\/+/, "")}`;
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed;
 }
 
 function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcResponse<T> {

@@ -357,8 +357,12 @@ struct MenuContent: View {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
 
-        let deviceId = DeviceIdentityStore.loadOrCreate(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile).deviceId
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile)
+        else {
+            return ("Mac identity unavailable", .red)
+        }
+        let deviceId = identity.deviceId
         if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
             guard entry.isConnected else {
                 return ("Mac capabilities offline", .orange)

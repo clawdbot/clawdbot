@@ -746,6 +746,17 @@ async function saveSessionStoreUnlocked(
 
   let maintenanceChangedStore = false;
   if (!opts?.skipMaintenance) {
+    const commitReducedStore = async (): Promise<void> => {
+      const projected = projectSessionStoreForPersistence({ storePath, store });
+      await writeSessionStoreAtomic({
+        storePath,
+        store,
+        serialized: JSON.stringify(projected.store, null, 2),
+        serializedPromptRefs: collectStorePromptRefs(projected.store),
+        promptBlobs: [...projected.promptBlobs.values()],
+        durable: true,
+      });
+    };
     const maintenance = await applyFileBackedSessionStoreMaintenance({
       storePath,
       store,
@@ -755,6 +766,7 @@ async function saveSessionStoreUnlocked(
       maintenanceOverride: opts?.maintenanceOverride,
       maintenanceConfig: opts?.maintenanceConfig,
       log,
+      commitReducedStore,
       artifacts: {
         archiveRemovedSessionTranscripts,
         removeRemovedSessionTrajectoryArtifacts: async (params) => {
@@ -1211,12 +1223,13 @@ async function writeSessionStoreAtomic(params: {
   cloneSerialized?: string;
   promptBlobs: Iterable<SessionSkillPromptBlobProjection>;
   takeOwnership?: boolean;
+  durable?: boolean;
 }): Promise<void> {
   // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
   // `.fs-safe-replace.*`) so a temp orphaned by a crash between write and rename
   // is identifiable as a session-store temp and reclaimable by cleanup (#56827).
   await writeTextAtomic(params.storePath, params.serialized, {
-    durable: false,
+    durable: params.durable ?? false,
     mode: 0o600,
     tempPrefix: path.basename(params.storePath),
     beforeRename: async () => {

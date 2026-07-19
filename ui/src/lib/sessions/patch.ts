@@ -3,6 +3,7 @@ import type { FastMode, SessionsPatchResult } from "../../api/types.ts";
 export type SessionPatch = {
   label?: string | null;
   category?: string | null;
+  icon?: string | null;
   model?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;

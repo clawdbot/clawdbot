@@ -4,7 +4,7 @@ import path from "node:path";
 import { quoteCmdScriptArg } from "./cmd-argv.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
-import type { GatewayServiceEnv } from "./service-types.js";
+import type { GatewayLifecycleMutationMode, GatewayServiceEnv } from "./service-types.js";
 
 const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
 
@@ -13,7 +13,7 @@ export type GatewayLifecycleAuditSource = "cli" | "safe-rpc" | "supervisor" | "h
 type GatewayLifecycleAuditEntry = {
   action: "start" | "stop" | "restart";
   source: GatewayLifecycleAuditSource;
-  mode: string;
+  mode: GatewayLifecycleMutationMode;
   pid?: number;
   interactive: boolean;
 };

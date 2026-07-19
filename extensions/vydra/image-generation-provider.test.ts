@@ -186,6 +186,6 @@ describe("vydra image-generation provider", () => {
         prompt: "draw a cat",
         cfg: {},
       }),
-    ).rejects.toThrow("Vydra job status: JSON response exceeds 16777216 bytes");
+    ).rejects.toThrow("Vydra job status request failed: JSON response exceeds 16777216 bytes");
   });
 });

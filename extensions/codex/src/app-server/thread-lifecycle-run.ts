@@ -17,6 +17,7 @@ import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
+  createCodexSessionGenerationSupersededError,
   hashCodexAppServerBindingFingerprint,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
@@ -194,9 +195,7 @@ export async function startOrResumeThread(
         }),
       );
       if (!reclaimed) {
-        throw new Error(
-          `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
-        );
+        throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
       }
     }
     if (binding?.pendingSupervisionBranch) {

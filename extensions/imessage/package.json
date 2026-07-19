@@ -20,6 +20,7 @@
     },
     "channel": {
       "id": "imessage",
+      "approvalFlags": ["native"],
       "label": "iMessage",
       "selectionLabel": "iMessage (imsg)",
       "detailLabel": "iMessage",

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import * as readline from "node:readline";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  readSessionTranscriptEvents,
+  readSessionTranscriptRawDelta,
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -127,39 +127,26 @@ function transcriptSourceFromReturnedSessionFile(params: {
   };
 }
 
-function estimateTranscriptEventsBytes(events: readonly unknown[]): number {
-  let total = 0;
-  for (const event of events) {
-    try {
-      total += Buffer.byteLength(`${JSON.stringify(event)}\n`, "utf8");
-    } catch {
-      total += 1;
-    }
-  }
-  return total;
-}
-
 async function streamRuntimeTranscriptEvents(params: {
   target: SessionTranscriptTargetParams;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
   const limits = resolveTranscriptReadLimits(params.limits);
-  let events: readonly unknown[];
+  let page: Awaited<ReturnType<typeof readSessionTranscriptRawDelta>>;
   try {
-    events = await readSessionTranscriptEvents(params.target);
+    page = await readSessionTranscriptRawDelta({
+      ...params.target,
+      maxBytes: limits.maxBytes,
+      maxEvents: limits.maxLines,
+    });
   } catch {
     return;
   }
-  if (estimateTranscriptEventsBytes(events) > limits.maxBytes) {
+  if (page.kind !== "page") {
     return;
   }
-  let seenLines = 0;
-  for (const event of events) {
-    seenLines += 1;
-    if (seenLines > limits.maxLines) {
-      break;
-    }
+  for (const { event } of page.events) {
     try {
       if (params.onRecord(event)) {
         break;

@@ -15,6 +15,60 @@
   padding: var(--space-3) var(--space-4) 0;
 }
 
+/* ---------- hub tabs ---------- */
+
+/* Hub tab strips (plugins + sessions hubs) are page-level navigation, not
+   filters: quiet text tabs on a hairline track with an accent indicator, so
+   they read differently from the segmented filter pills inside the pages.
+   Track/indicator come from wa-tab-group's shadow machinery. */
+wa-tab-group.hub-tabs {
+  --track-color: color-mix(in srgb, var(--border) 60%, transparent);
+  --indicator-color: var(--accent);
+}
+
+wa-tab-group.hub-tabs::part(body) {
+  display: none;
+}
+
+wa-tab-group.hub-tabs::part(tabs) {
+  gap: var(--space-2);
+}
+
+wa-tab.hub-tab {
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  color: var(--muted);
+  transition: color var(--duration-normal) var(--ease-out);
+}
+
+/* Neutralize wa-tab's stock 1em padding; keep a slim nav-tab hit area. */
+wa-tab.hub-tab::part(base) {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  gap: 6px;
+  font: inherit;
+  color: inherit;
+}
+
+wa-tab.hub-tab:hover {
+  color: var(--text);
+}
+
+wa-tab.hub-tab[active] {
+  color: var(--text-strong);
+}
+
+wa-tab.hub-tab:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* Web Awesome also draws its stock focus ring on the inner base part;
+   without this reset both rings render at once. */
+wa-tab.hub-tab:focus-visible::part(base) {
+  outline: none;
+}
+
 /* ---------- toolbar ---------- */
 
 .plugins-toolbar {
@@ -113,17 +167,18 @@
 
 /* ---------- panel + notices ---------- */
 
-/* Sections inside the tabpanel keep the settings-page rhythm. */
+/* Sections inside the tabpanel keep the settings-page rhythm. wa-tab-panel's
+   shadow slot (part=base) owns the slotted children's layout, so the column
+   flex + gap must live on the part — host-level gap never reaches them. */
 .plugins-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-7);
   min-width: 0;
 }
 
-/* Keep the installed-state filter shrink-to-fit inside the panel column. */
-.plugins-panel > .settings-segmented {
-  align-self: flex-start;
+.plugins-panel::part(base) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
 }
 
 .plugins-readonly {
@@ -475,35 +530,6 @@ h3.plugins-subheader {
   color: var(--danger);
 }
 
-/* ---------- MCP inline form ---------- */
-
-/* Lives inside the MCP group surface; hairline divider instead of a nested card. */
-.plugins-mcp-form {
-  display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
-  gap: var(--space-2);
-  align-items: end;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.plugins-mcp-form label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.plugins-mcp-form label span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 580;
-}
-
-.plugins-mcp-form__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
 /* ---------- detail overlay ---------- */
 
 .plugins-detail-backdrop {
@@ -683,11 +709,6 @@ h3.plugins-subheader {
 @media (max-width: 768px) {
   .plugins-content-header {
     display: flex;
-  }
-
-  .plugins-mcp-form {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
   }
 }
 

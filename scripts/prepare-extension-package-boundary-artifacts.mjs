@@ -84,6 +84,7 @@ function listSourceDtsOutputs({ sourceDir, outputPrefix }) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  "src/plugins/provider-runtime-model.types.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
   "packages/ai/src",

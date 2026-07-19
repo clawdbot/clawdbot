@@ -30,7 +30,7 @@ import {
 } from "../../agents/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
-import { isAskUserPromptActive } from "../../agents/tools/ask-user-tool.js";
+import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -1400,13 +1400,13 @@ async function dispatchReplyFromConfigInner(
       const askUser = payload.channelData?.askUser;
       return askUser && typeof askUser === "object" && !Array.isArray(askUser);
     };
-    const isInactiveAskUserPayload = (payload: ReplyPayload) => {
+    const readAskUserQuestionId = (payload: ReplyPayload) => {
       const askUser = payload.channelData?.askUser;
       if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
-        return false;
+        return undefined;
       }
       const questionId = (askUser as { questionId?: unknown }).questionId;
-      return typeof questionId === "string" && !isAskUserPromptActive(questionId);
+      return typeof questionId === "string" ? questionId : undefined;
     };
     const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
       if (!finalReplyDeliveryStarted) {
@@ -2251,16 +2251,10 @@ async function dispatchReplyFromConfigInner(
                       if (isDispatchOperationAborted()) {
                         return;
                       }
-                      if (isInactiveAskUserPayload(payload)) {
-                        return;
-                      }
                       await waitForPendingDirectBlockReplyDelivery(
                         getDispatchAbortOperation()?.abortSignal,
                       );
                       if (isDispatchOperationAborted()) {
-                        return;
-                      }
-                      if (isInactiveAskUserPayload(payload)) {
                         return;
                       }
                       markInboundDedupeReplayUnsafe();
@@ -2305,7 +2299,8 @@ async function dispatchReplyFromConfigInner(
                       if (
                         shouldSuppressProgressDelivery() &&
                         !isFastModeAutoProgressDelivery &&
-                        !isForcedToolProgress
+                        !isForcedToolProgress &&
+                        !hasAskUserPayload(payload)
                       ) {
                         return;
                       }
@@ -2334,9 +2329,6 @@ async function dispatchReplyFromConfigInner(
                       if (isDispatchOperationAborted()) {
                         return;
                       }
-                      if (isInactiveAskUserPayload(deliveryPayload)) {
-                        return;
-                      }
                       if (
                         shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
                         !isFastModeAutoProgressPayload(deliveryPayload) &&
@@ -2354,18 +2346,40 @@ async function dispatchReplyFromConfigInner(
                       ) {
                         const hasMedia =
                           resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                        if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                        if (
+                          !hasMedia &&
+                          !hasExecApprovalPayload(deliveryPayload) &&
+                          !hasAskUserPayload(deliveryPayload)
+                        ) {
                           return;
                         }
                       }
                       if (deliveryPayload.isError === true) {
                         markVisibleToolErrorProgress();
                       }
+                      const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
+                      if (
+                        askUserQuestionId !== undefined &&
+                        !(await isAskUserPromptPending(askUserQuestionId))
+                      ) {
+                        return;
+                      }
+                      if (isDispatchOperationAborted()) {
+                        return;
+                      }
                       if (shouldRouteToOriginating) {
                         await sendPayloadAsync(deliveryPayload, undefined, false);
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        dispatcher.sendToolResult(deliveryPayload);
+                        const delivered = dispatcher.sendToolResult(deliveryPayload);
+                        if (delivered && hasAskUserPayload(deliveryPayload)) {
+                          // ask_user blocks until this callback resolves; drain its prompt now
+                          // or the answerable UI can remain queued behind the blocked agent run.
+                          await waitForReplyDispatcherIdle(
+                            dispatcher,
+                            getDispatchAbortOperation()?.abortSignal,
+                          );
+                        }
                       }
                     };
                     return run();

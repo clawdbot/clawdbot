@@ -43,20 +43,35 @@ function logInvalidConfigOnce(params: {
 }
 
 /** Creates the tagged error shape used by callers that need details after catch. */
-export function createInvalidConfigError(configPath: string, details: string): Error {
+export function createInvalidConfigError(
+  configPath: string,
+  details: string,
+  options: { recovery?: "doctor" | "manual" } = {},
+): Error {
   const error = new Error(`Invalid config at ${configPath}:\n${details}`);
   // Keep metadata non-class-based so cross-module callers can inspect plain Error instances.
   error.name = "InvalidConfigError";
-  (error as { code?: "INVALID_CONFIG"; details?: string }).code = "INVALID_CONFIG";
-  (error as { code?: "INVALID_CONFIG"; details?: string }).details = details;
+  const tagged = error as {
+    code?: "INVALID_CONFIG";
+    details?: string;
+    recovery?: "doctor" | "manual";
+  };
+  tagged.code = "INVALID_CONFIG";
+  tagged.details = details;
+  tagged.recovery = options.recovery ?? "doctor";
   return error;
 }
 
 export function isInvalidConfigError(err: unknown): err is Error & {
   code: "INVALID_CONFIG";
   details?: string;
+  recovery?: "doctor" | "manual";
 } {
   return extractErrorCode(err) === "INVALID_CONFIG";
+}
+
+export function isDoctorRecoverableInvalidConfigError(err: unknown): boolean {
+  return isInvalidConfigError(err) && err.recovery !== "manual";
 }
 
 /** Logs and throws the standard invalid-config error for a validation result. */

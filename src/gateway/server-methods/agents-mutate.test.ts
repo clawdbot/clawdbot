@@ -1,6 +1,8 @@
 // Agent mutation tests cover create/update/delete handlers, safe workspace file
 // access, config preconditions, trash cleanup, and workspace-state handling.
 
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { FsSafeError } from "../../infra/fs-safe.js";
@@ -44,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   fsLstat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsRealpath: vi.fn(async (p: string) => p),
   fsReadlink: vi.fn(async () => ""),
+  fsRm: vi.fn(async () => undefined),
   fsOpen: vi.fn(async () => ({}) as unknown),
   rootRead: vi.fn(async (_params?: unknown) => ({
     buffer: Buffer.from(""),
@@ -197,6 +200,7 @@ vi.mock("node:fs/promises", async () => {
     lstat: mocks.fsLstat,
     realpath: mocks.fsRealpath,
     readlink: mocks.fsReadlink,
+    rm: mocks.fsRm,
     open: mocks.fsOpen,
   };
   return { ...patched, default: patched };
@@ -1169,11 +1173,20 @@ describe("agents.delete", () => {
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      { ok: true, agentId: "test-agent", removedBindings: 2 },
+      {
+        ok: true,
+        agentId: "test-agent",
+        removedBindings: 2,
+        removed: [
+          { path: "/workspace/test-agent", method: "trash" },
+          { path: "/agents/test-agent", method: "trash" },
+          { path: "/transcripts/test-agent", method: "trash" },
+        ],
+        failed: [],
+      },
       undefined,
     );
     expect(mocks.writeConfigFile).toHaveBeenCalled();
-    // moveToTrashBestEffort calls fs.lstat then movePathToTrash for each dir
     expect(mocks.movePathToTrash).toHaveBeenCalled();
   });
 
@@ -1221,16 +1234,55 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/workspace/test-agent");
   });
 
-  it("retains workspace state when best-effort workspace trash fails", async () => {
-    mocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+  it("reports trash failures without deleting the retained directory", async () => {
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const workspaceDir = await actualFs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-agent-delete-trash-failure-"),
+    );
+    mocks.resolveAgentWorkspaceDir.mockReturnValueOnce(workspaceDir);
+    mocks.movePathToTrash.mockRejectedValueOnce(
+      Object.assign(new Error("trash destination missing"), { code: "ENOENT" }),
+    );
+
+    try {
+      const { respond, promise } = makeCall("agents.delete", {
+        agentId: "test-agent",
+      });
+      await promise;
+
+      expectRespondOk(respond, {
+        removed: [
+          { path: "/agents/test-agent", method: "trash" },
+          { path: "/transcripts/test-agent", method: "trash" },
+        ],
+        failed: [{ path: workspaceDir, reason: "trash destination missing" }],
+      });
+      await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();
+      expect(mocks.fsRm).not.toHaveBeenCalled();
+      expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+    } finally {
+      await actualFs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an absent source without invoking the trash backend", async () => {
+    mocks.fsLstat.mockRejectedValueOnce(createEnoentError());
 
     const { respond, promise } = makeCall("agents.delete", {
       agentId: "test-agent",
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true });
-    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+    expectRespondOk(respond, {
+      removed: [
+        { path: "/workspace/test-agent", method: "missing" },
+        { path: "/agents/test-agent", method: "trash" },
+        { path: "/transcripts/test-agent", method: "trash" },
+      ],
+      failed: [],
+    });
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/workspace/test-agent");
+    expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
   });
 
   it("retains workspace state when workspace presence cannot be checked", async () => {
@@ -1243,12 +1295,15 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true });
+    expectRespondOk(respond, {
+      failed: [{ path: "/workspace/test-agent", reason: "permission denied" }],
+    });
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
   it("skips file deletion when deleteFiles is false", async () => {
     mocks.fsLstat.mockClear();
+    mocks.movePathToTrash.mockClear();
 
     const { respond, promise } = makeCall("agents.delete", {
       agentId: "test-agent",
@@ -1257,8 +1312,9 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { ok: true });
-    // moveToTrashBestEffort should not be called at all
+    // No filesystem cleanup should run.
     expect(mocks.fsLstat).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 

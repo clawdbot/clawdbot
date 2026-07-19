@@ -377,7 +377,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stdout: { write } as unknown as NodeJS.WritableStream,
           onMutation,
         }),
-      ).resolves.toEqual({ outcome: "completed" });
+      ).resolves.toBeUndefined();
 
       expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-start" });

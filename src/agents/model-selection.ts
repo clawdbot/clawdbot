@@ -379,12 +379,14 @@ export function buildAllowedModelSet(
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  automaticFallbackKeys: Set<string>;
 } {
   return buildAllowedModelSetWithFallbacks({
     cfg: params.cfg,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,

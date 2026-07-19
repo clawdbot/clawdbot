@@ -51,6 +51,46 @@ export function workspaceSyncError(result: SpawnResult): Error {
   );
 }
 
+export async function probeWorkspaceGitMode(params: {
+  localPath: string;
+  commandOptions: CommandOptions;
+  runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
+}): Promise<{ mode: "git" | "plain"; gitRoot: string; baseCommit: string }> {
+  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch((error: unknown) => {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!gitAdmin) {
+    return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
+  }
+  const [gitRootResult, gitBaseResult] = await Promise.all([
+    params.runTask(
+      ["git", "-C", params.localPath, "rev-parse", "--show-toplevel"],
+      params.commandOptions,
+    ),
+    params.runTask(
+      ["git", "-C", params.localPath, "rev-parse", "--verify", "--quiet", "HEAD"],
+      params.commandOptions,
+    ),
+  ]);
+  if (!workerWorkspaceCommandSucceeded(gitRootResult)) {
+    throw workspaceSyncError(gitRootResult);
+  }
+  if (workerWorkspaceCommandSucceeded(gitBaseResult)) {
+    return {
+      mode: "git",
+      gitRoot: gitRootResult.stdout.trim(),
+      baseCommit: gitBaseResult.stdout.trim(),
+    };
+  }
+  if (gitBaseResult.termination === "exit" && gitBaseResult.code === 1) {
+    return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
+  }
+  throw workspaceSyncError(gitBaseResult);
+}
+
 export function stableWorkerPathComponent(value: string, length: number): string {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }

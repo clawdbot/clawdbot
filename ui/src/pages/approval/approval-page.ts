@@ -1,3 +1,4 @@
+import "../../styles/approval.css";
 import { consume } from "@lit/context";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";

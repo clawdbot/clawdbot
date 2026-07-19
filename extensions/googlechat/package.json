@@ -30,6 +30,7 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "googlechat",
+      "approvalFlags": ["native"],
       "label": "Google Chat",
       "selectionLabel": "Google Chat (Chat API)",
       "detailLabel": "Google Chat",

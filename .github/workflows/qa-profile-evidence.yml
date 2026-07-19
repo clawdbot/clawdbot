@@ -39,6 +39,12 @@ on:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
         required: true
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Optional Convex credential broker URL supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Optional Convex CI credential supplied by qa-live-shared
+        required: false
     outputs:
       artifact_name:
         description: Uploaded QA profile evidence artifact name
@@ -191,7 +197,7 @@ jobs:
     name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.qa_profile == 'all' && 240 || 60 }}
     permissions:
       contents: read
     outputs:
@@ -240,10 +246,33 @@ jobs:
             throw new Error(`Unknown QA profile ${requested}. Available profiles: ${available}`);
           }
 
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `profile=${profile.id}\n`);
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `profile=${profile.id}\nchannel_driver=${profile.channelDriver}\n`,
+          );
           NODE
 
           echo "QA profile: \`${QA_PROFILE}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require live profile credentials
+        if: steps.profile.outputs.channel_driver == 'live'
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local name="$1"
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required qa-live-shared secret: ${name}" >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
         env:
@@ -258,6 +287,11 @@ jobs:
         env:
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
+          OPENCLAW_QA_CREDENTIAL_ROLE: ci
+          OPENCLAW_QA_CREDENTIAL_SOURCE: convex
         shell: bash
         run: |
           set -euo pipefail

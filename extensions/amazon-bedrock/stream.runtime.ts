@@ -69,6 +69,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { describeToolResultMediaPlaceholder } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
@@ -1038,7 +1039,11 @@ function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined
     return options.region;
   }
 
-  return options.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || undefined;
+  return (
+    options.region ||
+    normalizeOptionalString(process.env.AWS_REGION) ||
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION)
+  );
 }
 
 function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {

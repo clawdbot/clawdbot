@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DeviceAuthEntry: Codable, Sendable {
+public struct DeviceAuthEntry: Codable, Sendable, Equatable {
     public let token: String
     public let role: String
     public let scopes: [String]
@@ -16,7 +16,7 @@ public struct DeviceAuthEntry: Codable, Sendable {
     }
 }
 
-private struct DeviceAuthStoreFile: Codable {
+struct DeviceAuthStoreFile: Codable, Equatable {
     var version: Int
     var deviceId: String
     var tokens: [String: DeviceAuthEntry]
@@ -215,9 +215,13 @@ public enum DeviceAuthStore {
         guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data) else {
             return nil
         }
+        return self.normalizedStore(decoded)
+    }
+
+    static func normalizedStore(_ decoded: DeviceAuthStoreFile) -> DeviceAuthStoreFile? {
         guard decoded.version == 1 else { return nil }
-        // Entries carry their owner, so legacy raw keys can be safely reindexed on read.
-        // The next mutation persists only byte-stable v2 keys without changing file shape.
+        // Entries carry their owner, so reads and identity migration compare one canonical
+        // role/scope/owner map instead of raw JSON key order or legacy dictionary keys.
         var tokens: [String: DeviceAuthEntry] = [:]
         for entry in decoded.tokens.values {
             let role = self.normalizeRole(entry.role)
@@ -231,8 +235,13 @@ public enum DeviceAuthStore {
                 scopes: self.normalizeScopes(entry.scopes),
                 updatedAtMs: entry.updatedAtMs,
                 gatewayID: gatewayID)
-            if let existing = tokens[key], existing.updatedAtMs > normalized.updatedAtMs {
-                continue
+            if let existing = tokens[key] {
+                if existing.updatedAtMs > normalized.updatedAtMs {
+                    continue
+                }
+                if existing.updatedAtMs == normalized.updatedAtMs, existing != normalized {
+                    return nil
+                }
             }
             tokens[key] = normalized
         }

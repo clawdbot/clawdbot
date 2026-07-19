@@ -271,6 +271,32 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: response).key
     }
 
+    func rewindSession(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatRewindResponse
+    {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.rewindSession(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            entryId: entryId)
+        let response = try await self.requestSessionMutation(request)
+        return try JSONDecoder().decode(OpenClawChatRewindResponse.self, from: response)
+    }
+
+    func forkSessionAtMessage(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatForkAtMessageResponse
+    {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.forkAtMessage(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            entryId: entryId)
+        let response = try await self.requestSessionMutation(request)
+        return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: response)
+    }
+
     func setActiveSessionKey(_ sessionKey: String) async throws {
         let target = self.sessionTarget(for: sessionKey)
         let request = OpenClawChatGatewayRequests.subscribeSessionMessages(
@@ -504,8 +530,17 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
     }
 
+    func getQuestion(id: String) async throws -> QuestionRecord {
+        let data = try await self.gateway.request(OpenClawChatGatewayRequests.questionGet(id: id))
+        return try JSONDecoder().decode(QuestionGetResult.self, from: data).question
+    }
+
     func resolveQuestion(id: String, answers: [String: [String]]) async throws {
         _ = try await self.gateway.request(OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
+    }
+
+    func cancelQuestion(id: String) async throws {
+        _ = try await self.gateway.request(OpenClawChatGatewayRequests.cancelQuestion(id: id))
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {

@@ -22,6 +22,8 @@ export const GATEWAY_CLIENT_IDS = {
   CLI: "cli",
   GATEWAY_CLIENT: "gateway-client",
   MACOS_APP: "openclaw-macos",
+  // Native Linux UI uses the same trusted-client admission class as the macOS app.
+  LINUX_APP: "openclaw-linux",
   IOS_APP: "openclaw-ios",
   WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",

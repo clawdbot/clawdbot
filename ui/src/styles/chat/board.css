@@ -1,0 +1,172 @@
+.chat-pane__face-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-left: auto;
+}
+
+.chat-pane__face-switch .settings-segmented {
+  flex-wrap: nowrap;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+}
+
+.chat-pane__face-switch .settings-segmented__btn {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+}
+
+.chat-pane__face-switch .settings-segmented__btn--active {
+  background: var(--panel);
+}
+
+.chat-pane__face-switch + .chat-pane__actions {
+  margin-left: 0;
+}
+
+.chat-pane__board-dock-menu {
+  display: inline-flex;
+}
+
+.chat-pane__board-dock-menu svg,
+.board-session-surface__reopen svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.board-session-surface {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 35%, transparent);
+}
+
+.board-session-surface--dock-bottom {
+  flex-direction: column;
+}
+
+.board-session-surface--dock-left .board-session-surface__chat {
+  order: 0;
+}
+
+.board-session-surface--dock-left .board-session-surface__divider {
+  order: 1;
+}
+
+.board-session-surface--dock-left .board-session-surface__board {
+  order: 2;
+}
+
+.board-session-surface__board {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.board-session-surface__board > openclaw-board-view {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.board-session-surface__chat {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: 80%;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.board-session-surface--dock-bottom .board-session-surface__chat {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  max-height: 80%;
+}
+
+.board-session-surface__divider {
+  z-index: 2;
+}
+
+.board-session-surface--dock-hidden .board-session-surface__chat,
+.board-session-surface--dock-hidden .board-session-surface__divider,
+.board-session-surface__reopen[hidden] {
+  display: none;
+}
+
+.board-session-surface__reopen {
+  position: absolute;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-strong) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.board-session-surface__reopen:hover,
+.board-session-surface__reopen:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.board-session-surface__reopen:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.board-session-surface__reopen span {
+  font-size: 11px;
+  font-weight: 600;
+  writing-mode: vertical-rl;
+}
+
+.board-session-surface__reopen--left {
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+}
+
+.board-session-surface__reopen--right {
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+}
+
+.board-session-surface__reopen--bottom {
+  right: 12px;
+  bottom: 8px;
+}
+
+.board-session-surface__reopen--bottom span {
+  writing-mode: horizontal-tb;
+}
+
+@media (max-width: 560px) {
+  .chat-pane__face-switch .settings-segmented__btn {
+    padding-inline: 7px;
+  }
+}

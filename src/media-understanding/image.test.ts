@@ -3,6 +3,7 @@
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -163,6 +164,17 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
   COPILOT_INTEGRATION_ID: "vscode-chat",
 }));
 
+const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
+  return {
+    ...mod,
+    fetchWithSsrFGuard: imageTestFetchWithSsrFGuardMock,
+  };
+});
+
 const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
@@ -184,6 +196,16 @@ describe("describeImageWithModel", () => {
         base_resp: { status_code: 0 },
         content: "portal ok",
       }),
+    );
+    // Bridge fetchWithSsrFGuard through the globally-stubbed fetch so existing
+    // assertions on fetchMock call count and arguments continue to work.
+    imageTestFetchWithSsrFGuardMock.mockImplementation(
+      async (opts: { url: string; init: RequestInit; timeoutMs?: number }) => {
+        const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
+        const init = { ...opts.init, signal };
+        const response = await globalThis.fetch(opts.url, init);
+        return { response, release: vi.fn(), finalUrl: opts.url };
+      },
     );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -263,20 +285,59 @@ describe("describeImageWithModel", () => {
     expect(fetchUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(fetchOptions).toEqual({
       method: "POST",
-      headers: {
-        Authorization: "Bearer oauth-test",
-        "Content-Type": "application/json",
-        "MM-API-Source": "OpenClaw",
-      },
+      headers: fetchOptions.headers,
       body: JSON.stringify({
         prompt: "Describe the image.",
         image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
       }),
       signal: fetchOptions.signal,
     });
+    expect(Object.fromEntries(new Headers(fetchOptions.headers as HeadersInit))).toEqual({
+      authorization: "Bearer oauth-test",
+      "content-type": "application/json",
+      "mm-api-source": "OpenClaw",
+    });
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("carries resolved MiniMax model transport policy into the VLM request", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() =>
+        attachModelProviderRequestTransport(
+          {
+            provider: "minimax-portal",
+            id: "MiniMax-VL-01",
+            input: ["text", "image"],
+            baseUrl: "https://custom-minimax.example.com/anthropic",
+          },
+          {
+            proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" },
+          },
+        ),
+      ),
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "minimax-portal",
+      model: "MiniMax-VL-01",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    const guardedOptions = requireRecord(
+      requireFirstMockCall(imageTestFetchWithSsrFGuardMock, "guarded fetch")[0],
+      "guarded fetch options",
+    );
+    expect(guardedOptions.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "https://proxy.example.com",
+    });
   });
 
   it("unwraps a sentinel only at the direct MiniMax VLM handoff", async () => {
@@ -304,9 +365,9 @@ describe("describeImageWithModel", () => {
     );
     const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
     const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
-    expect(fetchOptions.headers).toMatchObject({
-      Authorization: "Bearer resolved-minimax-secret",
-    });
+    expect(new Headers(fetchOptions.headers as HeadersInit).get("Authorization")).toBe(
+      "Bearer resolved-minimax-secret",
+    );
   });
 
   it("uses generic completion for non-canonical minimax-portal image models", async () => {

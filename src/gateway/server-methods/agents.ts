@@ -319,21 +319,38 @@ function respondAgentConfigPreconditionError(
   );
 }
 
-async function moveToTrashBestEffort(pathname: string): Promise<boolean> {
-  if (!pathname) {
-    return false;
-  }
+type AgentDeleteRemovedPath = {
+  path: string;
+  method: "trash" | "missing";
+};
+
+type AgentDeleteFailedPath = {
+  path: string;
+  reason: string;
+};
+
+type AgentDeletePathOutcome =
+  | { removed: AgentDeleteRemovedPath }
+  | { failed: AgentDeleteFailedPath };
+
+function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcome {
+  const reason = error instanceof Error && error.message ? error.message : String(error);
+  return { failed: { path: pathname, reason: reason || "unknown error" } };
+}
+
+async function removeAgentPath(pathname: string): Promise<AgentDeletePathOutcome> {
   try {
     await fs.lstat(pathname);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? { removed: { path: pathname, method: "missing" } }
+      : cleanupFailure(pathname, error);
   }
   try {
     await movePathToTrash(pathname);
-    return true;
-  } catch {
-    // Best-effort: path may already be gone or trash unavailable.
-    return false;
+    return { removed: { path: pathname, method: "trash" } };
+  } catch (error) {
+    return cleanupFailure(pathname, error);
   }
 }
 
@@ -742,6 +759,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
     // Purge session store entries so orphaned sessions cannot be targeted (#65524).
     await purgeAgentSessionStoreEntries(cfg, agentId);
 
+    const removed: AgentDeleteRemovedPath[] = [];
+    const failed: AgentDeleteFailedPath[] = [];
+    const recordOutcome = (outcome: AgentDeletePathOutcome) => {
+      if ("removed" in outcome) {
+        removed.push(outcome.removed);
+      } else {
+        failed.push(outcome.failed);
+      }
+    };
+
     if (deleteFiles) {
       const workspaceSharedWith = findOverlappingWorkspaceAgentIds(
         committed.nextConfig,
@@ -749,12 +776,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
         deleteResult.workspaceDir,
       );
       const deleteWorkspace = workspaceSharedWith.length === 0;
-      const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
       if (deleteWorkspace) {
         const legacyPlan = prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir);
         const statePlan = prepareWorkspaceStateDeletion(deleteResult.workspaceDir);
-        const workspaceRemoved = await moveToTrashBestEffort(deleteResult.workspaceDir);
-        if (workspaceRemoved) {
+        const workspaceOutcome = await removeAgentPath(deleteResult.workspaceDir);
+        recordOutcome(workspaceOutcome);
+        if ("removed" in workspaceOutcome) {
           try {
             await removeLegacyWorkspaceStateForReset(legacyPlan);
             deleteWorkspaceState(statePlan);
@@ -763,10 +790,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
           }
         }
       }
-      await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
+      const stateOutcomes = await Promise.all(
+        [deleteResult.agentDir, deleteResult.sessionsDir].map(removeAgentPath),
+      );
+      stateOutcomes.forEach(recordOutcome);
     }
 
-    respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
+    respond(
+      true,
+      { ok: true, agentId, removedBindings: deleteResult.removedBindings, removed, failed },
+      undefined,
+    );
   },
   "agents.files.list": async ({ params, respond, context }) => {
     if (!validateAgentsFilesListParams(params)) {

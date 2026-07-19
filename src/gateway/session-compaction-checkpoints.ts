@@ -610,6 +610,7 @@ function cloneCheckpointSessionEntry(params: {
     parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
     archivedAt: params.preserveManagementState ? params.currentEntry.archivedAt : undefined,
     pinnedAt: params.preserveManagementState ? params.currentEntry.pinnedAt : undefined,
+    icon: params.preserveManagementState ? params.currentEntry.icon : undefined,
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,

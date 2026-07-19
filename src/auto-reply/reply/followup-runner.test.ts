@@ -6369,6 +6369,32 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
+  it("does not route marked host media for message-tool-only queued room events", async () => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { mediaUrl: "/tmp/generated.png" },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "room_event",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
   it("does not enqueue stranded recovery when queued followup send policy denies delivery", async () => {
     const finalText =
       "Here is a long reply for a denied session. It includes enough detail to be substantive, but send-policy denial must remain an intentional delivery block.";
@@ -6396,6 +6422,37 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not route marked host media when queued followup send policy denies delivery", async () => {
+    const queued = baseQueuedRun("discord");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sendPolicy: "deny",
+    };
+    await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { mediaUrl: "/tmp/generated.png" },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+      runnerOverrides: { sessionEntry, sessionKey: "main" },
+    });
+
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 

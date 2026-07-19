@@ -1,4 +1,4 @@
-// Control UI E2E tests cover docked Gateway questions through the mocked WebSocket.
+// Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -67,7 +67,7 @@ function historyMessages() {
         text:
           index === 11
             ? "I have the release context ready. I only need your deployment choice."
-            : `Release preparation note ${index + 1}: deterministic transcript content for the docked panel proof.`,
+            : `Release preparation note ${index + 1}: deterministic transcript content for the question panel proof.`,
       },
     ],
     timestamp: 1_750_000_000_000 + index * 1_000,
@@ -123,8 +123,10 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await server?.close();
   });
 
-  it("docks a pending question and replaces it with a compact answer summary", async () => {
+  it("replaces the composer, restores it on collapse, and preserves its draft through resolution", async () => {
     const { gateway, page } = await openQuestionPage();
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.fill("Keep this release note draft");
     const request = questionRecord("question-deploy-target", [
       {
         id: "deploy_target",
@@ -152,17 +154,29 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       .toBe(0);
     await expect.poll(() => panel.getByText("1/1", { exact: true }).count()).toBe(1);
     await expect.poll(() => panel.getByPlaceholder("Type your own answer here").count()).toBe(1);
+    await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+    await expect.poll(() => page.locator(".agent-chat__composer-footer").count()).toBe(0);
+    await expect
+      .poll(() =>
+        panel
+          .locator(".chat-question-panel")
+          .evaluate((element) => document.activeElement === element),
+      )
+      .toBe(true);
 
     await expect
       .poll(async () => {
         const panelBox = await panel.boundingBox();
-        const composerBox = await page.locator(".agent-chat__input").boundingBox();
-        if (!panelBox || !composerBox) {
+        const shellBox = await page.locator(".agent-chat__composer-shell").boundingBox();
+        if (!panelBox || !shellBox) {
           return null;
         }
-        return Math.round(composerBox.y - (panelBox.y + panelBox.height));
+        return {
+          left: Math.round(panelBox.x - shellBox.x),
+          width: Math.round(panelBox.width - shellBox.width),
+        };
       })
-      .toBeGreaterThanOrEqual(0);
+      .toEqual({ left: 0, width: 0 });
     await expect
       .poll(async () => {
         const panelHeight = (await panel.boundingBox())?.height ?? 0;
@@ -173,6 +187,22 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       })
       .toBe(true);
     await screenshot(page, "01-question-pending.png");
+
+    await panel.locator(".chat-question-panel__collapse").click();
+    await composer.waitFor();
+    await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
+    await expect
+      .poll(() => composer.evaluate((element) => document.activeElement === element))
+      .toBe(true);
+    await page.locator(".chat-question-panel__collapsed-button").click();
+    await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+    await expect
+      .poll(() =>
+        panel
+          .locator(".chat-question-panel")
+          .evaluate((element) => document.activeElement === element),
+      )
+      .toBe(true);
 
     await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
@@ -201,6 +231,11 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await expect
       .poll(() => summary.getByText("Staging (Recommended)", { exact: true }).count())
       .toBe(1);
+    await composer.waitFor();
+    await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
+    await expect
+      .poll(() => composer.evaluate((element) => document.activeElement === element))
+      .toBe(true);
     await screenshot(page, "02-question-answered.png");
   });
 
@@ -304,9 +339,9 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
         page.locator(".chat-question-summary").filter({ hasText: "Release manager" }).count(),
       )
       .toBe(1);
-    await expect
-      .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Expired" }).count())
-      .toBe(1);
+    const expiredSummary = page.locator(".chat-question-summary").filter({ hasText: "Expired" });
+    await expect.poll(() => expiredSummary.count()).toBe(1);
+    await expiredSummary.scrollIntoViewIfNeeded();
     await screenshot(page, "04-question-terminal-states.png");
   });
 });

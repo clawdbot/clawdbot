@@ -261,6 +261,7 @@
   "runtime-store",
   "json-store",
   "persistent-dedupe",
+  "ingress-effect-once",
   "keyed-async-queue",
   "qa-runner-runtime",
   "memory-core",

@@ -16,7 +16,11 @@ import {
   resolveRuntime,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
-import { rewriteModelConfigSlot, rewriteModelsMap } from "./codex-route-model-slots.js";
+import {
+  recordCodexModelHit,
+  rewriteModelConfigSlot,
+  rewriteModelsMap,
+} from "./codex-route-model-slots.js";
 import {
   clearConfigLegacyAgentRuntimePolicies,
   ensureCodexRuntimePolicy,
@@ -31,6 +35,31 @@ import type {
 } from "./codex-route-types.js";
 
 const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
+
+function rewriteModelPolicyAllowRefs(params: {
+  hits: CodexRouteHit[];
+  agent: MutableRecord;
+  path: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+}): void {
+  const modelPolicy = asMutableRecord(params.agent.modelPolicy);
+  if (!Array.isArray(modelPolicy?.allow)) {
+    return;
+  }
+  modelPolicy.allow = modelPolicy.allow.map((entry, index) => {
+    if (typeof entry !== "string") {
+      return entry;
+    }
+    return (
+      recordCodexModelHit({
+        hits: params.hits,
+        path: `${params.path}.modelPolicy.allow.${index}`,
+        model: entry.trim(),
+        blockedModelIdentities: params.blockedModelIdentities,
+      }) ?? entry
+    );
+  });
+}
 
 function rewriteAgentModelRefs(params: {
   cfg: OpenClawConfig;
@@ -144,6 +173,14 @@ function rewriteAgentModelRefs(params: {
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
+  const modelPolicyStart = params.hits.length;
+  rewriteModelPolicyAllowRefs({
+    hits: params.hits,
+    agent: params.agent,
+    path: params.path,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
+  preserveCodexRuntimePolicyForNewHits(modelPolicyStart);
   if (params.rewriteModelsMap) {
     const start = params.hits.length;
     rewriteModelsMap({

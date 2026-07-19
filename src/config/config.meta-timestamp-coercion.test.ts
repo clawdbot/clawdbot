@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
-describe("meta.lastTouchedAt numeric timestamp coercion", () => {
+describe("config metadata", () => {
   it("accepts a numeric Unix timestamp and coerces it to an ISO string", () => {
     const numericTimestamp = 1770394758161;
     const res = validateConfigObject({
@@ -58,5 +58,18 @@ describe("meta.lastTouchedAt numeric timestamp coercion", () => {
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("accepts the model-policy migration completion marker", () => {
+    const res = validateConfigObject({
+      meta: {
+        migrations: { modelPolicyAllowlist: true },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    }
   });
 });

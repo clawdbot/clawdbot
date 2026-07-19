@@ -14,6 +14,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -28,7 +29,11 @@ import {
 } from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
-import { buildGatewayReloadPlan, resolveConfigReloadMetadata } from "./config-reload-plan.js";
+import {
+  buildGatewayReloadPlan,
+  type ChannelKind,
+  resolveConfigReloadMetadata,
+} from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
   type GatewayConfigReloadTransactionOwnership,
@@ -179,9 +184,26 @@ describe("buildGatewayReloadPlan", () => {
       noopPrefixes: ["channels.whatsapp"],
     },
   };
+  const mattermostPlugin: ChannelPlugin = {
+    id: "mattermost",
+    meta: {
+      id: "mattermost",
+      label: "Mattermost",
+      selectionLabel: "Mattermost",
+      docsPath: "/channels/mattermost",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: (cfg) => Object.keys(cfg.channels?.mattermost?.accounts ?? {}),
+      resolveAccount: () => ({}),
+    },
+    reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+  };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
   registry.reloads = [
     {
@@ -301,6 +323,10 @@ describe("buildGatewayReloadPlan", () => {
       expected: { restartHeartbeat: true },
     },
     {
+      path: "agents.defaults.modelPolicy.allow",
+      expected: { restartHeartbeat: true },
+    },
+    {
       path: "agents.list",
       expected: { restartHeartbeat: true },
     },
@@ -373,6 +399,75 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  const mattermostAccountConfig = {
+    channels: {
+      mattermost: {
+        accounts: {
+          alpha: { enabled: true },
+          beta: { enabled: true },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it.each([
+    {
+      label: "targets changed named accounts",
+      paths: [
+        "channels.mattermost.accounts.alpha.enabled",
+        "channels.mattermost.accounts.beta.commands",
+      ],
+      expectedChannels: new Set<ChannelKind>(),
+      expectedAccounts: new Map<ChannelKind, Set<string>>([
+        ["mattermost", new Set(["alpha", "beta"])],
+      ]),
+    },
+    {
+      label: "promotes accounts.default changes",
+      paths: ["channels.mattermost.accounts.default.commands"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "promotes channel-global changes",
+      paths: ["channels.mattermost.botToken"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "promotes unlisted account changes",
+      paths: ["channels.mattermost.accounts.removed.enabled"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "lets an unlisted account replace earlier scoped targets",
+      paths: [
+        "channels.mattermost.accounts.alpha.enabled",
+        "channels.mattermost.accounts.removed.enabled",
+      ],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "lets a mixed global change replace scoped targets",
+      paths: ["channels.mattermost.accounts.alpha.enabled", "channels.mattermost.botToken"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "keeps non-opted-in channels wholesale",
+      paths: ["channels.telegram.accounts.alpha.enabled"],
+      expectedChannels: new Set<ChannelKind>(["telegram"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+  ])("$label", ({ paths, expectedChannels, expectedAccounts }) => {
+    const plan = buildGatewayReloadPlan(paths, { candidateConfig: mattermostAccountConfig });
+
+    expect(plan.restartChannels).toEqual(expectedChannels);
+    expect(plan.restartChannelAccounts).toEqual(expectedAccounts);
   });
 
   it("restarts every channel whose config prefix matches", () => {
@@ -466,7 +561,7 @@ describe("buildGatewayReloadPlan", () => {
 });
 
 type WatcherHandler = () => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error";
+type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
@@ -578,7 +673,7 @@ function createReloaderHarness(
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
       sourceConfig: OpenClawConfig,
-    ) => Promise<() => Promise<void>>;
+    ) => Promise<{ rollback: () => Promise<void>; commit?: () => void }>;
     onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onConfigRevisionApplied?: (hash: string) => void;
     onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
@@ -614,7 +709,7 @@ function createReloaderHarness(
   const onConfigAccepted = vi.fn(options.onConfigAccepted ?? (async () => {}));
   const onConfigRevisionApplied = vi.fn(options.onConfigRevisionApplied ?? (() => {}));
   const onEffectiveConfigUnchanged = vi.fn(
-    options.onEffectiveConfigUnchanged ?? (async () => async () => {}),
+    options.onEffectiveConfigUnchanged ?? (async () => ({ rollback: async () => {} })),
   );
   const onNoopConfigCommit = vi.fn(
     options.onNoopConfigCommit ??
@@ -634,6 +729,9 @@ function createReloaderHarness(
   );
   const onRestart = vi.fn(
     options.onRestart ?? ((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
+  );
+  const onConfigCandidateCommitted = vi.fn(
+    (_info: { path: string; persistedHash: string | null; changedPaths: readonly string[] }) => {},
   );
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
@@ -673,6 +771,7 @@ function createReloaderHarness(
     onNoopConfigCommit,
     onHotReload,
     onRestart,
+    onConfigCandidateCommitted,
     ...(options.runTransaction ? { runTransaction: options.runTransaction } : {}),
     log,
     watchPath: "/tmp/openclaw.json",
@@ -687,6 +786,7 @@ function createReloaderHarness(
     onNoopConfigCommit,
     onHotReload,
     onRestart,
+    onConfigCandidateCommitted,
     log,
     reloader,
     emitWrite(event: ConfigWriteNotification) {
@@ -758,6 +858,61 @@ describe("startGatewayConfigReloader", () => {
       await harness.reloader.stop();
     },
   );
+
+  it("notifies change listeners for every accepted external edit, including runtime-skipped ones", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+    };
+    // ui.* is a no-op reload class: the runtime snapshot refreshes without a
+    // hot reload or restart — exactly the agent-changes-theme case.
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      ui: { prefs: { themeMode: "dark" } },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "external-prefs-write" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
+    expect(harness.onConfigCandidateCommitted).toHaveBeenCalledWith({
+      path: "/tmp/openclaw.json",
+      persistedHash: "external-prefs-write",
+      changedPaths: ["ui"],
+    });
+
+    // A same-content echo must not re-notify: nothing changed.
+    harness.onConfigCandidateCommitted.mockClear();
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+    expect(harness.onConfigCandidateCommitted).not.toHaveBeenCalled();
+    await harness.reloader.stop();
+  });
+
+  it("notifies change listeners when reload mode off skips the runtime apply", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off", debounceMs: 0 } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off", debounceMs: 0 } },
+      ui: { prefs: { themeMode: "light" } },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "mode-off-write" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
+    await harness.reloader.stop();
+  });
 
   it("notifies lifecycle owners when a persisted edit reverts to the current baseline", async () => {
     const initialConfig: OpenClawConfig = {
@@ -1661,6 +1816,53 @@ describe("startGatewayConfigReloader", () => {
       harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     await harness.reloader.stop();
+  });
+
+  it("runs account-scoped channel changes through hot reload", async () => {
+    const channelRegistry = createTestRegistry([
+      {
+        pluginId: "mattermost",
+        plugin: {
+          id: "mattermost",
+          meta: {
+            id: "mattermost",
+            label: "Mattermost",
+            selectionLabel: "Mattermost",
+            docsPath: "/channels/mattermost",
+            blurb: "test",
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: { listAccountIds: () => ["default", "alpha"], resolveAccount: () => ({}) },
+          reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+        } satisfies ChannelPlugin,
+        source: "test",
+      },
+    ]);
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { mattermost: { accounts: { alpha: { enabled: false } } } },
+    } as OpenClawConfig;
+    const nextConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { mattermost: { accounts: { alpha: { enabled: true } } } },
+    } as OpenClawConfig;
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "account-reload" })),
+      { initialConfig },
+    );
+
+    pinActivePluginChannelRegistry(channelRegistry);
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      const [plan] = getOnlyHotReloadCall(harness);
+      expect(plan.restartChannelAccounts).toEqual(new Map([["mattermost", new Set(["alpha"])]]));
+      expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
+    } finally {
+      releasePinnedPluginChannelRegistry(channelRegistry);
+      await harness.reloader.stop();
+    }
   });
 
   it("plans one immutable runtime override snapshot per candidate", async () => {
@@ -2885,6 +3087,8 @@ describe("startGatewayConfigReloader", () => {
       ...initialConfig,
       logging: { level: "debug" as const },
     } satisfies OpenClawConfig;
+    const publicationEvents: string[] = [];
+    let publicationId = 0;
     const rollbackSource = vi.fn(async () => {});
     let emitSupersedingChange = () => {};
     const harness = createReloaderHarness(
@@ -2896,7 +3100,18 @@ describe("startGatewayConfigReloader", () => {
           queueMicrotask(emitSupersedingChange);
           return rollback;
         },
-        onEffectiveConfigUnchanged: async () => rollbackSource,
+        onEffectiveConfigUnchanged: async () => {
+          const id = publicationId++;
+          return {
+            rollback: async () => {
+              publicationEvents.push(`rollback:${id}`);
+              await rollbackSource();
+            },
+            commit: () => {
+              publicationEvents.push(`commit:${id}`);
+            },
+          };
+        },
       },
     );
     emitSupersedingChange = () => {
@@ -2927,6 +3142,7 @@ describe("startGatewayConfigReloader", () => {
       initialConfig,
     ]);
     expect(rollbackSource).toHaveBeenCalledOnce();
+    expect(publicationEvents).toEqual(["rollback:0", "commit:1"]);
 
     await harness.reloader.stop();
   });
@@ -3768,9 +3984,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       return watcher as unknown as never;
     });
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const readSnapshot = vi.fn(async () => makeSnapshot());
     const reloader = startGatewayConfigReloader({
       initialConfig: { gateway: { reload: { debounceMs: 0 } } },
-      readSnapshot: vi.fn(async () => makeSnapshot()),
+      readSnapshot,
       initialPluginInstallRecords: {},
       readPluginInstallRecords: async () => ({}),
       onNoopConfigCommit: vi.fn(async () => {}),
@@ -3779,15 +3996,18 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       log,
       watchPath: "/tmp/openclaw.json",
     });
-    return { watchSpy, log, reloader };
+    return { watchSpy, readSnapshot, log, reloader };
   }
 
-  it("re-creates the watcher with backoff after a transient error", async () => {
+  it("re-creates the watcher with backoff and reconciles after it is ready", async () => {
     const first = createWatcherMock();
     const second = createWatcherMock();
-    const { watchSpy, log, reloader } = startReloaderWithWatchers([first, second]);
+    const { watchSpy, readSnapshot, log, reloader } = startReloaderWithWatchers([first, second]);
 
     expect(watchSpy).toHaveBeenCalledTimes(1);
+    first.emit("ready");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readSnapshot).not.toHaveBeenCalled();
 
     first.emit("error");
     expect(reloader.hotReloadStatus()).toBe("active");
@@ -3800,8 +4020,37 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     expect(watchSpy).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(500);
     expect(watchSpy).toHaveBeenCalledTimes(2);
+    expect(readSnapshot).not.toHaveBeenCalled();
+    second.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(reloader.hotReloadStatus()).toBe("active");
     expect(log.error).not.toHaveBeenCalled();
+
+    await reloader.stop();
+  });
+
+  it("ignores ready from a replacement watcher that already failed", async () => {
+    const first = createWatcherMock();
+    const failedReplacement = createWatcherMock();
+    const recoveredReplacement = createWatcherMock();
+    const { readSnapshot, reloader } = startReloaderWithWatchers([
+      first,
+      failedReplacement,
+      recoveredReplacement,
+    ]);
+
+    first.emit("error");
+    await vi.advanceTimersByTimeAsync(500);
+    failedReplacement.emit("error");
+    failedReplacement.emit("ready");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readSnapshot).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    recoveredReplacement.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
 
     await reloader.stop();
   });
@@ -3874,7 +4123,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       // Polling phase: 1 polling re-create + 3 re-creates = 4 watchers.
       const watchers = Array.from({ length: 8 }, () => createWatcherMock());
       const started = startReloaderWithWatchers(watchers);
-      const { watchSpy, log } = started;
+      const { watchSpy, readSnapshot, log } = started;
       reloader = started.reloader;
       const watchOptions = (index: number) =>
         watchSpy.mock.calls[index]?.[1] as { usePolling?: boolean } | undefined;
@@ -3900,6 +4149,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(watchSpy).toHaveBeenCalledTimes(5);
       expect(watchOptions(4)?.usePolling).toBe(true);
+      expect(readSnapshot).not.toHaveBeenCalled();
+      watchers[4]?.emit("ready");
+      await vi.runOnlyPendingTimersAsync();
+      expect(readSnapshot).toHaveBeenCalledTimes(1);
 
       // --- Polling retry phase (3 retries) ---
       watchers[4]?.emit("error");

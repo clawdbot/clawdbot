@@ -88,6 +88,7 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Human input             | Pause for a structured decision owned by the user                                       | `ask_user`                                                                                           | [Ask user](/tools/ask-user)                                                                                            |
 | Web                     | Search the web, search X posts, or fetch readable page content                          | `web_search`, `x_search`, `web_fetch`                                                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
 | Browser                 | Operate a browser session                                                               | `browser`                                                                                            | [Browser](/tools/browser)                                                                                              |
+| Operator UI             | Arrange connected Control UI panes, panels, and navigation                              | `screen`                                                                                             | [Screen](/tools/screen)                                                                                                |
 | Messaging and channels  | Send replies or channel actions                                                         | `message`                                                                                            | [Agent send](/tools/agent-send)                                                                                        |
 | Sessions and agents     | Inspect sessions, delegate work, steer another run, or report status                    | `sessions_*`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)                            |
 | Automation              | Schedule work or respond to background events                                           | `cron`, `heartbeat_respond`                                                                          | [Automation](/automation)                                                                                              |
@@ -112,6 +113,7 @@ Common plugin-provided tools include:
 
 - [Diffs](/tools/diffs) for rendering file and markdown diffs
 - [Show widget](/tools/show-widget) for self-contained inline SVG and HTML in supported chat clients
+- [Screen](/tools/screen) for arranging a connected Control UI
 - [LLM Task](/tools/llm-task) for JSON-only workflow steps
 - [Lobster](/tools/lobster) for typed workflows with resumable approvals
 - [Tokenjuice](/tools/tokenjuice) for compacting noisy `exec` and `bash` tool

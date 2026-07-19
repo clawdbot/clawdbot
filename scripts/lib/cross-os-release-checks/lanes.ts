@@ -484,7 +484,7 @@ export async function runInstallerFreshSuite(
         logLanePhase(lane, "gateway-stop-managed");
         await runInstalledCli({
           cliPath: freshShell.cliPath,
-          args: ["gateway", "stop"],
+          args: ["gateway", "stop", "--force"],
           env,
           cwd: lane.homeDir,
           logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed.log"),

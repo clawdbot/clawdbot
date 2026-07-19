@@ -63,7 +63,9 @@ class SecurePrefs(
       "device.apps.prominentDisclosure.consentVersion"
     private const val currentInstalledAppsDisclosureConsentVersion = 1
     private const val cameraEnabledKey = "camera.enabled"
+    private const val preferredCameraFacingKey = "camera.preferredFacing"
     private const val voiceMicEnabledKey = "voice.micEnabled"
+    private const val preferredAudioInputDeviceKey = "voice.preferredAudioInputDevice"
     private const val voiceWakeEnabledKey = "voiceWake.enabled"
     private const val voiceWakeWordsKey = "voiceWake.triggerWords"
     private const val appearanceThemeModeKey = "appearance.themeMode"
@@ -209,6 +211,14 @@ class SecurePrefs(
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
+
+  private val _preferredCameraFacing =
+    MutableStateFlow(plainPrefs.getString(preferredCameraFacingKey, null).takeIf { it == "back" } ?: "front")
+  val preferredCameraFacing: StateFlow<String> = _preferredCameraFacing
+
+  private val _preferredAudioInputDevice =
+    MutableStateFlow(plainPrefs.getString(preferredAudioInputDeviceKey, null)?.takeIf(String::isNotBlank))
+  val preferredAudioInputDevice: StateFlow<String?> = _preferredAudioInputDevice
 
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
@@ -527,6 +537,13 @@ class SecurePrefs(
     securePrefs.edit { putString(key, value) }
   }
 
+  // KTX edit(commit = true) discards commit's Boolean; the identity migration fails closed on it.
+  @Suppress("UseKtx")
+  internal fun putStringSynchronously(
+    key: String,
+    value: String,
+  ): Boolean = securePrefs.edit().putString(key, value).commit()
+
   fun remove(key: String) {
     securePrefs.edit { remove(key) }
   }
@@ -644,6 +661,20 @@ class SecurePrefs(
   fun setSpeakerEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
+  }
+
+  fun setPreferredCameraFacing(value: String) {
+    val facing = value.takeIf { it == "back" } ?: "front"
+    plainPrefs.edit { putString(preferredCameraFacingKey, facing) }
+    _preferredCameraFacing.value = facing
+  }
+
+  fun setPreferredAudioInputDevice(value: String?) {
+    val key = value?.takeIf(String::isNotBlank)
+    plainPrefs.edit {
+      if (key == null) remove(preferredAudioInputDeviceKey) else putString(preferredAudioInputDeviceKey, key)
+    }
+    _preferredAudioInputDevice.value = key
   }
 
   private fun loadVoiceWakeWords(): List<String> {

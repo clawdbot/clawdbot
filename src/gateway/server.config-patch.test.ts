@@ -7,6 +7,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
 import {
   connectOk,
@@ -179,6 +184,101 @@ beforeEach(() => {
 });
 
 describe("gateway config methods", () => {
+  it("reloads owners independently and reports a changed unresolved owner as cold", async () => {
+    const original = await getCurrentConfigObject();
+    const secretFile = path.join(await resetTempDir("owner-reload"), "secrets.json");
+    await writeJsonFile(secretFile, { first: "first-old", second: "second-old" });
+    await fs.chmod(secretFile, 0o600);
+    const ref = (id: string) => ({ source: "file", provider: "reload-proof", id });
+    const providerConfig = {
+      secrets: {
+        providers: {
+          "reload-proof": { source: "file", path: secretFile, mode: "json" },
+        },
+      },
+      models: {
+        providers: {
+          "reload-first": {
+            apiKey: ref("/first"),
+            baseUrl: "https://first.example.invalid/v1",
+            models: [],
+          },
+          "reload-second": {
+            apiKey: ref("/second"),
+            baseUrl: "https://second.example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    try {
+      const seed = await rpcReq<{ degradedSecretOwners?: unknown[] }>(
+        requireWs(),
+        "config.patch",
+        {
+          raw: JSON.stringify(providerConfig),
+          baseHash: original.hash,
+        },
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(seed.ok).toBe(true);
+      expect(seed.payload?.degradedSecretOwners).toBeUndefined();
+
+      await writeJsonFile(secretFile, { second: "second-new" });
+      await fs.chmod(secretFile, 0o600);
+      const reload = await rpcReq<{ warningCount?: number }>(
+        requireWs(),
+        "secrets.reload",
+        {},
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(reload.ok).toBe(true);
+      const stale = getActiveSecretsRuntimeSnapshot();
+      expect(stale?.config.models?.providers?.["reload-first"]?.apiKey).toBe("first-old");
+      expect(stale?.config.models?.providers?.["reload-second"]?.apiKey).toBe("second-new");
+      expect(stale?.degradedOwners).toMatchObject([
+        { ownerKind: "provider", ownerId: "reload-first", degradationState: "stale" },
+      ]);
+
+      const beforeCold = await getCurrentConfigObject();
+      const cold = await rpcReq<{
+        degradedSecretOwners?: Array<{ ownerId?: string; state?: string }>;
+      }>(
+        requireWs(),
+        "config.patch",
+        {
+          raw: JSON.stringify({
+            models: {
+              providers: {
+                "reload-first": { apiKey: ref("/changed") },
+              },
+            },
+          }),
+          baseHash: beforeCold.hash,
+        },
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(cold.ok).toBe(true);
+      expect(cold.payload?.degradedSecretOwners).toEqual([
+        expect.objectContaining({ ownerId: "reload-first", state: "cold" }),
+      ]);
+      const coldSnapshot = getActiveSecretsRuntimeSnapshot();
+      expect(coldSnapshot?.config.models?.providers?.["reload-first"]?.apiKey).toEqual(
+        ref("/changed"),
+      );
+      expect(coldSnapshot?.config.models?.providers?.["reload-second"]?.apiKey).toBe("second-new");
+    } finally {
+      await restoreConfigFileForTest(original);
+      activateSecretsRuntimeSnapshot(
+        await prepareSecretsRuntimeSnapshot({
+          config: original.config,
+          includeAuthStoreRefs: true,
+        }),
+      );
+    }
+  });
+
   it("includes the active runtime config revision", async () => {
     const current = await rpcReq<{
       hash?: string;

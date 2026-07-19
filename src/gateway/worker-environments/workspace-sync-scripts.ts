@@ -1,34 +1,10 @@
-export const REMOTE_WORKSPACE_SETUP_SCRIPT = String.raw`set -eu
-relative=$1
-root=$HOME/.openclaw-worker
-
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker workspace directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
-
-ensure_private_directory "$root"
-current=$root
-old_ifs=$IFS
-IFS=/
-set -- $relative
-IFS=$old_ifs
-for segment in "$@"; do
-  current=$current/$segment
-  ensure_private_directory "$current"
-done
-cd "$current"
-find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-pwd -P
-`;
+import {
+  DERIVED_WORKSPACE_DIRECTORY_NAMES,
+  DERIVED_WORKSPACE_FILE_NAMES,
+  DERIVED_WORKSPACE_FILE_SUFFIXES,
+  isDerivedWorkspacePath,
+} from "./workspace-path-exclusions.js";
+export { REMOTE_WORKSPACE_SETUP_SCRIPT } from "./workspace-sync-setup-script.js";
 
 export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
@@ -494,6 +470,10 @@ export const REMOTE_WORKSPACE_MANIFEST_JS = String.raw`const crypto = require("n
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
+const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
+const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
+const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
 const root = fs.realpathSync(process.argv[1]);
 const requestedBaseCommit = process.argv[2] || null;
 const eligibleOnly = process.argv[3] === "eligible";
@@ -512,6 +492,7 @@ function addEntry(relative) {
   ) {
     fail("unsafe worker workspace path: " + relative);
   }
+  if (isDerivedWorkspacePath(relative)) return;
   if (entriesByPath.has(relative)) return;
   const absolute = path.join(root, relative);
   let stats;
@@ -541,6 +522,7 @@ function addEntry(relative) {
   }
 }
 function addWithParents(relative) {
+  if (isDerivedWorkspacePath(relative)) return;
   const segments = relative.split("/");
   for (let index = 1; index < segments.length; index += 1) {
     addEntry(segments.slice(0, index).join("/"));
@@ -554,6 +536,7 @@ function walk(relativeDirectory) {
       continue;
     }
     const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
+    if (isDerivedWorkspacePath(relative)) continue;
     const absolute = path.join(root, relative);
     const stats = fs.lstatSync(absolute);
     const mode = stats.mode & 0o777;
@@ -620,10 +603,12 @@ function eligiblePaths() {
     }
     for (const entry of prior.entries) {
       if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
-      if (entry.path !== ".openclaw-base.pack") selected.add(entry.path);
+      if (entry.path !== ".openclaw-base.pack" && !isDerivedWorkspacePath(entry.path)) {
+        selected.add(entry.path);
+      }
     }
   }
-  return [...selected].sort();
+  return [...selected].filter((relative) => !isDerivedWorkspacePath(relative)).sort();
 }
 async function hashFiles() {
   const entries = [...entriesByPath.values()].sort((a, b) =>

@@ -40,6 +40,8 @@
     <string></string>
     <key>OpenClawGitCommit</key>
     <string></string>
+    <key>OpenClawPortGuardianStorageVersion</key>
+    <integer>2</integer>
 
     <key>NSUserNotificationUsageDescription</key>
     <string>OpenClaw needs notification permission to show alerts for agent actions.</string>

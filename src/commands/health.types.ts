@@ -72,6 +72,12 @@ export type DeliveryQueueHealthSummary = {
     count: number;
     oldestFailedAt?: number;
   }>;
+  ingressFailed?: Array<{
+    channelId: string;
+    accountId: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
 };
 
 /** Optional model pricing cache health reported by the gateway. */

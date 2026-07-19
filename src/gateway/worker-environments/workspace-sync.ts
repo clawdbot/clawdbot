@@ -16,6 +16,7 @@ import type {
   WorkerWorkspaceSyncRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
+import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
@@ -25,12 +26,16 @@ import {
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
-  workerWorkspaceTransferPaths,
 } from "./workspace-reconcile.js";
+import {
+  workerWorkspaceResultStaging,
+  workerWorkspaceTransferPaths,
+} from "./workspace-result-staging.js";
 import {
   MANIFEST_REF_PATTERN,
   parseManifestRef,
   parseRemoteWorkspaceDirectory,
+  probeWorkspaceGitMode,
   readTransferredManifest,
   runBoundedInboundRsync as runBoundedInboundRsyncTransfer,
   stableWorkerPathComponent,
@@ -249,17 +254,15 @@ export function createWorkerWorkspaceActions(
       throw workspaceSyncError(setup);
     }
     const remoteWorkspaceDir = parseRemoteWorkspaceDirectory(setup.stdout.trim());
-
-    const gitRootResult = await runTask(
-      ["git", "-C", request.localPath, "rev-parse", "--show-toplevel"],
-      workerSshCommandOptions({
+    // Result refs can make plain workspaces unborn repos; only committed repos use Git sync.
+    const { mode, gitRoot, baseCommit } = await probeWorkspaceGitMode({
+      localPath: request.localPath,
+      commandOptions: workerSshCommandOptions({
         timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
         signal: options.ownerSignal,
       }),
-    );
-    const mode = success(gitRootResult) ? "git" : "plain";
-    let baseCommit = "";
-    let gitRoot = request.localPath;
+      runTask,
+    });
     const temporaryDirectory = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
     );
@@ -275,7 +278,6 @@ export function createWorkerWorkspaceActions(
     try {
       let fileListPath: string | undefined;
       if (mode === "git") {
-        gitRoot = gitRootResult.stdout.trim();
         const [canonicalRequestPath, canonicalGitRoot] = await Promise.all([
           fs.realpath(request.localPath),
           fs.realpath(gitRoot),
@@ -283,17 +285,6 @@ export function createWorkerWorkspaceActions(
         if (canonicalRequestPath !== canonicalGitRoot) {
           throw new Error("Worker git workspace sync requires the managed worktree root");
         }
-        const gitBase = await runTask(
-          ["git", "-C", gitRoot, "rev-parse", "--verify", "HEAD"],
-          workerSshCommandOptions({
-            timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
-            signal: options.ownerSignal,
-          }),
-        );
-        if (!success(gitBase)) {
-          throw new Error("Worker git workspace has no base commit");
-        }
-        baseCommit = gitBase.stdout.trim();
         if (!GIT_COMMIT_PATTERN.test(baseCommit)) {
           throw new Error("Worker workspace git base is not a commit id");
         }
@@ -447,6 +438,7 @@ export function createWorkerWorkspaceActions(
           "--archive",
           "--checksum",
           "--exclude=.git",
+          ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
           ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
           "-e",
           rsyncSsh,
@@ -584,7 +576,18 @@ export function createWorkerWorkspaceActions(
       const currentRef = parseManifestRef(currentResult.stdout.trim());
       if (currentRef === request.baseManifestRef) {
         await verifyStable(currentRef);
-        request.journal.commit(currentRef);
+        const stagedResult = request.stagedResult
+          ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+              request,
+              stagingRoot,
+              currentManifestRef: currentRef,
+              baseManifestRaw: baseRaw,
+              currentManifestRaw: baseRaw,
+            })
+          : undefined;
+        if (!stagedResult) {
+          request.journal.commit(currentRef);
+        }
         return {
           manifestRef: currentRef,
           changed: false,
@@ -595,6 +598,7 @@ export function createWorkerWorkspaceActions(
               base,
               current: base,
             }),
+          ...stagedResult,
         };
       }
       const currentDigest = currentRef.slice("sha256:".length);
@@ -660,21 +664,33 @@ export function createWorkerWorkspaceActions(
       // Stop performs this check once more after local acceptance, directly
       // before destroying the remote owner.
       await verifyStable(currentRef);
-      await applyStagedWorkerWorkspace({
-        root: request.localPath,
-        stagingRoot,
-        baseManifestRef: request.baseManifestRef,
-        currentManifestRef: currentRef,
-        base,
-        current,
-        journal: request.journal,
-      });
+      const stagedResult = request.stagedResult
+        ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+            request,
+            stagingRoot,
+            currentManifestRef: currentRef,
+            baseManifestRaw: baseRaw,
+            currentManifestRaw: currentRaw,
+          })
+        : undefined;
+      if (!stagedResult) {
+        await applyStagedWorkerWorkspace({
+          root: request.localPath,
+          stagingRoot,
+          baseManifestRef: request.baseManifestRef,
+          currentManifestRef: currentRef,
+          base,
+          current,
+          journal: request.journal,
+        });
+      }
       return {
         manifestRef: currentRef,
         changed: true,
         verifyStable: async () => await verifyStable(currentRef),
         verifyLocalStable: async () =>
           await assertWorkspaceResultStable({ root: request.localPath, base, current }),
+        ...stagedResult,
       };
     } finally {
       await fs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);

@@ -8,7 +8,7 @@ import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
   "text",
@@ -42,6 +42,8 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "displayName",
   "owner",
   "schedule",
+  "pacing",
+  "trigger",
   "sessionTarget",
   "wakeMode",
   "payload",
@@ -64,7 +66,7 @@ function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KIND
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {
-  return value === "systemEvent" || value === "agentTurn";
+  return value === "systemEvent" || value === "agentTurn" || value === "script";
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -245,6 +247,8 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
       (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
     if (hasAgentTurnSignal) {
       payload.kind = "agentTurn";
+    } else if (isNonEmptyString(payload.script)) {
+      payload.kind = "script";
     } else if (isNonEmptyString(payload.text)) {
       payload.kind = "systemEvent";
     }

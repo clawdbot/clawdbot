@@ -222,6 +222,33 @@ function selectPluginStateEntries(
   ).rows;
 }
 
+function selectPluginStateEntriesInKeyRange(
+  db: DatabaseSync,
+  params: {
+    pluginId: string;
+    namespace: string;
+    keyStartInclusive: string;
+    keyEndExclusive: string;
+    limit: number;
+    order: "asc" | "desc";
+    now: number;
+  },
+): PluginStateRow[] {
+  return executeSqliteQuerySync(
+    db,
+    getPluginStateKysely(db)
+      .selectFrom("plugin_state_entries")
+      .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", ">=", params.keyStartInclusive)
+      .where("entry_key", "<", params.keyEndExclusive)
+      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
+      .orderBy("entry_key", params.order)
+      .limit(params.limit),
+  ).rows;
+}
+
 function deletePluginStateEntry(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string },
@@ -266,6 +293,26 @@ function countLivePluginStateNamespaceEntries(
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
   return countRow(row);
+}
+
+function allocatePluginStateNamespaceCreatedAt(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace: string; now: number },
+): number {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getPluginStateKysely(db)
+      .selectFrom("plugin_state_entries")
+      .select((eb) => eb.fn.max<number | bigint>("created_at").as("max_created_at"))
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace),
+  );
+  const previous = normalizeSqliteNumber(row?.max_created_at ?? null);
+  const next = previous === undefined ? params.now : Math.max(params.now, previous + 1);
+  if (!Number.isSafeInteger(next)) {
+    throw new RangeError("Plugin state namespace append order exhausted safe integer range");
+  }
+  return next;
 }
 
 function countLivePluginStateEntries(
@@ -380,6 +427,7 @@ function enforcePostRegisterLimits(params: {
   overflowPolicy: PluginStateOverflowPolicy;
   now: number;
   protectedKey: string;
+  enforcePluginLimit?: boolean;
 }): void {
   if (params.overflowPolicy === "reject-new") {
     return;
@@ -399,6 +447,10 @@ function enforcePostRegisterLimits(params: {
     });
   }
 
+  if (params.enforcePluginLimit === false) {
+    return;
+  }
+
   const pluginCount = countLivePluginStateEntries(params.store.db, {
     pluginId: params.pluginId,
     now: params.now,
@@ -408,7 +460,9 @@ function enforcePostRegisterLimits(params: {
     return;
   }
 
-  // Shed rows from the namespace that grew before failing the plugin write.
+  // Shed only rows from the namespace that grew. Sibling namespaces can hold
+  // durable state; if this namespace cannot cover the overflow, fail so the
+  // surrounding transaction rolls every insertion and deletion back.
   deleteOldestPluginStateNamespaceEntries(params.store.db, {
     pluginId: params.pluginId,
     namespace: params.namespace,
@@ -547,6 +601,141 @@ export function pluginStateRegister(params: {
       "register",
       "PLUGIN_STATE_WRITE_FAILED",
       "Failed to register plugin state entry.",
+    );
+  }
+}
+
+export function pluginStateRegisterSequencedJournalEntry(params: {
+  pluginId: string;
+  cursorNamespace: string;
+  cursorKey: string;
+  cursorMaxEntries: number;
+  journalNamespace: string;
+  journalMaxEntries: number;
+  initialSequence: number;
+  readCursorSequence: (valueJson: string) => number | undefined;
+  prepareEntry: (sequence: number) => {
+    cursorValueJson: string;
+    journalKey: string;
+    journalValueJson: string;
+  };
+  env?: NodeJS.ProcessEnv;
+}): number {
+  try {
+    return runWriteTransaction(
+      "register",
+      (store) => {
+        const now = Date.now();
+        deleteExpiredPluginStateNamespaceEntries(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.cursorNamespace,
+          now,
+        });
+        deleteExpiredPluginStateNamespaceEntries(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.journalNamespace,
+          now,
+        });
+        const cursor = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.cursorNamespace,
+          key: params.cursorKey,
+          now,
+        });
+        const cursorSequence = cursor ? params.readCursorSequence(cursor.value_json) : undefined;
+        const lastSequence = Math.max(params.initialSequence, cursorSequence ?? 0);
+        const sequence = lastSequence + 1;
+        if (!Number.isSafeInteger(sequence)) {
+          throw new RangeError("Plugin state journal sequence exhausted safe integer range");
+        }
+        const prepared = params.prepareEntry(sequence);
+        const existingJournalEntry = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.journalNamespace,
+          key: prepared.journalKey,
+          now,
+        });
+        if (existingJournalEntry) {
+          throw createPluginStateError({
+            code: "PLUGIN_STATE_WRITE_FAILED",
+            operation: "register",
+            message: "Plugin state journal sequence already exists.",
+            path: store.path,
+          });
+        }
+        if (!cursor) {
+          assertCanInsertPluginStateEntry({
+            store,
+            pluginId: params.pluginId,
+            namespace: params.cursorNamespace,
+            maxEntries: params.cursorMaxEntries,
+            overflowPolicy: "evict-oldest",
+            now,
+          });
+        }
+        assertCanInsertPluginStateEntry({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.journalNamespace,
+          maxEntries: params.journalMaxEntries,
+          overflowPolicy: "evict-oldest",
+          now,
+        });
+        upsertPluginStateEntry(
+          store.db,
+          bindPluginStateEntry({
+            pluginId: params.pluginId,
+            namespace: params.cursorNamespace,
+            key: params.cursorKey,
+            valueJson: prepared.cursorValueJson,
+            createdAt: now,
+            expiresAt: null,
+          }),
+        );
+        enforcePostRegisterLimits({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.cursorNamespace,
+          maxEntries: params.cursorMaxEntries,
+          overflowPolicy: "evict-oldest",
+          now,
+          protectedKey: params.cursorKey,
+          enforcePluginLimit: false,
+        });
+        upsertPluginStateEntry(
+          store.db,
+          bindPluginStateEntry({
+            pluginId: params.pluginId,
+            namespace: params.journalNamespace,
+            key: prepared.journalKey,
+            valueJson: prepared.journalValueJson,
+            createdAt: allocatePluginStateNamespaceCreatedAt(store.db, {
+              pluginId: params.pluginId,
+              namespace: params.journalNamespace,
+              now,
+            }),
+            expiresAt: null,
+          }),
+        );
+        enforcePostRegisterLimits({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.journalNamespace,
+          maxEntries: params.journalMaxEntries,
+          overflowPolicy: "evict-oldest",
+          now,
+          protectedKey: prepared.journalKey,
+        });
+        return sequence;
+      },
+      envOptions(params.env),
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "register",
+      "PLUGIN_STATE_WRITE_FAILED",
+      "Failed to register sequenced plugin state journal entry.",
     );
   }
 }
@@ -852,6 +1041,51 @@ export function pluginStateEntries(params: {
   }
 }
 
+/** Internal bounded key-range read for core owners with sortable plugin-state keys. */
+export function pluginStateEntriesInKeyRange(params: {
+  pluginId: string;
+  namespace: string;
+  keyStartInclusive: string;
+  keyEndExclusive: string;
+  limit: number;
+  order?: "asc" | "desc";
+  env?: NodeJS.ProcessEnv;
+}): PluginStateEntry<unknown>[] {
+  if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "entries",
+      message: "Plugin state key-range limit must be a positive safe integer.",
+    });
+  }
+  if (params.keyStartInclusive >= params.keyEndExclusive) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "entries",
+      message: "Plugin state key range must have an increasing exclusive upper bound.",
+    });
+  }
+  try {
+    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
+    return selectPluginStateEntriesInKeyRange(db, {
+      pluginId: params.pluginId,
+      namespace: params.namespace,
+      keyStartInclusive: params.keyStartInclusive,
+      keyEndExclusive: params.keyEndExclusive,
+      limit: params.limit,
+      order: params.order ?? "asc",
+      now: Date.now(),
+    }).map((row) => rowToEntry(row, "entries"));
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "entries",
+      "PLUGIN_STATE_READ_FAILED",
+      "Failed to list plugin state entries by key range.",
+    );
+  }
+}
+
 export function pluginStateClear(params: {
   pluginId: string;
   namespace: string;
@@ -912,9 +1146,9 @@ function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
   maxPluginStateEntriesPerPluginForTests = value;
 }
 
-export function countPluginStateLiveEntries(pluginId: string): number {
+export function countPluginStateLiveEntries(pluginId: string, env?: NodeJS.ProcessEnv): number {
   try {
-    const { db } = openPluginStateDatabase("entries");
+    const { db } = openPluginStateDatabase("entries", envOptions(env));
     return countLivePluginStateEntries(db, { pluginId, now: Date.now() });
   } catch (error) {
     throw wrapPluginStateError(
@@ -924,6 +1158,16 @@ export function countPluginStateLiveEntries(pluginId: string): number {
       "Failed to count plugin state entries.",
     );
   }
+}
+
+export function getPluginStateCapacity(
+  pluginId: string,
+  env?: NodeJS.ProcessEnv,
+): { liveEntries: number; maxEntries: number } {
+  return {
+    liveEntries: countPluginStateLiveEntries(pluginId, env),
+    maxEntries: resolveMaxPluginStateEntriesPerPlugin(),
+  };
 }
 
 function seedPluginStateDatabaseEntriesForTests(

@@ -8,9 +8,24 @@ import {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
+  persistedMessageEntryId,
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+
+describe("persistedMessageEntryId", () => {
+  it("rejects optimistic pending bubbles and accepts transcript identities", () => {
+    expect(
+      persistedMessageEntryId({
+        role: "user",
+        __openclaw: { id: "pending-send:1", kind: "pending-send" },
+      }),
+    ).toBeNull();
+    expect(persistedMessageEntryId({ role: "user", __openclaw: { id: "entry-1", seq: 2 } })).toBe(
+      "entry-1",
+    );
+  });
+});
 
 type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
 type WorkGroupItem = Extract<
@@ -2512,7 +2527,7 @@ describe("buildCachedChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Compacted history");
     expect(divider.description).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
     );
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");

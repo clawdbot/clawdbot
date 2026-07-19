@@ -388,7 +388,7 @@ describe("chat page split layout host", () => {
 
     const paneTitles = () =>
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
-    expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
+    expect(paneTitles()).toEqual(["Main Thread", "Main Thread"]);
 
     // Rows arrive under the canonical agent key while the route still says
     // "main"; hello-default resolution plus equivalence matching must find

@@ -222,11 +222,11 @@ describe("Microsoft Teams meetings plugin surface", () => {
 
     expect(response).toMatchObject({
       ok: false,
-      payload: { error: "timeoutMs is supported only by testSpeech" },
+      payload: { error: "timeoutMs is supported only by testSpeech or testListen" },
     });
   });
 
-  it("rejects timeoutMs on testListen while captions are disabled", async () => {
+  it("accepts timeoutMs on testListen and reports a bounded caption timeout", async () => {
     const { invoke } = authorizationHarness();
     const response = await invoke("teamsmeetings.testListen", {
       mode: "transcribe",
@@ -235,8 +235,13 @@ describe("Microsoft Teams meetings plugin surface", () => {
     });
 
     expect(response).toMatchObject({
-      ok: false,
-      payload: { error: "timeoutMs is supported only by testSpeech" },
+      ok: true,
+      payload: {
+        captioning: undefined,
+        createdSession: true,
+        listenTimedOut: true,
+        listenVerified: false,
+      },
     });
   });
 

@@ -230,6 +230,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             case `${COMMAND_VALUE_PREFIX}pair-mobile`:
               params.onPairMobile();
               break;
+            case `${COMMAND_VALUE_PREFIX}apps`:
+              params.onNavigate("apps");
+              break;
           }
         }}
         @wa-after-show=${(event: Event) => {
@@ -330,6 +333,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         >
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
           <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
+        </wa-dropdown-item>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
+          <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-agent-menu__help"

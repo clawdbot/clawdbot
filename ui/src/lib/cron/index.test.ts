@@ -719,11 +719,11 @@ describe("cron controller", () => {
       name: "edited job",
       description: "",
       agentId: null,
-      deleteAfterRun: false,
       schedule: { kind: "cron", expr: "0 8 * * *", staggerMs: 0 },
       payload: { kind: "systemEvent", text: "updated" },
       delivery: { mode: "none" },
     });
+    expect(requestPatch(updateCall)).not.toHaveProperty("deleteAfterRun");
     expect(state.cronEditingJobId).toBeNull();
   });
 

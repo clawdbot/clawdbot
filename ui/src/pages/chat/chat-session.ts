@@ -3,6 +3,7 @@ import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state
 import { normalizeThinkLevel } from "../../lib/chat/thinking.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
+  DEFAULT_SESSION_LIST_QUERY,
   scopedAgentParamsForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
@@ -20,9 +21,6 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
-
-const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
-const CHAT_SESSION_LIST_LIMIT = 50;
 
 type ChatSessionListHost = {
   sessionsShowArchived?: boolean;
@@ -60,8 +58,7 @@ function buildChatSessionListOptions(
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): SessionListOptions {
   const result: SessionListOptions = {
-    activeMinutes: CHAT_SESSION_LIST_ACTIVE_MINUTES,
-    limit: CHAT_SESSION_LIST_LIMIT,
+    ...DEFAULT_SESSION_LIST_QUERY,
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,

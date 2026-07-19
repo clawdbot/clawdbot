@@ -16,6 +16,7 @@ import {
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
+import { isWhatsAppAuthConfigured, loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
@@ -36,11 +37,7 @@ import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
-import {
-  createWhatsAppPluginBase,
-  loadWhatsAppChannelRuntime,
-  whatsappSetupWizardProxy,
-} from "./shared.js";
+import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
@@ -85,10 +82,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
-        isConfigured: async (account) => {
-          const channelRuntime = await loadWhatsAppChannelRuntime();
-          return (await channelRuntime.readWebAuthState(account.authDir)) === "linked";
-        },
+        isConfigured: async (account) => await isWhatsAppAuthConfigured(account.authDir),
       }),
       agentTools: () => [createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({

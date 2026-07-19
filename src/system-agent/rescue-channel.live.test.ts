@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { runSystemAgentRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -53,6 +55,7 @@ async function runRescue(params: {
 
 describeLive("OpenClaw live rescue channel smoke", () => {
   afterEach(() => {
+    resetPluginStateStoreForTests();
     clearConfigCache();
     if (originalStateDir === undefined) {
       deleteTestEnvValue("OPENCLAW_STATE_DIR");
@@ -105,11 +108,11 @@ describeLive("OpenClaw live rescue channel smoke", () => {
         throw new Error("expected default model object");
       }
       expect(defaultModel.primary).toBe("openai/gpt-5.5");
-      const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-      const auditLines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
-      expect(auditLines.some((line) => line.includes('"operation":"config.setDefaultModel"'))).toBe(
-        true,
-      );
+      expect(
+        listSystemAgentAuditEntriesForTests().some(
+          (entry) => entry.value.operation === "config.setDefaultModel",
+        ),
+      ).toBe(true);
     });
   });
 });

@@ -6,6 +6,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -27,6 +28,7 @@ async function fetchJson<T>(url: string, timeoutMs = QA_SUITE_FETCH_JSON_TIMEOUT
   });
   try {
     if (!response.ok) {
+      await discardIgnoredResponseBody(response);
       throw new Error(`request failed ${response.status}: ${url}`);
     }
     return await readProviderJsonResponse<T>(response, "qa-lab-suite-fetch-json");
@@ -46,7 +48,9 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
         auditContext: "qa-lab-suite-wait-for-gateway-healthy",
       });
       try {
-        if (response.ok) {
+        const ready = response.ok;
+        await discardIgnoredResponseBody(response);
+        if (ready) {
           return;
         }
       } finally {

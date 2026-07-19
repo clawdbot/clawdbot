@@ -17,7 +17,6 @@ type LaunchdRestartHandoffResult = Result<number | undefined, string>;
 
 type LaunchdRestartTarget = {
   domain: string;
-  label: string;
   plistPath: string;
   serviceTarget: string;
 };
@@ -92,7 +91,6 @@ function resolveLaunchdRestartTarget(
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   return {
     domain,
-    label,
     plistPath,
     serviceTarget: `${domain}/${label}`,
   };
@@ -105,7 +103,6 @@ function buildLaunchdRestartScript(
   // The detached shell waits for the caller before touching launchd so the
   // current gateway process can exit cleanly after scheduling the handoff.
   const waitForCallerPid = `wait_pid="$4"
-label="$5"
 ${renderPosixRestartLogSetup(restartLogEnv)}
 printf '[%s] openclaw restart attempt source=handoff mode=${mode} target=%s pid=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$service_target" "$wait_pid" >&2
 if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
@@ -268,7 +265,6 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         target.domain,
         target.plistPath,
         String(waitForPid),
-        target.label,
       ],
       {
         detached: true,

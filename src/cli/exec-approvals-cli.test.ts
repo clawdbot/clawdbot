@@ -233,6 +233,24 @@ describe("exec approvals CLI", () => {
     await program.parseAsync(args, { from: "user" });
   };
 
+  const runNativeApprovalsFileCommand = async (filePath: string) => {
+    callGatewayFromCli.mockResolvedValue({
+      enabled: true,
+      hash: "sha256:current",
+      defaultAction: "deny",
+      rules: [],
+    } as never);
+    await runApprovalsCommand([
+      "approvals",
+      "set",
+      "--node",
+      "windows",
+      "--file",
+      filePath,
+      "--json",
+    ]);
+  };
+
   beforeEach(() => {
     resetLocalSnapshot();
     runtimeErrors.length = 0;
@@ -856,5 +874,76 @@ describe("exec approvals CLI", () => {
     await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
       "Exec approvals stdin exceeds 5 bytes.",
     );
+  });
+
+  it("reads approvals JSON from a regular file", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-bound-");
+    const filePath = path.join(dir, "approvals.json");
+    fs.writeFileSync(filePath, JSON.stringify({ defaultAction: "deny", rules: [] }));
+
+    await runNativeApprovalsFileCommand(filePath);
+
+    expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+      "exec.approvals.node.get",
+      "exec.approvals.node.set",
+      "exec.approvals.node.get",
+    ]);
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("rejects an oversized approvals file", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-bound-");
+    const filePath = path.join(dir, "oversized.json");
+    fs.writeFileSync(filePath, Buffer.alloc(1024 * 1024 + 1, "x"));
+
+    await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the directory read error", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-directory-");
+
+    await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors[0]).toMatch(/EISDIR|directory/i);
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows a symlinked approvals file", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-symlink-");
+    const targetPath = path.join(dir, "target.json");
+    const symlinkPath = path.join(dir, "approvals.json");
+    fs.writeFileSync(targetPath, JSON.stringify({ defaultAction: "deny", rules: [] }));
+    fs.symlinkSync(targetPath, symlinkPath);
+
+    await runNativeApprovalsFileCommand(symlinkPath);
+
+    expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toContain(
+      "exec.approvals.node.set",
+    );
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("rejects a file that grows past the limit after opening", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-growth-");
+    const filePath = path.join(dir, "growing.json");
+    fs.writeFileSync(filePath, Buffer.alloc(1024 * 1024, "x"));
+    const open = fs.promises.open.bind(fs.promises);
+    const openSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      fs.appendFileSync(filePath, "x");
+      return handle;
+    });
+
+    try {
+      await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });

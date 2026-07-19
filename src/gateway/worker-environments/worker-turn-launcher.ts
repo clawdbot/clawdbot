@@ -31,6 +31,10 @@ import {
   type WorkerWorkspaceOperationCoordinator,
 } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
+import {
+  deleteStagedWorkerWorkspaceResult,
+  workerWorkspaceResultRef,
+} from "./workspace-result-staging.js";
 
 const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
 
@@ -461,17 +465,36 @@ async function executeWorkerTurn(params: {
       const quiescence = await tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
       let resumed = false;
       try {
+        const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
         const reconciliation = await tunnel.reconcileWorkspace({
           localPath: turn.workspaceDir,
           remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
           baseManifestRef: currentPlacement.workspaceBaseManifestRef,
           journal,
+          stagedResult: {
+            ref: stagedResultRef,
+            record: (ref) => params.placements.recordStagedWorkspaceResult(params.turnClaim, ref),
+          },
         });
+        await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
         if (!manifestAccepted) {
           throw new Error("Cloud worker workspace reconciliation was not durably accepted");
         }
-        await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
         params.placements.acceptWorkspaceResult(params.turnClaim);
+        const recordedStagedResultRef = params.placements
+          .listPendingWorkspaceResults()
+          .find(
+            (pending) =>
+              pending.sessionId === params.turnClaim.sessionId &&
+              pending.claimId === params.turnClaim.claimId &&
+              pending.runId === params.turnClaim.runId,
+          )?.stagedResultRef;
+        if (recordedStagedResultRef) {
+          await deleteStagedWorkerWorkspaceResult({
+            root: turn.workspaceDir,
+            stagedResultRef: recordedStagedResultRef,
+          });
+        }
         await quiescence.resume();
         resumed = true;
         params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);

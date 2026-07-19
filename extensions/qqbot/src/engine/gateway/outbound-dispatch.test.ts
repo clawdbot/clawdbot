@@ -223,6 +223,11 @@ function makeRuntime(params: {
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: {
@@ -933,6 +938,55 @@ describe("dispatchOutbound", () => {
       expect(sendTextMock).toHaveBeenCalledWith(
         expect.anything(),
         "late answer",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps durable settlement with a dispatch that outlives the response watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      const lifecycle = {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+      };
+      const inbound = makeInbound();
+      inbound.event.turnAdoptionLifecycle = lifecycle;
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 301_000);
+          });
+          await deliver({ text: "late durable answer" }, { kind: "block" });
+        },
+      });
+      let settled = false;
+      const dispatchPromise = dispatchOutbound(inbound, {
+        runtime,
+        cfg: {},
+        account,
+      }).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(settled).toBe(false);
+      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatchPromise;
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "late durable answer",
         expect.anything(),
         expect.anything(),
       );

@@ -188,7 +188,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");
-    const errorHelp = `${errorMessage}. Configure native session discovery in Settings > Automation > Plugins.`;
+    const errorHelp = `${errorMessage}. Configure native thread discovery in Settings > Automation > Plugins.`;
     return html`
       <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
         <div class="sidebar-recent-sessions__head">

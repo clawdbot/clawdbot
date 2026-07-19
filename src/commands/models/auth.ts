@@ -7,6 +7,7 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -133,17 +134,11 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
 const MODELS_AUTH_STDIN_MAX_BYTES = 1024 * 1024;
 
 async function readPipedStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  for await (const chunk of process.stdin) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    totalBytes += buffer.byteLength;
-    if (totalBytes > MODELS_AUTH_STDIN_MAX_BYTES) {
-      throw new Error(`Piped auth input exceeds ${MODELS_AUTH_STDIN_MAX_BYTES} bytes.`);
-    }
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: MODELS_AUTH_STDIN_MAX_BYTES,
+    onOverflow: ({ maxBytes }) => new Error(`Piped auth input exceeds ${maxBytes} bytes.`),
+  });
+  return bytes.toString("utf8");
 }
 
 async function readPastedSecret(params: {

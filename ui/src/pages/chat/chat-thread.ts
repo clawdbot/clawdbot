@@ -838,6 +838,10 @@ function sourceMessageId(message: unknown): string | null {
   return id || null;
 }
 
+export function persistedMessageEntryId(message: unknown): string | null {
+  return isPendingSendMessage(message) ? null : sourceMessageId(message);
+}
+
 function transcriptMessageSourceKey(message: unknown): string | null {
   const record = asRecord(message);
   if (!record) {

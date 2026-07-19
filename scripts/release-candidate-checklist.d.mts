@@ -186,6 +186,17 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
 export function buildPublishCommand(options: unknown): string;
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor,
+}: {
+  toolingSha: string;
+  pinnedToolingSha: string;
+  latestTrustedToolingSha: string;
+  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): string;
 export function validateNpmPreflightRunSource({
   workflowRun,
   workflowRef,

@@ -2,13 +2,18 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
-import { clientHasAdminScope, RESET_COMMAND_RE } from "./agent-handler-helpers.js";
+import { clientHasAdminScope } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   buildBareSessionResetResponse,
@@ -60,7 +65,7 @@ export async function runAgentResetPhase(params: {
     effectiveTranscriptInputText: params.effectiveTranscriptInputText,
     message: params.message,
   };
-  const resetCommandMatch = params.message.match(RESET_COMMAND_RE);
+  const resetCommandMatch = params.message.match(AGENT_SESSION_RESET_COMMAND_RE);
   if (!resetCommandMatch || !params.requestedSessionKey) {
     return { ...base, stop: false, accepted: false };
   }
@@ -77,7 +82,7 @@ export async function runAgentResetPhase(params: {
     params.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+      missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
     );
     return { ...base, stop: true, accepted: false };
   }

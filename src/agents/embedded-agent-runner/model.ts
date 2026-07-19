@@ -599,6 +599,13 @@ function mergeConfiguredRuntimeModelParams(params: {
   );
 }
 
+function markDiscoveredMaxTokensSource(model: ProviderRuntimeModel): ProviderRuntimeModel {
+  if (model.maxTokens === undefined || model.maxTokensSource !== undefined) {
+    return model;
+  }
+  return { ...model, maxTokensSource: "discovered" };
+}
+
 function applyConfiguredProviderOverrides(params: {
   provider: string;
   discoveredModel: ProviderRuntimeModel;
@@ -611,7 +618,8 @@ function applyConfiguredProviderOverrides(params: {
   preferDiscoveredTransport?: boolean;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
-  const { discoveredModel, providerConfig, modelId } = params;
+  const { providerConfig, modelId } = params;
+  const discoveredModel = markDiscoveredMaxTokensSource(params.discoveredModel);
   const manifestAliasTransport = params.manifestAlias.transport;
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const defaultModelParams = findConfiguredAgentModelParams({
@@ -793,8 +801,8 @@ function applyConfiguredProviderOverrides(params: {
   });
   const resolvedContextWindow =
     metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
-  const resolvedMaxTokens =
-    metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens ?? discoveredModel.maxTokens;
+  const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
+  const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens =
     typeof resolvedMaxTokens === "number" && Number.isFinite(resolvedMaxTokens)
       ? typeof resolvedContextWindow === "number" && Number.isFinite(resolvedContextWindow)
@@ -846,7 +854,13 @@ function applyConfiguredProviderOverrides(params: {
           providerConfig.contextTokens ??
           discoveredModel.contextTokens,
         ...(normalizedResolvedMaxTokens !== undefined
-          ? { maxTokens: normalizedResolvedMaxTokens }
+          ? {
+              maxTokens: normalizedResolvedMaxTokens,
+              maxTokensSource:
+                configuredMaxTokens !== undefined
+                  ? "configured"
+                  : (discoveredModel.maxTokensSource ?? "discovered"),
+            }
           : {}),
         ...(resolvedParams ? { params: resolvedParams } : {}),
         ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
@@ -1056,6 +1070,9 @@ function resolveExplicitModelWithRegistry(params: {
         workspaceDir,
         model: {
           ...fallbackInlineMatch,
+          ...(fallbackInlineMatch.maxTokens !== undefined
+            ? { maxTokensSource: "configured" as const }
+            : {}),
           reasoning: resolveConfiguredModelReasoning({
             provider,
             compat: fallbackInlineMatch.compat,
@@ -1376,11 +1393,11 @@ function resolveConfiguredFallbackModel(params: {
     compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
-  const resolvedFallbackMaxTokens =
+  const configuredFallbackMaxTokens =
     configuredModel?.maxTokens ??
     providerConfig?.maxTokens ??
-    providerConfig?.models?.[0]?.maxTokens ??
-    staticCatalogModel?.maxTokens;
+    providerConfig?.models?.[0]?.maxTokens;
+  const resolvedFallbackMaxTokens = configuredFallbackMaxTokens ?? staticCatalogModel?.maxTokens;
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -1419,7 +1436,11 @@ function resolveConfiguredFallbackModel(params: {
           // maxTokens is a wire-level output cap, not a context-budget fallback.
           // Omit an unknown cap so strict providers can apply their own limit.
           ...(resolvedFallbackMaxTokens !== undefined
-            ? { maxTokens: resolvedFallbackMaxTokens }
+            ? {
+                maxTokens: resolvedFallbackMaxTokens,
+                maxTokensSource:
+                  configuredFallbackMaxTokens !== undefined ? "configured" : "discovered",
+              }
             : {}),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
@@ -1593,7 +1614,12 @@ export function resolveModel(
       ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
       : undefined;
   const authStorage =
-    options?.authStorage ?? cachedStores?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+    options?.authStorage ??
+    cachedStores?.authStorage ??
+    discoverAuthStorage(resolvedAgentDir, {
+      ...(cfg ? { config: cfg } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
   const modelRegistry =
     options?.modelRegistry ??
     cachedStores?.modelRegistry ??
@@ -1674,7 +1700,10 @@ export async function resolveModelAsync(
     options?.authStorage ??
     emptyDiscoveryStores?.authStorage ??
     cachedStores?.authStorage ??
-    discoverAuthStorage(resolvedAgentDir);
+    discoverAuthStorage(resolvedAgentDir, {
+      ...(cfg ? { config: cfg } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
   const modelRegistry =
     options?.modelRegistry ??
     emptyDiscoveryStores?.modelRegistry ??

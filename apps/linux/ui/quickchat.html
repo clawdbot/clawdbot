@@ -43,6 +43,20 @@
         </button>
       </div>
       <p id="status" class="status" role="alert"></p>
+      <section id="reply" class="reply" aria-label="Agent reply" aria-live="polite" hidden>
+        <div class="reply-header">
+          <div class="reply-agent">
+            <span id="reply-agent-avatar" class="agent-avatar-mini" aria-hidden="true">A</span>
+            <span id="reply-agent-name" class="reply-agent-name">Agent</span>
+          </div>
+          <span id="reply-state" class="reply-state" aria-hidden="true"></span>
+        </div>
+        <div id="reply-scroll" class="reply-scroll">
+          <div id="reply-text" class="reply-text"></div>
+          <span id="reply-thinking" class="reply-thinking">Thinking…</span>
+          <p id="reply-error" class="status reply-error" role="alert"></p>
+        </div>
+      </section>
     </main>
     <section id="agent-menu" class="popover" aria-label="Choose agent" hidden>
       <div class="popover-title">Agents</div>

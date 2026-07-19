@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
+import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -652,6 +653,36 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       expect(result.payload.text).toContain(expected);
     },
   );
+
+  it("surfaces stale Codex session generations in groups instead of staying silent", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new AgentHarnessSessionSupersededError(
+        "Codex session generation is no longer current: secret-session-id",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+    expect(result.payload.text).toBe(
+      "⚠️ This Codex session changed before your message could run. Please send it again.",
+    );
+    expect(result.payload.text).not.toContain("secret-session-id");
+  });
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(

@@ -1,23 +1,26 @@
-export type DockPanelSide = "bottom" | "right";
+export type DockPanelSide = "bottom" | "left" | "right";
 
-type DockPanelLayout = {
+type DockPanelLayout<TDock extends DockPanelSide> = {
   open: boolean;
-  dock: DockPanelSide;
+  dock: TDock;
   height: number;
   width: number;
 };
 
-type DockPanelLayoutOptions = {
+type DockPanelLayoutOptions<TDock extends DockPanelSide> = {
   storageKey: string;
   minHeight: number;
   minWidth: number;
-  defaultDock: DockPanelSide;
+  defaultDock: TDock;
+  supportedDocks: readonly TDock[];
   defaultHeight: number;
   defaultWidth: number;
 };
 
-export function createDockPanelLayout(options: DockPanelLayoutOptions) {
-  const defaults: DockPanelLayout = {
+export function createDockPanelLayout<TDock extends DockPanelSide>(
+  options: DockPanelLayoutOptions<TDock>,
+) {
+  const defaults: DockPanelLayout<TDock> = {
     open: false,
     dock: options.defaultDock,
     height: options.defaultHeight,
@@ -41,16 +44,18 @@ export function createDockPanelLayout(options: DockPanelLayoutOptions) {
     minWidth: options.minWidth,
     maxHeight,
     maxWidth,
-    load(): DockPanelLayout {
+    load(): DockPanelLayout<TDock> {
       try {
         const raw = globalThis.localStorage?.getItem(options.storageKey);
         if (!raw) {
           return { ...defaults };
         }
-        const parsed = JSON.parse(raw) as Partial<DockPanelLayout>;
+        const parsed = JSON.parse(raw) as Partial<DockPanelLayout<DockPanelSide>>;
         return {
           open: Boolean(parsed.open),
-          dock: parsed.dock === "bottom" || parsed.dock === "right" ? parsed.dock : defaults.dock,
+          dock: options.supportedDocks.includes(parsed.dock as TDock)
+            ? (parsed.dock as TDock)
+            : defaults.dock,
           height: clampSize(parsed.height, options.minHeight, maxHeight(), defaults.height),
           width: clampSize(parsed.width, options.minWidth, maxWidth(), defaults.width),
         };
@@ -58,7 +63,7 @@ export function createDockPanelLayout(options: DockPanelLayoutOptions) {
         return { ...defaults };
       }
     },
-    save(layout: DockPanelLayout): void {
+    save(layout: DockPanelLayout<TDock>): void {
       try {
         globalThis.localStorage?.setItem(options.storageKey, JSON.stringify(layout));
       } catch {

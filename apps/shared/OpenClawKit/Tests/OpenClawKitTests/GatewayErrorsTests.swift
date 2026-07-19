@@ -3,6 +3,41 @@ import OpenClawKit
 import Testing
 
 struct GatewayErrorsTests {
+    @Test func `response error reads structured missing scope`() throws {
+        let error = GatewayResponseError(
+            method: "question.list",
+            code: "FORBIDDEN",
+            message: "permission denied",
+            details: [
+                "code": AnyCodable("MISSING_SCOPE"),
+                "missingScope": AnyCodable("operator.questions"),
+                "requiredScopes": AnyCodable(["operator.read", "operator.questions"]),
+            ])
+
+        let details = try #require(error.missingScopeDetails)
+        #expect(details.missingScope == "operator.questions")
+        #expect(details.requiredScopes == ["operator.read", "operator.questions"])
+        #expect(error.missingScope == "operator.questions")
+    }
+
+    @Test func `response error keeps legacy missing scope compatibility`() {
+        let legacy = GatewayResponseError(
+            method: "question.list",
+            code: "INVALID_REQUEST",
+            message: "missing scope: operator.questions",
+            details: nil)
+        let unrelated = GatewayResponseError(
+            method: "question.list",
+            code: "UNAVAILABLE",
+            message: "missing scope: operator.questions",
+            details: nil)
+
+        #expect(legacy.missingScope == "operator.questions")
+        #expect(unrelated.missingScope == nil)
+        #expect(legacy.isAuthorizationFailure)
+        #expect(!unrelated.isAuthorizationFailure)
+    }
+
     @Test func `bootstrap token invalid is non recoverable`() {
         let error = GatewayConnectAuthError(
             message: "setup code expired",

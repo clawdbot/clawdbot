@@ -271,6 +271,7 @@ function mockConfig(
   agentsList?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>,
 ) {
   const cfg = {
+    meta: { migrations: { modelPolicyAllowlist: true } },
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-6" },
@@ -1502,10 +1503,14 @@ describe("agentCommand", () => {
       });
 
       mockConfig(home, clearStore, {
-        model: { primary: "openai/gpt-4.1-mini" },
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["anthropic/claude-opus-4-6"],
+        },
         models: {
           "openai/gpt-4.1-mini": {},
         },
+        modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
       });
 
       mockModelCatalogOnce([
@@ -1559,6 +1564,7 @@ describe("agentCommand", () => {
         models: {
           "openai/gpt-4.1-mini": {},
         },
+        modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
       });
       mockModelCatalogOnce([
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
@@ -1719,9 +1725,14 @@ describe("agentCommand", () => {
         model: "claude-haiku-4-5\u001b[32m",
       }));
       mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["anthropic/claude-haiku-4-5"],
+        },
         models: {
           "openai/gpt-4.1-mini": {},
         },
+        modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
       });
       try {
         await expect(
@@ -1734,11 +1745,34 @@ describe("agentCommand", () => {
             runtime,
           ),
         ).rejects.toThrow(
-          'Model override "anthropic/claude-haiku-4-5" is not allowed for agent "main".',
+          'Model override "anthropic/claude-haiku-4-5" is not allowed for agent "main" by agents.defaults.modelPolicy.allow. Add "anthropic/claude-haiku-4-5" or "anthropic/*" to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.',
         );
       } finally {
         parseModelRefSpy.mockRestore();
       }
+
+      const legacyCfg = mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["external/sensitive"],
+        },
+        models: {
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+      delete (legacyCfg as { meta?: unknown }).meta;
+      await expect(
+        agentCommand(
+          {
+            message: "use the configured fallback directly",
+            sessionKey: "agent:main:subagent:legacy-fallback-override",
+            model: "external/sensitive",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        'Model override "external/sensitive" is not allowed for agent "main" by agents.defaults.models. Add "external/sensitive" or "external/*" to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.',
+      );
     });
   });
 

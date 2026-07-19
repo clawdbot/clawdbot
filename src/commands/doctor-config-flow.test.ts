@@ -1552,6 +1552,25 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("enables Doctor-only state migrations only for explicit repair", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: false }),
+    );
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: true }),
+    );
+  });
+
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
     await runDoctorConfigWithInput({
       config: {

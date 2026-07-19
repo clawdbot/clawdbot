@@ -142,7 +142,10 @@ function discoverFreshAgentStores(
   options: Pick<DiscoverCachedAgentStoresOptions, "config" | "workspaceDir">,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
 ): DiscoveryStores {
-  const authStorage = discoverAuthStorage(agentDir);
+  const authStorage = discoverAuthStorage(agentDir, {
+    ...(options.config ? { config: options.config } : {}),
+    ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+  });
   const modelRegistry = discoverModels(authStorage, agentDir, {
     ...(options.config ? { config: options.config } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),

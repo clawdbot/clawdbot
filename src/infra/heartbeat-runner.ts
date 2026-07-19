@@ -180,6 +180,7 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { readRegularFile } from "./regular-file.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -1007,9 +1008,18 @@ async function resolveHeartbeatPreflight(params: {
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const MAX_HEARTBEAT_FILE_BYTES = 16 * 1024 * 1024;
   let heartbeatFileContent: string | undefined;
   try {
-    heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    // Resolve symlinks so a HEARTBEAT.md pointing to a regular file keeps
+    // working; missing/broken symlinks still surface as ENOENT below.
+    const resolvedHeartbeatFilePath = await fs.realpath(heartbeatFilePath);
+    heartbeatFileContent = (
+      await readRegularFile({
+        filePath: resolvedHeartbeatFilePath,
+        maxBytes: MAX_HEARTBEAT_FILE_BYTES,
+      })
+    ).buffer.toString("utf-8");
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
     if (
       isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
@@ -1035,6 +1045,12 @@ async function resolveHeartbeatPreflight(params: {
       // heartbeat instructions live outside the file), so keep the run active.
       // The heartbeat prompt already says "if it exists".
       return basePreflight;
+    }
+    // Oversized files loaded in full before the cap existed, so tell the
+    // operator why their heartbeat instructions no longer apply instead of
+    // dropping them silently. Other read errors keep proceeding as before.
+    if (err instanceof Error && err.message.startsWith("File exceeds")) {
+      log.warn(`heartbeat: skipping oversized ${DEFAULT_HEARTBEAT_FILENAME}: ${err.message}`);
     }
     // For other read errors, proceed with heartbeat as before.
   }
@@ -1334,12 +1350,13 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
+  const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
     cfg,
     agentId,
     requestedHeartbeat: opts.heartbeat,
-    source: opts.source,
-    mergeRequestedHeartbeat: opts.source === "cron",
+    source: wakeSource,
+    mergeRequestedHeartbeat: wakeSource === "cron",
   });
   const runScope = opts.runScope ?? "global";
   const allowsUnscheduledTarget =
@@ -1355,7 +1372,12 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!allowsUnscheduledTarget && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  // Cron uses the heartbeat runner as execution transport; heartbeat scheduling windows do not own it.
+  if (
+    !allowsUnscheduledTarget &&
+    wakeSource !== "cron" &&
+    !isWithinActiveHours(cfg, heartbeat, startedAt)
+  ) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
@@ -1459,7 +1481,7 @@ export async function runHeartbeatOnce(opts: {
     heartbeat,
     runScope,
     forcedSessionKey: opts.sessionKey,
-    source: opts.source,
+    source: wakeSource,
     reason: opts.reason,
     nowMs: startedAt,
     trustedContinuationRouting,
@@ -1983,7 +2005,7 @@ export async function runHeartbeatOnce(opts: {
         runSessionKey,
         response: heartbeatToolResponse,
         taskNames: dueHeartbeatTasks.map((task) => task.name),
-        wakeSource: opts.source,
+        wakeSource,
         wakeReason: opts.reason,
         occurredAt: startedAt,
       });

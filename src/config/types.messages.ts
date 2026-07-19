@@ -19,9 +19,10 @@ export type GroupChatConfig = {
    */
   unmentionedInbound?: "user_request" | "room_event";
   /**
-   * Controls how group/channel inbound events produce visible room replies. The
-   * message-tool mode requires explicit message sends for visible room output;
-   * final text stays private when the model misses the tool.
+   * Controls how group/channel inbound events produce model-authored room replies.
+   * The message-tool mode requires explicit message sends for normal assistant
+   * output; explicitly host-owned runtime output remains deliverable except for
+   * ambient room events.
    * Default: "automatic".
    */
   visibleReplies?: "automatic" | "message_tool";
@@ -107,8 +108,9 @@ export type MessagesConfig = {
    * group, and channel conversations. Group/channel events still default to
    * `groupChat.visibleReplies` when it is set.
    *
-   * Default: "automatic". In group/channel rooms, "message_tool" keeps final
-   * text private unless the model sends visibly through the message tool.
+   * Default: "automatic". In group/channel rooms, "message_tool" keeps normal
+   * assistant output private unless the model sends visibly through the message
+   * tool; explicitly host-owned runtime output remains deliverable.
    */
   visibleReplies?: "automatic" | "message_tool";
   /**

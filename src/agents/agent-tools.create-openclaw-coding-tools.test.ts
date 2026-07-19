@@ -1494,7 +1494,9 @@ describe("createOpenClawCodingTools", () => {
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("message")).toBe(true);
     expect(names.has("sessions_send")).toBe(true);
-    expect(names.has("sessions_spawn")).toBe(false);
+    // Messaging agents can spawn (and manage) sub-sessions since the
+    // visible-spawn parity change; execution tools stay coding-only.
+    expect(names.has("sessions_spawn")).toBe(true);
     expect(names.has("exec")).toBe(false);
     expect(names.has("browser")).toBe(false);
   });

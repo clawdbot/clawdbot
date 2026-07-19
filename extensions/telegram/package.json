@@ -25,6 +25,7 @@
     },
     "channel": {
       "id": "telegram",
+      "approvalFlags": ["native"],
       "label": "Telegram",
       "selectionLabel": "Telegram (Bot API)",
       "detailLabel": "Telegram Bot",

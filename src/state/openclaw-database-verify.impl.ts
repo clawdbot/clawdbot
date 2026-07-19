@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   listOpenClawRegisteredAgentDatabases,
@@ -13,18 +12,13 @@ import type {
   OpenClawDatabaseVerifyTarget,
 } from "./openclaw-database-verify.worker.js";
 import { recordOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import {
-  recordOpenClawStateDatabaseOpenFailure,
-  runOpenClawStateWriteTransaction,
-} from "./openclaw-state-db.js";
+import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 export const OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS = 5 * 60_000;
 export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("state/database-verify");
-type VerificationDatabase = Pick<OpenClawStateKyselyDatabase, "database_verifications">;
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
@@ -140,81 +134,25 @@ function createVerificationFailure(result: OpenClawDatabaseVerifyResult): Error 
   return error;
 }
 
-/** Persist one worker batch, then latch failures at each database owner. */
+/** Quarantine terminal failures and log the worker batch. */
 export function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
   results: readonly OpenClawDatabaseVerifyResult[];
   targets: readonly OpenClawDatabaseVerifyTarget[];
-  verifiedAt?: number;
 }): void {
   const targetByPath = new Map(options.targets.map((target) => [target.path, target]));
-  const verifiedAt = options.verifiedAt ?? Date.now();
 
   for (const result of options.results) {
-    const target = targetByPath.get(result.path);
-    if (!target || result.ok || !result.terminal) {
-      continue;
-    }
-    const recorded = recordOpenClawDatabaseQuarantine({
-      env: options.env,
-      kind: target.kind,
-      path: result.path,
-      reason: result.error ?? `SQLite integrity verification failed for ${result.path}`,
-    });
-    if (!recorded) {
-      // Accepted residual: quarantine stays process-local when this tiny,
-      // independent store is unavailable. Daily verification retries it.
-      log.error("failed to persist database quarantine; quarantine is process-local", {
-        kind: target.kind,
-        path: result.path,
-      });
-    }
-  }
-
-  try {
-    runOpenClawStateWriteTransaction(
-      (database) => {
-        const db = getNodeSqliteKysely<VerificationDatabase>(database.db);
-        for (const result of options.results) {
-          const target = targetByPath.get(result.path);
-          if (!target) {
-            continue;
-          }
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .insertInto("database_verifications")
-              .values({
-                path: result.path,
-                kind: target.kind,
-                verified_at: verifiedAt,
-                result: result.ok ? "ok" : result.terminal ? "error" : "inconclusive",
-                error: result.error ?? null,
-              })
-              .onConflict((conflict) =>
-                conflict.column("path").doUpdateSet({
-                  kind: target.kind,
-                  verified_at: verifiedAt,
-                  result: result.ok ? "ok" : result.terminal ? "error" : "inconclusive",
-                  error: result.error ?? null,
-                }),
-              ),
-          );
-        }
-      },
-      { env: options.env },
-      { operationLabel: "state.database-verifications.record" },
-    );
-  } catch (error) {
-    log.error("failed to persist database verification history", { error: String(error) });
-  }
-
-  for (const result of options.results) {
-    if (result.ok) {
-      continue;
-    }
     const target = targetByPath.get(result.path);
     if (!target) {
+      continue;
+    }
+    if (result.ok) {
+      log.info("database integrity verification passed", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+      });
       continue;
     }
     if (!result.terminal) {
@@ -225,6 +163,19 @@ export function applyOpenClawDatabaseVerificationResults(options: {
         error: result.error,
       });
       continue;
+    }
+    const recorded = recordOpenClawDatabaseQuarantine({
+      env: options.env,
+      kind: target.kind,
+      path: result.path,
+      reason: result.error ?? `SQLite integrity verification failed for ${result.path}`,
+    });
+    if (!recorded) {
+      // Store unavailable. Daily verification retries persistence.
+      log.error("failed to persist database quarantine; quarantine is process-local", {
+        kind: target.kind,
+        path: result.path,
+      });
     }
     const error = createVerificationFailure(result);
     if (target.kind === "state") {

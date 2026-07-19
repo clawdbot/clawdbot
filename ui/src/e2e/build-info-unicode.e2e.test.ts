@@ -47,11 +47,9 @@ function containsBrokenSurrogate(value: string): boolean {
 }
 
 async function openBuildDetails(page: Page) {
-  const sidebar = page.locator("openclaw-app-sidebar");
-  const agentMenu = sidebar.getByRole("button", { name: /Agent menu/ });
-  await agentMenu.waitFor();
-  await agentMenu.click();
-  const buildLink = page.getByRole("link", { name: "Control UI build details", exact: true });
+  const buildLink = page
+    .locator("openclaw-app-sidebar")
+    .getByRole("link", { name: "Control UI build details", exact: true });
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);

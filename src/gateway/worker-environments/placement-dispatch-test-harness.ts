@@ -1,0 +1,284 @@
+import { vi } from "vitest";
+import type { MintedWorkerCredential } from "./credential.js";
+import type {
+  WorkerDispatchEnvironmentService,
+  WorkerDispatchPlacementStore,
+} from "./placement-dispatch-failure.js";
+import {
+  BUNDLE_HASH,
+  createDispatchEnvironmentFixtures,
+  type DispatchStage,
+  MANIFEST_REF,
+  type PlacementStore,
+  REQUEST,
+  seedActivePlacement,
+  seedStartingPlacement,
+} from "./placement-dispatch-test-fixtures.js";
+import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import type { WorkerTunnelHandle } from "./tunnel.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+
+export function createHarness(
+  placementStore: PlacementStore,
+  options: {
+    failAt?: DispatchStage;
+    destroyFails?: boolean;
+    claimOnDrain?: boolean;
+    reconcileFails?: boolean;
+    verifyFails?: boolean;
+    leaseFails?: boolean;
+    localVerifyFails?: boolean;
+    resumeFails?: boolean;
+    workspacePath?: string;
+  } = {},
+) {
+  const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
+  const log: string[] = [];
+  const fail = (stage: DispatchStage) => {
+    log.push(stage);
+    if (options.failAt === stage) {
+      throw new Error(`${stage} failed`);
+    }
+  };
+  const placements: WorkerDispatchPlacementStore = {
+    get: (sessionId) => placementStore.get(sessionId),
+    loadWorkspaceReconciliation: (owner) => placementStore.loadWorkspaceReconciliation(owner),
+    beginWorkspaceReconciliation: (owner, journal) =>
+      placementStore.beginWorkspaceReconciliation(owner, journal),
+    abortWorkspaceReconciliation: (owner) => placementStore.abortWorkspaceReconciliation(owner),
+    listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
+    listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
+    workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
+    recordStagedWorkspaceResult: (claim, ref) =>
+      placementStore.recordStagedWorkspaceResult(claim, ref),
+    acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
+    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
+      placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),
+    abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
+    releaseTurn: (claim) => placementStore.releaseTurn(claim),
+    updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
+    acceptIdleWorkspaceReconciliation: (params) =>
+      placementStore.acceptIdleWorkspaceReconciliation(params),
+    startDispatch: (params) => {
+      log.push("placement:requested");
+      return placementStore.startDispatch(params);
+    },
+    transition: (params) => {
+      log.push(`placement:${params.to}`);
+      return placementStore.transition(params);
+    },
+    fail: (params) => {
+      log.push("placement:failed");
+      return placementStore.fail(params);
+    },
+    finishReclaim: (params) => {
+      log.push("placement:reclaimed");
+      if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
+        placementStore.claimTurn({
+          sessionId: params.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+          claimId: "claim-on-drain",
+          runId: "run-on-drain",
+          owner: {
+            kind: "worker",
+            environmentId: params.environmentId,
+            ownerEpoch: params.ownerEpoch,
+          },
+        });
+      }
+      return placementStore.finishReclaim(params);
+    },
+    listForReconcile: () => placementStore.listForReconcile(),
+    startDrain: (params) => {
+      log.push("placement:draining");
+      if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
+        placementStore.claimTurn({
+          sessionId: params.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+          claimId: "claim-on-drain",
+          runId: "run-on-drain",
+          owner: {
+            kind: "worker",
+            environmentId: params.environmentId,
+            ownerEpoch: params.ownerEpoch,
+          },
+        });
+      }
+      return placementStore.startDrain(params);
+    },
+    startReconcile: (params) => {
+      log.push("placement:reconciling");
+      return placementStore.startReconcile(params);
+    },
+    adoptActive: (params) => {
+      log.push("placement:adopted");
+      return placementStore.adoptActive(params);
+    },
+  };
+  const { attached, destroyedEnvironment, environmentId, ready } =
+    createDispatchEnvironmentFixtures();
+  let currentEnvironment: ReturnType<WorkerDispatchEnvironmentService["get"]> = ready;
+  const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
+    environmentId: ready.environmentId,
+    ownerEpoch,
+    remoteSocketPath: "/worker/gateway.sock",
+    quiesceWorkspace: vi.fn(async () => {
+      log.push("workspace:quiesce");
+      return {
+        assertActive: vi.fn(async () => {
+          log.push("workspace:lease");
+          if (options.leaseFails) {
+            throw new Error("workspace quiescence expired");
+          }
+        }),
+        resume: vi.fn(async () => {
+          log.push("workspace:resume");
+          if (options.resumeFails) {
+            throw new Error("workspace resume failed");
+          }
+        }),
+      };
+    }),
+    reconcileWorkspace: vi.fn(async (request) => {
+      log.push("workspace:reconcile");
+      if (options.reconcileFails) {
+        throw new Error("workspace conflict");
+      }
+      request.journal.commit(reconciledManifestRef);
+      return {
+        manifestRef: reconciledManifestRef,
+        changed: true,
+        verifyStable: async () => {
+          log.push("workspace:verify");
+          if (options.verifyFails) {
+            throw new Error("workspace changed after reconciliation");
+          }
+        },
+        verifyLocalStable: async () => {
+          log.push("workspace:verify-local");
+          if (options.localVerifyFails) {
+            throw new Error("local workspace changed after reconciliation");
+          }
+        },
+      };
+    }),
+    runWorkspaceCommand: vi.fn(async () => ({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    })),
+    syncWorkspace: vi.fn(async () => {
+      fail("sync");
+      return {
+        mode: "git" as const,
+        remoteWorkspaceDir: "/worker/workspace",
+        manifestRef: MANIFEST_REF,
+      };
+    }),
+    stop: vi.fn(async () => {}),
+  });
+  const minted: MintedWorkerCredential = {
+    credential: "fixture-credential",
+    deliveryId: "fixture-delivery-id",
+    environmentId: ready.environmentId,
+    bundleHash: BUNDLE_HASH,
+    sessionId: REQUEST.sessionId,
+    rpcSetVersion: 1,
+    ownerEpoch: 2,
+    expiresAtMs: 10_000,
+  };
+  const environments: WorkerDispatchEnvironmentService = {
+    create: vi.fn(async () => {
+      fail("create");
+      return ready;
+    }),
+    get: vi.fn(() => currentEnvironment),
+    attachSession: vi.fn(async () => {
+      fail("attach");
+      currentEnvironment = attached;
+      return minted;
+    }),
+    startTunnel: vi.fn(async ({ ownerEpoch }) => {
+      fail(ownerEpoch === 1 ? "tunnel:ready" : "tunnel:attached");
+      return tunnelHandle(ownerEpoch);
+    }),
+    stopTunnel: vi.fn(async () => {
+      log.push("teardown:stop");
+    }),
+    destroy: vi.fn(async () => {
+      log.push("teardown:destroy");
+      if (options.destroyFails) {
+        throw new Error("destroy pending");
+      }
+      const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
+      currentEnvironment = destroyed;
+      return destroyed;
+    }),
+    reconcileOnce: vi.fn(async () => {
+      log.push("environment:reconcile");
+    }),
+  };
+  const service = createWorkerPlacementDispatchService({
+    placements,
+    environments,
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+    runLocalBarrier: async ({ startDispatch }) => {
+      log.push("barrier");
+      const placement = startDispatch();
+      if (options.failAt === "barrier") {
+        throw new Error("barrier failed");
+      }
+      return placement;
+    },
+    runActivationBarrier: async ({ activate }) => {
+      fail("activation");
+      return activate();
+    },
+    runReclaimBarrier: async ({ reclaim }) =>
+      await reclaim(options.workspacePath ?? "/gateway/workspace"),
+    resolveWorkspacePath: async () => {
+      fail("workspace");
+      return options.workspacePath ?? "/gateway/workspace";
+    },
+  });
+  return {
+    log,
+    reconciledManifestRef,
+    placements: {
+      current: () => placementStore.get(REQUEST.sessionId),
+      seedStarting: () => seedStartingPlacement(placementStore, environmentId),
+      seedActive: (ownerEpoch: number) =>
+        seedActivePlacement(placementStore, { environmentId, ownerEpoch }),
+      seedDraining: (ownerEpoch: number) => {
+        const active = seedActivePlacement(placementStore, { environmentId, ownerEpoch });
+        if (active.state !== "active") {
+          throw new Error("active placement fixture was not active");
+        }
+        return placementStore.startDrain({
+          sessionId: active.sessionId,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          expectedGeneration: active.generation,
+        });
+      },
+    },
+    environments,
+    markEnvironmentDestroyed: () => {
+      currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
+    },
+    markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
+      currentEnvironment = { ...attached, ownerEpoch };
+    },
+    markEnvironmentAttachments: (attachedSessionIds: string[]) => {
+      currentEnvironment = { ...attached, attachedSessionIds };
+    },
+    service,
+    ready,
+    attached,
+  };
+}

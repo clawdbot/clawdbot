@@ -262,6 +262,16 @@ function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
   return avatarUrl.startsWith("/");
 }
 
+/** Give each sequential fetch a full budget; sharing one can starve the image request. */
+const CHAT_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+
+function scheduleChatAvatarFetchTimeout(controller: AbortController, label: string) {
+  return setTimeout(
+    () => controller.abort(new DOMException(`${label} timed out`, "TimeoutError")),
+    CHAT_AVATAR_FETCH_TIMEOUT_MS,
+  );
+}
+
 export async function refreshChatAvatar(host: ChatAvatarHost) {
   if (!host.connected) {
     clearChatAvatarState(host);
@@ -280,8 +290,16 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   const authHeader = resolveControlUiAuthHeader(host);
   const headers = buildControlUiAuthHeaders(authHeader);
   const url = buildAvatarMetaUrl(host.basePath, agentId);
+
+  const metaController = new AbortController();
+  const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
+  let avatarUrl: string;
   try {
-    const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
+    const res = await fetch(url, {
+      method: "GET",
+      ...(headers ? { headers } : {}),
+      signal: metaController.signal,
+    });
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
@@ -299,7 +317,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
       return;
     }
     setChatAvatarMeta(host, data);
-    const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
+    avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
       clearChatAvatarUrl(host);
       return;
@@ -308,9 +326,22 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
       setChatAvatarUrl(host, avatarUrl);
       return;
     }
+  } catch {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      clearChatAvatarState(host);
+    }
+    return;
+  } finally {
+    clearTimeout(metaTimeout);
+  }
+
+  const avatarController = new AbortController();
+  const avatarTimeout = scheduleChatAvatarFetchTimeout(avatarController, "chat avatar image fetch");
+  try {
     const avatarRes = await fetch(avatarUrl, {
       method: "GET",
       ...(headers ? { headers } : {}),
+      signal: avatarController.signal,
     });
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
@@ -328,5 +359,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       clearChatAvatarState(host);
     }
+  } finally {
+    clearTimeout(avatarTimeout);
   }
 }

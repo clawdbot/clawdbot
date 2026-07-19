@@ -5,8 +5,9 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -31,6 +32,69 @@ export type {
 } from "./setup-wizard-types.js";
 
 type ChannelSetupWizardPlugin = ChannelSetupPlugin;
+
+type ChannelSectionWithAccounts = Record<string, unknown> & {
+  accounts?: Record<string, unknown>;
+  defaultAccount?: string;
+};
+
+function getChannelSection(cfg: OpenClawConfig, channelKey: string): ChannelSectionWithAccounts {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const channel = channels?.[channelKey];
+  return channel && typeof channel === "object" ? (channel as ChannelSectionWithAccounts) : {};
+}
+
+function createWizardAccountScope(params: {
+  cfg: OpenClawConfig;
+  channelKey: string;
+  accountId: string;
+}): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
+  const accountId = normalizeAccountId(params.accountId);
+  const initialChannel = getChannelSection(params.cfg, params.channelKey);
+  // An existing accounts map — even empty — makes legacy plugins write account-scoped
+  // while root credentials linger; only a truly absent map may skip promotion.
+  if (accountId === DEFAULT_ACCOUNT_ID && initialChannel.accounts === undefined) {
+    return { cfg: params.cfg, restore: (cfg) => cfg };
+  }
+
+  const cfg = moveSingleAccountChannelSectionToDefaultAccount({
+    cfg: params.cfg,
+    channelKey: params.channelKey,
+  });
+  const channel = getChannelSection(cfg, params.channelKey);
+  const previousDefaultAccount = channel.defaultAccount;
+
+  // Some shipped plugins ignore accountId and resolve through defaultAccount.
+  // Scope their callbacks to this wizard run, then restore the operator's default.
+  const scopedCfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      [params.channelKey]: {
+        ...channel,
+        defaultAccount: accountId,
+      },
+    },
+  } as OpenClawConfig;
+
+  return {
+    cfg: scopedCfg,
+    restore: (currentCfg) => {
+      const currentChannel = getChannelSection(currentCfg, params.channelKey);
+      const restoredChannel =
+        previousDefaultAccount !== undefined
+          ? { ...currentChannel, defaultAccount: previousDefaultAccount }
+          : (({ defaultAccount: _ignored, ...rest }) => rest)(currentChannel);
+      return {
+        ...currentCfg,
+        channels: {
+          ...currentCfg.channels,
+          [params.channelKey]: restoredChannel,
+        },
+      } as OpenClawConfig;
+    },
+  };
+}
 
 async function buildStatus(
   plugin: ChannelSetupWizardPlugin,
@@ -203,7 +267,22 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             defaultAccountId,
           }));
 
-      let next = cfg;
+      const channel = getChannelSection(cfg, plugin.id);
+      // Wizards that explicitly own account selection may use defaultAccount as a
+      // top-level routing label. Only inject temporary scope when generic selection
+      // owns the account or an accounts map proves that scoped storage is in use.
+      const shouldScopeAccount =
+        wizard.resolveShouldPromptAccountIds === undefined ||
+        resolvedShouldPromptAccountIds ||
+        channel.accounts !== undefined;
+      const accountScope = shouldScopeAccount
+        ? createWizardAccountScope({
+            cfg,
+            channelKey: plugin.id,
+            accountId,
+          })
+        : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
+      let next = accountScope.cfg;
       let credentialValues = collectCredentialValues({
         wizard,
         cfg: next,
@@ -632,7 +711,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         await prompter.note(wizard.completionNote.lines.join("\n"), wizard.completionNote.title);
       }
 
-      return { cfg: next, accountId };
+      return { cfg: accountScope.restore(next), accountId };
     },
     dmPolicy: wizard.dmPolicy,
     disable: wizard.disable,

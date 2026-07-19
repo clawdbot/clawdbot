@@ -14,7 +14,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
 <AccordionGroup>
   <Accordion title="Model refs and CLI helpers">
     - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
-    - `agents.defaults.models` acts as an allowlist when set.
+    - `agents.defaults.models` stores aliases and per-model settings; `agents.defaults.modelPolicy.allow` is the optional explicit override allowlist.
     - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
     - `models.providers.*.contextWindow` / `contextTokens` / `maxTokens` set provider-level defaults; `models.providers.*.models[].contextWindow` / `contextTokens` / `maxTokens` override them per model.
     - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
@@ -359,7 +359,7 @@ Many of the bundled provider plugins below already publish a default catalog. Us
 
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
 
-`agents.defaults.models["provider/model"]` only controls model visibility, aliases, and per-model metadata for agents. It does not register a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`.
+`agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
 
 ### Moonshot AI (Kimi)
 

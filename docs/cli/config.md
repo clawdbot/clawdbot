@@ -177,6 +177,8 @@ Use `--replace` only when the provided value should intentionally become the com
     openclaw config set --batch-file ./config-set.batch.json --dry-run
     ```
 
+    Batch files are limited to 8 MiB.
+
   </Tab>
 </Tabs>
 
@@ -256,6 +258,8 @@ Paste or pipe a config-shaped JSON5 patch instead of running many path-based `co
 openclaw config patch --file ./openclaw.patch.json5 --dry-run
 openclaw config patch --file ./openclaw.patch.json5
 ```
+
+Patch files are limited to 8 MiB. Piped `--stdin` patches are limited to 1 MiB.
 
 Pipe a patch over stdin for remote setup scripts:
 

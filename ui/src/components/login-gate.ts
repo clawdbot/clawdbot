@@ -335,7 +335,7 @@ function renderLoginGate(props: LoginGateProps) {
           </label>
           <label class="field">
             <span>${t("connection.access.token")}</span>
-            <div class="login-gate__secret-row">
+            <span class="settings-secret">
               <input
                 type=${props.showGatewayToken ? "text" : "password"}
                 autocomplete="off"
@@ -357,7 +357,7 @@ function renderLoginGate(props: LoginGateProps) {
               >
                 <button
                   type="button"
-                  class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                  class="settings-secret__toggle"
                   aria-label=${t("login.toggleTokenVisibility")}
                   aria-pressed=${props.showGatewayToken}
                   @click=${props.onToggleGatewayToken}
@@ -365,11 +365,11 @@ function renderLoginGate(props: LoginGateProps) {
                   ${props.showGatewayToken ? icons.eye : icons.eyeOff}
                 </button>
               </openclaw-tooltip>
-            </div>
+            </span>
           </label>
           <label class="field">
             <span>${t("connection.access.password")}</span>
-            <div class="login-gate__secret-row">
+            <span class="settings-secret">
               <input
                 type=${props.showGatewayPassword ? "text" : "password"}
                 autocomplete="off"
@@ -393,7 +393,7 @@ function renderLoginGate(props: LoginGateProps) {
               >
                 <button
                   type="button"
-                  class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                  class="settings-secret__toggle"
                   aria-label=${t("login.togglePasswordVisibility")}
                   aria-pressed=${props.showGatewayPassword}
                   @click=${props.onToggleGatewayPassword}
@@ -401,7 +401,7 @@ function renderLoginGate(props: LoginGateProps) {
                   ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
                 </button>
               </openclaw-tooltip>
-            </div>
+            </span>
           </label>
           <button class="btn primary login-gate__connect" @click=${props.onConnect}>
             ${t("common.connect")}

@@ -232,6 +232,16 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "frame-guards.ts"),
       },
       {
+        find: "@openclaw/gateway-protocol/gateway-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "gateway-error-details.ts",
+        ),
+      },
+      {
         find: "@openclaw/gateway-protocol/schema",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
       },

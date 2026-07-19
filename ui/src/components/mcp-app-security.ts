@@ -20,7 +20,8 @@ function resolveWidgetPromptText(raw: unknown): string | null {
     return null;
   }
   const text = raw.trim();
-  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || text.startsWith("/")) {
+  const isHostCommand = text.startsWith("/") || text.startsWith("!");
+  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || isHostCommand) {
     return null;
   }
   return text;

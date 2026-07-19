@@ -53,6 +53,23 @@ export function formatDiscordReplyDeliveryFailure(params: {
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
+type DiscordReplySkipReason = "aborted before delivery" | "internal-only payload";
+
+export function formatDiscordReplySkip(params: {
+  kind: "tool" | "block" | "final";
+  reason: DiscordReplySkipReason;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply skipped (${params.reason}): ${context}`;
+}
+
 function resolveTargetChannelId(target: string): string | undefined {
   if (!target.startsWith("channel:")) {
     return undefined;

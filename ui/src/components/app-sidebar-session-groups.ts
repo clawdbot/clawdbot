@@ -1,11 +1,19 @@
 import { state } from "lit/decorators.js";
+import {
+  SIDEBAR_NAV_ROUTES,
+  serializeSidebarEntry,
+  type SidebarNavRoute,
+} from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
 import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
   readSessionGroupDragData,
+  readSidebarRouteDragData,
   sessionDragActive,
   sessionGroupDragActive,
+  sidebarRouteDragActive,
+  writeSidebarRouteDragData,
 } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -28,6 +36,160 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
   @state() protected draggingSessionGroup: string | null = null;
   @state() protected sessionDropTarget: string | null = null;
   @state() protected sessionGroupDropTarget: SidebarSessionGroupDropTarget | null = null;
+  @state() protected draggingSidebarEntry: string | null = null;
+  @state() protected sidebarZoneDropTarget: {
+    entry: string;
+    position: "before" | "after";
+  } | null = null;
+  @state() protected sessionListRemovalDrop = false;
+
+  protected startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
+    if (!event.dataTransfer) {
+      return;
+    }
+    writeSidebarRouteDragData(event.dataTransfer, route);
+    this.draggingSidebarEntry = serializeSidebarEntry({ type: "route", route });
+  }
+
+  protected finishSidebarEntryDrag() {
+    this.draggingSidebarEntry = null;
+    this.draggingSessionKey = null;
+    this.sidebarZoneDropTarget = null;
+    this.sessionListRemovalDrop = false;
+  }
+
+  private draggedSidebarEntry(dataTransfer: DataTransfer | null): string | null {
+    const route = readSidebarRouteDragData(dataTransfer);
+    if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
+      return serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute });
+    }
+    const sessionKey = readSessionDragData(dataTransfer);
+    return sessionKey ? serializeSidebarEntry({ type: "session", key: sessionKey }) : null;
+  }
+
+  protected handleSidebarZoneDragOver(event: DragEvent, targetEntry?: string) {
+    if (!sidebarRouteDragActive(event.dataTransfer) && !sessionDragActive(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    if (!targetEntry) {
+      this.sidebarZoneDropTarget = null;
+      return;
+    }
+    const target = event.currentTarget as HTMLElement;
+    const bounds = target.getBoundingClientRect();
+    this.sidebarZoneDropTarget = {
+      entry: targetEntry,
+      position: event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+    };
+  }
+
+  protected handleSidebarZoneDragLeave(event: DragEvent) {
+    const current = event.currentTarget as HTMLElement;
+    if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
+      return;
+    }
+    this.sidebarZoneDropTarget = null;
+  }
+
+  /** Insert `entry` into the freshest canonical order at the captured drop slot. */
+  private writeSidebarEntryAt(
+    entry: string,
+    targetEntry: string | undefined,
+    position: "before" | "after" | undefined,
+  ) {
+    const next = this.reconciledSidebarZone().sidebarEntries.filter(
+      (candidate) => candidate !== entry,
+    );
+    const targetIndex = targetEntry ? next.indexOf(targetEntry) : -1;
+    const offset = position === "after" ? 1 : 0;
+    next.splice(targetIndex < 0 ? next.length : targetIndex + offset, 0, entry);
+    this.onUpdateSidebarEntries?.(next);
+  }
+
+  protected handleSidebarZoneDrop(event: DragEvent, targetEntry?: string) {
+    const entry = this.draggedSidebarEntry(event.dataTransfer);
+    if (!entry) {
+      return;
+    }
+    // Consume before the self-drop bailout: an unhandled drop would bubble to
+    // the zone container and append the entry at the end.
+    event.preventDefault();
+    event.stopPropagation();
+    if (targetEntry === entry) {
+      this.finishSidebarEntryDrag();
+      return;
+    }
+    const position = this.sidebarZoneDropTarget?.position;
+    const sessionKey = readSessionDragData(event.dataTransfer);
+    const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
+    if (session && !session.pinned) {
+      // Persist the dropped slot only once the pin lands, and recompute
+      // against the then-current order: a failed patch must not leave an
+      // unpinned slot behind, and a stale snapshot must not undo zone edits
+      // that raced the request.
+      void this.patchSession(session, { pinned: true }).then((result) => {
+        if (result === "completed") {
+          this.writeSidebarEntryAt(entry, targetEntry, position);
+        }
+      });
+    } else {
+      this.writeSidebarEntryAt(entry, targetEntry, position);
+    }
+    this.finishSidebarEntryDrag();
+  }
+
+  private removeSidebarEntry(entry: string) {
+    const next = this.reconciledSidebarZone().sidebarEntries.filter(
+      (candidate) => candidate !== entry,
+    );
+    this.onUpdateSidebarEntries?.(next);
+  }
+
+  protected handleSessionListDragOver(event: DragEvent) {
+    const routeDrag = sidebarRouteDragActive(event.dataTransfer);
+    const sessionKey = readSessionDragData(event.dataTransfer);
+    const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
+    if (!routeDrag && !session?.pinned) {
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    this.sessionListRemovalDrop = true;
+  }
+
+  protected handleSessionListDragLeave(event: DragEvent) {
+    const current = event.currentTarget as HTMLElement;
+    if (!(event.relatedTarget instanceof Node && current.contains(event.relatedTarget))) {
+      this.sessionListRemovalDrop = false;
+    }
+  }
+
+  protected handleSessionListDrop(event: DragEvent) {
+    const route = readSidebarRouteDragData(event.dataTransfer);
+    if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
+      event.preventDefault();
+      this.removeSidebarEntry(
+        serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
+      );
+      this.finishSidebarEntryDrag();
+      return;
+    }
+    const sessionKey = readSessionDragData(event.dataTransfer);
+    const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
+    if (session?.pinned) {
+      event.preventDefault();
+      // patchSession prunes the persisted zone entry once the unpin lands.
+      void this.patchSession(session, { pinned: false });
+    }
+    this.finishSidebarEntryDrag();
+  }
 
   private async rememberSessionGroup(
     name: string,
@@ -230,7 +392,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     }
   }
 
-  private findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
+  protected findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
     const navigationState = this.getSessionNavigationState();
     const active = navigationState.visibleSessions.find(
       (candidate) => candidate.key === sessionKey,
@@ -248,8 +410,13 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
   }
 
   protected handleSessionSectionDrop(event: DragEvent, sectionId: string, category?: string) {
-    event.preventDefault();
     const sourceGroup = readSessionGroupDragData(event.dataTransfer);
+    const sessionKey = readSessionDragData(event.dataTransfer);
+    if (!sourceGroup && !sessionKey) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
     if (sourceGroup && category && sourceGroup !== category) {
       const position =
         this.sessionGroupDropTarget?.group === category
@@ -257,7 +424,6 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
           : "before";
       this.reorderSessionGroup(sourceGroup, category, position);
     } else {
-      const sessionKey = readSessionDragData(event.dataTransfer);
       // Rows can be dragged from a browsed agent section, so search all caches.
       const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
       if (session && sectionId === "pinned") {
@@ -267,6 +433,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
       } else if (session) {
         const nextCategory = category ?? null;
         if (session.category !== nextCategory || session.pinned) {
+          // The pinned:false leg prunes the persisted zone entry via patchSession.
           this.assignSessionCategory(
             session,
             nextCategory,
@@ -275,7 +442,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
         }
       }
     }
-    this.draggingSessionKey = null;
+    this.finishSidebarEntryDrag();
     this.draggingSessionGroup = null;
     this.sessionDropTarget = null;
     this.sessionGroupDropTarget = null;

@@ -642,7 +642,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
   });
 
-  it("keeps search and new-session controls in the expanded native titlebar", async () => {
+  it("keeps the new-thread control in the native titlebar only while collapsed", async () => {
     const onOpenPalette = vi.fn();
     const onOpenNewSession = vi.fn();
     const controls = document.createElement(
@@ -656,6 +656,10 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     await controls.updateComplete;
 
     controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__search")?.click();
+    expect(controls.querySelector(".macos-titlebar-controls__new-session")).toBeNull();
+
+    controls.navCollapsed = true;
+    await controls.updateComplete;
     controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__new-session")?.click();
 
     expect(onOpenPalette).toHaveBeenCalledOnce();

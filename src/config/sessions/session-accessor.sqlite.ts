@@ -5,6 +5,7 @@ export {
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
+  loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
   patchSqliteSessionEntryTarget,
   readSqliteSessionUpdatedAt,
@@ -38,6 +39,12 @@ export {
   restoreSqliteCompactionCheckpointSession,
 } from "./session-accessor.sqlite-checkpoint.js";
 export {
+  forkSqliteSessionAtMessage,
+  listSqliteSessionBranches,
+  rewindSqliteSessionToMessage,
+  switchSqliteSessionBranch,
+} from "./session-accessor.sqlite-message-cut.js";
+export {
   appendSqliteExpectedSessionTranscriptTurn,
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,
@@ -50,6 +57,7 @@ export {
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";
 export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
+export { readSqliteTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export { previewSqliteSessionDiskBudget } from "./session-accessor.sqlite-maintenance.js";
 export {
   findSqliteTranscriptEvent,

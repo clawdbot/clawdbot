@@ -45,6 +45,11 @@ export function collectAgentMemorySearchAssignments(params: {
       ownerId: runtimeMemorySecretOwnerId(agentId),
       requiredForGateway: false,
       disposition: "isolate",
+      contract: {
+        defaults: defaultsMemorySearch,
+        override: memorySearch,
+        agentEnabled: rawAgent?.enabled,
+      },
     } satisfies SecretAssignmentOwner;
 
     const hasApiKeyOverride = Boolean(remote && Object.hasOwn(remote, "apiKey"));

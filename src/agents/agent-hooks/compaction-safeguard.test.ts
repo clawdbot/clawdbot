@@ -15,6 +15,7 @@ import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { jsonResult } from "../tools/common.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import {
   consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
@@ -3188,6 +3189,25 @@ describe("readWorkspaceContextForSummary", () => {
     expect(result).toContain("## Session Startup");
     expect(result).toContain("Read AGENTS.md");
     expect(result).not.toContain("Ignore me");
+  });
+
+  it("returns empty when AGENTS.md exceeds the workspace bootstrap limit", async () => {
+    const result = await withWorkspaceSummary(
+      `## Session Startup\n\n${"x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES)}`,
+      ["Session Startup"],
+    );
+
+    expect(result).toBe("");
+  });
+
+  it("reads AGENTS.md at the workspace bootstrap limit", async () => {
+    const heading = "## Session Startup\n\n";
+    const result = await withWorkspaceSummary(
+      heading + "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - heading.length),
+      ["Session Startup"],
+    );
+
+    expect(result).toContain("<workspace-critical-rules>");
   });
 
   it("keeps bounded workspace rules UTF-16 safe", async () => {

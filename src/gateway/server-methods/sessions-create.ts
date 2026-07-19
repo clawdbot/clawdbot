@@ -10,11 +10,14 @@ import {
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveUserPath } from "../../utils.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   buildDashboardSessionKey,
@@ -108,21 +111,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     } = initialTurn;
     const requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
-    if (requestedCwd && p.worktree !== true && !requestedExecNode) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "sessions.create cwd requires worktree=true or execNode",
-        ),
-      );
-      return;
-    }
+    // Agent tools expand `~` before RPC; the Gateway contract stays absolute-only.
+    // Remote nodes may use Windows paths; local cwd must match the Gateway host.
     const cwdIsAbsolute =
       !requestedCwd ||
-      path.isAbsolute(requestedCwd) ||
-      Boolean(requestedExecNode && path.win32.isAbsolute(requestedCwd));
+      (requestedExecNode
+        ? path.isAbsolute(requestedCwd) || path.win32.isAbsolute(requestedCwd)
+        : path.isAbsolute(requestedCwd));
     if (!cwdIsAbsolute) {
       respond(
         false,
@@ -156,9 +151,40 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionAgentId = catalogAgentId ?? p.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
-    let sessionCwd: string | undefined;
+    let sessionCwd = requestedExecNode ? undefined : requestedCwd;
     let sessionSourceRoot: string | undefined;
     let provisionedSessionWorktree = false;
+    if (requestedCwd && !requestedExecNode && p.worktree !== true) {
+      const targetAgentId = normalizeAgentId(
+        sessionAgentId ??
+          parseAgentSessionKey(sessionKey ?? "")?.agentId ??
+          resolveDefaultAgentId(cfg),
+      );
+      const targetSessionKey = sessionKey ?? `agent:${targetAgentId}:dashboard:pending`;
+      const targetRuntime = resolveSandboxRuntimeStatus({
+        cfg,
+        agentId: targetAgentId,
+        sessionKey: targetSessionKey,
+      });
+      // Sandboxed dashboard sessions mount only their configured agent workspace.
+      if (
+        targetRuntime.sandboxed &&
+        !isPathInside(
+          resolveUserPath(resolveAgentWorkspaceDir(cfg, targetAgentId)),
+          resolveUserPath(requestedCwd),
+        )
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "sessions.create cwd is outside the sandboxed agent workspace",
+          ),
+        );
+        return;
+      }
+    }
     if (p.worktree === true) {
       // The normal path stays at operator.write and checks out the configured agent workspace.
       // An explicit cwd can target another host checkout, so method-scopes requires admin.
@@ -314,9 +340,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       execNode: requestedExecNode,
       execCwd: sessionExecCwd,
       clearExecBinding: !requestedExecNode,
-      // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
-      clearSpawnedCwd: p.worktree !== true,
+      // A plain New Chat with no cwd must not inherit the prior session cwd.
+      clearSpawnedCwd: !sessionCwd,
       fork: p.fork,
+      succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",

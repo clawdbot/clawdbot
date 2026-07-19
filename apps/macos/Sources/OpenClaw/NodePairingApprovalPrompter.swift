@@ -319,8 +319,9 @@ final class NodePairingApprovalPrompter {
         if req.silent == true {
             return true
         }
-        let localNodeId = DeviceIdentityStore.loadOrCreate(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile).deviceId
+        guard let localNodeId = DeviceIdentityStore.loadOrCreatePersisted(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile)?.deviceId
+        else { return false }
         return Self.shouldAutoApproveOwnLocalNode(
             connectionMode: AppStateStore.shared.connectionMode,
             requestNodeId: req.nodeId,
@@ -451,8 +452,13 @@ final class NodePairingApprovalPrompter {
     }
 
     private func tryAutomaticApproveIfPossible(_ req: PendingRequest) async -> Bool {
-        let localNodeId = DeviceIdentityStore.loadOrCreate(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile).deviceId
+        guard let localNodeId = DeviceIdentityStore.loadOrCreatePersisted(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile)?.deviceId
+        else {
+            self.logger.error(
+                "automatic pairing skipped (device identity unavailable) requestId=\(req.requestId, privacy: .public)")
+            return false
+        }
         if Self.shouldAutoApproveOwnLocalNode(
             connectionMode: AppStateStore.shared.connectionMode,
             requestNodeId: req.nodeId,

@@ -414,9 +414,14 @@ describe("agents helpers", () => {
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        defaults: { subagents: { allowAgents: ["work", "home"] } },
         list: [
           { id: "work", default: true, workspace: "/work-ws" },
-          { id: "home", workspace: "/home-ws" },
+          {
+            id: "home",
+            workspace: "/home-ws",
+            subagents: { allowAgents: ["WORK", "home"] },
+          },
         ],
       },
       bindings: [
@@ -435,6 +440,8 @@ describe("agents helpers", () => {
       { agentId: "home", match: { channel: "telegram" } },
     ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
+    expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.list?.[0]?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
   });

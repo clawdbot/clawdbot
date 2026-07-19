@@ -11,6 +11,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
+  "meta.migrations": "System-managed completion markers for one-time config migrations.",
+  "meta.migrations.modelPolicyAllowlist":
+    "Records that doctor preserved or evaluated legacy default and per-agent model-map override restrictions.",
   marketplaces:
     "Marketplace feed and local package source profile settings. Feeds provide package selection and governance metadata, while sources define the local source names that install candidates may reference.",
   "marketplaces.feeds":
@@ -54,6 +57,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
   "wizard.lastRunMode":
     'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
+  "wizard.localModelLeanAutoModel":
+    "System-managed model reference indicating that inference onboarding enabled the global lean-model surface. A later verified route uses this marker to remove only the onboarding-owned setting; a model changed outside onboarding hands ownership back to the user.",
   "wizard.securityAcknowledgedAt":
     "ISO timestamp for when the setup security acknowledgement was accepted on this config. Setup uses this to avoid repeating the acknowledgement on later wizard runs.",
   audit:

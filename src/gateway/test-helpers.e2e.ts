@@ -61,17 +61,17 @@ export async function connectGatewayClient(params: {
   const identityRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   const deviceIdentity =
     params.deviceIdentity ??
-    loadOrCreateDeviceIdentity(
-      (() => {
+    loadOrCreateDeviceIdentity({
+      path: (() => {
         const safe = normalizeLowercaseStringOrEmpty(
           `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
             /[^a-zA-Z0-9._-]+/g,
             "_",
           ),
         );
-        return path.join(identityRoot, "test-device-identities", `${safe}.json`);
+        return path.join(identityRoot, "test-device-identities", `${safe}.sqlite`);
       })(),
-    );
+    });
   return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
     let settled = false;
     const stop = (err?: Error, connectedClient?: InstanceType<typeof GatewayClient>) => {

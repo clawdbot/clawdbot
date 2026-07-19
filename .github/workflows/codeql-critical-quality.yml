@@ -447,6 +447,7 @@ jobs:
           added_lines="$(mktemp)"
           raw_socket_scan_lines="$(mktemp)"
           codex_transport="extensions/codex/src/app-server/transport-websocket.ts"
+          network_codeql_contract_pattern='^\.github/codeql/(codeql-network-runtime-boundary-critical-quality\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\.ql)$'
 
           gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename' > "$changed_files"
           gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '
@@ -472,10 +473,10 @@ jobs:
             | "\($file): \(.)"
           ' > "$raw_socket_scan_lines"
 
-          if grep -Fxq "$codex_transport" "$changed_files"; then
-            # This transport has an exact owner/function allowlist in the raw-socket
-            # CodeQL query, so its raw socket calls run there. Proxy policy tokens
-            # remain in the fast scan below.
+          # Query/config edits need semantic analysis; the fast diff scan cannot validate QL.
+          # The Codex transport also has an exact owner/function allowlist in the query.
+          if grep -Eq "$network_codeql_contract_pattern" "$changed_files" || \
+             grep -Fxq "$codex_transport" "$changed_files"; then
             echo "full_codeql=true" >> "$GITHUB_OUTPUT"
           else
             echo "full_codeql=false" >> "$GITHUB_OUTPUT"

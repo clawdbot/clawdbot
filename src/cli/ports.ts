@@ -284,17 +284,7 @@ export function forceFreePort(
   opts: { beforeSignal?: BeforePortSignal } = {},
 ): PortProcess[] {
   const listeners = listPortListeners(port);
-  for (const proc of listeners) {
-    try {
-      opts.beforeSignal?.({ port, pid: proc.pid, signal: "SIGTERM" });
-      process.kill(proc.pid, "SIGTERM");
-    } catch (err) {
-      throw new Error(
-        `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
-        { cause: err },
-      );
-    }
-  }
+  killPids(port, listeners, "SIGTERM", opts.beforeSignal);
   return listeners;
 }
 

@@ -97,6 +97,9 @@ describe("opencode provider plugin", () => {
       "gemini-3.5-flash",
       "gemini-3.1-pro",
       "gemini-3-flash",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
       "gpt-5.5",
       "gpt-5.5-pro",
       "gpt-5.4",
@@ -168,6 +171,39 @@ describe("opencode provider plugin", () => {
     expect(requireMapEntry(models, "gpt-5.5")).toMatchObject({
       api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(requireMapEntry(models, "gpt-5.6-luna")).toMatchObject({
+      name: "GPT-5.6 Luna",
+      api: "openai-responses",
+      baseUrl: "https://opencode.ai/zen/v1",
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: {
+        input: 1,
+        output: 6,
+        cacheRead: 0.1,
+        cacheWrite: 1.25,
+        tieredPricing: [
+          { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
+          { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+        ],
+      },
+      compat: {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      },
+    });
+    expect(requireMapEntry(models, "gpt-5.6-terra")).toMatchObject({
+      name: "GPT-5.6 Terra",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
+    });
+    expect(requireMapEntry(models, "gpt-5.6-sol")).toMatchObject({
+      name: "GPT-5.6 Sol",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
     });
     expect(requireMapEntry(models, "gemini-3.5-flash")).toMatchObject({
       api: "google-generative-ai",
@@ -330,6 +366,57 @@ describe("opencode provider plugin", () => {
       ["claude-opus-4-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
       ["claude-sonnet-5", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }],
+      [
+        "gpt-5.6-luna",
+        {
+          input: 1,
+          output: 6,
+          cacheRead: 0.1,
+          cacheWrite: 1.25,
+          tieredPricing: [
+            { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
+            { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+          ],
+        },
+      ],
+      [
+        "gpt-5.6-terra",
+        {
+          input: 2.5,
+          output: 15,
+          cacheRead: 0.25,
+          cacheWrite: 3.125,
+          tieredPricing: [
+            {
+              input: 2.5,
+              output: 15,
+              cacheRead: 0.25,
+              cacheWrite: 3.125,
+              range: [0, 272_000],
+            },
+            {
+              input: 5,
+              output: 22.5,
+              cacheRead: 0.5,
+              cacheWrite: 6.25,
+              range: [272_000],
+            },
+          ],
+        },
+      ],
+      [
+        "gpt-5.6-sol",
+        {
+          input: 5,
+          output: 30,
+          cacheRead: 0.5,
+          cacheWrite: 6.25,
+          tieredPricing: [
+            { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, range: [0, 272_000] },
+            { input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5, range: [272_000] },
+          ],
+        },
+      ],
       ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
       ["glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
       ["hy3-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
@@ -372,7 +459,7 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(52);
+    expect(result.provider.models).toHaveLength(55);
     expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
@@ -381,6 +468,7 @@ describe("opencode provider plugin", () => {
     expect(result.provider.models.map((model) => model.id)).toContain("kimi-k2.7-code");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
+    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-luna");
     expect(result.provider.models.find((model) => model.id === "minimax-m2.7")).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/v1",
@@ -395,8 +483,9 @@ describe("opencode provider plugin", () => {
       throw new Error("expected registered OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(52);
+    expect(result.provider.models).toHaveLength(55);
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
+    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-sol");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
     expect(result.provider.models.find((model) => model.id === "grok-4.5")).toMatchObject({
       api: "openai-completions",
@@ -616,7 +705,7 @@ describe("opencode provider plugin", () => {
     });
   });
 
-  it("exposes Anthropic thinking levels for proxied Claude models", async () => {
+  it("exposes provider-owned thinking levels for proxied models", async () => {
     const { providers } = await registerProviderPlugin({
       plugin,
       id: "opencode",
@@ -655,5 +744,20 @@ describe("opencode provider plugin", () => {
     expect(sonnet46LevelIds).toContain("adaptive");
     expect(sonnet46LevelIds).not.toContain("xhigh");
     expect(sonnet46LevelIds).not.toContain("max");
+
+    const gpt56Profile = resolveThinkingProfile({
+      provider: "opencode",
+      modelId: "gpt-5.6-luna",
+      api: "openai-responses",
+      reasoning: true,
+      compat: {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      },
+    });
+    const gpt56LevelIds = gpt56Profile?.levels.map((level) => level.id) ?? [];
+    expect(gpt56Profile?.defaultLevel).toBe("medium");
+    expect(gpt56LevelIds).not.toContain("minimal");
+    expect(gpt56LevelIds).toContain("xhigh");
+    expect(gpt56LevelIds).toContain("max");
   });
 });

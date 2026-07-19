@@ -437,6 +437,49 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
+  it("repairs legacy and content schema applicators without changing property dependencies", () => {
+    expect(
+      normalizeOpenAIParameters({
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+        dependencies: {
+          mode: ["payload"],
+          payload: { type: "object" },
+        },
+        additionalItems: { type: "object" },
+        contentSchema: { type: "object" },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+      dependencies: {
+        mode: ["payload"],
+        payload: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+      additionalItems: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      contentSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    });
+  });
+
   it("does not tighten or warn for permissive object schemas that use strict:false", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const permissiveParameters = {

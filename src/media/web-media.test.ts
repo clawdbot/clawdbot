@@ -33,21 +33,6 @@ let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
 
-function installCanvasMediaResolver() {
-  const registry = createEmptyPluginRegistry();
-  registry.hostedMediaResolvers = [
-    {
-      pluginId: "canvas",
-      resolver: (mediaUrl) =>
-        mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
-          ? canvasPngFile
-          : null,
-      source: "test",
-    },
-  ];
-  setActivePluginRegistry(registry);
-}
-
 beforeAll(async () => {
   ({
     effectiveImageBytesCap,
@@ -75,7 +60,6 @@ beforeAll(async () => {
   );
   await fs.mkdir(path.dirname(canvasPngFile), { recursive: true });
   await fs.writeFile(canvasPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
-  installCanvasMediaResolver();
 });
 
 afterAll(async () => {
@@ -329,7 +313,6 @@ describe("loadWebMedia", () => {
   });
 
   it("loads browser-style canvas media paths as managed local files", async () => {
-    installCanvasMediaResolver();
     const result = await loadWebMedia(
       `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
       { maxBytes: 1024 * 1024 },
@@ -349,20 +332,14 @@ describe("loadWebMedia", () => {
         source: "test",
       },
       {
-        pluginId: "canvas",
-        resolver: (mediaUrl) =>
-          mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
-            ? canvasPngFile
-            : null,
+        pluginId: "hosted-media",
+        resolver: (mediaUrl) => (mediaUrl === "/__test__/hosted/tiny.png" ? canvasPngFile : null),
         source: "test",
       },
     ];
     setActivePluginRegistry(registry);
 
-    const result = await loadWebMedia(
-      `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
-      { maxBytes: 1024 * 1024 },
-    );
+    const result = await loadWebMedia("/__test__/hosted/tiny.png", { maxBytes: 1024 * 1024 });
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);

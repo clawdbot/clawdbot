@@ -558,6 +558,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel,
           actionParams: request.params,
           cfg,
+          accountId,
+          currentAccountId: trustedContext.requesterAccountId,
           sessionKey,
           sessionId: trustedContext.sessionId,
           agentId,

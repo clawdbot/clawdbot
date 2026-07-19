@@ -115,22 +115,6 @@
   gap: 12px;
 }
 
-.login-gate__secret-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.login-gate__secret-row input {
-  flex: 1;
-}
-
-.login-gate__secret-row .btn--icon {
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-}
-
 .login-gate__connect {
   margin-top: 4px;
   width: 100%;
@@ -282,10 +266,11 @@
     min-height: 44px;
   }
 
-  .login-gate__secret-row .btn--icon {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
+  /* Inset reveal eye keeps a comfortable coarse-pointer hit area. */
+  .login-gate__form .settings-secret__toggle {
+    width: 32px;
+    height: 32px;
+    right: 6px;
   }
 
   .login-gate__connect {
@@ -728,7 +713,7 @@
 
 .btn.primary {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
@@ -737,6 +722,14 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+:root[data-theme="dark"] .btn.primary:hover {
+  background: var(--primary-hover);
+}
+
+:root[data-theme="openknot"] .btn.primary:hover {
+  background: var(--primary-hover);
 }
 
 /* Keyboard shortcut badge (shadcn style) */
@@ -793,6 +786,65 @@
   padding: 4px 6px;
   font-size: 12px;
   line-height: 1;
+}
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(20px + var(--safe-area-bottom));
+  z-index: 2000;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-lg);
+}
+
+.app-toast__message {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--control-ui-text-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-toast__action,
+.app-toast__dismiss {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.app-toast__action {
+  color: var(--accent);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 700;
+}
+
+.app-toast__dismiss {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.app-toast__action:hover,
+.app-toast__action:focus-visible,
+.app-toast__dismiss:hover,
+.app-toast__dismiss:focus-visible {
+  color: var(--text-strong);
 }
 
 .btn--icon {
@@ -1137,7 +1189,6 @@
   margin: 0;
   width: 16px;
   height: 16px;
-  accent-color: var(--accent);
 }
 
 .form-grid {
@@ -2326,7 +2377,6 @@ td.data-table-checkbox-col {
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--accent);
   vertical-align: middle;
 }
 
@@ -2448,7 +2498,6 @@ td.data-table-key-col {
 }
 
 .field-inline.checkbox input[type="checkbox"] {
-  accent-color: var(--accent);
 }
 
 /* ===========================================
@@ -4672,6 +4721,32 @@ td.data-table-key-col {
   line-height: 1.5;
 }
 
+.device-pair-setup__header p.device-pair-setup__get-apps {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.device-pair-setup__get-apps button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.device-pair-setup__get-apps button:hover {
+  color: var(--text-strong);
+}
+
+.device-pair-setup__get-apps button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
 .device-pair-setup__phone {
   display: grid;
   width: 44px;
@@ -4748,7 +4823,6 @@ td.data-table-key-col {
 
 .device-pair-setup__access input {
   margin-top: 2px;
-  accent-color: var(--accent);
 }
 
 .device-pair-setup__access span {

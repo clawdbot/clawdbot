@@ -11,6 +11,7 @@ const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 type EnsureConfigReadyOptions = {
+  allowInvalid?: boolean;
   beforeStateMigrations?: () => Promise<boolean>;
   commandPath?: string[];
   requireConfig?: boolean;
@@ -167,11 +168,13 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     const gateway = programLocal
       .command("gateway")
+      .option("--allow-unconfigured")
       .option("--force")
       .option("--reset")
       .action(() => {});
     gateway
       .command("run")
+      .option("--allow-unconfigured")
       .option("--force")
       .option("--reset")
       .action(() => {});
@@ -338,6 +341,26 @@ describe("registerPreActionHooks", () => {
     expect(reloadTrustedGatewayRunEnvironmentMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
     });
+  });
+
+  it("passes --allow-unconfigured through as an invalid-config override", async () => {
+    const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
+    gatewayRunCommand.setOptionValueWithSource("allowUnconfigured", true, "cli");
+    try {
+      await runPreAction({
+        parseArgv: ["gateway", "run"],
+        processArgv: ["node", "openclaw", "gateway", "run", "--allow-unconfigured"],
+      });
+    } finally {
+      gatewayRunCommand.setOptionValueWithSource("allowUnconfigured", false, "default");
+    }
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowInvalid: true,
+        commandPath: ["gateway", "run"],
+      }),
+    );
   });
 
   it("loads plugins for text local agent runs", async () => {

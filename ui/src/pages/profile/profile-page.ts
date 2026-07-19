@@ -1,3 +1,4 @@
+import "../../styles/config-quick.css";
 import { consume } from "@lit/context";
 import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";
@@ -206,7 +207,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           range: "all",
           agentScope: "all",
           // Instance rows keep durations per transcript; family rollups would
-          // merge resets and inflate "Longest session" to the family lifespan.
+          // merge resets and inflate "Longest thread" to the family lifespan.
           groupBy: "instance",
           limit: 1000,
           ...dateParams,

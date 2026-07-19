@@ -236,14 +236,14 @@ describe("gateway auth compatibility baseline", () => {
     test("keeps local backend device-token reconnects out of pairing", async () => {
       const identityPath = path.join(
         os.tmpdir(),
-        `openclaw-backend-device-${process.pid}-${port}.json`,
+        `openclaw-backend-device-${process.pid}-${port}.sqlite`,
       );
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../infra/device-identity.js");
       const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
         await import("../infra/device-pairing.js");
 
-      const identity = loadOrCreateDeviceIdentity(identityPath);
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
       const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -411,7 +411,7 @@ describe("gateway auth compatibility baseline", () => {
       try {
         const deviceIdentityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.sqlite`,
         );
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
@@ -443,11 +443,11 @@ describe("gateway auth compatibility baseline", () => {
         const nonce = await readConnectChallengeNonce(ws);
         const identityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-${process.pid}-${port}.sqlite`,
         );
         const staleIdentityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-stale-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-stale-${process.pid}-${port}.sqlite`,
         );
         const { identity, device } = await createSignedDevice({
           token: null,
@@ -457,7 +457,7 @@ describe("gateway auth compatibility baseline", () => {
           identityPath,
           nonce,
         });
-        const staleIdentity = loadOrCreateDeviceIdentity(staleIdentityPath);
+        const staleIdentity = loadOrCreateDeviceIdentity({ path: staleIdentityPath });
         const pending = await requestDevicePairing({
           deviceId: identity.deviceId,
           publicKey: publicKeyRawBase64UrlFromPem(staleIdentity.publicKeyPem),

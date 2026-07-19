@@ -29,6 +29,9 @@ const setupInferenceMocks = vi.hoisted(() => ({
   detectSetupInference: vi.fn(),
   verifySetupInference: vi.fn(),
 }));
+const setupInferenceDetectionMocks = vi.hoisted(() => ({
+  detectSetupInferenceIsolated: vi.fn(),
+}));
 const providerAuthChoiceMocks = vi.hoisted(() => ({
   applyAuthChoiceLoadedPluginProvider: vi.fn(),
 }));
@@ -41,6 +44,9 @@ vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
+}));
+vi.mock("../../system-agent/setup-inference-detection.js", () => ({
+  detectSetupInferenceIsolated: setupInferenceDetectionMocks.detectSetupInferenceIsolated,
 }));
 vi.mock("../../plugins/provider-auth-choice.js", () => ({
   applyAuthChoiceLoadedPluginProvider: providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider,
@@ -168,6 +174,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
+  setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockReset();
   setupInferenceMocks.verifySetupInference.mockReset();
   providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
   setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
@@ -443,10 +450,10 @@ describe("openclaw.chat", () => {
     expect(secondCall.ok).toBe(true);
   });
 
-  it("tracks setup detection until its RPC response is sent", async () => {
+  it("keeps read-only setup detection outside the serialized system-agent lane", async () => {
     const started = createDeferred();
     const release = createDeferred();
-    setupInferenceMocks.detectSetupInference.mockImplementation(async () => {
+    setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async () => {
       started.resolve();
       await release.promise;
       return {
@@ -472,11 +479,11 @@ describe("openclaw.chat", () => {
     } as never);
 
     await started.promise;
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(1);
+    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
     release.resolve();
     await pending;
 
-    expect(activeAtResponse).toEqual([1]);
+    expect(activeAtResponse).toEqual([0]);
     expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
   });
 

@@ -784,6 +784,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     ...(item.kind === "queued" || item.kind === "steered" ? { kind: item.kind } : {}),
     ...(attachments.length ? { attachments: attachments as ChatAttachment[] } : {}),
     ...(typeof item.refreshSessions === "boolean" ? { refreshSessions: item.refreshSessions } : {}),
+    ...(item.replyToId ? { replyToId: item.replyToId } : {}),
     ...(item.localCommandArgs ? { localCommandArgs: item.localCommandArgs } : {}),
     ...(item.localCommandName ? { localCommandName: item.localCommandName } : {}),
     ...(item.sessionKey ? { sessionKey: item.sessionKey } : {}),
@@ -827,6 +828,10 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   const refreshSessions = normalizeOptionalBoolean(entry.refreshSessions);
   if (refreshSessions !== undefined) {
     item.refreshSessions = refreshSessions;
+  }
+  const replyToId = normalizeOptionalString(entry.replyToId);
+  if (replyToId) {
+    item.replyToId = replyToId;
   }
   if (
     entry.sendState === "failed" ||

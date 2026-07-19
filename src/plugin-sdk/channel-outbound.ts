@@ -17,6 +17,7 @@ export type { DurableMessageBatchSendResult } from "../channels/message/runtime.
 export {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressDrain,
+  createChannelIngressMonitor,
   createReplyPrefixContext,
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -148,6 +149,8 @@ export type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
   ChannelIngressDrain,
+  ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorLifecycle,
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,

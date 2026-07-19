@@ -703,7 +703,15 @@ describe("node.invoke APNs wake path", () => {
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
-    expect(call[2]?.message).toContain("missing scope: operator.admin");
+    expect(call[2]).toMatchObject({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.admin",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.admin",
+        requiredScopes: ["operator.admin"],
+      },
+    });
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 

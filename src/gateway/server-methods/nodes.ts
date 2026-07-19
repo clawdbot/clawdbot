@@ -11,6 +11,7 @@ import {
   type ConnectParams,
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateNodeDescribeParams,
   validateNodeEventParams,
   validateNodeInvokeParams,
@@ -33,7 +34,7 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { NODE_ADMIN_ONLY_INVOKE_COMMANDS } from "../../infra/node-commands.js";
+import { isAdminOnlyNodeInvokeCommand } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
   getPendingNodePairing,
@@ -57,6 +58,7 @@ import {
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
+import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -68,7 +70,7 @@ import {
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
   pluginNodeCapabilityScopedHostUrlsConflict,
@@ -83,7 +85,6 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { isForbiddenBrowserProxyMutation } from "./node-browser-proxy.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
@@ -117,7 +118,6 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
-const ADMIN_ONLY_NODE_INVOKE_COMMANDS = new Set<string>(NODE_ADMIN_ONLY_INVOKE_COMMANDS);
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {
@@ -1020,7 +1020,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
+          missingScopeErrorShape({
+            missingScope: approved.missingScope,
+            requiredScopes:
+              approved.missingScope === PAIRING_SCOPE
+                ? [PAIRING_SCOPE]
+                : [PAIRING_SCOPE, approved.missingScope],
+          }),
         );
         return;
       }
@@ -1444,13 +1450,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      ADMIN_ONLY_NODE_INVOKE_COMMANDS.has(command) &&
+      isAdminOnlyNodeInvokeCommand(command) &&
       !nodeInvokePolicy.clientHasOperatorAdminScope(client)
     ) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
       );
       return;
     }

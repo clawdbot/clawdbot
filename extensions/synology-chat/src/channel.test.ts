@@ -44,7 +44,7 @@ const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(
 const mockSendFileUrl = vi.spyOn(clientModule, "sendFileUrl").mockResolvedValue(true);
 const registerSynologyWebhookRouteMock = vi
   .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
-  .mockImplementation(() => vi.fn());
+  .mockImplementation(async () => vi.fn(async () => undefined));
 
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
@@ -62,7 +62,7 @@ describe("createSynologyChatPlugin", () => {
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
     mockSendFileUrl.mockResolvedValue(true);
-    registerSynologyWebhookRouteMock.mockImplementation(() => vi.fn());
+    registerSynologyWebhookRouteMock.mockImplementation(async () => vi.fn(async () => undefined));
   });
 
   afterEach(() => {
@@ -731,10 +731,10 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("re-registers same account/path through the route registrar", async () => {
-      const unregisterFirst = vi.fn();
-      const unregisterSecond = vi.fn();
+      const unregisterFirst = vi.fn(async () => undefined);
+      const unregisterSecond = vi.fn(async () => undefined);
       const registerMock = registerSynologyWebhookRouteMock;
-      registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
+      registerMock.mockResolvedValueOnce(unregisterFirst).mockResolvedValueOnce(unregisterSecond);
 
       const plugin = synologyChatPlugin;
       const abortFirst = new AbortController();

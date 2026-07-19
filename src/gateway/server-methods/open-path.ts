@@ -1,5 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { runExec } from "../../process/exec.js";
+import { runExec, spawnCommand } from "../../process/exec.js";
+
+const OPEN_PATH_TIMEOUT_MS = 5_000;
+const XDG_OPEN_STARTUP_OBSERVATION_MS = 5_000;
+const XDG_OPEN_STDERR_MAX_CHARS = 4_096;
 
 type OpenPathCommand = {
   command: string;
@@ -32,8 +36,84 @@ export function resolveOpenPathCommand(
   };
 }
 
-export async function execOpenPath(command: OpenPathCommand): Promise<void> {
-  await runExec(command.command, command.args, { logOutput: false });
+async function observeXdgOpenStartup(command: OpenPathCommand): Promise<void> {
+  // xdg-open can synchronously own a foreground application. Observe startup
+  // failures without making the Gateway own the launched application's lifetime.
+  const child = spawnCommand([command.command, ...command.args], {
+    buffer: false,
+    cleanup: false,
+    detached: true,
+    reject: true,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  child.unref();
+  let stderrText = "";
+  const stderr = child.stderr;
+  stderr?.setEncoding("utf8");
+  const onStderr = (chunk: string | Buffer) => {
+    if (stderrText.length >= XDG_OPEN_STDERR_MAX_CHARS) {
+      return;
+    }
+    stderrText += String(chunk).slice(0, XDG_OPEN_STDERR_MAX_CHARS - stderrText.length);
+  };
+  stderr?.on("data", onStderr);
+
+  await new Promise<void>((resolve, reject) => {
+    let observationComplete = false;
+    const releaseStderr = (childSettled: boolean) => {
+      stderr?.off("data", onStderr);
+      if (childSettled) {
+        stderr?.destroy();
+        return;
+      }
+      // Keep draining after the observation window. Closing the pipe can send
+      // SIGPIPE to a foreground application that writes diagnostics later.
+      stderr?.resume();
+      (stderr as (typeof stderr & { unref?: () => void }) | null)?.unref?.();
+    };
+    const timer = setTimeout(() => {
+      observationComplete = true;
+      releaseStderr(false);
+      resolve();
+    }, XDG_OPEN_STARTUP_OBSERVATION_MS);
+    void child.then(
+      () => {
+        clearTimeout(timer);
+        releaseStderr(true);
+        if (!observationComplete) {
+          resolve();
+        }
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        releaseStderr(true);
+        if (observationComplete) {
+          return;
+        }
+        const commandError = error instanceof Error ? error : new Error(String(error));
+        const diagnostic = stderrText.trim();
+        reject(
+          diagnostic
+            ? new Error(`${commandError.message}: ${diagnostic}`, { cause: commandError })
+            : commandError,
+        );
+      },
+    );
+  });
+}
+
+export async function execOpenPath(
+  command: OpenPathCommand,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  if (platform === "linux") {
+    await observeXdgOpenStartup(command);
+    return;
+  }
+  await runExec(command.command, command.args, {
+    logOutput: false,
+    timeoutMs: OPEN_PATH_TIMEOUT_MS,
+  });
 }
 
 export function formatOpenPathError(error: unknown): string {

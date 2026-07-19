@@ -233,6 +233,11 @@ describe("structured state integrity findings", () => {
 
 async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
   const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        memorySearch: { rememberAcrossConversations: false },
+      },
+    },
     memory: {
       backend: "qmd",
       qmd: {

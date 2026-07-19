@@ -13,6 +13,7 @@ export type SessionCreateParams = {
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
+  succeedsParent?: boolean;
   label?: string;
   model?: string;
   thinkingLevel?: string;
@@ -40,7 +41,9 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
       : undefined;
   return {
     ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
-    ...(parentSessionKey ? { parentSessionKey, emitCommandHooks: true } : {}),
+    ...(parentSessionKey
+      ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
+      : {}),
   };
 }
 
@@ -63,7 +66,7 @@ export async function requestSessionCreate(
       key,
       initialRun: {
         status: "rejected",
-        error: message || "The session was created, but its first message could not be sent.",
+        error: message || "The thread was created, but its first message could not be sent.",
       },
     };
   }

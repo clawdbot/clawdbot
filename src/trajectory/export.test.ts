@@ -10,7 +10,12 @@ import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
-import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, resolveTrajectoryPointerFilePath } from "./paths.js";
+import {
+  TRAJECTORY_POINTER_FILE_MAX_BYTES,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "./paths.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -1305,6 +1310,53 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.runtimeFile).toBeUndefined();
     expect(eventTypes(bundle.events)).not.toContain("outside-runtime");
+  });
+
+  it("ignores oversized runtime pointers and falls back to the default trajectory file", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const defaultRuntimeFile = resolveTrajectoryFilePath({
+      env: {},
+      sessionFile,
+      sessionId: "session-1",
+    });
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.writeFileSync(
+      resolveTrajectoryPointerFilePath(sessionFile),
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: "session-1",
+        runtimeFile: path.join(tmpDir, "recorded", "session-1.jsonl"),
+      })}\n${" ".repeat(TRAJECTORY_POINTER_FILE_MAX_BYTES)}`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      defaultRuntimeFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "default-runtime",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+      })}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.runtimeFile).toBe(defaultRuntimeFile);
+    expect(eventTypes(bundle.events)).toContain("default-runtime");
   });
 
   it("does not fall back to runtime pointer targets that are not regular files", async () => {

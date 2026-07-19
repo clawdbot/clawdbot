@@ -15,6 +15,12 @@ private struct ChatScrollEdgeTreatment: ViewModifier {
 }
 
 struct ChatProTab: View {
+    enum GatewayStatusTone: Equatable {
+        case success
+        case warning
+        case error
+    }
+
     private struct TranscriptShareItem: Identifiable {
         let id = UUID()
         let fileURL: URL
@@ -38,6 +44,7 @@ struct ChatProTab: View {
     @State private var viewModelPresentationAgentBadge = "M"
     @State private var viewModelHasVerifiedOfflineRoutingIdentity = false
     @State private var speech: OpenClawChatSpeechController?
+    @State private var isGatewayStatusManuallyExpanded = false
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
@@ -121,7 +128,7 @@ struct ChatProTab: View {
     private var content: some View {
         self.chatSurface
             .modifier(ChatScrollEdgeTreatment())
-            .navigationTitle(self.headerDisplayTitle)
+            .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let headerLeadingAction {
@@ -130,16 +137,23 @@ struct ChatProTab: View {
                     }
                 }
                 if self.showsAgentBadge {
-                    ToolbarItem(placement: .topBarLeading) {
-                        self.headerIdentityBadge
+                    if #available(iOS 26.0, *) {
+                        ToolbarItem(placement: .topBarLeading) {
+                            self.headerAgentIdentity
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .topBarLeading) {
+                            self.headerAgentIdentity
+                        }
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        self.headerGatewayStatus
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     self.chatActionsMenu
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    self.connectionStatusButton
-                        .accessibilityIdentifier("chat-gateway-status")
                 }
             }
             .sheet(item: self.$transcriptShareItem) { item in
@@ -188,7 +202,14 @@ struct ChatProTab: View {
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
-                talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl,
+                talkControl: Self.shouldExposeCaptureControl(
+                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
+                dictationControl: Self.shouldExposeCaptureControl(
+                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
+                    ? self.dictationControl
+                    : nil,
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
@@ -204,16 +225,184 @@ struct ChatProTab: View {
         }
     }
 
-    /// Flat circular avatar for the nav bar — no gradient/shadow, per Apple bar-button sizing.
+    /// Voice activity owns the contour while gateway state stays a compact,
+    /// stable dot on the avatar instead of competing with it in the toolbar.
     private var headerIdentityBadge: some View {
-        Text(self.agentBadge)
-            .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 15))
-            .foregroundStyle(.white)
-            .minimumScaleFactor(0.6)
+        TalkAvatarWaveformView(
+            phase: self.voiceAvatarPhase,
+            palette: .openClawBrand,
+            diameter: 38,
+            avatarDiameter: 28)
+        {
+            Text(self.agentBadge)
+                .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 16))
+                .foregroundStyle(.white)
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(OpenClawBrand.carapaceElevated))
+        }
+        .overlay(alignment: .topTrailing) {
+            self.gatewayAvatarStatusDot
+        }
+        .accessibilityElement(children: .ignore)
+    }
+
+    private var gatewayAvatarStatusDot: some View {
+        ZStack {
+            Circle()
+                .fill(Color(uiColor: .systemBackground))
+            Circle()
+                .fill(self.gatewayStatusColor)
+                .padding(2)
+        }
+        .frame(width: 13, height: 13)
+        .accessibilityHidden(true)
+    }
+
+    private var headerAgentIdentity: some View {
+        HStack {
+            self.headerAgentIdentityControl
+        }
+        .frame(minHeight: 44)
+        .accessibilityIdentifier("chat-agent-identity")
+        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+    }
+
+    @ViewBuilder
+    private var headerGatewayStatus: some View {
+        if self.gatewayStatusIsHealthy || self.openSettings != nil {
+            Button(action: self.handleHeaderAgentIdentityTap) {
+                self.headerGatewayStatusLabel
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(verbatim: self.gatewayAccessibilityLabel))
+            .accessibilityHint(self.gatewayStatusAccessibilityHint)
+            .accessibilityIdentifier("chat-gateway-status")
+        } else {
+            self.headerGatewayStatusLabel
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: self.gatewayAccessibilityLabel))
+                .accessibilityIdentifier("chat-gateway-status")
+        }
+    }
+
+    private var headerGatewayStatusLabel: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(self.gatewayStatusColor)
+                .frame(width: 10, height: 10)
+            if self.showsExpandedGatewayStatus {
+                self.expandedGatewayStatusLabel
+            }
+        }
+        .frame(minHeight: 44)
+        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+    }
+
+    @ViewBuilder
+    private var headerAgentIdentityControl: some View {
+        if self.gatewayStatusIsHealthy || self.openSettings != nil {
+            Button(action: self.handleHeaderAgentIdentityTap) {
+                self.headerAgentIdentityLabel
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
+            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+            .accessibilityHint(self.gatewayStatusAccessibilityHint)
+            .accessibilityIdentifier("chat-gateway-status")
+        } else {
+            self.headerAgentIdentityLabel
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
+                .accessibilityIdentifier("chat-gateway-status")
+        }
+    }
+
+    private var headerAgentIdentityLabel: some View {
+        HStack(spacing: 7) {
+            self.headerIdentityBadge
+            if self.showsExpandedGatewayStatus {
+                self.expandedGatewayStatusLabel
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+            } else {
+                Text(self.agentDisplayName)
+                    .font(OpenClawType.headline)
+                    .lineLimit(1)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var gatewayStatusIsHealthy: Bool {
+        Self.gatewayStatusTone(
+            state: self.gatewayDisplayState,
+            isGatewayUsable: self.gatewayConnected) == .success
+    }
+
+    private var headerAgentAccessibilityLabel: String {
+        "\(self.voiceAvatarAccessibilityLabel). \(self.gatewayAccessibilityLabel)"
+    }
+
+    private func handleHeaderAgentIdentityTap() {
+        if self.gatewayStatusIsHealthy {
+            withAnimation(.snappy(duration: 0.24)) {
+                self.isGatewayStatusManuallyExpanded.toggle()
+            }
+        } else {
+            self.openSettings?()
+        }
+    }
+
+    private var expandedGatewayStatusLabel: some View {
+        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
+            .font(OpenClawType.subheadMedium)
+            .foregroundStyle(.primary)
             .lineLimit(1)
-            .frame(width: 30, height: 30)
-            .background(Circle().fill(OpenClawBrand.accent))
-            .accessibilityLabel(self.agentDisplayName)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(self.gatewayStatusColor.opacity(0.12), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(self.gatewayStatusColor.opacity(0.28), lineWidth: 1)
+            }
+    }
+
+    private var showsExpandedGatewayStatus: Bool {
+        Self.gatewayStatusShouldExpand(
+            state: self.gatewayDisplayState,
+            isGatewayUsable: self.gatewayConnected,
+            isManuallyExpanded: self.isGatewayStatusManuallyExpanded)
+    }
+
+    private var gatewayStatusAccessibilityHint: String {
+        if !self.gatewayStatusIsHealthy {
+            return String(localized: "Opens Settings / Gateway")
+        }
+        return self.isGatewayStatusManuallyExpanded
+            ? String(localized: "Hides the gateway status label")
+            : String(localized: "Shows the full gateway status label")
+    }
+
+    private var voiceAvatarPhase: TalkWaveformPhase {
+        guard self.appModel.talkMode.isEnabled else { return .idle }
+        if self.appModel.talkMode.isSpeaking {
+            return .speaking(level: self.appModel.talkMode.playbackLevel)
+        }
+        if self.appModel.talkMode.isListening {
+            return .listening(
+                level: self.appModel.talkMode.micLevel,
+                speechActive: self.appModel.talkMode.isUserSpeechDetected)
+        }
+        return .idle
+    }
+
+    private var voiceAvatarAccessibilityLabel: String {
+        let state = self.appModel.talkMode.isEnabled
+            ? self.appModel.talkMode.statusText
+            : String(localized: "Voice off")
+        return "\(self.agentDisplayName), \(state)"
     }
 
     private func syncChatViewModel() {
@@ -241,6 +430,7 @@ struct ChatProTab: View {
             // Keep recording, staging, and delivery on their captured route.
             // The pin-change observer replays this rebuild with latest state.
             guard !viewModel.isAttachmentOwnerPinned else { return }
+            viewModel.endPendingToolActivities()
             self.viewModelOwnerID = ownerID
             self.viewModelTransportAgentID = transportAgentID
             self.viewModelRoutingContract = routingContract
@@ -283,6 +473,18 @@ struct ChatProTab: View {
             onSessionChanged: { sessionKey in
                 self.appModel.focusChatSession(sessionKey)
             },
+            onToolActivity: { id, name, isActive, toolSessionKey in
+                if isActive {
+                    LiveActivityManager.shared.showTool(
+                        id: id,
+                        name: name,
+                        agentName: self.agentDisplayName,
+                        agentBadge: self.agentBadge,
+                        sessionKey: toolSessionKey)
+                } else {
+                    LiveActivityManager.shared.endTool(id: id, sessionKey: toolSessionKey)
+                }
+            },
             diagnosticsLog: { message in
                 GatewayDiagnostics.log(message)
             })
@@ -303,6 +505,21 @@ struct ChatProTab: View {
             })
     }
 
+    private var dictationControl: OpenClawChatDictationControl {
+        OpenClawChatDictationControl(
+            isActive: self.appModel.isChatDictationActive,
+            isAvailable: !self.appModel.isTalkCaptureActive || self.appModel.isChatDictationActive,
+            start: {
+                try await self.appModel.transcribeChatDraft()
+            },
+            finish: {
+                self.appModel.finishChatDictation()
+            },
+            cancel: {
+                self.appModel.cancelChatDictation()
+            })
+    }
+
     private var talkLevel: Double {
         if self.appModel.talkMode.isSpeaking {
             return self.appModel.talkMode.playbackLevel ?? 0
@@ -317,33 +534,6 @@ struct ChatProTab: View {
         OpenClawChatVoiceNoteControl(
             recorder: self.appModel.voiceNoteRecorder,
             isTalkActive: self.appModel.isTalkCaptureActive)
-    }
-
-    @ViewBuilder
-    private var connectionStatusButton: some View {
-        if let openSettings {
-            Button(action: openSettings) {
-                self.connectionPill
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(self.gatewayAccessibilityLabel)
-            .accessibilityHint("Opens Settings / Gateway")
-        } else {
-            self.connectionPill
-                .accessibilityLabel(self.gatewayAccessibilityLabel)
-        }
-    }
-
-    private var connectionPill: some View {
-        HStack(spacing: 5) {
-            ProStatusDot(color: self.gatewayPillColor)
-            Text(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
-                .font(OpenClawType.subheadMedium)
-                .lineLimit(1)
-        }
-        .foregroundStyle(self.gatewayPillColor)
-        // Even breathing room inside the system glass capsule.
-        .padding(.horizontal, 6)
     }
 
     private var chatActionsMenu: some View {
@@ -411,6 +601,20 @@ struct ChatProTab: View {
             }
             .disabled(self.viewModel == nil)
 
+            if let openSettings {
+                Divider()
+
+                Button(action: openSettings) {
+                    Label {
+                        Text("Gateway Settings")
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: "network")
+                    }
+                }
+                .accessibilityIdentifier("chat-gateway-settings")
+            }
+
             Toggle(isOn: self.$showsAssistantTrace) {
                 Label {
                     Text(String(localized: "Show reasoning & tool activity"))
@@ -471,24 +675,57 @@ struct ChatProTab: View {
         return current
     }
 
-    private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
+    /// Attachment pinning blocks new capture, but starting or active capture must keep its stop control.
+    nonisolated static func shouldExposeCaptureControl(
+        isAttachmentOwnerPinned: Bool,
+        isCaptureInFlight: Bool) -> Bool
+    {
+        !isAttachmentOwnerPinned || isCaptureInFlight
     }
 
-    private var gatewayPillColor: Color {
-        switch self.gatewayDisplayState {
-        case .connected:
-            self.gatewayConnected ? OpenClawBrand.ok : .secondary
-        case .connecting:
-            OpenClawBrand.accent
+    private var gatewayAccessibilityLabel: String {
+        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
+    }
+
+    private var gatewayStatusColor: Color {
+        switch Self.gatewayStatusTone(
+            state: self.gatewayDisplayState,
+            isGatewayUsable: self.gatewayConnected)
+        {
+        case .success:
+            OpenClawBrand.statusSuccess
+        case .warning:
+            OpenClawBrand.statusWarning
         case .error:
-            OpenClawBrand.warn
-        case .disconnected:
-            .secondary
+            OpenClawBrand.statusError
         }
     }
 
-    nonisolated static func gatewayPillTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
+    nonisolated static func gatewayStatusTone(
+        state: GatewayDisplayState,
+        isGatewayUsable: Bool) -> GatewayStatusTone
+    {
+        switch state {
+        case .connected:
+            isGatewayUsable ? .success : .warning
+        case .connecting, .error:
+            .warning
+        case .disconnected:
+            .error
+        }
+    }
+
+    nonisolated static func gatewayStatusShouldExpand(
+        state: GatewayDisplayState,
+        isGatewayUsable: Bool,
+        isManuallyExpanded: Bool) -> Bool
+    {
+        isManuallyExpanded || self.gatewayStatusTone(
+            state: state,
+            isGatewayUsable: isGatewayUsable) != .success
+    }
+
+    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
         switch state {
         case .connected:
             isGatewayUsable ? "Connected" : "Unavailable"
@@ -564,7 +801,7 @@ struct ChatProTab: View {
     }
 
     private var currentAgentBadge: String {
-        if let identity = self.currentActiveAgent?.identity,
+        if let identity = currentActiveAgent?.identity,
            let emoji = identity["emoji"]?.value as? String,
            let normalizedEmoji = Self.normalizedBadgeEmoji(emoji)
         {
@@ -578,20 +815,11 @@ struct ChatProTab: View {
     }
 
     nonisolated static func initialsBadge(for displayName: String) -> String {
-        let words = displayName
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
-            .prefix(2)
-        let initials = words.compactMap(\.first).map(String.init).joined()
-        if !initials.isEmpty {
-            return initials.uppercased()
-        }
-        return "OC"
+        AgentIdentityPresentation.initialsBadge(for: displayName)
     }
 
     nonisolated static func normalizedBadgeEmoji(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty || normalized == "?" ? nil : normalized
+        AgentIdentityPresentation.normalizedBadgeEmoji(value)
     }
 
     nonisolated static func transportAgentID(_ value: String?) -> String {

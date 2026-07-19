@@ -215,6 +215,7 @@ const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
 const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
+const ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
 const ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
@@ -568,6 +569,7 @@ describe("diagnostics-otel service", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     delete process.env.OPENCLAW_OTEL_PRELOADED;
+    delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
     delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
@@ -602,6 +604,11 @@ describe("diagnostics-otel service", () => {
       delete process.env.OPENCLAW_OTEL_PRELOADED;
     } else {
       process.env.OPENCLAW_OTEL_PRELOADED = ORIGINAL_OPENCLAW_OTEL_PRELOADED;
+    }
+    if (ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_PROTOCOL = ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL;
     }
     if (ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN === undefined) {
       delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
@@ -1227,6 +1234,44 @@ describe("diagnostics-otel service", () => {
       capture.spy.mockRestore();
       await service.stop?.(ctx);
     }
+  });
+
+  test("ignores blank OTLP protocol env overrides", async () => {
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "   ";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    if (ctx.config.diagnostics?.otel) {
+      delete ctx.config.diagnostics.otel.protocol;
+    }
+
+    try {
+      await service.start(ctx);
+
+      expect(traceExporterCtor).toHaveBeenCalledOnce();
+      expect(metricExporterCtor).toHaveBeenCalledOnce();
+      expect(ctx.logger.warn).not.toHaveBeenCalledWith(
+        "diagnostics-otel: unsupported protocol    ",
+      );
+    } finally {
+      await service.stop?.(ctx);
+    }
+  });
+
+  test("preserves nonblank OTLP protocol env overrides", async () => {
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = " http/protobuf ";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    if (ctx.config.diagnostics?.otel) {
+      delete ctx.config.diagnostics.otel.protocol;
+    }
+
+    await service.start(ctx);
+
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: unsupported protocol  http/protobuf ",
+    );
   });
 
   test("exports trusted security events as stdout JSONL logs", async () => {
@@ -2841,7 +2886,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.runId")).toBe(false);
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.sessionKey")).toBe(false);
     expect(modelOptions?.startTime).toBeTypeOf("number");
-    expect(Object.hasOwn(modelOptions ?? {}, "kind")).toBe(false);
+    expect(modelOptions?.kind).toBe(2);
     expect(modelCall?.[2]).toBeUndefined();
 
     const harnessCall = startedSpanCall("openclaw.harness.run");
@@ -2878,6 +2923,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(toolOptions?.attributes ?? {}, "openclaw.runId")).toBe(false);
     expect(Object.hasOwn(toolOptions?.attributes ?? {}, "openclaw.sessionKey")).toBe(false);
     expect(toolOptions?.startTime).toBeTypeOf("number");
+    expect(Object.hasOwn(toolOptions ?? {}, "kind")).toBe(false);
     expect(toolCall?.[2]).toBeUndefined();
 
     const modelCallDuration = lastHistogramRecord("openclaw.model_call.duration_ms");

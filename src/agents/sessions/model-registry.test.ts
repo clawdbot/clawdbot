@@ -226,6 +226,44 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
   });
 
+  it("tracks explicit max-token provenance across authored and generated catalogs", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "authored-model", maxTokens: 2_048 }],
+          },
+        },
+      },
+      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai/api/paas/v4",
+            api: "openai-completions",
+            models: [{ id: "catalog-model", maxTokens: 32_768 }],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
+    });
+
+    expect(registry.find("custom", "authored-model")).toMatchObject({
+      maxTokens: 2_048,
+      maxTokensSource: "configured",
+    });
+    expect(registry.find("zai", "catalog-model")).toMatchObject({
+      maxTokens: 32_768,
+      maxTokensSource: "discovered",
+    });
+  });
+
   it("preserves response-model temperature compatibility from generated catalogs", () => {
     const modelsPath = writeModelsJsonWithPluginCatalog({
       root: { providers: {} },

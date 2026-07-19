@@ -817,14 +817,130 @@ describe("applyJobPatch", () => {
   });
 });
 
-function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
+function createMockState(
+  now: number,
+  opts?: { defaultAgentId?: string; scriptPayloadsEnabled?: boolean },
+): CronServiceState {
   return {
     deps: {
       nowMs: () => now,
       defaultAgentId: opts?.defaultAgentId,
+      cronConfig:
+        opts?.scriptPayloadsEnabled === undefined
+          ? undefined
+          : { triggers: { enabled: opts.scriptPayloadsEnabled } },
     },
   } as unknown as CronServiceState;
 }
+
+describe("script payload validation", () => {
+  const now = Date.parse("2026-07-18T12:00:00.000Z");
+  const input = (sessionTarget: CronJob["sessionTarget"] = "isolated") => ({
+    name: "script-job",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget,
+    wakeMode: "now" as const,
+    payload: {
+      kind: "script" as const,
+      script: "return { state: { count: 1 } }",
+      timeoutSeconds: 4_000,
+      toolBudget: 4_000,
+    },
+  });
+
+  it("rejects creation while the trigger gate is disabled", () => {
+    expect(() =>
+      createJob(createMockState(now, { scriptPayloadsEnabled: false }), input()),
+    ).toThrow("cron.triggers.enabled=true");
+  });
+
+  it.each(["current", "session:reporting"] as const)(
+    "rejects the %s session target",
+    (sessionTarget) => {
+      expect(() =>
+        createJob(createMockState(now, { scriptPayloadsEnabled: true }), input(sessionTarget)),
+      ).toThrow('sessionTarget="main" or "isolated"');
+    },
+  );
+
+  it("persists defaults and hard caps when creation is enabled", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+
+    expect(job.payload).toMatchObject({
+      kind: "script",
+      timeoutSeconds: 900,
+      toolBudget: 200,
+    });
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("allows a main-session script for a named agent", () => {
+    const job = createJob(
+      createMockState(now, { defaultAgentId: "main", scriptPayloadsEnabled: true }),
+      { ...input("main"), agentId: "reporter" },
+    );
+
+    expect(job.sessionTarget).toBe("main");
+    expect(job.agentId).toBe("reporter");
+  });
+
+  it("rejects condition triggers because both script kinds own trigger.state", () => {
+    const state = createMockState(now, { scriptPayloadsEnabled: true });
+    expect(() =>
+      createJob(state, {
+        ...input(),
+        trigger: { script: "return { fire: true }" },
+      }),
+    ).toThrow("cannot be combined with a condition trigger");
+
+    const job = createJob(state, input());
+    expect(() =>
+      applyJobPatch(
+        job,
+        { trigger: { script: "return { fire: true }" } },
+        { cronConfig: { triggers: { enabled: true } } },
+      ),
+    ).toThrow("cannot be combined with a condition trigger");
+  });
+
+  it("rejects converting a job to script while disabled and caps enabled patches", () => {
+    const base = createJob(createMockState(now), {
+      name: "agent-job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    expect(() =>
+      applyJobPatch(
+        structuredClone(base),
+        { payload: { kind: "script", script: "return {}" } },
+        { cronConfig: { triggers: { enabled: false } } },
+      ),
+    ).toThrow("cron.triggers.enabled=true");
+
+    const patched = structuredClone(base);
+    applyJobPatch(
+      patched,
+      {
+        payload: {
+          kind: "script",
+          script: "return {}",
+          timeoutSeconds: 9_000,
+          toolBudget: 9_000,
+        },
+      },
+      { cronConfig: { triggers: { enabled: true } } },
+    );
+    expect(patched.payload).toMatchObject({
+      kind: "script",
+      timeoutSeconds: 900,
+      toolBudget: 200,
+    });
+  });
+});
 
 describe("createJob rejects sessionTarget main for non-default agents", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
@@ -1137,18 +1253,21 @@ describe("computeJobPreviousRunAtOrBeforeMs", () => {
 describe("createJob delivery defaults", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
 
-  it('defaults delivery to { mode: "announce" } for isolated agentTurn jobs without explicit delivery', () => {
-    const state = createMockState(now);
-    const job = createJob(state, {
-      name: "isolated-no-delivery",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "hello" },
-    });
-    expect(job.delivery).toEqual({ mode: "announce" });
-  });
+  it.each(["isolated", "current", "session:project-alpha"] as const)(
+    'defaults delivery to { mode: "announce" } for %s agentTurn jobs',
+    (sessionTarget) => {
+      const state = createMockState(now);
+      const job = createJob(state, {
+        name: `${sessionTarget}-no-delivery`,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget,
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+      expect(job.delivery).toEqual({ mode: "announce" });
+    },
+  );
 
   it("preserves explicit delivery for isolated agentTurn jobs", () => {
     const state = createMockState(now);

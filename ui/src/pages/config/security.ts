@@ -12,6 +12,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { PROFILE_OPTIONS } from "../../lib/agents/display.ts";
 
 export type SecurityOverview = {
   gatewayAuth: string;
@@ -32,19 +33,22 @@ type SecurityViewProps = {
   editor: TemplateResult;
 };
 
-const TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
-
 function renderSecurityOverview(props: SecurityViewProps) {
   const { gatewayAuth, execPolicy, deviceAuth, browserEnabled, toolProfile } = props.security;
   const normalizedToolProfile = toolProfile.trim() || "full";
-  const toolProfiles = TOOL_PROFILES.includes(normalizedToolProfile)
-    ? TOOL_PROFILES
-    : [...TOOL_PROFILES, normalizedToolProfile];
+  const profileOptions = PROFILE_OPTIONS.map((profile) => ({
+    value: profile.id as string,
+    label: t(profile.labelKey),
+  }));
+  if (!profileOptions.some((option) => option.value === normalizedToolProfile)) {
+    profileOptions.push({ value: normalizedToolProfile, label: normalizedToolProfile });
+  }
   return renderSettingsSection({ title: t("quickSettings.security.title") }, [
     renderSettingsRow({
       title: t("quickSettings.security.gatewayAuth"),
       control: renderSettingsStatus({
-        kind: gatewayAuth !== "none" ? "ok" : "warn",
+        // "unknown" is a pre-hello placeholder, not a healthy auth mode.
+        kind: gatewayAuth === "none" ? "warn" : gatewayAuth === "unknown" ? "muted" : "ok",
         label: gatewayAuth,
       }),
     }),
@@ -63,7 +67,7 @@ function renderSecurityOverview(props: SecurityViewProps) {
       stacked: true,
       control: renderSettingsSegmented({
         value: normalizedToolProfile,
-        options: toolProfiles.map((profile) => ({ value: profile, label: profile })),
+        options: profileOptions,
         disabled: props.configBusy,
         onChange: (profile) => props.onToolProfileChange?.(profile),
       }),

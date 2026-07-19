@@ -109,7 +109,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   sessionKey: "",
   clearAgent: false,
   enabled: true,
-  deleteAfterRun: true,
+  deleteAfterRun: false,
   scheduleKind: "every",
   scheduleAt: "",
   everyAmount: "30",
@@ -756,7 +756,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
     enabled: job.enabled,
-    deleteAfterRun: job.deleteAfterRun ?? false,
+    deleteAfterRun: job.deleteAfterRun ?? job.schedule.kind === "at",
     scheduleKind: job.schedule.kind,
     scheduleAt: "",
     everyAmount: prev.everyAmount,
@@ -1063,7 +1063,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
       enabled: form.enabled,
-      deleteAfterRun: form.deleteAfterRun,
+      ...(form.scheduleKind === "at" || form.scheduleKind === "on-exit"
+        ? { deleteAfterRun: form.deleteAfterRun }
+        : {}),
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       delivery,

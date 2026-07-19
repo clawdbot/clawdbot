@@ -30,6 +30,7 @@ import {
   checkQmdBinaryAvailability,
   resolveQmdBinaryUnavailableReason,
 } from "../memory-host-sdk/engine-qmd.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditDreamingArtifacts,
@@ -444,20 +445,12 @@ function listRememberAcrossConversationAgentIds(
   cfg: OpenClawConfig,
   defaultAgentId: string,
 ): string[] {
-  const defaultsEnabled = cfg.agents?.defaults?.memorySearch?.rememberAcrossConversations === true;
   const configuredAgents = cfg.agents?.list ?? [];
   const enabledAgentIds = configuredAgents
-    .filter(
-      (agent) =>
-        (agent.memorySearch?.rememberAcrossConversations ?? defaultsEnabled) &&
-        Boolean(agent.id?.trim()),
-    )
+    .filter((agent) => resolveRememberAcrossConversations(cfg, agent.id))
     .map((agent) => agent.id.trim());
-  const defaultEntry = configuredAgents.find(
-    (agent) => agent.id.trim().toLowerCase() === defaultAgentId.trim().toLowerCase(),
-  );
   if (
-    (defaultEntry?.memorySearch?.rememberAcrossConversations ?? defaultsEnabled) &&
+    resolveRememberAcrossConversations(cfg, defaultAgentId) &&
     !enabledAgentIds.some(
       (agentId) => agentId.toLowerCase() === defaultAgentId.trim().toLowerCase(),
     )
@@ -514,18 +507,18 @@ function noteRememberAcrossConversationsHealth(params: {
   for (const agentId of agentIds) {
     if (!activeMemoryAvailable) {
       params.noteFn(
-        `Remember across conversations is enabled for agent "${agentId}", but the Active Memory plugin is disabled. Enable the plugin or turn off Remember across conversations.`,
+        `Remember across conversations is effectively enabled for agent "${agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memorySearch.rememberAcrossConversations to false.`,
         "Memory search",
       );
     }
     if (activeMemoryAvailable && !conversationRecallSupport.providerSupported) {
       params.noteFn(
-        `Remember across conversations is enabled for agent "${agentId}", but the current memory provider does not support protected private transcript recall. Turn off Remember across conversations or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
+        `Remember across conversations is effectively enabled for agent "${agentId}", but the current memory provider does not support protected private transcript recall. Set memorySearch.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
         "Memory search",
       );
     } else if (activeMemoryAvailable && !conversationRecallSupport.memorySearchAllowed) {
       params.noteFn(
-        `Remember across conversations is enabled for agent "${agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or turn off Remember across conversations.`,
+        `Remember across conversations is effectively enabled for agent "${agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memorySearch.rememberAcrossConversations to false.`,
         "Memory search",
       );
     }
@@ -534,7 +527,7 @@ function noteRememberAcrossConversationsHealth(params: {
       !resolveMemorySearchConfig(params.cfg, agentId)
     ) {
       params.noteFn(
-        `Remember across conversations is enabled for agent "${agentId}", but memory search is disabled. Enable memory search or turn off Remember across conversations.`,
+        `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.`,
         "Memory search",
       );
     }
@@ -586,7 +579,7 @@ export async function noteMemorySearchHealth(
   if (!resolved) {
     noteFn(
       recallHealth.defaultAgentEnabled
-        ? `Remember across conversations is enabled for agent "${agentId}", but memory search is disabled. Enable memory search or turn off Remember across conversations.`
+        ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.`
         : "Memory search is explicitly disabled (enabled: false).",
       "Memory search",
     );

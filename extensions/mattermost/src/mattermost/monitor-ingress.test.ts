@@ -38,9 +38,13 @@ function postedEvent(params?: {
   });
 }
 
-function startMonitor(queue: MattermostIngressQueue, dispatch: MattermostIngressDispatch) {
+function startMonitor(
+  queue: MattermostIngressQueue,
+  dispatch: MattermostIngressDispatch,
+  accountId = "default",
+) {
   return createMattermostIngressMonitor({
-    accountId: "default",
+    accountId,
     queue,
     dispatch,
     runtime: { error: vi.fn(), log: vi.fn() },
@@ -49,20 +53,35 @@ function startMonitor(queue: MattermostIngressQueue, dispatch: MattermostIngress
   });
 }
 
-async function withQueue<T>(fn: (queue: MattermostIngressQueue) => Promise<T>): Promise<T> {
-  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mattermost-ingress-"));
-  const stateDir = await fs.realpath(created);
-  const queue = createChannelIngressQueueForTests<MattermostIngressPayload>({
+function createQueue(stateDir: string, accountId: string): MattermostIngressQueue {
+  return createChannelIngressQueueForTests<MattermostIngressPayload>({
     channelId: "mattermost",
-    accountId: "default",
+    accountId,
     stateDir,
   });
+}
+
+async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mattermost-ingress-"));
+  const stateDir = await fs.realpath(created);
   try {
-    return await fn(queue);
+    return await fn(stateDir);
   } finally {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
+}
+
+async function withQueue<T>(fn: (queue: MattermostIngressQueue) => Promise<T>): Promise<T> {
+  return await withStateDir(async (stateDir) => await fn(createQueue(stateDir, "default")));
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise = () => {};
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
 }
 
 function testLifecycle() {
@@ -127,6 +146,88 @@ describe("Mattermost durable ingress", () => {
         expect(recoveredDispatch).toHaveBeenCalledTimes(1);
       } finally {
         await recovered.stop();
+      }
+    });
+  });
+
+  it("settles only the restarted account and recovers its durable row exactly once", async () => {
+    await withStateDir(async (stateDir) => {
+      const queueA = createQueue(stateDir, "account-a");
+      const queueB = createQueue(stateDir, "account-b");
+      const dispatchA = vi.fn<MattermostIngressDispatch>(async (_post, _payload, lifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
+      });
+      const dispatchBBeforeRestart = vi.fn<MattermostIngressDispatch>(async () => undefined);
+      const monitorA = startMonitor(queueA, dispatchA, "account-a");
+      const monitorBBeforeRestart = startMonitor(queueB, dispatchBBeforeRestart, "account-b");
+      const admissionStored = createDeferred();
+      const releaseAdmission = createDeferred();
+      const enqueueB = queueB.enqueue.bind(queueB);
+      queueB.enqueue = async (...args) => {
+        const result = await enqueueB(...args);
+        admissionStored.resolve();
+        await releaseAdmission.promise;
+        return result;
+      };
+      let admittingB: Promise<void> | undefined;
+      let stoppingB: Promise<void> | undefined;
+
+      try {
+        await Promise.all([monitorA.waitForIdle(), monitorBBeforeRestart.waitForIdle()]);
+        await monitorA.receive(postedEvent({ postId: "post-account-a" }));
+        await monitorA.waitForIdle();
+        const claimsABefore = await queueA.listClaims();
+        expect(claimsABefore).toHaveLength(1);
+        expect(dispatchA).toHaveBeenCalledTimes(1);
+
+        admittingB = monitorBBeforeRestart.receive(postedEvent({ postId: "post-account-b" }));
+        await admissionStored.promise;
+        let stopSettled = false;
+        stoppingB = monitorBBeforeRestart.stop().then(() => {
+          stopSettled = true;
+        });
+        await Promise.resolve();
+
+        // stop() must wait for the serialized append admission. Account A's
+        // drain claim and debounce handoff stay owned by its live monitor.
+        expect(stopSettled).toBe(false);
+        expect(await queueA.listClaims()).toEqual(claimsABefore);
+        expect(dispatchA).toHaveBeenCalledTimes(1);
+
+        releaseAdmission.resolve();
+        await Promise.all([admittingB, stoppingB]);
+        expect(dispatchBBeforeRestart).not.toHaveBeenCalled();
+        expect(await queueB.listPending({ limit: "all" })).toEqual([
+          expect.objectContaining({ id: "post-account-b" }),
+        ]);
+        expect(await queueA.listClaims()).toEqual(claimsABefore);
+
+        const dispatchBAfterRestart = vi.fn<MattermostIngressDispatch>(
+          async (_post, _payload, lifecycle) => {
+            await lifecycle.onAdopted();
+          },
+        );
+        const monitorBAfterRestart = startMonitor(queueB, dispatchBAfterRestart, "account-b");
+        try {
+          await monitorBAfterRestart.waitForIdle();
+          expect(dispatchBAfterRestart).toHaveBeenCalledTimes(1);
+          expect(dispatchBAfterRestart.mock.calls[0]?.[0].id).toBe("post-account-b");
+
+          await monitorBAfterRestart.receive(postedEvent({ postId: "post-account-b" }));
+          await monitorBAfterRestart.waitForIdle();
+          expect(dispatchBAfterRestart).toHaveBeenCalledTimes(1);
+          expect(await queueA.listClaims()).toEqual(claimsABefore);
+          expect(dispatchA).toHaveBeenCalledTimes(1);
+        } finally {
+          await monitorBAfterRestart.stop();
+        }
+      } finally {
+        releaseAdmission.resolve();
+        await Promise.allSettled(
+          [admittingB, stoppingB].filter((task): task is Promise<void> => task !== undefined),
+        );
+        await Promise.allSettled([monitorA.stop(), monitorBBeforeRestart.stop()]);
       }
     });
   });

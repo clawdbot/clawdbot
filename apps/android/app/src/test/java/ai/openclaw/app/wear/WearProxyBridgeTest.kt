@@ -179,6 +179,29 @@ class WearProxyBridgeTest {
     }
 
   @Test
+  fun resyncInvalidatesTheWatchSnapshot() =
+    withActorScope { actorScope ->
+      val sent = mutableListOf<SentWearMessage>()
+      val bridge =
+        WearProxyBridge(
+          scope = actorScope,
+          sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
+          peerResolver = WearPeerResolver { setOf("watch-1") },
+          monotonicMillis = { 1_000L },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+        )
+
+      bridge.publishResync()
+      bridge.awaitIdleForTests()
+
+      val event = (WearProtocolCodec.decode(sent.single().data) as WearDecodeResult.Success).message as WearMessage.Event
+      assertEquals(WearProtocol.EVENT_PATH, sent.single().path)
+      assertEquals(WearEventType.Resync, event.event)
+      assertEquals(1L, event.sequence)
+      assertEquals(null, event.payload)
+    }
+
+  @Test
   fun historyResponseWatermarkExcludesEventsQueuedBehindIt() =
     runTest {
       val sent = mutableListOf<SentWearMessage>()

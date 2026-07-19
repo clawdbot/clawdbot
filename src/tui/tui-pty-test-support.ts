@@ -13,8 +13,10 @@ export type PtyRun = {
   write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
   waitForOutput: (needle: string, timeoutMs?: number) => Promise<string>;
   waitForExit: (timeoutMs?: number) => Promise<PtyExitEvent>;
-  dispose: () => void;
+  dispose: () => Promise<void>;
 };
+
+const PTY_EXIT_SETTLE_MS = 25;
 
 /** Polls until a reader returns a value or the timeout expires. */
 export function waitFor<T>(params: {
@@ -116,13 +118,22 @@ export function startPty(
     },
   });
 
-  pty.onData((data) => {
+  const dataSubscription = pty.onData((data) => {
     output += data;
     mirrorPtyOutput(data);
   });
-  pty.onExit((event) => {
+  const exitSubscription = pty.onExit((event) => {
     exitEvent = event;
   });
+
+  const waitForExit = async (timeoutMs = opts.exitTimeoutMs) =>
+    await waitFor({
+      timeoutMs,
+      read: () => exitEvent,
+      onTimeout: () => new Error(`timed out waiting for PTY exit\n${output}`),
+    });
+
+  let disposePromise: Promise<void> | undefined;
 
   const run: PtyRun = {
     output: () => output,
@@ -143,16 +154,23 @@ export function startPty(
         },
         onTimeout: () => new Error(`timed out waiting for ${JSON.stringify(needle)}\n${output}`),
       }),
-    waitForExit: async (timeoutMs = opts.exitTimeoutMs) =>
-      await waitFor({
-        timeoutMs,
-        read: () => exitEvent,
-        onTimeout: () => new Error(`timed out waiting for PTY exit\n${output}`),
-      }),
+    waitForExit,
     dispose: () => {
-      if (!exitEvent) {
-        pty.kill("SIGTERM");
-      }
+      disposePromise ??= (async () => {
+        dataSubscription.dispose();
+        try {
+          if (!exitEvent) {
+            pty.kill("SIGTERM");
+          }
+          await waitForExit();
+          // node-pty releases its native exit callback after onExit returns.
+          // Give that release a turn before Vitest tears down the worker.
+          await sleep(PTY_EXIT_SETTLE_MS);
+        } finally {
+          exitSubscription.dispose();
+        }
+      })();
+      return disposePromise;
     },
   };
   opts.activeRuns?.push(run);

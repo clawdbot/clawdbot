@@ -415,8 +415,8 @@ wa-popover.new-session-page__select--folder::part(body) {
   padding: 6px 14px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--accent);
-  color: var(--accent-contrast, #fff);
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;

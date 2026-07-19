@@ -170,23 +170,9 @@ describe("runDoctorStateSqliteCompact", () => {
     expect(report.integrityCheck).toBe("ok");
   });
 
-  it("clears authoritative quarantine and verification history after compaction", async () => {
+  it("clears authoritative quarantine after compaction", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
-    const sqlite = requireNodeSqlite();
-    const history = new sqlite.DatabaseSync(sqlitePath);
-    try {
-      history
-        .prepare(
-          `
-            INSERT INTO database_verifications (path, kind, verified_at, result, error)
-            VALUES (?, 'state', 1, 'error', 'corrupt index')
-          `,
-        )
-        .run(sqlitePath);
-    } finally {
-      history.close();
-    }
     expect(
       recordOpenClawDatabaseQuarantine({
         env,
@@ -199,10 +185,7 @@ describe("runDoctorStateSqliteCompact", () => {
     await runDoctorStateSqliteCompact({ env });
 
     expect(readOpenClawDatabaseQuarantine(sqlitePath, { env })).toBeUndefined();
-    const repaired = openOpenClawStateDatabase({ env });
-    expect(
-      repaired.db.prepare("SELECT 1 FROM database_verifications WHERE path = ?").get(sqlitePath),
-    ).toBeUndefined();
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
   });
 
   it.skipIf(process.platform === "win32")("reapplies owner-only SQLite permissions", async () => {

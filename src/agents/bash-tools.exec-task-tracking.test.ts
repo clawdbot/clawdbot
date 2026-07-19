@@ -51,7 +51,6 @@ describe("background exec task tracking", () => {
       startedAt: 100,
       lastEventAt: 100,
       progressSummary: "Command running",
-      detail: { processSessionId: "amber-reef" },
     });
   });
 
@@ -137,6 +136,9 @@ describe("background exec task tracking", () => {
       );
       expect(JSON.stringify(taskRuntime.finalizeTaskRunByRunId.mock.calls)).not.toContain(
         "secret output",
+      );
+      expect(JSON.stringify(taskRuntime.finalizeTaskRunByRunId.mock.calls)).not.toContain(
+        "processSessionId",
       );
     },
   );

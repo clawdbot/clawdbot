@@ -51,6 +51,7 @@ function createContext(): ApplicationContext {
       password: "",
     },
     subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
   } as unknown as ApplicationGateway;
   return { gateway } as unknown as ApplicationContext;
 }

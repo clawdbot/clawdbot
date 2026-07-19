@@ -6,6 +6,7 @@ import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
+import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
 type UrbitSseLogger = {
@@ -63,7 +64,11 @@ export class UrbitSSEClient {
   }> = [];
   eventHandlers = new Map<
     number,
-    { event?: (data: unknown) => void; err?: (error: unknown) => void; quit?: () => void }
+    {
+      event?: (data: unknown) => Promise<void> | void;
+      err?: (error: unknown) => void;
+      quit?: () => void;
+    }
   >();
   aborted = false;
   streamController: AbortController | null = null;
@@ -80,7 +85,7 @@ export class UrbitSSEClient {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   streamRelease: (() => Promise<void>) | null = null;
 
-  // Event ack tracking - must ack every ~50 events to keep channel healthy
+  // Event ack tracking keeps each HTTP channel's delivered window bounded.
   private lastHeardEventId = -1;
   private lastAcknowledgedEventId = -1;
   private readonly ackThreshold = 20;
@@ -115,10 +120,24 @@ export class UrbitSSEClient {
     };
   }
 
+  private resetChannelIdentity(): void {
+    this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
+    this.channelUrl = new URL(`/~/channel/${this.channelId}`, this.url).toString();
+    this.lastHeardEventId = -1;
+    this.lastAcknowledgedEventId = -1;
+  }
+
+  private async createCurrentChannel(): Promise<void> {
+    await ensureUrbitChannelOpen(this.channelRequestContext(), {
+      createBody: this.subscriptions,
+      createAuditContext: "tlon-urbit-channel-create",
+    });
+  }
+
   async subscribe(params: {
     app: string;
     path: string;
-    event?: (data: unknown) => void;
+    event?: (data: unknown) => Promise<void> | void;
     err?: (error: unknown) => void;
     quit?: () => void;
   }) {
@@ -170,10 +189,10 @@ export class UrbitSSEClient {
   }
 
   async connect() {
-    await ensureUrbitChannelOpen(this.channelRequestContext(), {
-      createBody: this.subscriptions,
-      createAuditContext: "tlon-urbit-channel-create",
-    });
+    // A fresh HTTP channel owns an independent event-id and ack sequence.
+    this.lastHeardEventId = -1;
+    this.lastAcknowledgedEventId = -1;
+    await this.createCurrentChannel();
 
     await this.openStream();
     this.isConnected = true;
@@ -218,7 +237,7 @@ export class UrbitSSEClient {
     if (!response.ok) {
       this.streamRelease = null;
       await release();
-      throw new Error(`Stream connection failed: ${response.status}`);
+      throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
     }
 
     this.processStream(response.body).catch((error: unknown) => {
@@ -263,12 +282,12 @@ export class UrbitSSEClient {
       buffer += text;
       bufferBytes = nextBytes;
     };
-    const consumeText = (text: string) => {
+    const consumeText = async (text: string) => {
       let offset = 0;
       if (pendingDelimiterNewline && text.length > 0) {
         pendingDelimiterNewline = false;
         if (text.startsWith("\n")) {
-          this.processEvent(buffer);
+          await this.processEvent(buffer);
           buffer = "";
           bufferBytes = 0;
           offset = 1;
@@ -287,7 +306,7 @@ export class UrbitSSEClient {
           return;
         }
         appendPending(text.slice(offset, eventEnd));
-        this.processEvent(buffer);
+        await this.processEvent(buffer);
         buffer = "";
         bufferBytes = 0;
         offset = eventEnd + 2;
@@ -300,13 +319,13 @@ export class UrbitSSEClient {
           break;
         }
         if (typeof chunk === "string") {
-          consumeText(decoder.decode());
-          consumeText(chunk);
+          await consumeText(decoder.decode());
+          await consumeText(chunk);
         } else {
-          consumeText(decoder.decode(chunk as Uint8Array, { stream: true }));
+          await consumeText(decoder.decode(chunk as Uint8Array, { stream: true }));
         }
       }
-      consumeText(decoder.decode());
+      await consumeText(decoder.decode());
     } finally {
       if (this.streamRelease) {
         const release = this.streamRelease;
@@ -322,7 +341,7 @@ export class UrbitSSEClient {
     }
   }
 
-  processEvent(eventData: string) {
+  async processEvent(eventData: string): Promise<void> {
     const lines = eventData.split("\n");
     let data: string | null = null;
     let eventId: number | null = null;
@@ -340,49 +359,54 @@ export class UrbitSSEClient {
       return;
     }
 
-    // Track event ID and send ack if needed
-    if (eventId !== null && !Number.isNaN(eventId)) {
-      if (eventId > this.lastHeardEventId) {
-        this.lastHeardEventId = eventId;
-        if (eventId - this.lastAcknowledgedEventId > this.ackThreshold) {
-          this.logger.log?.(
-            `[SSE] Acking event ${eventId} (last acked: ${this.lastAcknowledgedEventId})`,
-          );
-          this.ack(eventId).catch((err: unknown) => {
-            this.logger.error?.(`Failed to ack event ${eventId}: ${String(err)}`);
-          });
-        }
-      }
-    }
-
+    let parsed: ReturnType<typeof parseUrbitSsePayload>;
     try {
-      const parsed = parseUrbitSsePayload(data);
-
-      if (parsed.response === "quit") {
-        if (parsed.id) {
-          const handlers = this.eventHandlers.get(parsed.id);
-          if (handlers?.quit) {
-            handlers.quit();
-          }
-        }
-        return;
-      }
-
-      if (parsed.id && this.eventHandlers.has(parsed.id)) {
-        const { event } = this.eventHandlers.get(parsed.id) ?? {};
-        if (event && parsed.json) {
-          event(parsed.json);
-        }
-      } else if (parsed.json) {
-        for (const { event } of this.eventHandlers.values()) {
-          if (event) {
-            event(parsed.json);
-          }
-        }
-      }
+      parsed = parseUrbitSsePayload(data);
     } catch (error) {
+      // Malformed transport payloads are permanent. Count them handled so one
+      // poison event cannot pin the Urbit channel forever.
       this.logger.error?.(`Error parsing SSE event: ${String(error)}`);
+      await this.acknowledgeHandledEventIfNeeded(eventId);
+      return;
     }
+
+    if (parsed.response === "quit") {
+      if (parsed.id) {
+        const handlers = this.eventHandlers.get(parsed.id);
+        if (handlers?.quit) {
+          handlers.quit();
+        }
+      }
+    } else if (parsed.id && this.eventHandlers.has(parsed.id)) {
+      const { event } = this.eventHandlers.get(parsed.id) ?? {};
+      if (event && parsed.json) {
+        await event(parsed.json);
+      }
+    } else if (parsed.json) {
+      for (const { event } of this.eventHandlers.values()) {
+        if (event) {
+          await event(parsed.json);
+        }
+      }
+    }
+    // Handler failures propagate without ack. Durable callbacks resolve only after append.
+    await this.acknowledgeHandledEventIfNeeded(eventId);
+  }
+
+  private async acknowledgeHandledEventIfNeeded(eventId: number | null): Promise<void> {
+    if (eventId === null || eventId <= this.lastAcknowledgedEventId) {
+      return;
+    }
+    this.lastHeardEventId = Math.max(this.lastHeardEventId, eventId);
+    if (this.lastHeardEventId - this.lastAcknowledgedEventId <= this.ackThreshold) {
+      return;
+    }
+    this.logger.log?.(
+      `[SSE] Acking event ${this.lastHeardEventId} (last acked: ${this.lastAcknowledgedEventId})`,
+    );
+    // The acknowledged watermark advances only after PUT succeeds. A replay
+    // therefore retries a failed ack instead of leaving the subscription clogged.
+    await this.ack(this.lastHeardEventId);
   }
 
   async poke(params: { app: string; mark: string; json: unknown }) {
@@ -414,8 +438,6 @@ export class UrbitSSEClient {
   }
 
   private async ack(eventId: number): Promise<void> {
-    this.lastAcknowledgedEventId = eventId;
-
     const ackData = {
       id: Date.now(),
       action: "ack",
@@ -431,6 +453,7 @@ export class UrbitSSEClient {
       if (!response.ok) {
         throw new Error(`Ack failed with status ${response.status}`);
       }
+      this.lastAcknowledgedEventId = eventId;
     } finally {
       await release();
     }
@@ -470,15 +493,31 @@ export class UrbitSSEClient {
       setTimeout(resolve, delay);
     });
 
-    try {
-      this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
-      this.channelUrl = new URL(`/~/channel/${this.channelId}`, this.url).toString();
+    if (this.aborted || !this.autoReconnect) {
+      return;
+    }
 
+    try {
       if (this.onReconnect) {
         await this.onReconnect(this);
       }
 
-      await this.connect();
+      try {
+        // Reopen the same Eyre channel. Its queue retains every unacked event;
+        // switching ids here would discard the cursor and strand failed admission.
+        await this.openStream();
+      } catch (error) {
+        if (!(error instanceof UrbitHttpError) || error.status !== 404) {
+          throw error;
+        }
+        // Eyre deletes idle channels. Only a definitive missing-channel response
+        // permits losing the old cursor and rebuilding every subscription.
+        this.resetChannelIdentity();
+        await this.createCurrentChannel();
+        await this.openStream();
+      }
+      this.isConnected = true;
+      this.reconnectAttempts = 0;
       this.logger.log?.("[SSE] Reconnection successful!");
     } catch (error) {
       this.logger.error?.(`[SSE] Reconnection failed: ${String(error)}`);
@@ -486,10 +525,14 @@ export class UrbitSSEClient {
     }
   }
 
-  async close() {
+  stopReceiving(): void {
     this.aborted = true;
     this.isConnected = false;
     this.streamController?.abort();
+  }
+
+  async close() {
+    this.stopReceiving();
 
     try {
       const unsubscribes = this.subscriptions.map((sub) => ({
@@ -504,7 +547,7 @@ export class UrbitSSEClient {
           auditContext: "tlon-urbit-unsubscribe",
         });
         try {
-          void response.body?.cancel();
+          void response.body?.cancel().catch(() => undefined);
         } finally {
           await release();
         }
@@ -527,7 +570,7 @@ export class UrbitSSEClient {
           auditContext: "tlon-urbit-channel-close",
         });
         try {
-          void response.body?.cancel();
+          void response.body?.cancel().catch(() => undefined);
         } finally {
           await release();
         }

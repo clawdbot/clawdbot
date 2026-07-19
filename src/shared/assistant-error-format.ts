@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Assistant error formatting helpers normalize assistant-visible error payloads.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -107,7 +106,7 @@ function extractHttpStatusMatch(
     return null;
   }
   const code = Number(match[1]);
-  if (!Number.isFinite(code)) {
+  if (!Number.isInteger(code) || code < 100 || code > 599) {
     return null;
   }
   return { code, rest: (match[2] ?? "").trim() };
@@ -174,10 +173,10 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   let httpCode: string | undefined;
   let candidate = trimmed;
 
-  const httpPrefixMatch = candidate.match(/^(\d{3})\s+(.+)$/s);
-  if (httpPrefixMatch) {
-    httpCode = httpPrefixMatch[1];
-    candidate = expectDefined(httpPrefixMatch[2], "http prefix match capture group 2").trim();
+  const httpPrefix = extractHttpStatusMatch(candidate.match(/^(\d{3})\s+(.+)$/s));
+  if (httpPrefix) {
+    httpCode = String(httpPrefix.code);
+    candidate = httpPrefix.rest;
   }
 
   const payload = parseApiErrorPayload(candidate);
@@ -249,11 +248,10 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     );
   }
 
-  const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
+  const httpMatch = extractHttpStatusMatch(trimmed.match(HTTP_STATUS_PREFIX_RE));
   if (httpMatch) {
-    const rest = expectDefined(httpMatch[2], "http match capture group 2").trim();
-    if (!rest.startsWith("{")) {
-      return `HTTP ${httpMatch[1]}: ${rest}`;
+    if (!httpMatch.rest.startsWith("{")) {
+      return `HTTP ${httpMatch.code}: ${httpMatch.rest}`;
     }
   }
 

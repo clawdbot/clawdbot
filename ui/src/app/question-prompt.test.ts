@@ -537,7 +537,7 @@ describe("refreshPendingQuestions", () => {
     });
   });
 
-  it("terminalizes a missing pending question after authoritative not-found", async () => {
+  it("terminalizes a missing pending question with an unknown outcome after not-found", async () => {
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "question.list") {
         return { questions: [] };
@@ -553,11 +553,11 @@ describe("refreshPendingQuestions", () => {
     });
 
     refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("unavailable"));
 
     expect(state.prompts.get("question-1")).toMatchObject({
-      status: "answered",
-      answeredElsewhere: true,
+      status: "unavailable",
+      answeredElsewhere: false,
       locallyExpired: false,
       submitting: false,
       error: null,

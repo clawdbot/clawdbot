@@ -47,6 +47,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),
                 .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),

@@ -246,6 +246,37 @@ describe("qa suite", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels a successful lab readiness body before releasing its guard", async () => {
+    const events: string[] = [];
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            events.push("cancel");
+          },
+        }),
+        { status: 200 },
+      ),
+      release: async () => {
+        events.push("release");
+      },
+    });
+
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(events).toEqual(["cancel", "release"]);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
   it("bounds a hung lab readiness request by the remaining startup deadline", async () => {
     vi.useFakeTimers();
     const stop = vi.fn(async () => {});

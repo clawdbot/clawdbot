@@ -123,7 +123,7 @@ jobs:
             exit 1
           fi
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
           if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
             echo "Alpha preflight target must be reachable from ${alpha_branch}." >&2
             exit 1
@@ -265,7 +265,7 @@ jobs:
           else
             # The workflow runs from trusted main, while beta and stable tags can
             # point at their frozen release branch after it diverged from main.
-            git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
             RELEASE_TAG="${RELEASE_REF}"
             export RELEASE_TAG
             if ! git merge-base --is-ancestor "${RELEASE_SHA}" "${RELEASE_BRANCH_REF}"; then
@@ -280,7 +280,7 @@ jobs:
                 exit 1
               fi
               RELEASE_BRANCH_REF="refs/remotes/origin/${RELEASE_BRANCH_NAME}"
-              git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"
+              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"
               export RELEASE_BRANCH_REF
             fi
           fi
@@ -621,7 +621,7 @@ jobs:
               echo "SHA-pinned release-publish tag does not match the OpenClaw npm workflow SHA." >&2
               exit 1
             }
-            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
             git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main || {
               echo "SHA-pinned OpenClaw npm workflow revision is not reachable from current main." >&2
               exit 1
@@ -750,7 +750,7 @@ jobs:
             exit 1
           fi
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
           if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
             echo "Alpha publish tag must be reachable from ${alpha_branch}." >&2
             exit 1
@@ -911,7 +911,7 @@ jobs:
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
           # Fetch the workflow branch so merge-base ancestry checks keep working
           # for older tagged commits contained in a release branch.
-          git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
           pnpm release:openclaw:npm:check
 
       - name: Verify prepared tarball provenance

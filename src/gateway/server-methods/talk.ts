@@ -9,6 +9,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  missingScopeErrorShape,
   type TalkSpeakParams,
   validateTalkCatalogParams,
   validateTalkConfigParams,
@@ -19,6 +20,10 @@ import {
   withSpeakerSelectionCompat,
   withSpeakerSelectionFallbackCompat,
 } from "../../../packages/speech-core/speaker.js";
+import {
+  CODE_HEAVY_SPOKEN_FALLBACK,
+  isCodeHeavySpeechText,
+} from "../../../packages/speech-core/src/speech-text.js";
 import { getVoiceProviderConfig } from "../../../packages/speech-core/voice-models.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
@@ -51,7 +56,7 @@ import {
   synthesizeSpeech,
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
-import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
@@ -727,7 +732,10 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${TALK_SECRETS_SCOPE}`),
+        missingScopeErrorShape({
+          missingScope: TALK_SECRETS_SCOPE,
+          requiredScopes: [READ_SCOPE, TALK_SECRETS_SCOPE],
+        }),
       );
       return;
     }
@@ -807,8 +815,9 @@ export const talkHandlers: GatewayRequestHandlers = {
         runtimeConfig,
         typedParams,
       );
+      const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
       const result = await synthesizeSpeech({
-        text,
+        text: speechText,
         cfg: setup.cfg,
         overrides,
         disableFallback: true,

@@ -516,6 +516,15 @@ public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
     public let sessionId: String?
 }
 
+public struct OpenClawChatRewindResponse: Codable, Sendable {
+    public let editorText: String?
+}
+
+public struct OpenClawChatForkAtMessageResponse: Codable, Sendable {
+    public let sessionKey: String
+    public let editorText: String?
+}
+
 public struct OpenClawChatEventPayload: Codable, Sendable {
     public let runId: String?
     public let sessionKey: String?

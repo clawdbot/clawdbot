@@ -52,6 +52,7 @@ export function resolveAgentCredentialsForDiscovery(
   const credentials = addEnvBackedAgentCredentials(
     resolveAgentCredentialMapFromStore(store, {
       includeSecretRefPlaceholders: options?.readOnly === true,
+      config: options?.config,
     }),
     {
       config: options?.config,

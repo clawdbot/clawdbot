@@ -200,6 +200,7 @@ function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unkn
     contextTokens: model.contextTokens ?? null,
     headers: record.headers ?? null,
     maxTokens: model.maxTokens,
+    maxTokensSource: model.maxTokensSource ?? null,
     params: model.params ?? null,
     requestTimeoutMs: model.requestTimeoutMs ?? null,
   };

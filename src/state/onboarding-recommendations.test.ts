@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -35,6 +36,7 @@ describe("onboarding recommendations store", () => {
       const inventory = [{ label: "Chat", bundleId: "com.example.chat" }];
 
       expect(readOnboardingRecommendations(database)).toBeNull();
+      expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
       const written = writeOnboardingRecommendationsOffer({
         inventory,
         matches,

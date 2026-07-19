@@ -550,8 +550,15 @@ describe("plugin session actions", () => {
       scopes: [READ_SCOPE],
     });
     const missingApprovalScopeError = requireHookError(missingApprovalScope);
-    expect(missingApprovalScopeError.code).toBe("INVALID_REQUEST");
-    expect(missingApprovalScopeError.message).toBe(`missing scope: ${APPROVALS_SCOPE}`);
+    expect(missingApprovalScopeError).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${APPROVALS_SCOPE}`,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: APPROVALS_SCOPE,
+        requiredScopes: [APPROVALS_SCOPE],
+      },
+    });
     expect(handlerCalls).toEqual([
       { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
       { scopes: [WRITE_SCOPE], action: "view" },

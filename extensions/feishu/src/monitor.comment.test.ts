@@ -2,7 +2,7 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import * as dedup from "./dedup.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import {
   resolveDriveCommentEventTurn,
@@ -872,20 +872,10 @@ describe("resolveDriveCommentEventTurn", () => {
 });
 
 describe("drive.notice.comment_add_v1 monitor handler", () => {
-  let processingClaim: dedup.FeishuMessageProcessingClaim;
   beforeEach(() => {
     lastRuntime = createNonExitingRuntimeEnv();
     handleFeishuCommentEventMock.mockClear();
     createFeishuClientMock.mockReset().mockReturnValue(makeOpenApiClient({}) as never);
-    processingClaim = {
-      keys: ["drive-comment:test"],
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
-    };
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue({
-      kind: "claimed",
-      handle: processingClaim,
-    });
   });
 
   afterEach(() => {
@@ -942,10 +932,6 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
         reply_id: "reply_2",
       }),
     );
-    await vi.waitFor(() => {
-      expect(dedup.claimUnprocessedFeishuMessage).toHaveBeenCalledTimes(2);
-    });
-
     expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
 
     resolveFirst?.();
@@ -969,48 +955,41 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     expect(secondCall?.event?.event_id).toBe("evt_2");
   });
 
-  it("drops duplicate comment events before dispatch", async () => {
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue({ kind: "duplicate" });
-    const onComment = await setupCommentMonitorHandler();
-
-    await onComment(makeDriveCommentEvent());
-
-    expect(handleFeishuCommentEventMock).not.toHaveBeenCalled();
-  });
-
-  it("records generic comment-handler failures so replay stays closed", async () => {
-    const onComment = await setupCommentMonitorHandler();
-    handleFeishuCommentEventMock.mockRejectedValueOnce(new Error("post-send failure"));
-
-    await onComment(makeDriveCommentEvent());
-
-    await vi.waitFor(() => {
-      expect(processingClaim.commit).toHaveBeenCalledTimes(1);
-      expect(processingClaim.release).not.toHaveBeenCalled();
-      expect(lastRuntime?.error).toHaveBeenCalledWith(
-        "feishu[default]: error handling drive comment notice: Error: post-send failure",
-      );
-    });
-  });
-
-  it("releases comment replay without recording when failure is explicitly retryable", async () => {
-    const onComment = await setupCommentMonitorHandler();
-    handleFeishuCommentEventMock.mockRejectedValueOnce(
-      Object.assign(new Error("retry me"), {
-        name: "FeishuRetryableSyntheticEventError",
-      }),
+  it("does not execute a queued durable comment after its claim aborts", async () => {
+    let resolveFirst!: () => void;
+    handleFeishuCommentEventMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        }),
     );
-
-    await onComment(makeDriveCommentEvent());
-
-    await vi.waitFor(() => {
-      expect(processingClaim.commit).not.toHaveBeenCalled();
-      expect(processingClaim.release).toHaveBeenCalledWith({
-        error: expect.objectContaining({ message: "retry me" }),
-      });
-      expect(lastRuntime?.error).toHaveBeenCalledWith(
-        "feishu[default]: error handling drive comment notice: FeishuRetryableSyntheticEventError: retry me",
-      );
+    const controller = new AbortController();
+    const abandoned = vi.fn(async () => {});
+    const lifecycle: FeishuIngressLifecycle = {
+      abortSignal: controller.signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: abandoned,
+    };
+    const onComment = createFeishuDriveCommentNoticeHandler({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      runtime: createNonExitingRuntimeEnv(),
+      fireAndForget: true,
+      getBotOpenId: () => "ou_bot",
+      resolveIngressLifecycle: (data) =>
+        (data as { event_id?: string }).event_id === "evt_queued" ? lifecycle : undefined,
     });
+
+    await onComment(makeDriveCommentEvent({ event_id: "evt_blocking" }));
+    await vi.waitFor(() => expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1));
+    const queued = onComment(makeDriveCommentEvent({ event_id: "evt_queued" }));
+    controller.abort(new Error("adoption timeout"));
+    resolveFirst();
+    await queued;
+
+    expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
+    expect(abandoned).toHaveBeenCalledTimes(1);
   });
 });

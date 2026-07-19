@@ -90,10 +90,9 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/general`);
+      const response = await page.goto(`${server.baseUrl}settings/advanced`);
       expect(response?.status()).toBe(200);
 
-      await page.locator('.content-header wa-radio[value="advanced"]').click();
       await page.getByRole("button", { name: "Core" }).click();
       await page.getByRole("button", { name: "Updates", exact: true }).click();
 

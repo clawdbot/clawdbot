@@ -43,7 +43,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Every cron execution creates a [background task](/automation/tasks) record.
 - One-shot jobs (`--at`) auto-delete after success by default; pass `--keep-after-run` to keep them.
-- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by cron's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes.
+- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by cron's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes, and script payloads default to 5 minutes.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled instead of replayed immediately, keeping model/tool bootstrap work out of the channel-connect window.
 - If you drive `openclaw agent` from system cron or another external scheduler, wrap it with a hard-kill escalation even though the CLI already handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; local and embedded fallback runs get the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...` — the `-k` value is the backstop if the process cannot drain in time. For systemd units, use a `SIGTERM` stop signal with a grace window (`TimeoutStopSec`) before the final kill. Reusing a `--run-id` while the original Gateway run is still active reports the duplicate as in-flight instead of starting a second run.
 
@@ -75,6 +75,14 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
 
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
+
+### Dynamic cadence (pacing)
+
+Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `cron add|edit` (`--clear-pacing` removes both bounds).
+
+During an isolated run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
+
+Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence.
 
 ### Day-of-month and day-of-week use OR logic
 
@@ -108,8 +116,10 @@ The script must return `{ fire, message?, state? }`. The previous JSON state is 
 
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a configurable minimum interval (30 seconds by default). Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
 
+Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
+
 <Warning>
-Enabling `cron.triggers.enabled` lets agent-authored scripts run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create cron jobs is trusted accordingly.
+Enabling `cron.triggers.enabled` permits both condition-trigger scripts and `script` payloads to run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create cron jobs is trusted accordingly.
 </Warning>
 
 Create a watcher from a local script file (`-` reads the script from stdin):
@@ -127,11 +137,12 @@ openclaw cron add \
 
 Every job carries exactly one payload kind, chosen by flag:
 
-| Payload       | Flag                                           | Runs                                                    |
-| ------------- | ---------------------------------------------- | ------------------------------------------------------- |
-| System event  | `--system-event <text>`                        | Enqueued into the main session, no model call by itself |
-| Agent message | `--message <text>`                             | A model-backed agent turn                               |
-| Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call      |
+| Payload       | Flag                                           | Runs                                                       |
+| ------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| System event  | `--system-event <text>`                        | Enqueued into the main session, no model call by itself    |
+| Agent message | `--message <text>`                             | A model-backed agent turn                                  |
+| Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
+| Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
 ### Agent-turn options
 
@@ -200,6 +211,31 @@ openclaw cron create "*/15 * * * *" \
 
 Delivered text is derived from process output: non-empty stdout wins; if stdout is empty and stderr is non-empty, stderr is delivered; if both are present, cron sends a small `stdout:` / `stderr:` block. Exit code `0` records the run `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
 
+### Script payloads
+
+Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. Enable `cron.triggers.enabled` before creating or running them; this dangerous-automation gate covers both trigger scripts and script payloads. Script jobs support only `main` and `isolated` session targets.
+
+```bash
+openclaw cron create "0 * * * *" \
+  --name "Hourly queue check" \
+  --script ./automation/check-queue.js \
+  --script-timeout-seconds 300 \
+  --script-tool-budget 50 \
+  --session isolated \
+  --announce
+```
+
+Use `--script <file|->` to read JavaScript from a file or stdin. The timeout defaults to 300 seconds and is capped at 900; the tool budget defaults to 50 calls and is capped at 200. These payload budgets are separate from the smaller trigger-gate evaluation budgets.
+
+The script may return an object with these optional fields:
+
+- `notify`: Text delivered through the job's `announce`, `webhook`, or `none` delivery mode. If omitted, nothing is delivered. For a `main` job, the text becomes a system event.
+- `wake`: `"now"` requests an immediate heartbeat after enqueueing `notify` (or a compact completion event); `"next-heartbeat"` enqueues the event for the next heartbeat.
+- `state`: JSON state, capped at 16 KB and persisted only after a successful run. The next run receives a frozen copy as `trigger.state`, matching trigger scripts. Because that namespace has one persisted owner, a script payload cannot be combined with a condition trigger on the same job.
+- `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
+
+Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal cron run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
+
 ## Execution styles
 
 | Style           | `--session` value   | Runs in                  | Best for                        |
@@ -218,6 +254,12 @@ Delivered text is derived from process output: non-empty stdout wins; if stdout 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+  </Accordion>
+  <Accordion title="Unattended run contract">
+    Isolated cron and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `HEARTBEAT_OK` when nothing needs doing and states failures plainly; cron owns retry and failure-alert policy.
+
+    For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
+
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
     When isolated cron runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendants are still running, OpenClaw suppresses that partial parent update instead of announcing it.

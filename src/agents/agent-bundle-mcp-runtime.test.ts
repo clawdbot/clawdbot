@@ -2136,6 +2136,38 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("keeps a run-mode subagent runtime alive for an approved follow-up turn", async () => {
+    const sessionId = "session-subagent-followup";
+    const sessionKey = "agent:test:session-subagent-followup";
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      sessionKey,
+      workspaceDir: "/workspace",
+      cfg: { mcp: { sessionIdleTtlMs: 0 } },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    expect(runtime.activeLeases).toBe(1);
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({
+        sessionKey,
+        reason: "subagent-run-cleanup",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).toContain(sessionId);
+
+    const followUp = await materializeBundleMcpToolsForRun({ runtime });
+    expect(runtime.activeLeases).toBe(2);
+
+    await materialized.dispose();
+    expect(testing.getCachedSessionIds()).toContain(sessionId);
+
+    await followUp.dispose();
+    expect(runtime.activeLeases).toBe(0);
+    expect(testing.getCachedSessionIds()).not.toContain(sessionId);
+  });
+
   it("cancels deferred retirement when a later run reuses the runtime", async () => {
     const manager = testing.createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
     const params = {

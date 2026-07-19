@@ -521,6 +521,7 @@ describe("session-compaction-checkpoints", () => {
       updatedAt: Date.now() - 1,
       archivedAt: managedAt,
       pinnedAt: managedAt,
+      icon: "name:spark",
       totalTokens: 200,
       compactionCheckpoints: [
         {
@@ -552,6 +553,7 @@ describe("session-compaction-checkpoints", () => {
     }
     expect(branched.entry.archivedAt).toBeUndefined();
     expect(branched.entry.pinnedAt).toBeUndefined();
+    expect(branched.entry.icon).toBeUndefined();
 
     const restored = await store.restoreCheckpointSession({
       storePath,
@@ -565,6 +567,7 @@ describe("session-compaction-checkpoints", () => {
     expect(restored.entry.totalTokens).toBe(45);
     expect(restored.entry.archivedAt).toBe(managedAt);
     expect(restored.entry.pinnedAt).toBe(managedAt);
+    expect(restored.entry.icon).toBe("name:spark");
     const restoredSessionFile = requireNonEmptyString(
       restored.entry.sessionFile,
       "restored session file missing",

@@ -87,7 +87,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private static let windowDragMessageHandlerName = "openclawWindowDrag"
     private static let updateMessageHandlerName = "openclawUpdate"
 
-    private let webView: DashboardWebView
+    let webView: DashboardWebView
     private let linkBrowser: DashboardLinkBrowserView
     private let linkBrowserItem: NSSplitViewItem
     private let linkBrowserSplitView: DashboardLinkSplitView
@@ -137,6 +137,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
         let windowDragMessageHandler = DashboardWindowDragMessageHandler()
         config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
+        let notificationsMessageHandler = DashboardNotificationsMessageHandler()
+        config.userContentController.add(notificationsMessageHandler, name: Self.notificationsMessageHandlerName)
         let updateMessageHandler = DashboardUpdateMessageHandler()
         self.updateMessageHandler = updateMessageHandler
         if shouldEnableUpdateBridge {
@@ -200,6 +202,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
         windowDragMessageHandler.owner = self
+        notificationsMessageHandler.owner = self
         updateMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self

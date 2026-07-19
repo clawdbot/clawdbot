@@ -142,6 +142,22 @@ export const AgentsDeleteResultSchema = closedObject({
   ok: Type.Literal(true),
   agentId: NonEmptyString,
   removedBindings: Type.Integer({ minimum: 0 }),
+  removed: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        method: Type.Union([Type.Literal("trash"), Type.Literal("missing")]),
+      }),
+    ),
+  ),
+  failed: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        reason: NonEmptyString,
+      }),
+    ),
+  ),
 });
 
 /** File metadata and optional content for agent-local editable files. */

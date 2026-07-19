@@ -19,6 +19,7 @@ export type CronToolOptions = {
    */
   creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
   selfRemoveOnlyJobId?: string;
+  runId?: string;
 };
 
 export type CronToolCallerScope = {

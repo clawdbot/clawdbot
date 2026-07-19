@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
 import { icon } from "../components/icons.ts";
+import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import {
@@ -222,14 +223,22 @@ class OpenClawRouterOutlet<
     router: this.router,
     onNotFound: this.onNotFound,
   }));
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override render() {
     if (!this.router) {
       return nothing;
     }
-    return renderRouterOutlet(this.router, this.outlet.snapshot, {
+    const snapshot = this.outlet.snapshot;
+    const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
+    const rendered = renderRouterOutlet(this.router, snapshot, {
       retryContext: this.retryContext,
     });
+    return this.mcpAppUnmountGate.render(
+      renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty",
+      rendered,
+      () => [this],
+    );
   }
 }
 

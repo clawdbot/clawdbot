@@ -339,9 +339,12 @@ async function respondToInvoke(
 }
 
 function createDeviceIdentityForTest(prefix: string) {
-  return loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`),
-  );
+  return loadOrCreateDeviceIdentity({
+    path: path.join(
+      os.tmpdir(),
+      `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
+    ),
+  });
 }
 
 describe("gateway role enforcement", () => {
@@ -486,15 +489,18 @@ describe("gateway node command allowlist", () => {
     const invokeCapture = createInvokeCapture();
 
     try {
-      const systemDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-system-run-${Date.now()}-${Math.random()}.json`),
-      );
-      const emptyDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.json`),
-      );
-      const allowedDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.json`),
-      );
+      const systemDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(
+          os.tmpdir(),
+          `openclaw-node-system-run-${Date.now()}-${Math.random()}.sqlite`,
+        ),
+      });
+      const emptyDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.sqlite`),
+      });
+      const allowedDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.sqlite`),
+      });
 
       systemClient = await connectNodeClientWithPairing({
         port,

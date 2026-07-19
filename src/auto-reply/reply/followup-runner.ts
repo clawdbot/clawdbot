@@ -2357,7 +2357,12 @@ export function createFollowupRunner(params: {
             getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
         );
         if (suppressionDeliverablePayloads.length > 0) {
-          await sendFollowupPayloads(
+          // Marked runtime output bypasses source-reply suppression, not the
+          // admission-time send policy or ambient room-event silence.
+          if (isRoomEventFollowup()) {
+            return;
+          }
+          await sendRunPayloads(
             suppressionDeliverablePayloads,
             effectiveQueued,
             {

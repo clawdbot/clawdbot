@@ -11,6 +11,7 @@ import { sessionGroupHandlers } from "./sessions-groups.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { sessionReadHandlers } from "./sessions-read.js";
+import { sessionRewindHandlers } from "./sessions-rewind.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -20,6 +21,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
   ...sessionCreateHandlers,
   ...sessionCheckpointQueryHandlers,
   ...sessionCheckpointHandlers,
+  ...sessionRewindHandlers,
   ...sessionDispatchHandlers,
   ...sessionMessagingHandlers,
   ...sessionAbortHandlers,

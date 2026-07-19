@@ -282,4 +282,28 @@ describe("session dispatch protocol schemas", () => {
       }),
     ).toBe(false);
   });
+
+  it("rejects extra fields in dispatch params and results", () => {
+    const active = {
+      state: "active" as const,
+      ...basePlacement,
+      ...workerOwnedFields,
+    };
+    expect(
+      validateSessionsDispatchResult({
+        ok: true,
+        key: "agent:main:dispatch",
+        sessionId: "session-1",
+        placement: active,
+        extra: true,
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        extra: true,
+      }),
+    ).toBe(false);
+  });
 });

@@ -13,6 +13,7 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -879,7 +880,10 @@ async function loadWebMediaInternal(
       throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
-  mediaUrl = (await resolveHostedPluginMediaUrl(mediaUrl)) ?? mediaUrl;
+  mediaUrl =
+    resolveCanvasHttpPathToLocalPath(mediaUrl) ??
+    (await resolveHostedPluginMediaUrl(mediaUrl)) ??
+    mediaUrl;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
   const optimizeAndClampImage = async (

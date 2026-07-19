@@ -23,7 +23,7 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
       locale: "en",
     },
     password: "",

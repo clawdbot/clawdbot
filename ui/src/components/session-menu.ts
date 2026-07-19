@@ -1,13 +1,19 @@
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+// Module import, not the protocol barrel — keeps TypeBox out of startup JS.
+import {
+  normalizeSessionIconInput,
+  parseSessionIcon,
+} from "../../../packages/gateway-protocol/src/session-icon.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { CURATED_SESSION_ICON_IDS, resolveSessionIcon } from "./session-icon-registry.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionMenuData = {
@@ -16,6 +22,7 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon?: string;
 };
 
 /**
@@ -34,6 +41,7 @@ export type SessionMenuAction =
   | { kind: "open-pr"; url: string }
   | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "toggle-pin" }
+  | { kind: "set-icon"; icon: string | null }
   | { kind: "toggle-unread" }
   | { kind: "rename" }
   | { kind: "fork" }
@@ -50,6 +58,7 @@ const EMPTY_SESSION: SessionMenuData = {
   unread: false,
   archived: false,
   category: null,
+  icon: undefined,
 };
 
 class SessionMenu extends OpenClawLightDomElement {
@@ -73,6 +82,7 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
+  @state() private iconPickerOpen = false;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -126,6 +136,13 @@ class SessionMenu extends OpenClawLightDomElement {
     const simpleAction = simpleActions[value];
     if (simpleAction) {
       this.runAction(simpleAction);
+      return;
+    }
+    if (value === "change-icon") {
+      this.iconPickerOpen = true;
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLButtonElement>(".session-menu__icon-choice")?.focus();
+      });
       return;
     }
     if (value === "open-pr" && this.work?.pullRequestUrl) {
@@ -244,6 +261,145 @@ class SessionMenu extends OpenClawLightDomElement {
     `;
   }
 
+  private readonly handleIconPickerKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      return;
+    }
+    event.stopPropagation();
+    const target = event.target;
+    if (!(target instanceof HTMLButtonElement) || !target.matches(".session-menu__icon-choice")) {
+      return;
+    }
+    const choices = Array.from(
+      this.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice:not(:disabled)"),
+    );
+    const index = choices.indexOf(target);
+    const columns = 6;
+    const nextIndex =
+      event.key === "ArrowLeft"
+        ? index - 1
+        : event.key === "ArrowRight"
+          ? index + 1
+          : event.key === "ArrowUp"
+            ? index - columns
+            : event.key === "ArrowDown"
+              ? index + columns
+              : index;
+    if (nextIndex >= 0 && nextIndex < choices.length && nextIndex !== index) {
+      event.preventDefault();
+      choices[nextIndex]?.focus();
+    }
+  };
+
+  private returnFromIconPicker() {
+    this.iconPickerOpen = false;
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>('wa-dropdown-item[value="change-icon"]')?.focus();
+    });
+  }
+
+  private renderIconPicker() {
+    const currentIcon = this.session.icon;
+    return html`
+      <div
+        class="session-menu__icon-picker"
+        role="dialog"
+        aria-label=${t("sessionsView.changeIcon")}
+        @keydown=${this.handleIconPickerKeydown}
+      >
+        <div class="session-menu__icon-picker-header">
+          <button
+            type="button"
+            class="session-menu__icon-picker-back"
+            aria-label=${t("common.back")}
+            @click=${() => this.returnFromIconPicker()}
+          >
+            ${icons.arrowLeft}
+          </button>
+          <span>${t("sessionsView.changeIcon")}</span>
+        </div>
+        <div
+          class="session-menu__icon-grid"
+          role="radiogroup"
+          aria-label=${t("sessionsView.changeIcon")}
+        >
+          ${CURATED_SESSION_ICON_IDS.map((id) => {
+            const value = `name:${id}`;
+            const selected = currentIcon === value;
+            return html`<button
+              type="button"
+              class="session-menu__icon-choice"
+              role="radio"
+              aria-label=${id}
+              aria-checked=${String(selected)}
+              title=${id}
+              ?disabled=${this.disabled}
+              @click=${() => this.runAction({ kind: "set-icon", icon: value })}
+            >
+              ${resolveSessionIcon(value)}
+            </button>`;
+          })}
+        </div>
+        <label class="session-menu__emoji-field">
+          <span>${t("sessionsView.customEmoji")}</span>
+          <input
+            type="text"
+            inputmode="text"
+            maxlength="16"
+            aria-label=${t("sessionsView.customEmoji")}
+            placeholder="🦞"
+            ?disabled=${this.disabled}
+            @keydown=${(event: KeyboardEvent) => {
+              if (event.key !== "Enter") {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              const input = event.currentTarget as HTMLInputElement;
+              const normalized = normalizeSessionIconInput(input.value);
+              if (!normalized.ok || parseSessionIcon(normalized.value)?.kind !== "emoji") {
+                input.setCustomValidity(t("sessionsView.invalidEmojiIcon"));
+                input.reportValidity();
+                return;
+              }
+              input.setCustomValidity("");
+              this.runAction({ kind: "set-icon", icon: normalized.value });
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          class="session-menu__remove-icon"
+          ?disabled=${this.disabled || !currentIcon}
+          @click=${() => this.runAction({ kind: "set-icon", icon: null })}
+        >
+          ${t("sessionsView.removeIcon")}
+        </button>
+      </div>
+    `;
+  }
+
+  private renderIconPickerDropdown(menuLabel: string, clampedX: number, clampedY: number) {
+    return html`<wa-dropdown
+      class="session-menu"
+      .open=${true}
+      placement="bottom-start"
+      .distance=${0}
+      aria-label=${menuLabel}
+      @wa-after-hide=${this.handleAfterHide}
+    >
+      <button
+        slot="trigger"
+        type="button"
+        tabindex="-1"
+        aria-hidden="true"
+        aria-label=${menuLabel}
+        style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+      ></button>
+      ${this.renderIconPicker()}
+    </wa-dropdown>`;
+  }
+
   override render() {
     const menuWidth = 240;
     const menuMaxHeight = 460;
@@ -255,6 +411,9 @@ class SessionMenu extends OpenClawLightDomElement {
     const menuLabel = batch
       ? t("chat.sidebar.sessionMenuMany", { count })
       : t("chat.sidebar.sessionMenu", { session: session.label });
+    if (this.iconPickerOpen) {
+      return keyed(this.anchor, this.renderIconPickerDropdown(menuLabel, clampedX, clampedY));
+    }
     return keyed(
       this.anchor,
       html`<wa-dropdown
@@ -316,6 +475,16 @@ class SessionMenu extends OpenClawLightDomElement {
                     : t("sessionsView.pinSession")}</span
                 >
                 ${menuShortcutHint("p")}
+              </wa-dropdown-item>
+              <wa-dropdown-item
+                class="session-menu__item"
+                value="change-icon"
+                ?disabled=${this.disabled}
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                  >${icons.spark}</span
+                >
+                <span class="session-menu__text">${t("sessionsView.changeIcon")}</span>
               </wa-dropdown-item>
             `}
         <wa-dropdown-item

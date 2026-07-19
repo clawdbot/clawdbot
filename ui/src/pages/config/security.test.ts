@@ -94,9 +94,9 @@ describe("renderSecurity", () => {
     browserInput.dispatchEvent(new Event("change"));
     expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
 
-    selectRadio(expectButtonByText(container, "full"));
+    selectRadio(expectButtonByText(container, "Full"));
     expect(onToolProfileChange).toHaveBeenCalledWith("full");
-    const activeProfile = expectButtonByText(container, "messaging");
+    const activeProfile = expectButtonByText(container, "Messaging");
     expect(activeProfile.classList.contains("settings-segmented__btn--active")).toBe(true);
   });
 
@@ -106,7 +106,7 @@ describe("renderSecurity", () => {
 
     render(renderSecurity(createProps({ configBusy: true, onToolProfileChange })), container);
 
-    const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "full");
+    const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "Full");
     expect(
       (profileButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
     ).toBe(true);

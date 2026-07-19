@@ -42,6 +42,8 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     workspaceRoot: "/repo/openclaw",
     workspaceLabel: "openclaw",
     branch: "feature/header",
+    branches: [],
+    branchSwitchDisabledReason: null,
     platform: "darwin",
     canReveal: true,
     copiedAction: null,
@@ -56,6 +58,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     onCancelRename: vi.fn(),
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
+    onBranchSelect: vi.fn(),
     ...patch,
   };
   render(html`${renderChatPaneHeader(props)}`, container);
@@ -162,6 +165,58 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__cloud")).not.toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
+  });
+
+  it("hides one branch and lists multiple branches with the active tip marked", () => {
+    const one = mount({
+      branches: [{ leafEntryId: "only", headline: "Only path", messageCount: 1, active: true }],
+    });
+    expect(one.container.querySelector(".chat-pane__branches-trigger")).toBeNull();
+
+    const multiple = mount({
+      branches: [
+        { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
+        {
+          leafEntryId: "other",
+          headline: "Earlier idea",
+          messageCount: 2,
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          active: false,
+        },
+      ],
+    });
+    const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
+    expect(multiple.container.querySelector(".chat-pane__branches-trigger")).not.toBeNull();
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("Current work");
+    expect(items[0]?.getAttribute("data-active")).toBe("true");
+    expect(items[0]?.querySelector(".chat-pane__branch-active")).not.toBeNull();
+    expect(items[1]?.textContent).toContain("Earlier idea");
+
+    multiple.container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "other" } },
+      }),
+    );
+    expect(multiple.props.onBranchSelect).toHaveBeenCalledWith("other");
+  });
+
+  it("disables branch switching while the agent is working", () => {
+    const { container, props } = mount({
+      branchSwitchDisabledReason: "Branch switch is unavailable while the agent is working.",
+      branches: [
+        { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
+        { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
+      ],
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger");
+    expect(trigger?.disabled).toBe(true);
+    container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "other" } },
+      }),
+    );
+    expect(props.onBranchSelect).not.toHaveBeenCalled();
   });
 });
 

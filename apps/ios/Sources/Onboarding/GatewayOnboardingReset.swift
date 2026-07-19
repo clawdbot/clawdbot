@@ -10,7 +10,7 @@ enum GatewayOnboardingReset {
         disconnectGateway: Bool = true,
         defaults: UserDefaults = .standard) async
     {
-        await self.prepare(
+        _ = await self.prepare(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: gatewayStableID,
@@ -24,12 +24,13 @@ enum GatewayOnboardingReset {
         instanceId: String,
         defaults: UserDefaults = .standard) async
     {
-        await self.prepare(
+        guard await self.prepare(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: nil,
             disconnectGateway: true,
             defaults: defaults)
+        else { return }
         self.clearOnboardingState(defaults: defaults)
     }
 
@@ -42,12 +43,13 @@ enum GatewayOnboardingReset {
         defaults: UserDefaults = .standard)
     {
         appModel.purgeChatTranscriptCacheBeforeStartup()
-        self.preparePairingState(
+        guard self.preparePairingState(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: nil,
             disconnectGateway: true,
             defaults: defaults)
+        else { return }
         self.clearOnboardingState(defaults: defaults)
     }
 
@@ -57,10 +59,10 @@ enum GatewayOnboardingReset {
         instanceId: String,
         gatewayStableID: String?,
         disconnectGateway: Bool,
-        defaults: UserDefaults) async
+        defaults: UserDefaults) async -> Bool
     {
         await appModel.purgeChatTranscriptCache(gatewayID: gatewayStableID)
-        self.preparePairingState(
+        return self.preparePairingState(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: gatewayStableID,
@@ -74,8 +76,26 @@ enum GatewayOnboardingReset {
         instanceId: String,
         gatewayStableID: String?,
         disconnectGateway: Bool,
-        defaults: UserDefaults)
+        defaults: UserDefaults) -> Bool
     {
+        guard let deviceId = DeviceIdentityStore.loadOrCreatePersisted()?.deviceId else {
+            appModel.gatewayStatusText = "Could not access device identity"
+            return false
+        }
+        let shareDeviceId: String?
+        if gatewayStableID != nil {
+            guard let resolvedShareDeviceId = DeviceIdentityStore
+                .loadOrCreatePersisted(profile: .shareExtension)?
+                .deviceId
+            else {
+                appModel.gatewayStatusText = "Could not access share device identity"
+                return false
+            }
+            shareDeviceId = resolvedShareDeviceId
+        } else {
+            shareDeviceId = nil
+        }
+
         if disconnectGateway {
             appModel.disconnectGateway()
         }
@@ -91,25 +111,25 @@ enum GatewayOnboardingReset {
             }
         }
 
-        let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
         if let gatewayStableID {
             let authenticationOwnerID = GatewaySettingsStore.authenticationOwnerID(
                 routeStableID: gatewayStableID)
-            let shareDeviceId = DeviceIdentityStore.loadOrCreate(profile: .shareExtension).deviceId
             // Bootstrap replacement invalidates only the target. Other paired gateways remain
             // usable when the user switches back after reviewing or completing this setup.
             DeviceAuthStore.clearToken(deviceId: deviceId, role: "node", gatewayID: authenticationOwnerID)
             DeviceAuthStore.clearToken(deviceId: deviceId, role: "operator", gatewayID: authenticationOwnerID)
-            DeviceAuthStore.clearToken(
-                deviceId: shareDeviceId,
-                role: "node",
-                gatewayID: authenticationOwnerID,
-                profile: .shareExtension)
-            DeviceAuthStore.clearToken(
-                deviceId: shareDeviceId,
-                role: "operator",
-                gatewayID: authenticationOwnerID,
-                profile: .shareExtension)
+            if let shareDeviceId {
+                DeviceAuthStore.clearToken(
+                    deviceId: shareDeviceId,
+                    role: "node",
+                    gatewayID: authenticationOwnerID,
+                    profile: .shareExtension)
+                DeviceAuthStore.clearToken(
+                    deviceId: shareDeviceId,
+                    role: "operator",
+                    gatewayID: authenticationOwnerID,
+                    profile: .shareExtension)
+            }
             GatewayTLSStore.clearFingerprint(stableID: gatewayStableID)
         } else {
             // Full onboarding reset is the only path that intentionally forgets every gateway.
@@ -126,6 +146,7 @@ enum GatewayOnboardingReset {
         GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)
         GatewaySettingsStore.clearLastDiscoveredGatewayStableID(defaults: defaults)
         defaults.set(false, forKey: "gateway.autoconnect")
+        return true
     }
 
     private static func clearOnboardingState(defaults: UserDefaults) {

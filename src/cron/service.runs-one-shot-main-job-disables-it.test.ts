@@ -367,6 +367,60 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("deletes a recurring job converted to at when retention is omitted", async () => {
+    const { store, cron, events } = await createMainOneShotHarness();
+    const job = await cron.add({
+      name: "converted one-shot delete",
+      enabled: true,
+      deleteAfterRun: false,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "converted" },
+    });
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+
+    const updated = await cron.update(job.id, {
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+    });
+    expect(updated.deleteAfterRun).toBe(true);
+
+    vi.setSystemTime(atMs);
+    await vi.runOnlyPendingTimersAsync();
+    await events.waitFor((evt) => evt.jobId === job.id && evt.action === "removed");
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((candidate) => candidate.id === job.id)).toBeUndefined();
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("keeps a recurring job converted to at when explicitly requested", async () => {
+    const { store, cron, events } = await createMainOneShotHarness();
+    const job = await cron.add({
+      name: "converted one-shot keep",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "converted" },
+    });
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+
+    const updated = await cron.update(job.id, {
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      deleteAfterRun: false,
+    });
+    expect(updated.deleteAfterRun).toBe(false);
+
+    vi.setSystemTime(atMs);
+    await vi.runOnlyPendingTimersAsync();
+    await events.waitFor((evt) => evt.jobId === job.id && evt.action === "finished");
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((candidate) => candidate.id === job.id)?.enabled).toBe(false);
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("wakeMode now waits for heartbeat completion when available", async () => {
     let now = 0;
     const nowMs = () => {

@@ -52,7 +52,7 @@ async function startOutboundAccount(accountId?: string) {
   const sendDm = vi.fn(async () => "a".repeat(64));
   const bus = {
     sendDm,
-    close: vi.fn(),
+    close: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),

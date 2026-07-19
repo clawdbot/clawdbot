@@ -627,16 +627,19 @@ describe("PluginPage", () => {
   });
 
   it("does not install an earlier bundled view after switching away and back", async () => {
-    const firstWorkspaceLoad = deferred<TestBundledView>();
-    const currentWorkspaceLoad = deferred<TestBundledView>();
-    const logbookLoad = deferred<TestBundledView>();
+    const firstLogbookLoad = deferred<TestBundledView>();
+    const currentLogbookLoad = deferred<TestBundledView>();
     const hello: GatewayHelloOk = {
       type: "hello-ok",
       protocol: 3,
       auth: { role: "operator", scopes: ["operator.write"] },
       controlUiTabs: [
-        { pluginId: "workspaces", id: "workspaces", label: "Workspaces" },
         { pluginId: "logbook", id: "logbook", label: "Logbook" },
+        {
+          pluginId: "external-plugin",
+          id: "panel",
+          label: "External panel",
+        },
       ],
     };
     const snapshot: ApplicationGatewaySnapshot = {
@@ -651,11 +654,10 @@ describe("PluginPage", () => {
     };
     const page = document.createElement(deferredPluginPageTag) as DeferredPluginPage;
     page.loads = new Map([
-      ["workspaces/workspaces", [firstWorkspaceLoad.promise, currentWorkspaceLoad.promise]],
-      ["logbook/logbook", [logbookLoad.promise]],
+      ["logbook/logbook", [firstLogbookLoad.promise, currentLogbookLoad.promise]],
     ]);
-    page.pluginId = "workspaces";
-    page.tabId = "workspaces";
+    page.pluginId = "logbook";
+    page.tabId = "logbook";
     (page as unknown as { context: ApplicationContext<RouteId> }).context = {
       gateway: { snapshot, subscribe: () => () => undefined },
     } as unknown as ApplicationContext<RouteId>;
@@ -663,22 +665,21 @@ describe("PluginPage", () => {
     document.body.append(page);
     try {
       await page.updateComplete;
+      page.pluginId = "external-plugin";
+      page.tabId = "panel";
+      await page.updateComplete;
       page.pluginId = "logbook";
       page.tabId = "logbook";
       await page.updateComplete;
-      page.pluginId = "workspaces";
-      page.tabId = "workspaces";
-      await page.updateComplete;
 
-      currentWorkspaceLoad.resolve({ render: () => "current workspace view", stop: vi.fn() });
-      await waitForFast(() => expect(page.textContent).toContain("current workspace view"));
+      currentLogbookLoad.resolve({ render: () => "current Logbook view", stop: vi.fn() });
+      await waitForFast(() => expect(page.textContent).toContain("current Logbook view"));
 
-      firstWorkspaceLoad.resolve({ render: () => "stale workspace view", stop: vi.fn() });
+      firstLogbookLoad.resolve({ render: () => "stale Logbook view", stop: vi.fn() });
       await Promise.resolve();
       await page.updateComplete;
-      expect(page.textContent).not.toContain("stale workspace view");
-      expect(page.textContent).toContain("current workspace view");
-      logbookLoad.resolve({ render: () => "stale Logbook view", stop: vi.fn() });
+      expect(page.textContent).not.toContain("stale Logbook view");
+      expect(page.textContent).toContain("current Logbook view");
     } finally {
       page.remove();
     }

@@ -137,6 +137,69 @@ describe("qa-bus server", () => {
     });
   });
 
+  it("resumes an account after its last acknowledged cursor when the client restarts", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const consumed = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "first", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "consumed before restart",
+    });
+    const firstPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(firstPoll.events.map((event) => event.cursor)).toEqual([1]);
+
+    await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPoll.cursor,
+      timeoutMs: 0,
+    });
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
+    const queuedDuringRestart = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "second", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "queued during restart",
+    });
+
+    const restartedPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    const restartedMessageIds = restartedPoll.events.flatMap((event) =>
+      "message" in event ? [event.message.id] : [],
+    );
+    expect(restartedMessageIds).toEqual([queuedDuringRestart.id]);
+    expect(restartedMessageIds).not.toContain(consumed.id);
+
+    state.reset();
+    const queuedAfterReset = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "third", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "queued after bus reset",
+    });
+    const resetPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(
+      resetPoll.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
+    ).toEqual([queuedAfterReset.id]);
+  });
+
   it("rejects malformed poll numeric fields before long-polling", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });

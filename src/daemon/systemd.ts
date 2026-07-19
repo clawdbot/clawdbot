@@ -33,6 +33,7 @@ import {
   isEnvironmentFileOnlySource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
+import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -1386,21 +1387,15 @@ export async function startSystemdService({
   stdout,
   env,
   onMutation,
-}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+}: GatewayServiceControlArgs): Promise<void> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "start",
     label: "Started systemd service",
-    onMutation: () => {
-      try {
-        onMutation?.({ mode: "systemctl-start" });
-      } catch {
-        // Audit observers are diagnostic; never interrupt service control.
-      }
-    },
+    onMutation: () => reportMutation("systemctl-start"),
   });
-  return { outcome: "completed" };
 }
 
 export async function stopSystemdService({
@@ -1408,12 +1403,13 @@ export async function stopSystemdService({
   env,
   onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "stop",
     label: "Stopped systemd service",
-    onMutation: () => onMutation?.({ mode: "systemctl-stop" }),
+    onMutation: () => reportMutation("systemctl-stop"),
   });
 }
 
@@ -1422,12 +1418,13 @@ export async function restartSystemdService({
   env,
   onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "restart",
     label: "Restarted systemd service",
-    onMutation: () => onMutation?.({ mode: "systemctl-restart" }),
+    onMutation: () => reportMutation("systemctl-restart"),
   });
   return { outcome: "completed" };
 }

@@ -503,6 +503,7 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  icon?: string;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -523,6 +524,8 @@ export type GatewaySessionRow = {
   totalTokensFresh?: boolean;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  /** Compact user-facing reason for the latest failed or timed-out run. */
+  lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
@@ -578,6 +581,16 @@ export type SessionsCompactionRestoreResult = {
     updatedAt: number;
   } & Record<string, unknown>;
 };
+
+export type SessionsRewindResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;
+export type SessionsForkResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsForkResult;
+export type SessionBranch = import("../../../packages/gateway-protocol/src/index.js").SessionBranch;
+export type SessionsBranchesListResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesListResult;
+export type SessionsBranchesSwitchResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesSwitchResult;
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;

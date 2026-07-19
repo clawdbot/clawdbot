@@ -5,6 +5,7 @@ import "./fs-safe-defaults.js";
 export {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
+  type FileIdentityStat,
   sameFileIdentity,
   sanitizeUntrustedFileName,
 } from "@openclaw/fs-safe/advanced";

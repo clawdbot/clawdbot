@@ -54,12 +54,37 @@ dependencies and development commands.
 Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
 chip shows the configured avatar, emoji, or monogram; select it to switch agents.
 Messages use the selected agent's main session and honor global session scope.
+The native Rust client owns a persistent Ed25519 device identity. It uses the
+CLI handoff's shared token or password only to bootstrap pairing, then stores and
+prefers the Gateway-issued device token on later connections. The identity and
+device token live in the app config directory in a mode `0600` file; Quick
+Chat's WebView receives neither credentials nor the WebSocket.
+
+When the native connection is unavailable, Quick Chat shows **Gateway
+unreachable — retrying** and disables send until reconnection. A remote device
+that has reached the pairing phase shows **Approve this device in the dashboard
+(Nodes)** instead, with a short device ID when the Gateway provides one. A
+Gateway that requires a missing shared credential shows **Gateway requires a
+credential — open the dashboard on the gateway host**; no pairing request is
+waiting for approval in that state. Server-provided remediation guidance
+replaces these fallback notices when it is more specific.
+For TLS Gateways, the CLI hands the app the Gateway certificate's SHA-256
+fingerprint; the native client pins that certificate and reports **Gateway TLS
+trust failed — check the certificate fingerprint** separately from downtime.
+Gateways whose shared secret is configured through a SecretRef omit it from the
+CLI handoff. Existing paired installs keep working through their stored device
+token, but a fresh install cannot create a pending pairing request under shared-secret
+authentication without that bootstrap credential.
+Setup-code and `bootstrapToken` redemption need dedicated product UI and remain
+a follow-up; Quick Chat does not attempt either flow.
 
 On X11, use the gear in Quick Chat to record or reset a custom shortcut. The
 **Quick Chat shortcut** tray toggle enables or disables it without disabling the
 plain **Quick Chat** tray item. Global shortcuts are not available on Wayland, so
 the shortcut settings are hidden and the tray item remains the entry point.
-Replies remain in the normal session; open the dashboard to read them.
+After an accepted send, Quick Chat stays open and streams the selected agent's
+plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
+`Ctrl+Enter` still opens the dashboard.
 
 ### Canvas
 
@@ -177,6 +202,8 @@ KillMode=control-group
 [Install]
 WantedBy=default.target
 ```
+
+Hand-written units do not inherit the adaptive heap sizing that `openclaw gateway install` writes for managed Gateway services. Prefer the managed installer, or set an explicit heap limit in the custom supervisor after accounting for native-memory headroom.
 
 Enable it:
 

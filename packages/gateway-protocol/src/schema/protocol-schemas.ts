@@ -248,6 +248,7 @@ import {
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
 } from "./environments.js";
+import { GatewayErrorDetailsSchema } from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
@@ -422,6 +423,10 @@ import {
   SessionsCompactionListResultSchema,
   SessionsCompactionRestoreParamsSchema,
   SessionsCompactionRestoreResultSchema,
+  SessionsForkParamsSchema,
+  SessionsForkResultSchema,
+  SessionsRewindParamsSchema,
+  SessionsRewindResultSchema,
   SessionFileBrowserEntrySchema,
   SessionFileBrowserResultSchema,
   SessionCompactionCheckpointSchema,
@@ -548,6 +553,7 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: GatewaySuspendPrepareParamsSchema,
@@ -686,6 +692,10 @@ export const ProtocolSchemas = {
   SessionsCompactionGetResult: SessionsCompactionGetResultSchema,
   SessionsCompactionBranchResult: SessionsCompactionBranchResultSchema,
   SessionsCompactionRestoreResult: SessionsCompactionRestoreResultSchema,
+  SessionsRewindParams: SessionsRewindParamsSchema,
+  SessionsRewindResult: SessionsRewindResultSchema,
+  SessionsForkParams: SessionsForkParamsSchema,
+  SessionsForkResult: SessionsForkResultSchema,
   SessionFileBrowserEntry: SessionFileBrowserEntrySchema,
   SessionFileBrowserResult: SessionFileBrowserResultSchema,
   SessionFileKind: SessionFileKindSchema,

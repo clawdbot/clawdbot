@@ -5,5 +5,6 @@ export function toPublicCronJob(job: CronJob): CronJob {
   const state = { ...job.state };
   delete state.queuedAtMs;
   delete state.startupCatchupAtMs;
+  delete state.pacedNextRunAtMs;
   return { ...job, state };
 }

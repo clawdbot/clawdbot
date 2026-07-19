@@ -114,14 +114,16 @@ describeControlUiE2e("Control UI agent page scope", () => {
       await page.goto(`${server.baseUrl}usage`);
       await gateway.waitForRequest("agents.list");
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
         .locator('wa-dropdown-item[value="agent:writer"]')
         .click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expect
-        .poll(() => sidebar.locator(".sidebar-agent-card__name").textContent())
+        .poll(async () =>
+          (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+        )
         .toBe("Writer");
 
       await sidebar.getByRole("link", { name: "Usage" }).click();
@@ -142,11 +144,13 @@ describeControlUiE2e("Control UI agent page scope", () => {
         })
         .toBe(true);
       await expect
-        .poll(() => sidebar.locator(".sidebar-agent-card__name").textContent())
+        .poll(async () =>
+          (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+        )
         .toBe("Writer");
       await screenshot(page, "02-all-agents-usage.png");
 
-      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
         .locator('wa-dropdown-item[value="command:agent-settings"]')

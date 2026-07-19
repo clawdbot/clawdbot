@@ -125,6 +125,8 @@ Session controls:
 - `/goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
+- `/queue <steer|followup|collect|interrupt> [debounce:<duration>] [cap:<n>] [drop:<summarize|old|new>]`
+- `/queue default` (or `/queue reset`) clears the session override
 
 Session lifecycle:
 
@@ -137,6 +139,13 @@ Session lifecycle:
 Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
+
+Local mode implements the same queue modes inside the embedded runtime. A
+mid-run prompt follows the session's `/queue` policy: `steer` injects when the
+runtime can accept it, `followup` waits for a separate turn, `collect` combines
+pending prompts, and `interrupt` stops the current run before starting the new
+one. Explicit `/steer <message>` is Gateway-only; use `/queue steer` plus a
+normal message in local mode.
 
 OpenClaw:
 

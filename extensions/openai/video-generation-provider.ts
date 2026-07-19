@@ -183,26 +183,23 @@ async function pollOpenAIVideo(
   });
 }
 
-function resolveOpenAIVideoDownloadTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined) {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
-    ? resolved
-    : DEFAULT_TIMEOUT_MS;
-}
-
 async function fetchOpenAIVideoDownload(
   params: {
     url: string;
     init: RequestInit;
-    timeoutMs?: ProviderOperationTimeoutMs;
+    deadline: ReturnType<typeof createProviderOperationDeadline>;
     fetchFn: typeof fetch;
   } & OpenAIVideoRequestPolicy,
 ) {
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline: params.deadline,
+    defaultTimeoutMs: params.deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   if (!params.allowPrivateNetwork && !params.dispatcherPolicy) {
     const response = await fetchProviderDownloadResponse({
       url: params.url,
       init: params.init,
-      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      deadline: params.deadline,
       fetchFn: params.fetchFn,
       provider: "openai",
       requestFailedMessage: "OpenAI video download failed",
@@ -220,7 +217,7 @@ async function fetchOpenAIVideoDownload(
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveOpenAIVideoDownloadTimeoutMs(params.timeoutMs),
+        timeoutMs(),
         params.fetchFn,
         {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -251,6 +248,14 @@ async function downloadOpenAIVideo(
 ): Promise<GeneratedVideoAsset> {
   const url = new URL(`${params.baseUrl}/videos/${params.videoId}/content`);
   url.searchParams.set("variant", "video");
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "OpenAI generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const { response, release } = await fetchOpenAIVideoDownload({
     url: url.toString(),
     init: {
@@ -260,7 +265,7 @@ async function downloadOpenAIVideo(
         Accept: "application/binary",
       }),
     },
-    timeoutMs: params.timeoutMs,
+    deadline,
     fetchFn: params.fetchFn,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
@@ -268,6 +273,11 @@ async function downloadOpenAIVideo(
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `OpenAI generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`OpenAI generated video download exceeds ${maxBytes} bytes`),
     });

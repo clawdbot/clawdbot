@@ -37,7 +37,7 @@ function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }
 
-describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gateway E2E", () => {
+describeControlUiE2e("Control UI General settings thinking persistence mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(

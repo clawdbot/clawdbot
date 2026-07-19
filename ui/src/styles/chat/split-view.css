@@ -214,6 +214,44 @@ openclaw-chat-pane {
   min-width: 0;
 }
 
+.chat-pane__branches-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__branches-trigger svg,
+.chat-pane__branch-active svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-pane__branch-item {
+  min-width: 260px;
+  max-width: 360px;
+}
+
+.chat-pane__branch-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-pane__branch-headline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__branch-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__branch-active {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--accent);
+}
+
 .chat-pane__workspace-chip {
   display: inline-flex;
   max-width: 180px;

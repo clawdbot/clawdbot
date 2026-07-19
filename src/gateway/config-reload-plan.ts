@@ -1,11 +1,17 @@
 // Gateway config reload planner.
 // Maps changed config paths to hot-reload actions, no-ops, or full restarts.
-import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  type ChannelId,
+  type ChannelPlugin,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActivePluginChannelRegistryVersion,
   getActivePluginHttpRouteRegistry,
   getActivePluginHttpRouteRegistryVersion,
 } from "../plugins/runtime.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
 
 export type ChannelKind = ChannelId;
@@ -23,6 +29,8 @@ export type GatewayReloadPlan = {
   reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
   disposeMcpRuntimes: boolean;
+  /** Account targets; absent means no targeted restarts for hand-built plans. */
+  restartChannelAccounts?: Map<ChannelKind, Set<string>>;
   noopPaths: string[];
 };
 
@@ -30,6 +38,7 @@ type ReloadRule = {
   prefix: string;
   kind: "restart" | "hot" | "none";
   actions?: ReloadAction[];
+  accountScopedPlugin?: ChannelPlugin;
 };
 
 type ConfigReloadMetadata = {
@@ -44,11 +53,14 @@ type ReloadAction =
   | "restart-health-monitor"
   | "reload-plugins"
   | "dispose-mcp-runtimes"
+  | `restart-channel-account:${ChannelId}`
   | `restart-channel:${ChannelId}`;
 
 type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
+  /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
+  candidateConfig?: OpenClawConfig;
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
@@ -89,6 +101,11 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   {
     prefix: "agents.defaults.models",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  {
+    prefix: "agents.defaults.modelPolicy",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
@@ -179,15 +196,22 @@ function listReloadRules(): ReloadRule[] {
     return cachedReloadRules;
   }
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
-  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) =>
-    (plugin.reload?.configPrefixes ?? [])
-      .map(
-        (prefix): ReloadRule => ({
+  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => {
+    const restartAction = plugin.reload?.accountScopedRestart
+      ? (`restart-channel-account:${plugin.id}` as ReloadAction)
+      : (`restart-channel:${plugin.id}` as ReloadAction);
+    return (plugin.reload?.configPrefixes ?? [])
+      .map((prefix): ReloadRule => {
+        const rule: ReloadRule = {
           prefix,
           kind: "hot",
-          actions: [`restart-channel:${plugin.id}` as ReloadAction],
-        }),
-      )
+          actions: [restartAction],
+        };
+        if (plugin.reload?.accountScopedRestart) {
+          rule.accountScopedPlugin = plugin;
+        }
+        return rule;
+      })
       .concat(
         (plugin.reload?.noopPrefixes ?? []).map(
           (prefix): ReloadRule => ({
@@ -195,8 +219,8 @@ function listReloadRules(): ReloadRule[] {
             kind: "none",
           }),
         ),
-      ),
-  );
+      );
+  });
   const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
     {
       prefix: `plugins.entries.${plugin.id}`,
@@ -338,12 +362,53 @@ export function listPluginInstallWholeRecordPaths(
   );
 }
 
+function extractAccountIdFromPath(channel: ChannelId, path: string): string | null {
+  const prefix = `channels.${channel}.accounts.`;
+  if (!path.startsWith(prefix)) {
+    return null;
+  }
+  const rest = path.slice(prefix.length);
+  if (rest.length === 0) {
+    return null;
+  }
+  const dotIdx = rest.indexOf(".");
+  const id = dotIdx === -1 ? rest : rest.slice(0, dotIdx);
+  if (id.length === 0) {
+    return null;
+  }
+  // Default config is the inheritance base, so it can change every account.
+  if (id === DEFAULT_ACCOUNT_ID) {
+    return null;
+  }
+  return id;
+}
+
+function isResolvableChannelAccount(params: {
+  plugin: ChannelPlugin | undefined;
+  accountId: string;
+  config: OpenClawConfig;
+}): boolean {
+  if (!params.plugin) {
+    return false;
+  }
+  try {
+    if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
+      return false;
+    }
+    params.plugin.config.resolveAccount(params.config, params.accountId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildGatewayReloadPlan(
   changedPaths: string[],
   options: GatewayReloadPlanOptions = {},
 ): GatewayReloadPlan {
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
+  const restartChannelAccounts = new Map<ChannelKind, Set<string>>();
   const plan: GatewayReloadPlan = {
     changedPaths,
     restartGateway: false,
@@ -357,10 +422,41 @@ export function buildGatewayReloadPlan(
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
+    restartChannelAccounts,
     noopPaths: [],
   };
 
-  const applyAction = (action: ReloadAction) => {
+  const applyAction = (
+    action: ReloadAction,
+    originatingPath: string,
+    accountScopedPlugin?: ChannelPlugin,
+  ) => {
+    if (action.startsWith("restart-channel-account:")) {
+      const channel = action.slice("restart-channel-account:".length) as ChannelId;
+      const accountId = extractAccountIdFromPath(channel, originatingPath);
+      if (accountId !== null) {
+        if (
+          options.candidateConfig &&
+          !isResolvableChannelAccount({
+            plugin: accountScopedPlugin,
+            accountId,
+            config: options.candidateConfig,
+          })
+        ) {
+          plan.restartChannels.add(channel);
+          return;
+        }
+        let set = restartChannelAccounts.get(channel);
+        if (!set) {
+          set = new Set<string>();
+          restartChannelAccounts.set(channel, set);
+        }
+        set.add(accountId);
+        return;
+      }
+      plan.restartChannels.add(channel);
+      return;
+    }
     if (action.startsWith("restart-channel:")) {
       const channel = action.slice("restart-channel:".length) as ChannelId;
       plan.restartChannels.add(channel);
@@ -418,8 +514,13 @@ export function buildGatewayReloadPlan(
     }
     plan.hotReasons.push(path);
     for (const action of rule.actions ?? []) {
-      applyAction(action);
+      applyAction(action, path, rule.accountScopedPlugin);
     }
+  }
+
+  // A wholesale restart covers its account targets and must run only once.
+  for (const channel of plan.restartChannels) {
+    restartChannelAccounts.delete(channel);
   }
 
   if (plan.restartGmailWatcher) {

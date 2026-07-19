@@ -16,12 +16,13 @@ const SANDBOX_SSH_SECRET_KEYS = ["identityData", "certificateData", "knownHostsD
 
 type SandboxSshSecretKey = (typeof SANDBOX_SSH_SECRET_KEYS)[number];
 
-function sandboxSecretOwner(agentId: string): SecretAssignmentOwner {
+function sandboxSecretOwner(agentId: string, contract: unknown): SecretAssignmentOwner {
   return {
     ownerKind: "capability",
     ownerId: runtimeSandboxSecretOwnerId(agentId),
     requiredForGateway: false,
     disposition: "isolate",
+    contract,
   };
 }
 
@@ -113,7 +114,11 @@ export function collectAgentSandboxAssignments(params: {
     // sandbox is disabled, so SSH lifecycle credentials stay materialized while
     // SSH remains the configured backend.
     const active = backend === "ssh";
-    const owner = sandboxSecretOwner(agentId);
+    const owner = sandboxSecretOwner(agentId, {
+      defaults: defaultsSandbox,
+      override: sandbox,
+      agentEnabled: rawAgent?.enabled,
+    });
 
     for (const key of SANDBOX_SSH_SECRET_KEYS) {
       const hasAgentOverride = Boolean(ssh && Object.hasOwn(ssh, key));
@@ -181,7 +186,7 @@ export function collectAgentSandboxAssignments(params: {
       context: params.context,
       active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
-      owner: sandboxSecretOwner(DEFAULT_AGENT_ID),
+      owner: sandboxSecretOwner(DEFAULT_AGENT_ID, { defaults: defaultsSandbox }),
     });
   }
 }

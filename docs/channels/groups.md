@@ -309,7 +309,15 @@ Quick mental model (evaluation order for group messages):
 
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
-Replying to a bot message counts as an implicit mention when the channel exposes reply metadata; quoting a bot message can also count on channels that expose quote metadata. Current built-in cases: Discord, Microsoft Teams, QQBot, Slack, Telegram, WhatsApp, and Zalo personal.
+Supported implicit mention facts are channel-specific:
+
+| Fact                  | Current built-in producers                       |
+| --------------------- | ------------------------------------------------ |
+| Reply to the bot      | Discord, Microsoft Teams, QQBot, Slack, Telegram |
+| Quote of the bot      | WhatsApp, Zalo personal                          |
+| Bot joined the thread | Mattermost, Slack, Tlon                          |
+
+Each fact defaults to enabled when the channel produces it. Set the corresponding `implicitMentions` flag to `false` to stop that fact from bypassing mention gating; native explicit mentions remain unaffected. A flag has no effect on channels that do not produce that fact.
 
 ```json5
 {

@@ -89,12 +89,33 @@ jobs:
           submodules: false
 
       - name: Create generated PR tokens
+        id: tokens
         uses: ./.github/actions/create-generated-pr-tokens
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          pull-request-contents-permission: write
+
+      - name: Verify repository auto-merge setting
+        env:
+          GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          auto_merge_allowed="$(
+            gh api graphql \
+              -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { autoMergeAllowed } }' \
+              -f owner="${REPOSITORY_OWNER}" \
+              -f name="${REPOSITORY_NAME}" \
+              --jq '.data.repository.autoMergeAllowed'
+          )"
+          if [[ "${auto_merge_allowed}" != "true" ]]; then
+            echo "Repository auto-merge must be enabled before generated locale publication." >&2
+            exit 1
+          fi
 
   refresh:
     needs: [resolve-base, publisher-preflight]
@@ -290,7 +311,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ github.event.repository.default_branch }}
           head-branch: automation/control-ui-locale-refresh

@@ -49,6 +49,7 @@ enum ChatSessionSidebarModel {
         currentSessionKey: String,
         mainSessionKey: String = "main",
         activeAgentID: String? = nil,
+        groups: [OpenClawChatSessionGroup] = [],
         query: String) -> [Section]
     {
         let visible = self.visibleSessions(
@@ -57,19 +58,33 @@ enum ChatSessionSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             query: query)
-        // Pin state owns section placement. Cross-section parent links become
-        // roots so a child's own Pin/Unpin action always has visible effect.
+        // Pin state owns first placement. Group sections then preserve the
+        // same tree builder, so grouped parent/child rosters still nest.
         let pinned = self.tree(from: visible.filter { $0.pinned == true })
-        let recent = self.tree(from: visible.filter { $0.pinned != true })
+        let unpinned = visible.filter { $0.pinned != true }
+        let orderedGroups = groups.sorted { lhs, rhs in
+            lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
+        }
+        let groupNames = Set(orderedGroups.map(\.name))
+        let recent = self.tree(from: unpinned.filter { session in
+            guard let category = session.category else { return true }
+            return !groupNames.contains(category)
+        })
 
         var result: [Section] = []
         if !pinned.isEmpty {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
+        for group in orderedGroups {
+            let nodes = self.tree(from: unpinned.filter { $0.category == group.name })
+            if !nodes.isEmpty {
+                result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
+            }
+        }
         if !recent.isEmpty {
             result.append(Section(
                 id: "recent",
-                title: pinned.isEmpty ? nil : "Recent",
+                title: result.isEmpty ? nil : "Recent",
                 nodes: recent))
         }
         return result

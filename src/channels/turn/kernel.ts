@@ -29,6 +29,7 @@ import type {
   DispatchedChannelTurnResult,
   NormalizedTurnInput,
   PreflightFacts,
+  PreparedChannelTurn,
   RunChannelTurnParams,
 } from "./types.js";
 
@@ -107,6 +108,23 @@ function normalizePreflight(
     return { admission: value };
   }
   return value;
+}
+
+function assertPreparedDispatchLifecycle<TDispatchResult>(
+  turn: PreparedChannelTurn<TDispatchResult>,
+  turnAdoptionLifecycle: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"],
+): void {
+  const lifecycle = turn.runDispatchLifecycle;
+  if (!lifecycle) {
+    throw new Error(
+      "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
+    );
+  }
+  if (turnAdoptionLifecycle && lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
+    throw new Error(
+      "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+    );
+  }
 }
 
 function emit(params: {
@@ -278,12 +296,8 @@ async function runChannelTurn<
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult<TDispatchResult>;
   try {
-    if ("runDispatch" in resolved && params.turnAdoptionLifecycle) {
-      // Prepared dispatchers already own their reply options. Accepting a top-level lifecycle
-      // here would silently orphan durable-ingress adoption.
-      throw new Error(
-        "runChannelInboundEvent cannot apply turnAdoptionLifecycle to a prepared turn; attach the lifecycle when creating runDispatch",
-      );
+    if ("runDispatch" in resolved) {
+      assertPreparedDispatchLifecycle(resolved, params.turnAdoptionLifecycle);
     }
     const dispatchResult = (
       "runDispatch" in resolved

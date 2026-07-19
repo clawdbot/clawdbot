@@ -14,6 +14,34 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { SessionPlacementState } from "./session-row-badges.ts";
 
+export type SidebarSessionAttention =
+  | { kind: "none" }
+  | { kind: "question" }
+  | { kind: "approval" }
+  | { kind: "error"; reason: string };
+
+/** Client-owned attention that can name a session before its row is loaded. */
+export type SidebarKnownSessionAttention = {
+  sessionKey: string;
+  attention: Extract<SidebarSessionAttention, { kind: "question" } | { kind: "approval" }>;
+};
+
+export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
+
+export function sidebarSessionAttentionPriority(attention: SidebarSessionAttention): number {
+  switch (attention.kind) {
+    case "question":
+    case "approval":
+      return 2;
+    case "error":
+      return 1;
+    case "none":
+      return 0;
+    default:
+      return attention satisfies never;
+  }
+}
+
 export type SidebarRecentSession = {
   key: string;
   label: string;
@@ -27,6 +55,7 @@ export type SidebarRecentSession = {
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
+  icon?: string;
   category?: string;
   channel?: string;
   channelSession?: boolean;
@@ -38,6 +67,7 @@ export type SidebarRecentSession = {
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
   unread: boolean;
+  attention: SidebarSessionAttention;
   spawnedBy?: string;
   status?: SessionRunStatus;
   startedAt?: number;
@@ -89,6 +119,7 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   category?: string | null;
+  icon?: string | null;
 };
 
 export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;

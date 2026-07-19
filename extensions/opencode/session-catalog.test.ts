@@ -257,6 +257,27 @@ describe("OpenCode session catalog", () => {
         cursor: latest.nextCursor,
       });
       expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+      const nonEmitted = Buffer.from(JSON.stringify({ offset: 2, extra: true }), "utf8").toString(
+        "base64url",
+      );
+      const unsafeOffset = Buffer.from(
+        JSON.stringify({ offset: Number.MAX_SAFE_INTEGER + 1 }),
+        "utf8",
+      ).toString("base64url");
+      for (const cursor of [
+        `${latest.nextCursor}$`,
+        `${latest.nextCursor}=`,
+        ` ${latest.nextCursor} `,
+        nonEmitted,
+        unsafeOffset,
+      ]) {
+        await expect(
+          readLocalOpenCodeTranscriptPage({
+            threadId: "ses_test",
+            cursor,
+          }),
+        ).rejects.toThrow("cursor is invalid");
+      }
       await expect(listLocalOpenCodeSessionPage({ cursor: " " })).rejects.toThrow(
         "cursor is invalid",
       );
@@ -631,6 +652,62 @@ describe("OpenCode session catalog", () => {
     });
     await expect(catalog!.read({ hostId: "node:node-1", threadId: "ses_remote" })).rejects.toThrow(
       "invalid transcript page",
+    );
+
+    invoke.mockClear();
+    await expect(
+      catalog!.read({ hostId: "node:node-1", threadId: "ses_remote", cursor: "" }),
+    ).rejects.toThrow("cursor is invalid");
+    await expect(
+      catalog!.list({
+        hostIds: ["node:node-1"],
+        cursors: { "node:node-1": "" },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
+      }),
+    ]);
+    expect(invoke).not.toHaveBeenCalled();
+
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({ sessions: [], nextCursor: " wrapped " }),
+    });
+    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
+      expect.objectContaining({
+        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
+      }),
+    ]);
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({
+        threadId: "ses_remote",
+        items: [],
+        nextCursor: " wrapped ",
+      }),
+    });
+    await expect(catalog!.read({ hostId: "node:node-1", threadId: "ses_remote" })).rejects.toThrow(
+      "invalid cursor",
+    );
+
+    const exactCursor = Buffer.from(JSON.stringify({ offset: 1 }), "utf8").toString("base64url");
+    invoke.mockResolvedValueOnce({ payloadJSON: JSON.stringify({ sessions: [] }) });
+    await catalog!.list({
+      hostIds: ["node:node-1"],
+      cursors: { "node:node-1": exactCursor },
+    });
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({ params: { cursor: exactCursor } }),
+    );
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({ threadId: "ses_remote", items: [] }),
+    });
+    await catalog!.read({
+      hostId: "node:node-1",
+      threadId: "ses_remote",
+      cursor: exactCursor,
+    });
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({ params: { threadId: "ses_remote", cursor: exactCursor } }),
     );
   });
 

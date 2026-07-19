@@ -17,22 +17,18 @@ import {
 import {
   isWorkerDispatchInputError,
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   requireSessionKey,
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionDispatchHandlers: GatewayRequestHandlers = {
-  "sessions.dispatch": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.dispatch": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsDispatchParams, "sessions.dispatch", respond)) {
       return;
     }
     const key = requireSessionKey(params.key, respond);
     if (!key) {
-      return;
-    }
-    if (rejectWebchatSessionMutation({ action: "dispatch", client, isWebchatConnect, respond })) {
       return;
     }
     const dispatchService = context.workerPlacementDispatchService;
@@ -163,15 +159,12 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "sessions.reclaim": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.reclaim": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsReclaimParams, "sessions.reclaim", respond)) {
       return;
     }
     const key = requireSessionKey(params.key, respond);
     if (!key) {
-      return;
-    }
-    if (rejectWebchatSessionMutation({ action: "reclaim", client, isWebchatConnect, respond })) {
       return;
     }
     const placementService = context.workerPlacementDispatchService;

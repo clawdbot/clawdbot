@@ -1137,6 +1137,7 @@ jobs:
         id: built_artifact_checks
         if: needs.preflight.outputs.run_checks == 'true' || needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_check_additional == 'true'
         env:
+          PARALLEL_GATEWAY_WATCH: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
           RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
@@ -1164,6 +1165,29 @@ jobs:
             pids+=("$!")
           }
 
+          wait_checks() {
+            local index name log pid result
+            for index in "${!pids[@]}"; do
+              name="${names[$index]}"
+              log="${logs[$index]}"
+              pid="${pids[$index]}"
+
+              if wait "$pid"; then
+                result="success"
+              else
+                result="failure"
+              fi
+
+              echo "::group::${name} log"
+              cat "$log"
+              echo "::endgroup::"
+              results["$name"]="$result"
+            done
+            names=()
+            pids=()
+            logs=()
+          }
+
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -1178,36 +1202,19 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
-          for index in "${!pids[@]}"; do
-            name="${names[$index]}"
-            log="${logs[$index]}"
-            pid="${pids[$index]}"
+          if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
+            start_check "gateway-watch" \
+              node scripts/check-gateway-watch-regression.mjs --skip-build
+          fi
 
-            if wait "$pid"; then
-              result="success"
-            else
-              result="failure"
-            fi
+          wait_checks
 
-            echo "::group::${name} log"
-            cat "$log"
-            echo "::endgroup::"
-            results["$name"]="$result"
-          done
-
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            log="${RUNNER_TEMP}/gateway-watch.log"
-            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build"
-            if node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1; then
-              result="success"
-            else
-              result="failure"
-            fi
-
-            echo "::group::gateway-watch log"
-            cat "$log"
-            echo "::endgroup::"
-            results["gateway-watch"]="$result"
+          # Preserve the low-core hosted path; concurrent Vitest can otherwise
+          # starve the Gateway readiness deadline used by this regression gate.
+          if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then
+            start_check "gateway-watch" \
+              node scripts/check-gateway-watch-regression.mjs --skip-build
+            wait_checks
           fi
 
           for name in channels core-support-boundary gateway-watch; do
@@ -2915,6 +2922,17 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+
+      - name: Native state schema version contract
+        run: |
+          if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
+            node scripts/check-native-state-schema-version.mjs
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            echo "[skip] native state schema version guard is not present in this historical target"
+          else
+            echo "Current CI targets must provide scripts/check-native-state-schema-version.mjs." >&2
+            exit 1
+          fi
 
       - name: Swift lint
         run: |

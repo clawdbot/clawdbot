@@ -1,0 +1,67 @@
+name: PR CI Sweeper
+
+# Re-fires pull_request CI runs that GitHub dropped at PR open (merge-ref
+# race: no CI run attaches, or an un-rerunnable startup_failure is created).
+# Close/reopen with an app token re-fires the event; GITHUB_TOKEN events
+# would not trigger workflows.
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log intended re-fires without closing/reopening.
+        required: false
+        default: false
+        type: boolean
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: pr-ci-sweeper
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  sweep:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+      - name: Sweep dropped PR CI runs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const { pathToFileURL } = require("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/scripts/github/pr-ci-sweeper.mjs`,
+            );
+            const { runPrCiSweeper } = await import(moduleUrl.href);
+
+            await runPrCiSweeper({
+              github,
+              context,
+              core,
+              dryRun: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }},
+              appSlug: ${{ toJSON(steps.app-token.outputs.app-slug || steps.app-token-fallback.outputs.app-slug || '') }},
+            });

@@ -113,7 +113,7 @@ class GatewaySessionCustomHeadersTest {
       val session =
         GatewaySession(
           scope = scope,
-          identityStore = DeviceIdentityStore(app),
+          identityStore = testDeviceIdentityStore(app),
           deviceAuthStore = NoopDeviceAuthStore(),
           onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
           onDisconnected = {},

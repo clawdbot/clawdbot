@@ -54,6 +54,26 @@ function collectModelsMapRefs(params: {
   }
 }
 
+function collectModelPolicyAllowRefs(params: {
+  hits: CodexRouteHit[];
+  path: string;
+  modelPolicy: unknown;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+}): void {
+  const allow = asMutableRecord(params.modelPolicy)?.allow;
+  if (!Array.isArray(allow)) {
+    return;
+  }
+  for (const [index, modelRef] of allow.entries()) {
+    collectStringModelSlot({
+      hits: params.hits,
+      path: `${params.path}.allow.${index}`,
+      value: modelRef,
+      blockedModelIdentities: params.blockedModelIdentities,
+    });
+  }
+}
+
 function collectAgentModelRefs(params: {
   hits: CodexRouteHit[];
   agent: unknown;
@@ -111,6 +131,12 @@ function collectAgentModelRefs(params: {
     hits: params.hits,
     path: `${params.path}.models`,
     models: agent.models,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
+  collectModelPolicyAllowRefs({
+    hits: params.hits,
+    path: `${params.path}.modelPolicy`,
+    modelPolicy: agent.modelPolicy,
     blockedModelIdentities: params.blockedModelIdentities,
   });
 }

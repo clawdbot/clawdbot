@@ -145,6 +145,8 @@ extension RootTabsSourceGuardTests {
         #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource.contains("case let .gatewayLink(link):"))
         #expect(actionsSource.contains("case let .setupCode(code):"))
+        #expect(actionsSource.contains(
+            "self.stagedGatewaySetupLink = nil\n        self.setupCode = \"\"\n        await self.applyGatewayLink(link)"))
         #expect(stopScanning.lowerBound < deliverResult.lowerBound)
         #expect(trustSource.contains("Trust this gateway?"))
         #expect(trustSource.contains("Trust and connect"))
@@ -230,7 +232,7 @@ extension RootTabsSourceGuardTests {
         #expect(connectionFailure.contains("self.localConnectionFailure = message"))
         #expect(!connectionFailure.contains("self.connectMessage = message"))
         #expect(connectionFailure.contains("self.statusLine = message"))
-        #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
+        #expect(onboardingSource.contains(".failedStatus(message: localFailure, allowsRetry: false)"))
         #expect(onboardingSource.contains(
             "primaryActionTitle: allowsRetry ? OpenClawTextValue.localized(\"Retry\") : nil"))
         #expect(onboardingSource.contains("onPrimaryAction: allowsRetry ? self.onRetry : nil"))

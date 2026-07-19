@@ -134,10 +134,11 @@ then runs an announce step and posts the announce reply to the requester
 chat channel.
 
 Availability depends on the caller's effective tool policy. The built-in
-`coding` profile includes `sessions_spawn`; `messaging` and `minimal` do
-not. `full` allows every tool. Add `tools.alsoAllow: ["sessions_spawn",
-"sessions_yield", "subagents"]`, or use `tools.profile: "coding"`, for
-agents on a narrower profile that should still delegate work.
+`coding` and `messaging` profiles include `sessions_spawn`,
+`sessions_yield`, and `subagents`; `minimal` does not. `full` allows every
+tool. Add those tools with `tools.alsoAllow`, or use one of the profiles
+above, for an agent on a custom narrower profile that should still
+delegate work.
 Channel/group, provider, sandbox, and per-agent allow/deny policies can
 still remove the tool after the profile stage. Use `/tools` from the same
 session to confirm the effective tool list.
@@ -212,7 +213,7 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
 </ParamField>
 <ParamField path="thinking" type="string">
-  Override thinking level for the sub-agent run.
+  Override thinking level for the sub-agent run. Not available with `visible: true`.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.
@@ -228,7 +229,19 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
   `require` rejects the spawn unless the target child runtime is sandboxed.
 </ParamField>
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
-  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
+  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`. A visible fork must target the same agent as the requester.
+</ParamField>
+<ParamField path="visible" type="boolean" default="false">
+  Create a persistent dashboard session that the user can open in the Control UI. Visible spawns support only `runtime: "subagent"` and always keep the created session.
+</ParamField>
+<ParamField path="worktree" type="boolean" default="false">
+  Provision a managed git worktree for the new dashboard session. Requires `visible: true`.
+</ParamField>
+<ParamField path="worktreeName" type="string">
+  Optional managed-worktree name. Requires `visible: true` and `worktree: true`.
+</ParamField>
+<ParamField path="worktreeBaseRef" type="string">
+  Optional git base ref for the managed worktree. Requires `visible: true` and `worktree: true`.
 </ParamField>
 
 <Warning>
@@ -237,6 +250,8 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
 their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
+
+With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, light bootstrap context, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is also rejected when inherited tool restrictions cannot be carried into the dashboard session. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
 
 ### Task names and targeting
 
@@ -280,11 +295,17 @@ from user/model-provided spawn arguments.
 
 ## Tool: `subagents`
 
-Lists spawned sub-agent runs owned by the requester session. It is scoped
-to the current requester; a child can only see its own controlled children.
+Lists spawned sub-agent runs and background-task records owned by the
+requester session tree. The task rows cover native sub-agents, ACP runs,
+Gateway CLI/media work, and cron executions. It is scoped to the current
+requester; a child can only see its own controlled children.
 
 Use `subagents` for on-demand status and debugging. Use `sessions_yield` to
 wait for completion events.
+
+Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
+a task. Cancellation is confined to the controlled session tree; a leaf
+sub-agent cannot cancel work owned by another session.
 
 ## Thread-bound sessions
 

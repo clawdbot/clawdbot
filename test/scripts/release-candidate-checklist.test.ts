@@ -25,6 +25,7 @@ import {
   validateFullManifest,
   validateNpmPreflightRunSource,
   validatePreflightManifest,
+  validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
@@ -198,13 +199,44 @@ describe("release candidate checklist", () => {
     expect(source).toContain(
       '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
     );
+    expect(source).toContain("[TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha");
     expect(source).toContain("cwd: targetRoot");
     expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
     expect(source).toContain(
-      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+      "const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
     );
     expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
     expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
+  });
+
+  it("keeps the exact pinned trusted tooling valid when main advances", () => {
+    const isAncestor = vi.fn(() => true);
+
+    expect(
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor,
+      }),
+    ).toBe("a".repeat(40));
+    expect(isAncestor).toHaveBeenCalledWith("a".repeat(40), "b".repeat(40));
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "b".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor: () => true,
+      }),
+    ).toThrow("does not match pinned tooling");
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "c".repeat(40),
+        isAncestor: () => false,
+      }),
+    ).toThrow("pinned release candidate tooling");
   });
 
   it("validates the exact tag changelog before dispatching the release matrix", () => {

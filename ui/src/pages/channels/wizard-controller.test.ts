@@ -132,6 +132,97 @@ describe("ChannelWizardController", () => {
     expect(cancelled).toContain("s-stale");
   });
 
+  it("cancels a session created after a local start timeout so retry can proceed", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirstStart: (value: unknown) => void = () => {};
+      let runningSession: string | null = null;
+      let startCount = 0;
+      const { controller, request } = createController(async (method, params) => {
+        if (method === "wizard.start") {
+          startCount += 1;
+          if (startCount === 1) {
+            runningSession = "s-timeout";
+            return await new Promise((resolve) => {
+              resolveFirstStart = resolve;
+            });
+          }
+          if (runningSession) {
+            throw new Error("wizard already running");
+          }
+          return { sessionId: "s-retry", done: false, status: "running", step: selectStep };
+        }
+        if (method === "wizard.cancel") {
+          const sessionId = (params as { sessionId?: string }).sessionId;
+          if (sessionId === runningSession) {
+            runningSession = null;
+          }
+          return { status: "cancelled" };
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+
+      const timedOutStart = controller.start("telegram");
+      await vi.advanceTimersByTimeAsync(120_000);
+      await timedOutStart;
+      expect(controller.state).toMatchObject({
+        phase: "error",
+        message: "Error: wizard request timed out: wizard.start",
+      });
+
+      resolveFirstStart({
+        sessionId: "s-timeout",
+        done: false,
+        status: "running",
+        step: selectStep,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "s-timeout" });
+      expect(runningSession).toBeNull();
+
+      await controller.start("telegram");
+      expect(startCount).toBe(2);
+      expect(controller.state).toMatchObject({
+        phase: "step",
+        step: { id: "step-select" },
+        busy: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not cancel a terminal start result that arrives after the local timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveStart: (value: unknown) => void = () => {};
+      const { controller, request } = createController(async (method) => {
+        if (method === "wizard.start") {
+          return await new Promise((resolve) => {
+            resolveStart = resolve;
+          });
+        }
+        if (method === "wizard.cancel") {
+          return { status: "cancelled" };
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+
+      const timedOutStart = controller.start("telegram");
+      await vi.advanceTimersByTimeAsync(120_000);
+      await timedOutStart;
+
+      resolveStart({ sessionId: "s-done", done: true, status: "done" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the gateway-reported channels for completion", async () => {
     const { controller } = createController(async (method) => {
       if (method === "wizard.start") {

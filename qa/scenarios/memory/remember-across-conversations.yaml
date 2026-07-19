@@ -248,7 +248,7 @@ flow:
                   expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
               - set: targetStartIndex
                 value:
-                  expr: state.getSnapshot().messages.length
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
               - sendInbound:
                   conversation:
                     id:

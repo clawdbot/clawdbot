@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Adds copy and save-as-PNG actions for rendered chat widgets.
+
 Adds foreground, on-device Voice Wake with editable Gateway-synced wake words and automatic pause during other voice activity.
 
 Fixes Android composer media leaking across Gateway, agent, and chat switches. Thanks @IWhatsskill.

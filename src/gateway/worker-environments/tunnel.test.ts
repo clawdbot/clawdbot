@@ -395,6 +395,100 @@ describe("worker tunnel manager", () => {
     await handle.stop();
   });
 
+  it("does not downgrade an operational HEAD probe failure to plain sync", async () => {
+    const remoteWorkspaceDir = "/home/worker/.openclaw-worker/workspaces/env/session/3";
+    const localPath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-head-probe-"));
+    await fs.mkdir(path.join(localPath, ".git"));
+    const fake = fakeRunner((argv, options) => {
+      if (argv.includes("--show-toplevel")) {
+        return success(`${localPath}\n`);
+      }
+      if (argv.includes("--verify")) {
+        return {
+          ...success("", "HEAD probe timed out"),
+          code: null,
+          killed: true,
+          termination: "timeout",
+        };
+      }
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker workspace directory")
+      ) {
+        return success(`${remoteWorkspaceDir}\n`);
+      }
+      return undefined;
+    });
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const starting = manager.start({
+      environmentId: "worker:head-probe-failure",
+      ownerEpoch: 3,
+      ssh: SSH,
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    const handle = await starting;
+
+    try {
+      await expect(
+        handle.syncWorkspace({ localPath, sessionId: "session:three", generation: 3 }),
+      ).rejects.toThrow("Worker workspace sync failed: HEAD probe timed out");
+      expect(fake.runs.some((entry) => entry.argv[0] === "rsync")).toBe(false);
+    } finally {
+      await handle.stop();
+      await fs.rm(localPath, { recursive: true, force: true });
+    }
+  });
+
+  it("does not downgrade an operational repository-root probe failure to plain sync", async () => {
+    const remoteWorkspaceDir = "/home/worker/.openclaw-worker/workspaces/env/session/4";
+    const localPath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-root-probe-"));
+    await fs.mkdir(path.join(localPath, ".git"));
+    const fake = fakeRunner((argv, options) => {
+      if (argv.includes("--show-toplevel")) {
+        return {
+          ...success("", "root probe timed out"),
+          code: null,
+          killed: true,
+          termination: "timeout",
+        };
+      }
+      if (argv.includes("--verify")) {
+        return success("0123456789abcdef0123456789abcdef01234567\n");
+      }
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker workspace directory")
+      ) {
+        return success(`${remoteWorkspaceDir}\n`);
+      }
+      return undefined;
+    });
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const starting = manager.start({
+      environmentId: "worker:root-probe-failure",
+      ownerEpoch: 4,
+      ssh: SSH,
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    const handle = await starting;
+
+    try {
+      await expect(
+        handle.syncWorkspace({ localPath, sessionId: "session:four", generation: 4 }),
+      ).rejects.toThrow("Worker workspace sync failed: root probe timed out");
+      expect(fake.runs.some((entry) => entry.argv[0] === "rsync")).toBe(false);
+    } finally {
+      await handle.stop();
+      await fs.rm(localPath, { recursive: true, force: true });
+    }
+  });
+
   it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-git-sync-"));
     const localPath = path.join(root, "local");
@@ -607,6 +701,14 @@ describe("worker tunnel manager", () => {
       fs.writeFile(path.join(plainPath, "hello.txt"), "plain\n"),
       fs.writeFile(path.join(plainPath, "nested/.git/config"), "private metadata\n"),
     ]);
+    // Result staging stores refs in an unborn repository for a plain workspace.
+    // A later dispatch must keep using plain-mode sync until the user creates HEAD.
+    await git(plainPath, "init");
+    await fs.mkdir(path.join(plainPath, "__pycache__"));
+    await Promise.all([
+      fs.writeFile(path.join(plainPath, "__pycache__/fizzbuzz.pyc"), "derived\n"),
+      fs.writeFile(path.join(plainPath, ".mypy_cache"), "derived name file\n"),
+    ]);
     await git(gitPath, "init");
     await git(gitPath, "config", "user.name", "Worker Sync Test");
     await git(gitPath, "config", "user.email", "worker-sync@example.invalid");
@@ -641,6 +743,10 @@ describe("worker tunnel manager", () => {
       await expect(
         fs.access(path.join(plain.remoteWorkspaceDir, "nested/.git/config")),
       ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(plain.remoteWorkspaceDir, "__pycache__/fizzbuzz.pyc")),
+      ).rejects.toThrow();
+      await expect(fs.access(path.join(plain.remoteWorkspaceDir, ".mypy_cache"))).rejects.toThrow();
 
       await expect(
         handle.syncWorkspace({

@@ -1,9 +1,12 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { compileFunction } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   buildSummary,
+  filterIgnoredFindings,
   formatAnnotation,
   intersectFindings,
   parseRepoLocation,
@@ -11,6 +14,7 @@ import {
 } from "../../scripts/periphery-intersection.mjs";
 
 const WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
+const FINDING_SOURCE = "../shared/OpenClawKit/Sources/OpenClawKit/Example.swift";
 
 type WorkflowStep = {
   id?: string;
@@ -35,10 +39,22 @@ function finding(overrides: Record<string, unknown> = {}) {
   return {
     ids: ["s:11OpenClawKit7ExampleV"],
     kind: "struct",
-    location: "../shared/OpenClawKit/Sources/OpenClawKit/Example.swift:12:8",
+    location: `${FINDING_SOURCE}:12:8`,
     name: "Example",
     ...overrides,
   };
+}
+
+function withSharedSource(source: string, test: (repoRoot: string) => void) {
+  const repoRoot = mkdtempSync(join(tmpdir(), "openclaw-periphery-intersection-"));
+  const sourceFile = join(repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawKit/Example.swift");
+  mkdirSync(dirname(sourceFile), { recursive: true });
+  writeFileSync(sourceFile, source);
+  try {
+    test(repoRoot);
+  } finally {
+    rmSync(repoRoot, { force: true, recursive: true });
+  }
 }
 
 describe("Periphery intersection", () => {
@@ -60,6 +76,32 @@ describe("Periphery intersection", () => {
       name: "Later",
     });
     expect(intersectFindings([later, finding()], [finding(), later])).toEqual([finding(), later]);
+  });
+
+  it("honors bare Periphery ignore comments on or above declarations", () => {
+    withSharedSource(
+      [
+        "// periphery:ignore - exported package surface",
+        "public struct Example {}",
+        "",
+        'public init(value: String = "value") {} // periphery:ignore - exported initializer',
+      ].join("\n"),
+      (repoRoot) => {
+        const declaration = finding({ location: `${FINDING_SOURCE}:2:8` });
+        const inline = finding({ location: `${FINDING_SOURCE}:4:8` });
+        expect(filterIgnoredFindings([declaration, inline], repoRoot)).toEqual([]);
+      },
+    );
+  });
+
+  it("does not treat scoped Periphery commands as bare ignores", () => {
+    withSharedSource(
+      ["// periphery:ignore:parameters value", "public struct Example {}"].join("\n"),
+      (repoRoot) => {
+        const command = finding({ location: `${FINDING_SOURCE}:2:8` });
+        expect(filterIgnoredFindings([command], repoRoot)).toEqual([command]);
+      },
+    );
   });
 
   it("fails closed when a finding has no USR", () => {

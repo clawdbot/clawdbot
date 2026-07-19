@@ -11,6 +11,10 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+For the personal-agent default — one rolling conversation shared by all your
+DM channels, with group activity and background work flowing into it — see
+[The main session](/concepts/main-session).
+
 ## How messages are routed
 
 | Source          | Behavior                  |
@@ -42,12 +46,12 @@ visible to Bob.
 
 `session.dmScope` options:
 
-| Value                      | Behavior                                  |
-| -------------------------- | ----------------------------------------- |
-| `main` (default)           | All DMs share one session                 |
-| `per-peer`                 | Isolate by sender, across channels        |
-| `per-channel-peer`         | Isolate by channel + sender (recommended) |
-| `per-account-channel-peer` | Isolate by account + channel + sender     |
+| Value                      | Behavior                                                 |
+| -------------------------- | -------------------------------------------------------- |
+| `main` (default)           | All DMs share the [main session](/concepts/main-session) |
+| `per-peer`                 | Isolate by sender, across channels                       |
+| `per-channel-peer`         | Isolate by channel + sender (recommended)                |
+| `per-account-channel-peer` | Isolate by account + channel + sender                    |
 
 <Tip>
 If the same person contacts you from multiple channels, use

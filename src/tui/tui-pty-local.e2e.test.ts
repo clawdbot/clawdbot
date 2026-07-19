@@ -571,7 +571,7 @@ async function startLocalModeTui(
   });
 
   const cleanup = createIdempotentCleanup(async () => {
-    run.dispose();
+    await run.dispose();
     await mockModel.stop();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -701,7 +701,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
     const fixtureMockModel = mockModel;
     const fixtureControlClient = controlClient;
     const cleanup = createIdempotentCleanup(async () => {
-      fixtureControlClient.stop();
+      await fixtureControlClient.stop();
       try {
         await fixtureGateway.cleanup();
       } finally {
@@ -719,7 +719,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
       cleanup,
     };
   } catch (error) {
-    controlClient?.stop();
+    await controlClient?.stop();
     try {
       await gateway?.cleanup();
     } finally {
@@ -776,7 +776,7 @@ async function startGatewayModeTui(
   });
   const cleanup = createIdempotentCleanup(async () => {
     shared.mockModel.releaseFirstResponse(scenario.modelId);
-    run.dispose();
+    await run.dispose();
     for (const key of sessionKeys) {
       await shared.controlClient.abortChat({ sessionKey: key });
     }
@@ -1033,7 +1033,7 @@ describe("TUI PTY real backends", () => {
           await fixture.run.write("/exit\r", { delay: false });
           expect((await fixture.run.waitForExit()).exitCode).toBe(0);
         } finally {
-          eventProbe?.stop();
+          await eventProbe?.stop();
           await fixture.cleanup();
         }
       },
@@ -1357,7 +1357,7 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
-        queueClient.stop();
+        await queueClient.stop();
         await fixture.cleanup();
       }
     },

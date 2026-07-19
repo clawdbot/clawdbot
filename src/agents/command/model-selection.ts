@@ -100,9 +100,6 @@ export async function resolveEmbeddedModelSelection(params: {
   let provider = defaultProvider;
   let model = defaultModel;
   let sessionEntry = params.sessionEntry;
-  const hasAllowlist =
-    params.cfg.agents?.defaults?.models &&
-    Object.keys(params.cfg.agents.defaults.models).length > 0;
   const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
   let storedModelOverrideSource = hasStoredOverride ? sessionEntry?.modelOverrideSource : undefined;
   let hasStoredAutoFallbackProvenance =
@@ -132,11 +129,17 @@ export async function resolveEmbeddedModelSelection(params: {
     catalog: [],
     defaultProvider,
     defaultModel,
+    agentId: params.sessionAgentId,
     allowManifestNormalization: true,
     allowPluginNormalization: params.pluginsEnabled,
     ...params.modelManifestContext,
   });
-  if (hasAllowlist) {
+  const hasAllowlist = !visibilityPolicy.allowAny;
+  const agentModels = resolveAgentConfig(params.cfg, params.sessionAgentId)?.models;
+  const hasConfiguredModels =
+    Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0 ||
+    Object.keys(agentModels ?? {}).length > 0;
+  if (hasAllowlist || hasConfiguredModels) {
     modelCatalog = params.pluginsEnabled
       ? loadManifestModelCatalog({ config: params.cfg, workspaceDir: params.workspaceDir })
       : [];
@@ -325,8 +328,11 @@ export async function resolveEmbeddedModelSelection(params: {
       throw new Error("Invalid model override.");
     }
     if (!visibilityPolicy.allowsKey(modelKey(explicitRef.provider, explicitRef.model))) {
+      const rejectedKey = `${sanitizeForLog(explicitRef.provider)}/${sanitizeForLog(explicitRef.model)}`;
+      const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
+      const repairPath = visibilityPolicy.allowRepairConfigPath;
       throw new Error(
-        `Model override "${sanitizeForLog(explicitRef.provider)}/${sanitizeForLog(explicitRef.model)}" is not allowed for agent "${params.sessionAgentId}".`,
+        `Model override "${rejectedKey}" is not allowed for agent "${params.sessionAgentId}" by ${policyPath}. Add "${rejectedKey}" or "${sanitizeForLog(explicitRef.provider)}/*" to ${repairPath}, or remove/empty the list to allow any model.`,
       );
     }
     provider = explicitRef.provider;
@@ -334,8 +340,9 @@ export async function resolveEmbeddedModelSelection(params: {
   }
   const allowedInitialSelection = visibilityPolicy.resolveSelection({ provider, model });
   if (!allowedInitialSelection) {
+    const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
     throw new Error(
-      `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
+      `Configured default model "${modelKey(provider, model)}" is not allowed by ${policyPath}, and no allowed model is available.`,
     );
   }
   provider = allowedInitialSelection.provider;

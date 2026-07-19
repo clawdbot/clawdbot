@@ -1,4 +1,8 @@
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
@@ -20,6 +24,7 @@ import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -315,7 +320,14 @@ function authorizeGatewayMethod(
     ? authorizeOperatorScopesForRequiredScope(registeredScope, scopes)
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
+    const resolvedRequiredScopes = isOperatorScope(registeredScope)
+      ? [registeredScope]
+      : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+    return missingScopeErrorShape({
+      missingScope: scopeAuth.missingScope,
+      requiredScopes:
+        resolvedRequiredScopes.length > 0 ? resolvedRequiredScopes : [scopeAuth.missingScope],
+    });
   }
   return null;
 }
@@ -647,6 +659,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.create",
       "sessions.compaction.branch",
       "sessions.compaction.restore",
+      "sessions.branches.list",
+      "sessions.branches.switch",
+      "sessions.rewind",
+      "sessions.fork",
       "sessions.send",
       "sessions.steer",
       "sessions.abort",

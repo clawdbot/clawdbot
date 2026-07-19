@@ -14,6 +14,7 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
 
 export type RuntimeId = "openclaw" | "codex";
@@ -1052,6 +1053,7 @@ async function loadRuntimeParityMockToolCalls(
     let payload: unknown;
     try {
       if (!response.ok) {
+        await discardIgnoredResponseBody(response);
         return null;
       }
       payload = await response.json();

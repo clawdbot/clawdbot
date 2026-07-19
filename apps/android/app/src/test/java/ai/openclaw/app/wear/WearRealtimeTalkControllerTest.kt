@@ -8,9 +8,11 @@ import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import android.util.Base64
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -177,6 +179,94 @@ class WearRealtimeTalkControllerTest {
       assertFalse(controller.stop("watch-a", "attempt-b"))
       assertTrue(controller.stop("watch-a", "attempt-a"))
       assertTrue(forcedChannelCloses.isEmpty())
+    }
+
+  @Test
+  fun `late append error from a stopped session does not fail its replacement`() =
+    runTest {
+      var relaySequence = 0
+      var staleAppendError: ((String) -> Unit)? = null
+      val controller =
+        WearRealtimeTalkController(
+          scope = this,
+          isConnected = { true },
+          requestGateway = { method, _, _ ->
+            if (method == "talk.session.create") {
+              relaySequence += 1
+              """{"relaySessionId":"relay-$relaySequence"}"""
+            } else {
+              """{"ok":true}"""
+            }
+          },
+          sendGatewayFrame = { _, _, _, onError ->
+            if (staleAppendError == null) staleAppendError = onError
+          },
+          sendWatchFrame = { _, _, _ -> },
+        )
+
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      controller.appendAudio("watch-a", ByteArray(2))
+      runCurrent()
+      assertTrue(staleAppendError != null)
+
+      assertTrue(controller.stop("watch-a", "attempt-a"))
+      assertTrue(controller.start("watch-a", "session-b", "attempt-b", "de"))
+      staleAppendError?.invoke("request timeout")
+
+      assertEquals(WearRealtimeTalkStatus.LISTENING, controller.snapshot.value.status)
+      assertEquals("attempt-b", controller.snapshot.value.attemptId)
+      assertTrue(controller.stop("watch-a", "attempt-b"))
+    }
+
+  @Test
+  fun `late Watch output error from a stopped session does not fail its replacement`() =
+    runTest {
+      var relaySequence = 0
+      val outputStarted = CompletableDeferred<Unit>()
+      val releaseOutput = CompletableDeferred<Unit>()
+      val controller =
+        WearRealtimeTalkController(
+          scope = this,
+          isConnected = { true },
+          requestGateway = { method, _, _ ->
+            if (method == "talk.session.create") {
+              relaySequence += 1
+              """{"relaySessionId":"relay-$relaySequence"}"""
+            } else {
+              """{"ok":true}"""
+            }
+          },
+          sendGatewayFrame = { _, _, _, _ -> },
+          sendWatchFrame = { _, _, _ ->
+            outputStarted.complete(Unit)
+            withContext(NonCancellable) {
+              releaseOutput.await()
+              error("wear link down")
+            }
+          },
+        )
+
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      controller.handleGatewayEvent(
+        "talk.event",
+        """
+        {
+          "relaySessionId":"relay-1",
+          "type":"audio",
+          "audioBase64":"${Base64.encodeToString(ByteArray(16), Base64.NO_WRAP)}"
+        }
+        """.trimIndent(),
+      )
+      outputStarted.await()
+
+      assertTrue(controller.stop("watch-a", "attempt-a"))
+      assertTrue(controller.start("watch-a", "session-b", "attempt-b", "de"))
+      releaseOutput.complete(Unit)
+      runCurrent()
+
+      assertEquals(WearRealtimeTalkStatus.LISTENING, controller.snapshot.value.status)
+      assertEquals("attempt-b", controller.snapshot.value.attemptId)
+      assertTrue(controller.stop("watch-a", "attempt-b"))
     }
 
   @Test

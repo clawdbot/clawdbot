@@ -12,7 +12,6 @@ import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -21,13 +20,12 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -77,10 +75,9 @@ internal class WearProxyClient private constructor(
   private val transport: WearMessageTransport,
 ) : WearRpcRequester {
   private val pending = ConcurrentHashMap<String, PendingWearRequest>()
-  private val selectedPhoneNodeId = AtomicReference<String?>()
   private val preferredPhoneLock = Any()
-  private var preferredPhoneKnown = false
-  private var preferredPhoneNodeId: String? = null
+  private var preferredPhoneGeneration = 0L
+  private var registeredPhone: PreferredPhoneRegistration? = null
   private val inboundMutex = Mutex()
   private val mutableEvents =
     MutableSharedFlow<WearInboundEvent>(
@@ -98,31 +95,49 @@ internal class WearProxyClient private constructor(
     params: JsonObject,
     expectedNodeId: String?,
     requirePreferredNode: Boolean,
-  ): WearRpcResult =
-    try {
-      withTimeout(REQUEST_TIMEOUT_MS) {
-        requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode)
+  ): WearRpcResult {
+    var attemptedPreferredPhone: PreferredPhoneRegistration? = null
+    val result =
+      withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+        requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode) { registration ->
+          attemptedPreferredPhone = registration
+        }
       }
-    } catch (_: TimeoutCancellationException) {
-      throw WearProxyException("timeout", "Paired phone did not respond")
-    }
+    if (result != null) return result
+
+    // MessageClient success only proves the request was queued. A silent phone
+    // must be rediscovered just like a node that rejected the send outright.
+    invalidatePreferredPhone(attemptedPreferredPhone)
+    throw WearProxyException("timeout", "Paired phone did not respond")
+  }
 
   private suspend fun requestBeforeDeadline(
     method: WearRpcMethod,
     params: JsonObject,
     expectedNodeId: String?,
     requirePreferredNode: Boolean,
+    recordPreferredPhoneAttempt: (PreferredPhoneRegistration?) -> Unit,
   ): WearRpcResult {
     // Stateful RPCs stay on the phone that supplied their session/transcript.
     // Rediscovery here could route a shared session key to a different phone.
-    val requiredPreferredNodeId = if (requirePreferredNode) resolvePreferredPhoneNode() else null
-    val nodeId = expectedNodeId ?: requiredPreferredNodeId ?: resolvePreferredPhoneNode()
-    if (requirePreferredNode && expectedNodeId != null && requiredPreferredNodeId != expectedNodeId) {
+    val preferredPhone =
+      when {
+        requirePreferredNode || expectedNodeId == null -> resolvePreferredPhone()
+        else -> preferredPhoneRegistration(expectedNodeId)
+      }
+    val nodeId = expectedNodeId ?: checkNotNull(preferredPhone).nodeId
+    if (requirePreferredNode && expectedNodeId != null && preferredPhone?.nodeId != expectedNodeId) {
       throw WearProxyException("phone_changed", "Preferred phone changed during request")
     }
+    recordPreferredPhoneAttempt(preferredPhone?.takeIf { it.nodeId == nodeId })
     val requestId = UUID.randomUUID().toString()
     val response = CompletableDeferred<WearMessage.Response>()
-    val pendingRequest = PendingWearRequest(nodeId = nodeId, response = response)
+    val pendingRequest =
+      PendingWearRequest(
+        nodeId = nodeId,
+        response = response,
+        preferredPhone = preferredPhone?.takeIf { it.nodeId == nodeId },
+      )
     check(pending.putIfAbsent(requestId, pendingRequest) == null)
     return try {
       try {
@@ -136,14 +151,16 @@ internal class WearProxyClient private constructor(
         )
       } catch (_: CancellationException) {
         currentCoroutineContext().ensureActive()
+        invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
         throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
       } catch (_: Throwable) {
+        invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
         throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
       }
       val envelope = response.await()
       if (
         (expectedNodeId == null || requirePreferredNode || method.requiresPreferredSnapshotSource()) &&
-        selectedPhoneNodeId.get() != nodeId
+        currentPreferredPhone()?.nodeId != nodeId
       ) {
         throw WearProxyException("phone_changed", "Preferred phone changed during request")
       }
@@ -175,8 +192,12 @@ internal class WearProxyClient private constructor(
         path == WearProtocol.RESPONSE_PATH && message is WearMessage.Response -> {
           pending[message.requestId]
             ?.takeIf { it.nodeId == sourceNodeId }
-            ?.response
-            ?.complete(message)
+            ?.let { request ->
+              // Correlation is the reachability proof. Advance the registration
+              // before a concurrently expiring request can invalidate it.
+              confirmPreferredPhoneResponse(request.preferredPhone)
+              request.response.complete(message)
+            }
           null
         }
         path == WearProtocol.EVENT_PATH && message is WearMessage.Event -> {
@@ -209,15 +230,12 @@ internal class WearProxyClient private constructor(
     } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
 
   private suspend fun acceptEventSource(sourceNodeId: String): Boolean {
-    val snapshot = preferredPhoneSnapshot()
-    if (snapshot.known) {
-      val preferred = snapshot.nodeId
-      selectedPhoneNodeId.set(preferred)
-      return preferred == sourceNodeId
+    val preferredPhone = currentPreferredPhone()
+    if (preferredPhone != null) {
+      return preferredPhone.nodeId == sourceNodeId
     }
-    if (selectedPhoneNodeId.get() == sourceNodeId) return true
     return try {
-      resolvePreferredPhoneNode() == sourceNodeId
+      resolvePreferredPhone().nodeId == sourceNodeId
     } catch (err: CancellationException) {
       throw err
     } catch (_: WearProxyException) {
@@ -225,49 +243,97 @@ internal class WearProxyClient private constructor(
     }
   }
 
-  /** Capability callbacks invalidate cached routing before another old-phone event is accepted. */
-  fun updatePreferredPhoneNodeId(nodeId: String?) {
+  /** A unique directly connected phone becomes the preferred routing source immediately. */
+  fun updatePreferredPhoneNodeId(nodeId: String) {
     val changed =
       synchronized(preferredPhoneLock) {
-        val changed = !preferredPhoneKnown || preferredPhoneNodeId != nodeId
-        preferredPhoneKnown = true
-        preferredPhoneNodeId = nodeId
+        val changed = registeredPhone?.nodeId != nodeId
+        preferredPhoneGeneration += 1
+        registeredPhone = PreferredPhoneRegistration(nodeId, preferredPhoneGeneration)
         changed
       }
-    selectedPhoneNodeId.set(nodeId)
     if (changed) mutablePreferredPhoneChanges.tryEmit(nodeId)
   }
 
-  private suspend fun resolvePreferredPhoneNode(): String {
-    preferredPhoneSnapshot().takeIf(PreferredPhoneSnapshot::known)?.let { snapshot ->
-      return snapshot.nodeId ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-    }
-    val resolved = resolvePhoneNode()
-    val selected =
+  /** Capability callbacks are not reachability-filtered, so ambiguous results force fresh discovery. */
+  fun invalidatePreferredPhoneNode() {
+    val changed =
       synchronized(preferredPhoneLock) {
-        if (!preferredPhoneKnown) {
-          preferredPhoneKnown = true
-          preferredPhoneNodeId = resolved
-        }
-        preferredPhoneNodeId
-      } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-    selectedPhoneNodeId.set(selected)
-    return selected
+        val changed = registeredPhone != null
+        preferredPhoneGeneration += 1
+        registeredPhone = null
+        changed
+      }
+    if (changed) mutablePreferredPhoneChanges.tryEmit(null)
   }
 
-  private fun preferredPhoneSnapshot(): PreferredPhoneSnapshot =
+  private suspend fun resolvePreferredPhone(): PreferredPhoneRegistration {
+    // Capability callbacks can invalidate the route while discovery suspends.
+    // Only a result from the same generation may repopulate it.
+    val discoveryGeneration =
+      synchronized(preferredPhoneLock) {
+        registeredPhone?.let { return it }
+        preferredPhoneGeneration
+      }
+    val resolved = resolvePhoneNode()
+    return synchronized(preferredPhoneLock) {
+      registeredPhone ?: if (preferredPhoneGeneration == discoveryGeneration) {
+        preferredPhoneGeneration += 1
+        PreferredPhoneRegistration(resolved, preferredPhoneGeneration).also { registeredPhone = it }
+      } else {
+        null
+      }
+    } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
+  }
+
+  private fun currentPreferredPhone(): PreferredPhoneRegistration? =
     synchronized(preferredPhoneLock) {
-      PreferredPhoneSnapshot(known = preferredPhoneKnown, nodeId = preferredPhoneNodeId)
+      registeredPhone
     }
 
-  private data class PreferredPhoneSnapshot(
-    val known: Boolean,
-    val nodeId: String?,
+  private fun preferredPhoneRegistration(nodeId: String): PreferredPhoneRegistration? =
+    synchronized(preferredPhoneLock) {
+      registeredPhone?.takeIf { it.nodeId == nodeId }
+    }
+
+  private fun invalidatePreferredPhone(registration: PreferredPhoneRegistration?) {
+    if (registration == null) return
+    val invalidated =
+      synchronized(preferredPhoneLock) {
+        if (registeredPhone == registration) {
+          // A capability callback can refresh the same node while an older request
+          // is failing. Clear only the registration that owned this transport attempt.
+          preferredPhoneGeneration += 1
+          registeredPhone = null
+          true
+        } else {
+          false
+        }
+      }
+    if (invalidated) mutablePreferredPhoneChanges.tryEmit(null)
+  }
+
+  private fun confirmPreferredPhoneResponse(registration: PreferredPhoneRegistration?) {
+    if (registration == null) return
+    synchronized(preferredPhoneLock) {
+      if (registeredPhone == registration) {
+        // Any correlated response proves this registration is reachable. Advance
+        // it so an older parallel request cannot clear it on a later timeout.
+        preferredPhoneGeneration += 1
+        registeredPhone = registration.copy(generation = preferredPhoneGeneration)
+      }
+    }
+  }
+
+  private data class PreferredPhoneRegistration(
+    val nodeId: String,
+    val generation: Long,
   )
 
   private data class PendingWearRequest(
     val nodeId: String,
     val response: CompletableDeferred<WearMessage.Response>,
+    val preferredPhone: PreferredPhoneRegistration?,
   )
 
   companion object {
@@ -281,13 +347,13 @@ internal class WearProxyClient private constructor(
       return WearProxyClient(
         nodeResolver =
           WearNodeResolver {
-            capabilityClient
-              .getCapability(WearProtocol.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-              .await()
-              .nodes
-              .sortedWith(compareByDescending<com.google.android.gms.wearable.Node> { it.isNearby }.thenBy { it.id })
-              .firstOrNull()
-              ?.id
+            selectReachablePhoneNodeId(
+              capabilityClient
+                .getCapability(WearProtocol.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
+                .await()
+                .nodes
+                .map { node -> WearReachablePhoneNode(id = node.id, isNearby = node.isNearby) },
+            )
           },
         transport =
           WearMessageTransport { nodeId, path, data ->
@@ -303,6 +369,22 @@ internal class WearProxyClient private constructor(
   }
 }
 
+internal data class WearReachablePhoneNode(
+  val id: String,
+  val isNearby: Boolean,
+)
+
+internal fun selectReachablePhoneNodeId(nodes: Collection<WearReachablePhoneNode>): String? {
+  val distinctNodes = nodes.distinctBy(WearReachablePhoneNode::id)
+  val nearbyNodes = distinctNodes.filter(WearReachablePhoneNode::isNearby)
+  return when {
+    nearbyNodes.size == 1 -> nearbyNodes.single().id
+    nearbyNodes.isNotEmpty() -> null
+    distinctNodes.size == 1 -> distinctNodes.single().id
+    else -> null
+  }
+}
+
 private fun WearRpcMethod.requiresPreferredSnapshotSource(): Boolean = this == WearRpcMethod.ProxyStatus || this == WearRpcMethod.SessionsList || this == WearRpcMethod.ChatHistory
 
 internal enum class WearSequenceDecision {
@@ -311,16 +393,24 @@ internal enum class WearSequenceDecision {
   GapOrReset,
 }
 
+internal data class WearResponseRequest(
+  val responseGeneration: Long,
+  val eventGeneration: Long,
+)
+
 internal class WearEventSequenceTracker {
   private var streamId: String? = null
   private var lastSequence: Long? = null
   private var awaitingSnapshot = false
+  private var responseGeneration = 0L
+  private var eventGeneration = 0L
 
   @Synchronized
   fun adoptSnapshot(
     streamId: String?,
     sequence: Long?,
   ) {
+    eventGeneration += 1
     if (sequence == null) {
       this.streamId = streamId
       lastSequence = null
@@ -344,25 +434,60 @@ internal class WearEventSequenceTracker {
     if (previous == null) {
       this.streamId = streamId
       lastSequence = sequence
+      eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
     if (this.streamId != streamId && (this.streamId != null || streamId != null)) {
       awaitingSnapshot = true
+      eventGeneration += 1
       return WearSequenceDecision.GapOrReset
     }
     if (sequence == previous + 1) {
       lastSequence = sequence
+      eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
     // Stream epochs expose phone restarts even when the new process happens to
     // produce the next numeric sequence. Legacy null epochs still use gap detection.
     awaitingSnapshot = true
+    eventGeneration += 1
     return WearSequenceDecision.GapOrReset
+  }
+
+  // Only the newest model RPC may mutate UI state. The event generation also
+  // rejects legacy unwatermarked responses when live state advanced meanwhile.
+  @Synchronized
+  fun beginResponseRequest(): WearResponseRequest {
+    responseGeneration += 1
+    return WearResponseRequest(responseGeneration = responseGeneration, eventGeneration = eventGeneration)
+  }
+
+  @Synchronized
+  fun invalidateResponseRequests() {
+    responseGeneration += 1
+  }
+
+  @Synchronized
+  fun isResponseCurrent(
+    request: WearResponseRequest,
+    streamId: String?,
+    sequence: Long?,
+  ): Boolean {
+    if (request.responseGeneration != responseGeneration) return false
+    if (awaitingSnapshot) return false
+    if (this.streamId != streamId && (this.streamId != null || streamId != null)) return false
+    val currentSequence = lastSequence
+    return if (sequence == null) {
+      request.eventGeneration == eventGeneration
+    } else {
+      sequence == currentSequence
+    }
   }
 
   @Synchronized
   fun requireSnapshot() {
     awaitingSnapshot = true
+    eventGeneration += 1
   }
 }
 

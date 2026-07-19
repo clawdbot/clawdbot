@@ -566,9 +566,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       }
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.waitFor({ state: "visible" });
-      const moreButton = sidebar.getByRole("button", { name: "More" });
-      if ((await moreButton.getAttribute("aria-expanded")) !== "true") {
-        await moreButton.click();
+      const pagesButton = sidebar.locator(".sidebar-nav__head-action");
+      if ((await pagesButton.getAttribute("aria-expanded")) !== "true") {
+        await pagesButton.click();
       }
       const workboardMenuItem = sidebar
         .locator("wa-dropdown.sidebar-more-menu")

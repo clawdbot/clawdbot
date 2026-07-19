@@ -59,6 +59,7 @@ vi.mock("../runtime.js", () => ({
 
 type CronUpdatePatch = {
   patch?: {
+    deleteAfterRun?: boolean;
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
     payload?: {
       kind?: string;
@@ -772,21 +773,29 @@ describe("cron cli", () => {
     expect(params?.delivery?.threadId).toBe(42);
   });
 
-  it("rejects --account on non-isolated/systemEvent cron add", async () => {
+  it.each([
+    ["--channel", "telegram"],
+    ["--to", "+1234567890"],
+    ["--account", "coordinator"],
+    ["--thread-id", "42"],
+  ])("rejects explicit chat delivery %s on main systemEvent cron add", async (flag, value) => {
     await expectCronCommandExit([
       "cron",
       "add",
       "--name",
-      "invalid account add",
+      "invalid delivery add",
       "--cron",
       "* * * * *",
       "--session",
       "main",
       "--system-event",
       "tick",
-      "--account",
-      "coordinator",
+      flag,
+      value,
     ]);
+    expectRuntimeErrorContaining(
+      "--channel, --to, --account, and --thread-id require a non-main agentTurn, command, or script job with delivery",
+    );
   });
 
   it("rejects invalid --thread-id on cron add", async () => {
@@ -1608,6 +1617,21 @@ describe("cron cli", () => {
       kind: "at",
       at: "2026-03-23T22:00:00.000Z",
     });
+    expect(patch?.patch).not.toHaveProperty("deleteAfterRun");
+  });
+
+  it("preserves an explicit keep policy when converting to --at", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--at",
+      "2026-03-23T23:00:00Z",
+      "--keep-after-run",
+    ]);
+
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "at",
+      at: "2026-03-23T23:00:00.000Z",
+    });
+    expect(patch?.patch?.deleteAfterRun).toBe(false);
   });
 
   it("rejects --tz with --every on cron edit", async () => {

@@ -63,6 +63,8 @@ export function buildCronAgentDefaultsConfig(params: {
   // Keep nested configs owned by agent-aware resolvers out of this flattened snapshot.
   // Copying a partial sandbox or memorySearch object into defaults destroys its global
   // fields before the resolver can merge the selected agent's override.
+  // Model authorization likewise uses the unflattened config plus agent id; this
+  // snapshot only carries the effective runtime metadata and explicit policy.
   return mergeCronAgentModelOverride({
     defaults: Object.assign({}, params.defaults, definedOverrides),
     overrideModel,

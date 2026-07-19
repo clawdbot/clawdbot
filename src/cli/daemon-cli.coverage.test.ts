@@ -14,7 +14,7 @@ const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceStage = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
-const serviceStart = vi.fn().mockResolvedValue({ outcome: "completed" });
+const serviceStart = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);

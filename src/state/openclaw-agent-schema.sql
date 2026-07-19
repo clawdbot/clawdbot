@@ -203,6 +203,13 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS session_transcript_generations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  generation TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -216,6 +223,19 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
   ON trajectory_runtime_events(session_id, run_id, seq)
   WHERE run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  event_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, run_id, seq),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_acp_parent_stream_run
+  ON acp_parent_stream_events(run_id, seq);
 
 CREATE TABLE IF NOT EXISTS transcript_event_identities (
   session_id TEXT NOT NULL,

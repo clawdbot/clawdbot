@@ -23,7 +23,10 @@ function htmlResponse(status: number, body: string): Response {
   });
 }
 
-function createRuntime(responses: Response[]): {
+function createRuntime(
+  responses: Response[],
+  options: { stopAfterPollSuccesses?: number } = {},
+): {
   calls: number[];
   messages: TelegramIngressWorkerMessage[];
   done: Promise<void>;
@@ -31,6 +34,7 @@ function createRuntime(responses: Response[]): {
   const calls: number[] = [];
   const messages: TelegramIngressWorkerMessage[] = [];
   const listeners = new Set<(message: TelegramIngressWorkerCommand) => void>();
+  let pollSuccesses = 0;
   const sendCommand = (message: TelegramIngressWorkerCommand) => {
     for (const listener of listeners) {
       listener(message);
@@ -39,8 +43,18 @@ function createRuntime(responses: Response[]): {
   const port: RuntimePort = {
     postMessage(message) {
       messages.push(message);
+      if (message.type === "update") {
+        sendCommand({
+          type: "spool-ack",
+          requestId: message.requestId,
+          result: { ok: true, updateId: 42 },
+        });
+      }
       if (message.type === "poll-success") {
-        sendCommand({ type: "stop" });
+        pollSuccesses += 1;
+        if (pollSuccesses >= (options.stopAfterPollSuccesses ?? 1)) {
+          sendCommand({ type: "stop" });
+        }
       }
     },
     onMessage(listener) {
@@ -77,6 +91,52 @@ async function flushRuntime(): Promise<void> {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("telegram ingress worker poll cadence", () => {
+  it("backs off consecutive empty polls without hot spinning", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+    const runtime = createRuntime(
+      Array.from({ length: 9 }, () => jsonResponse(200, { ok: true, result: [] })),
+      { stopAfterPollSuccesses: 9 },
+    );
+
+    expect(runtime.calls).toHaveLength(1);
+    await flushRuntime();
+    expect(runtime.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(3_550);
+    await runtime.done;
+
+    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
+    expect(runtime.calls.map((calledAt) => calledAt - firstCall)).toEqual([
+      0, 0, 50, 150, 350, 750, 1_550, 2_550, 3_550,
+    ]);
+  });
+
+  it("resets to immediate polling when activity resumes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+    const runtime = createRuntime(
+      [
+        jsonResponse(200, { ok: true, result: [] }),
+        jsonResponse(200, { ok: true, result: [] }),
+        jsonResponse(200, { ok: true, result: [{ update_id: 42 }] }),
+        jsonResponse(200, { ok: true, result: [] }),
+      ],
+      { stopAfterPollSuccesses: 4 },
+    );
+
+    await flushRuntime();
+    await vi.advanceTimersByTimeAsync(50);
+    await runtime.done;
+
+    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
+    expect(runtime.calls.map((calledAt) => calledAt - firstCall)).toEqual([0, 0, 50, 50]);
+    expect(runtime.messages).toContainEqual(
+      expect.objectContaining({ type: "spooled", updateId: 42 }),
+    );
+  });
 });
 
 describe("telegram ingress worker durable-before-offset", () => {

@@ -81,7 +81,7 @@ class ShellScreenLogicTest {
     assertEquals(SettingsRoute.Gateway, nav.settingsRoute)
 
     nav.back()
-    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(Tab.Chat, nav.activeTab)
     assertEquals(SettingsRoute.Home, nav.settingsRoute)
 
     nav.back()
@@ -121,7 +121,7 @@ class ShellScreenLogicTest {
     assertEquals(SettingsRoute.Home, nav.settingsRoute)
 
     nav.back()
-    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(Tab.Chat, nav.activeTab)
   }
 
   @Test
@@ -135,7 +135,7 @@ class ShellScreenLogicTest {
     nav.selectTab(Tab.Voice)
     nav.openDetailTab(Tab.ProvidersModels)
     nav.back()
-    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(Tab.Chat, nav.activeTab)
   }
 
   @Test
@@ -161,7 +161,7 @@ class ShellScreenLogicTest {
     assertEquals(Tab.Settings, restored.activeTab)
     assertEquals(SettingsRoute.Gateway, restored.settingsRoute)
     restored.back()
-    assertEquals(Tab.Voice, restored.activeTab)
+    assertEquals(Tab.Chat, restored.activeTab)
   }
 
   @Test

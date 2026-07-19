@@ -8,7 +8,7 @@ import {
   RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
 } from "./realtime-talk-audio.ts";
-import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
+import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkJsonPcmWebSocketSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -106,6 +106,7 @@ function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult):
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
   private media: MediaStream | null = null;
+  private cameraMedia: MediaStream | null = null;
   private captureVideo: HTMLVideoElement | null = null;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
@@ -113,6 +114,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private closed = false;
   private mediaSetupController: AbortController | null = null;
+  private cameraSetupController: AbortController | null = null;
+  private readonly handleCameraTrackEnded = () => this.releaseCamera();
+  private setupComplete = false;
   private videoFramesActive = false;
   private hasSentVideoFrame = false;
   private videoFrameTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -143,7 +147,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     let media: MediaStream;
     try {
       media = await openRealtimeTalkInput(this.ctx.inputDeviceId, {
-        video: this.ctx.videoEnabled,
         signal: mediaSetupController.signal,
       });
     } catch (error) {
@@ -161,16 +164,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     this.media = media;
-    if (this.ctx.videoEnabled) {
-      const captureVideo = document.createElement("video");
-      captureVideo.autoplay = true;
-      captureVideo.muted = true;
-      captureVideo.playsInline = true;
-      captureVideo.srcObject = media;
-      this.captureVideo = captureVideo;
-      this.ctx.callbacks.onVideoStream?.(media);
-      void captureVideo.play().catch(() => undefined);
-    }
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     if (this.ctx.callbacks.onInputLevel) {
@@ -201,6 +194,86 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     });
   }
 
+  async setVideoEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      this.releaseCamera();
+      return;
+    }
+    if (this.closed) {
+      throw new Error("Realtime Talk session is closed");
+    }
+    if (this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live")) {
+      return;
+    }
+    this.cameraSetupController?.abort();
+    const controller = new AbortController();
+    this.cameraSetupController = controller;
+    let camera: MediaStream;
+    try {
+      camera = await openRealtimeTalkCamera(this.ctx.videoDeviceId, {
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (this.closed || controller.signal.aborted) {
+        return;
+      }
+      throw error;
+    } finally {
+      if (this.cameraSetupController === controller) {
+        this.cameraSetupController = null;
+      }
+    }
+    if (this.closed || controller.signal.aborted) {
+      camera.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.cameraMedia = camera;
+    // External track loss clears preview state so the next toggle reacquires the camera.
+    camera
+      .getVideoTracks()
+      .forEach((track) =>
+        track.addEventListener("ended", this.handleCameraTrackEnded, { once: true }),
+      );
+    const captureVideo = document.createElement("video");
+    captureVideo.autoplay = true;
+    captureVideo.muted = true;
+    captureVideo.playsInline = true;
+    captureVideo.srcObject = camera;
+    this.captureVideo = captureVideo;
+    this.ctx.callbacks.onVideoStream?.(camera);
+    void captureVideo.play().catch(() => undefined);
+    if (this.setupComplete) {
+      this.startVideoFrames();
+    }
+  }
+
+  async switchCamera(videoDeviceId: string | undefined): Promise<void> {
+    const nextDeviceId = videoDeviceId?.trim() || undefined;
+    const previousDeviceId =
+      this.cameraMedia?.getVideoTracks()[0]?.getSettings?.().deviceId?.trim() ||
+      this.ctx.videoDeviceId;
+    const shouldReacquire = this.cameraMedia !== null || this.cameraSetupController !== null;
+    this.ctx.videoDeviceId = nextDeviceId;
+    if (!shouldReacquire) {
+      return;
+    }
+
+    this.releaseCamera();
+    try {
+      await this.setVideoEnabled(true);
+    } catch (error) {
+      if (!this.closed && previousDeviceId !== nextDeviceId) {
+        this.ctx.videoDeviceId = previousDeviceId;
+        try {
+          await this.setVideoEnabled(true);
+        } catch {
+          // The original switch failure is the actionable error for the user.
+        }
+      }
+      throw error;
+    }
+  }
+
   stop(): void {
     if (!this.closed) {
       this.emitTalkEvent({ type: "session.closed", final: true });
@@ -208,7 +281,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.closed = true;
     this.mediaSetupController?.abort();
     this.mediaSetupController = null;
-    this.stopVideoFrames();
+    this.cameraSetupController?.abort();
+    this.cameraSetupController = null;
+    this.setupComplete = false;
     for (const controller of this.consultAbortControllers) {
       controller.abort();
     }
@@ -219,11 +294,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.inputMeter = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
-    if (this.captureVideo) {
-      this.captureVideo.srcObject = null;
-      this.captureVideo = null;
-    }
-    this.ctx.callbacks.onVideoStream?.(null);
+    this.releaseCamera();
     this.stopOutput();
     void this.inputContext?.close();
     this.inputContext = null;
@@ -275,6 +346,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     if (message.setupComplete) {
+      this.setupComplete = true;
       this.ctx.callbacks.onStatus?.("listening");
       this.emitTalkEvent({ type: "session.ready" });
       this.startVideoFrames();
@@ -395,11 +467,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
       const active = this.videoFramesActive && this.hasSentVideoFrame && this.isCameraTrackUsable();
-      this.submitToolResult(callId, {
-        ok: active,
-        cameraStreamActive: active,
-        ...(!active ? { error: "Camera stream is unavailable" } : {}),
-      });
+      this.submitToolResult(
+        callId,
+        active ? { ok: true, cameraStreamActive: true } : { ok: false, error: "camera is off" },
+      );
       this.emitTalkEvent({
         type: active ? "tool.result" : "tool.error",
         callId,
@@ -488,7 +559,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private startVideoFrames(): void {
-    if (!this.ctx.videoEnabled || !this.captureVideo || this.videoFramesActive || this.closed) {
+    if (!this.captureVideo || this.videoFramesActive || this.closed) {
       return;
     }
     this.videoFramesActive = true;
@@ -547,15 +618,31 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private hasLiveCameraTrack(): boolean {
-    return this.media?.getVideoTracks().some((track) => track.readyState === "live") === true;
+    return this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live") === true;
   }
 
   private isCameraTrackUsable(): boolean {
     return (
-      this.media
+      this.cameraMedia
         ?.getVideoTracks()
         .some((track) => track.readyState === "live" && track.enabled && !track.muted) === true
     );
+  }
+
+  private releaseCamera(): void {
+    this.cameraSetupController?.abort();
+    this.cameraSetupController = null;
+    this.stopVideoFrames();
+    this.cameraMedia?.getVideoTracks().forEach((track) => {
+      track.removeEventListener("ended", this.handleCameraTrackEnded);
+      track.stop();
+    });
+    this.cameraMedia = null;
+    if (this.captureVideo) {
+      this.captureVideo.srcObject = null;
+      this.captureVideo = null;
+    }
+    this.ctx.callbacks.onVideoStream?.(null);
   }
 
   private sendControlSpeechMessage(message: string): void {

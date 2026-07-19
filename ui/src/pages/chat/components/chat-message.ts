@@ -56,6 +56,7 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import { persistedMessageEntryId } from "../chat-thread.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
@@ -267,6 +268,7 @@ const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 
 function readManagedImageBlobUrl(cacheKey: string): string | undefined {
   const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
@@ -786,6 +788,8 @@ type RenderMessageGroupOptions = {
   allowExternalEmbedUrls?: boolean;
   contextWindow?: number | null;
   onDelete?: () => void;
+  onRewind?: () => void;
+  rewindDisabled?: boolean;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -800,6 +804,7 @@ function buildGroupedMessageRenderOptions(
     isStreaming: group.isStreaming && index === group.messages.length - 1,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
+    entryId: persistedMessageEntryId(item.message) ?? undefined,
     onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
@@ -994,6 +999,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         })}
         <div class="chat-group-footer">
           <div class="chat-group-footer__meta">
+            ${opts.onRewind && normalizedRole === "user"
+              ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
+              : nothing}
             ${opts.onDelete && normalizedRole === "user"
               ? renderDeleteButton(opts.onDelete, "left")
               : nothing}
@@ -1160,7 +1168,8 @@ function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   `;
 }
 
-const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
+const SKIP_DELETE_CONFIRM_PREFERENCE = "openclaw:skipDeleteConfirm";
+const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const DELETE_CONFIRM_VIEWPORT_MARGIN_PX = 8;
 const DELETE_CONFIRM_TRIGGER_GAP_PX = 6;
 
@@ -1168,9 +1177,9 @@ type DeleteConfirmSide = "left" | "right";
 
 const deleteConfirmDismissers = new WeakMap<Element, () => void>();
 
-function shouldSkipDeleteConfirm(): boolean {
+function shouldSkipActionConfirm(preferenceName: string): boolean {
   try {
-    return getSafeLocalStorage()?.getItem(SKIP_DELETE_CONFIRM_KEY) === "1";
+    return getSafeLocalStorage()?.getItem(preferenceName) === "1";
   } catch {
     return false;
   }
@@ -1243,83 +1252,155 @@ function placeDeleteConfirmPopover(
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
+  // "Hide" is honest copy: this action only hides the bubble in this browser's
+  // localStorage; the message stays in the transcript and in agent context.
+  return renderConfirmedActionButton({
+    action: onDelete,
+    ariaLabel: t("chat.messages.hideMessage"),
+    buttonClass: "chat-group-delete",
+    confirmLabel: t("chat.messages.hide"),
+    confirmText: t("chat.messages.hideConfirm"),
+    icon: icons.eyeOff ?? icons.x,
+    preferenceName: SKIP_DELETE_CONFIRM_PREFERENCE,
+    side,
+    tooltip: t("chat.messages.hideTooltip"),
+  });
+}
+
+function renderRewindButton(onRewind: () => void, disabled: boolean, side: DeleteConfirmSide) {
+  return renderConfirmedActionButton({
+    action: onRewind,
+    ariaLabel: t("chat.messages.rewind"),
+    buttonClass: "chat-group-rewind",
+    confirmLabel: t("chat.messages.rewind"),
+    confirmText: t("chat.messages.rewindConfirm"),
+    disabled,
+    icon: icons.refresh,
+    preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
+    side,
+    tooltip: disabled ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewind"),
+    wrapClass: "chat-rewind-wrap",
+  });
+}
+
+type ConfirmedActionParams = {
+  action: () => void;
+  ariaLabel: string;
+  buttonClass?: string;
+  confirmLabel: string;
+  confirmText: string;
+  disabled?: boolean;
+  icon: unknown;
+  preferenceName: string;
+  side: DeleteConfirmSide;
+  tooltip: string;
+  wrapClass?: string;
+};
+
+export function openChatRewindConfirmation(trigger: HTMLElement, action: () => void): void {
+  openConfirmedActionPopover(trigger, {
+    action,
+    confirmLabel: t("chat.messages.rewind"),
+    confirmText: t("chat.messages.rewindConfirm"),
+    preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
+    side: "left",
+  });
+}
+
+function openConfirmedActionPopover(
+  btn: HTMLElement,
+  params: Pick<
+    ConfirmedActionParams,
+    "action" | "confirmLabel" | "confirmText" | "preferenceName" | "side"
+  >,
+): void {
+  if (shouldSkipActionConfirm(params.preferenceName)) {
+    params.action();
+    return;
+  }
+  const wrap = btn.closest(".chat-delete-wrap") as HTMLElement | null;
+  if (!wrap) {
+    return;
+  }
+  const existing = wrap.querySelector(".chat-delete-confirm");
+  if (existing) {
+    dismissDeleteConfirm(existing);
+    return;
+  }
+  const popover = document.createElement("div");
+  popover.className = `chat-delete-confirm chat-delete-confirm--${params.side}`;
+  popover.innerHTML = `
+    <p class="chat-delete-confirm__text"></p>
+    <label class="chat-delete-confirm__remember">
+      <input type="checkbox" class="chat-delete-confirm__check" />
+      <span>Don't ask again</span>
+    </label>
+    <div class="chat-delete-confirm__actions">
+      <button class="chat-delete-confirm__cancel" type="button">Cancel</button>
+      <button class="chat-delete-confirm__yes" type="button"></button>
+    </div>
+  `;
+  const confirmText = popover.querySelector(".chat-delete-confirm__text");
+  const confirmButton = popover.querySelector(".chat-delete-confirm__yes");
+  if (confirmText) {
+    confirmText.textContent = params.confirmText;
+  }
+  if (confirmButton) {
+    confirmButton.textContent = params.confirmLabel;
+  }
+  wrap.appendChild(popover);
+  placeDeleteConfirmPopover(btn, popover, params.side);
+
+  const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
+  const yes = popover.querySelector(".chat-delete-confirm__yes")!;
+  const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
+  let dismissed = false;
+  function dismissPopover() {
+    if (dismissed) {
+      return;
+    }
+    dismissed = true;
+    document.removeEventListener("click", closeOnOutside, true);
+    deleteConfirmDismissers.delete(popover);
+    popover.remove();
+  }
+  function closeOnOutside(evt: MouseEvent) {
+    const target = evt.target;
+    if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
+      dismissPopover();
+    }
+  }
+  deleteConfirmDismissers.set(popover, dismissPopover);
+  cancel.addEventListener("click", dismissPopover);
+  yes.addEventListener("click", () => {
+    if (check.checked) {
+      try {
+        getSafeLocalStorage()?.setItem(params.preferenceName, "1");
+      } catch {}
+    }
+    dismissPopover();
+    params.action();
+  });
+  requestAnimationFrame(() => {
+    if (!dismissed && popover.isConnected) {
+      placeDeleteConfirmPopover(btn, popover, params.side);
+      document.addEventListener("click", closeOnOutside, true);
+    }
+  });
+}
+
+function renderConfirmedActionButton(params: ConfirmedActionParams) {
   return html`
-    <span class="chat-delete-wrap">
-      <openclaw-tooltip .content=${t("common.delete")}>
+    <span class="chat-delete-wrap ${params.wrapClass ?? ""}">
+      <openclaw-tooltip .content=${params.tooltip}>
         <button
-          class="chat-group-delete"
-          aria-label=${t("chat.messages.deleteMessage")}
-          @click=${(e: Event) => {
-            if (shouldSkipDeleteConfirm()) {
-              onDelete();
-              return;
-            }
-            const btn = e.currentTarget as HTMLElement;
-            const wrap = btn.closest(".chat-delete-wrap") as HTMLElement;
-            const existing = wrap?.querySelector(".chat-delete-confirm");
-            if (existing) {
-              dismissDeleteConfirm(existing);
-              return;
-            }
-            const popover = document.createElement("div");
-            popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
-            popover.innerHTML = `
-            <p class="chat-delete-confirm__text">Delete this message?</p>
-            <label class="chat-delete-confirm__remember">
-              <input type="checkbox" class="chat-delete-confirm__check" />
-              <span>Don't ask again</span>
-            </label>
-            <div class="chat-delete-confirm__actions">
-              <button class="chat-delete-confirm__cancel" type="button">Cancel</button>
-              <button class="chat-delete-confirm__yes" type="button">Delete</button>
-            </div>
-          `;
-            wrap.appendChild(popover);
-            placeDeleteConfirmPopover(btn, popover, side);
-
-            const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
-            const yes = popover.querySelector(".chat-delete-confirm__yes")!;
-            const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
-
-            let dismissed = false;
-            function dismissPopover() {
-              if (dismissed) {
-                return;
-              }
-              dismissed = true;
-              document.removeEventListener("click", closeOnOutside, true);
-              deleteConfirmDismissers.delete(popover);
-              popover.remove();
-            }
-            function closeOnOutside(evt: MouseEvent) {
-              const target = evt.target;
-              if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
-                dismissPopover();
-              }
-            }
-
-            deleteConfirmDismissers.set(popover, dismissPopover);
-
-            cancel.addEventListener("click", dismissPopover);
-            yes.addEventListener("click", () => {
-              if (check.checked) {
-                try {
-                  getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
-                } catch {}
-              }
-              dismissPopover();
-              onDelete();
-            });
-
-            requestAnimationFrame(() => {
-              if (!dismissed && popover.isConnected) {
-                placeDeleteConfirmPopover(btn, popover, side);
-                document.addEventListener("click", closeOnOutside, true);
-              }
-            });
-          }}
+          class=${params.buttonClass ?? ""}
+          aria-label=${params.ariaLabel}
+          ?disabled=${params.disabled}
+          @click=${(event: Event) =>
+            openConfirmedActionPopover(event.currentTarget as HTMLElement, params)}
         >
-          ${icons.trash ?? icons.x}
+          ${params.icon}
         </button>
       </openclaw-tooltip>
     </span>
@@ -1669,23 +1750,39 @@ async function resolveManagedOutgoingImageBlobUrl(
       if (requesterSessionKey) {
         headers.set("x-openclaw-requester-session-key", requesterSessionKey);
       }
-      const res = await fetch(fetchUrl, {
-        method: "GET",
-        headers,
-        credentials: "same-origin",
-      });
-      if (!res.ok) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort(
+          new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
+        );
+      }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch(fetchUrl, {
+          method: "GET",
+          headers,
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          cacheManagedImageBlobUrlMiss(cacheKey);
+          return null;
+        }
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/")) {
+          cacheManagedImageBlobUrlMiss(cacheKey);
+          return null;
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        cacheManagedImageBlobUrl(cacheKey, blobUrl);
+        return blobUrl;
+      } catch {
+        // The render path treats a missing preview as `nothing`; never reject
+        // its `until` promise for an optional image fetch or body failure.
         cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
+      } finally {
+        clearTimeout(timeout);
       }
-      const blob = await res.blob();
-      if (!blob.type.startsWith("image/")) {
-        cacheManagedImageBlobUrlMiss(cacheKey);
-        return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      cacheManagedImageBlobUrl(cacheKey, blobUrl);
-      return blobUrl;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);
     });
@@ -2225,6 +2322,7 @@ function renderGroupedMessage(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    entryId?: string;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -2370,6 +2468,7 @@ function renderGroupedMessage(
       <div
         class="${bubbleClasses}"
         data-message-id=${messageKey}
+        data-entry-id=${opts.entryId || nothing}
         data-message-text=${extractedText || nothing}
       >
         ${renderReplyPill(normalizedMessage.replyTarget)}
@@ -2402,6 +2501,7 @@ function renderGroupedMessage(
     <div
       class="${bubbleClasses}"
       data-message-id=${messageKey}
+      data-entry-id=${opts.entryId || nothing}
       data-message-text=${extractedText || nothing}
     >
       ${renderReplyPill(normalizedMessage.replyTarget)}

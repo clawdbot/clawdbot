@@ -22,8 +22,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import { isCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { enqueueRun, remove, run, start } from "./ops.js";
+import { enqueueRun, remove, run, start, update } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
@@ -834,6 +835,112 @@ describe("cron service ops regressions", () => {
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(false);
 
     clearCommandLane(CommandLane.Cron);
+  });
+
+  it("#102238 keeps a timer tick from duplicating a re-enabled active run", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-07-09T12:00:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "disable-enable-timer",
+      nowMs: now,
+      nextRunAtMs: now - 60_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const firstRunGate = createDeferred<void>();
+    let dispatchCount = 0;
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { maxConcurrentRuns: 2 },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        dispatchCount += 1;
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        if (dispatchCount === 1) {
+          await firstRunGate.promise;
+        }
+        inFlight -= 1;
+        return { status: "ok" as const, summary: "done" };
+      }),
+    });
+
+    const firstRun = run(state, job.id, "force");
+    try {
+      await vi.waitFor(() => {
+        expect(dispatchCount).toBe(1);
+        expect(isCronJobActive(job.id)).toBe(true);
+      });
+      await update(state, job.id, { enabled: false });
+      await update(state, job.id, { enabled: true });
+
+      await onTimer(state);
+
+      expect(dispatchCount).toBe(1);
+      expect(peakInFlight).toBe(1);
+    } finally {
+      firstRunGate.resolve();
+      await firstRun;
+    }
+
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(dispatchCount).toBe(2);
+  });
+
+  it("#102238 rejects a second manual run after disabling and re-enabling", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-07-09T12:00:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "disable-enable-manual",
+      nowMs: now,
+      nextRunAtMs: now - 60_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const firstRunGate = createDeferred<void>();
+    let dispatchCount = 0;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { maxConcurrentRuns: 2 },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        dispatchCount += 1;
+        if (dispatchCount === 1) {
+          await firstRunGate.promise;
+        }
+        return { status: "ok" as const, summary: "done" };
+      }),
+    });
+
+    const firstRun = run(state, job.id, "force");
+    try {
+      await vi.waitFor(() => expect(dispatchCount).toBe(1));
+      await update(state, job.id, { enabled: false });
+      await update(state, job.id, { enabled: true });
+
+      await expect(run(state, job.id, "force")).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "already-running",
+      });
+      expect(dispatchCount).toBe(1);
+    } finally {
+      firstRunGate.resolve();
+      await firstRun;
+    }
+
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(dispatchCount).toBe(2);
   });
 
   it.each([

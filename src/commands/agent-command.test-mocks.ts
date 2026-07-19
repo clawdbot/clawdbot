@@ -65,9 +65,11 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/model-selection.js", () => {
   type ConfigWithModels = {
+    meta?: { migrations?: { modelPolicyAllowlist?: boolean } };
     agents?: {
       defaults?: {
         model?: string | { primary?: string; fallbacks?: string[] };
+        modelPolicy?: { allow?: string[] };
         models?: Record<string, { params?: { thinking?: string } } | undefined>;
         thinkingDefault?: string;
       };
@@ -120,12 +122,31 @@ vi.mock("../agents/model-selection.js", () => {
     const models = cfg?.agents?.defaults?.models ?? {};
     return models[`${ref.provider}/${ref.model}`] ?? models[modelKey(ref.provider, ref.model)];
   };
+  const resolvePolicyRefs = (cfg?: ConfigWithModels) => {
+    const defaults = cfg?.agents?.defaults;
+    const hasExplicitPolicy = Boolean(
+      defaults?.modelPolicy && Object.hasOwn(defaults.modelPolicy, "allow"),
+    );
+    if (hasExplicitPolicy) {
+      return {
+        refs: defaults?.modelPolicy?.allow ?? [],
+        configPath: "agents.defaults.modelPolicy.allow",
+      };
+    }
+    if (cfg?.meta?.migrations?.modelPolicyAllowlist !== true) {
+      const refs = Object.keys(defaults?.models ?? {});
+      if (refs.length > 0) {
+        return { refs, configPath: "agents.defaults.models" };
+      }
+    }
+    return { refs: [], configPath: null };
+  };
 
   return {
     buildAllowedModelSet: vi.fn(({ cfg }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
       const refs = new Set<string>();
-      const modelConfig = cfg?.agents?.defaults?.models ?? {};
-      for (const raw of Object.keys(modelConfig)) {
+      const policyRefs = resolvePolicyRefs(cfg).refs;
+      for (const raw of policyRefs) {
         const parsed = parseModelRefImpl(raw, "openai");
         if (parsed) {
           refs.add(modelKey(parsed.provider, parsed.model));
@@ -133,27 +154,19 @@ vi.mock("../agents/model-selection.js", () => {
       }
       const primary = resolveDefaultRef(cfg);
       refs.add(modelKey(primary.provider, primary.model));
-      const fallbackRefs =
-        typeof cfg?.agents?.defaults?.model === "object"
-          ? (cfg.agents.defaults.model.fallbacks ?? [])
-          : [];
-      for (const fallback of fallbackRefs) {
-        const parsed = parseModelRefImpl(fallback, primary.provider);
-        if (parsed) {
-          refs.add(modelKey(parsed.provider, parsed.model));
-        }
-      }
       return {
         allowedKeys: refs,
         allowedCatalog: [],
-        allowAny: Object.keys(modelConfig).length === 0,
+        allowAny: policyRefs.length === 0,
+        automaticFallbackKeys: new Set<string>(),
       };
     }),
     createModelVisibilityPolicy: vi.fn(
       ({ cfg, catalog = [] }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
         const refs = new Set<string>();
-        const modelConfig = cfg?.agents?.defaults?.models ?? {};
-        for (const raw of Object.keys(modelConfig)) {
+        const policy = resolvePolicyRefs(cfg);
+        const policyRefs = policy.refs;
+        for (const raw of policyRefs) {
           const parsed = parseModelRefImpl(raw, "openai");
           if (parsed) {
             refs.add(modelKey(parsed.provider, parsed.model));
@@ -161,20 +174,23 @@ vi.mock("../agents/model-selection.js", () => {
         }
         const primary = resolveDefaultRef(cfg);
         refs.add(modelKey(primary.provider, primary.model));
-        const allowAny = Object.keys(modelConfig).length === 0;
+        const allowAny = policyRefs.length === 0;
         const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
         return {
           allowAny,
           allowedKeys: refs,
           allowedCatalog: catalog,
-          exactModelRefs: Object.keys(modelConfig).filter((key) => !key.endsWith("/*")),
+          exactModelRefs: policyRefs.filter((key) => !key.endsWith("/*")),
           providerWildcards: new Set(
-            Object.keys(modelConfig)
+            policyRefs
               .filter((key) => key.endsWith("/*"))
               .map((key) => key.slice(0, -2).trim().toLowerCase()),
           ),
-          hasConfiguredEntries: Object.keys(modelConfig).length > 0,
-          hasProviderWildcards: Object.keys(modelConfig).some((key) => key.endsWith("/*")),
+          hasConfiguredEntries: policyRefs.length > 0,
+          hasProviderWildcards: policyRefs.some((key) => key.endsWith("/*")),
+          allowConfigPath: policy.configPath,
+          allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
+          automaticFallbackKeys: new Set<string>(),
           allowsKey,
           allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
           resolveSelection: ({ provider, model }: ModelRef) => {

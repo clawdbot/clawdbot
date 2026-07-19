@@ -58,6 +58,7 @@ describe("tool-catalog", () => {
       "create_goal",
       "update_goal",
       "update_plan",
+      "ask_user",
       "skill_workshop",
       "image",
       "image_generate",
@@ -78,8 +79,12 @@ describe("tool-catalog", () => {
       "conversations_send",
       "conversations_turn",
       "sessions_send",
+      "sessions_spawn",
+      "sessions_yield",
+      "subagents",
       "session_status",
       "message",
+      "ask_user",
       "bundle-mcp",
     ]);
     expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);

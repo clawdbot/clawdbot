@@ -141,6 +141,32 @@ describe("Matrix destructive E2EE backup failure assertions", () => {
     ).not.toThrow();
   });
 
+  it("accepts the SDK bad-MAC diagnostic from the restore error", () => {
+    expect(() =>
+      testing.assertMatrixQaCliBackupRestoreFailed(
+        {
+          payload: {
+            backup: {
+              decryptionKeyCached: false,
+              keyLoadError: "getSecretStorageKey callback returned falsey",
+              matchesDecryptionKey: false,
+            },
+            backupVersion: "1",
+            error:
+              "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (Error decrypting secret m.megolm_backup.v1: bad MAC).",
+            success: false,
+          },
+          result: { exitCode: 1 },
+        },
+        {
+          expectedBackupVersion: "1",
+          failureKind: "rejected-recovery-key",
+          label: "restore",
+        },
+      ),
+    ).not.toThrow();
+  });
+
   it("rejects a wrapper-only key-mismatch diagnostic", () => {
     expect(() =>
       testing.assertMatrixQaCliBackupRestoreFailed(

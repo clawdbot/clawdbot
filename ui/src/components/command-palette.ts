@@ -69,6 +69,13 @@ function getPaletteBaseItems(): PaletteItem[] {
       action: "nav:plugins",
     },
     {
+      id: "nav-apps",
+      label: t("palette.items.apps"),
+      icon: "layoutGrid",
+      category: "navigation",
+      action: "nav:apps",
+    },
+    {
       id: "nav-config",
       label: t("palette.items.settings"),
       icon: "settings",

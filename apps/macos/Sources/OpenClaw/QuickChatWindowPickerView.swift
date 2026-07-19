@@ -20,7 +20,7 @@ struct QuickChatWindowPickerView: View {
                         .fill(Color.accentColor.opacity(isHovered ? 0.16 : 0.04))
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Color.accentColor.opacity(isHovered ? 0.95 : 0.62), lineWidth: isHovered ? 3 : 2)
-                    Text(QuickChatWindowPickerLogic.labelText(
+                    Text(verbatim: QuickChatWindowPickerLogic.labelText(
                         appName: candidate.appName,
                         title: candidate.title))
                         .font(.callout.weight(.medium))

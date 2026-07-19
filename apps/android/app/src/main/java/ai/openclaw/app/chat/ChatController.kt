@@ -4,7 +4,11 @@ import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.QuestionAnswers
+import ai.openclaw.app.gateway.QuestionAnswersAnswersValue
+import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.gateway.parseChatSendAck
@@ -36,6 +40,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import java.util.Base64
 import java.util.Locale
@@ -46,6 +51,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 // Bounds one-shot search list fetches like the primary session list.
 internal const val SESSION_LIST_FETCH_LIMIT = 200
+private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
@@ -1050,11 +1056,12 @@ class ChatController internal constructor(
           if (hasLoadedParentSession) {
             put("parentSessionKey", JsonPrimitive(parentKey))
             put("emitCommandHooks", JsonPrimitive(true))
+            put("succeedsParent", JsonPrimitive(false))
           }
           put("label", JsonPrimitive(label))
           if (worktree) put("worktree", JsonPrimitive(true))
         }
-      val res = requestGatewayBound(createGatewayId, "sessions.create", params.toString())
+      val res = requestSessionCreateWithDispositionFallback(createGatewayId, params)
       if (!isCurrentHistoryLoad(parentKey, _sessionKey.value, requestGeneration, historyLoadGeneration.get())) {
         return false
       }
@@ -2098,40 +2105,70 @@ class ChatController internal constructor(
   fun resolveQuestion(
     id: String,
     answers: Map<String, List<String>>,
+  ) = resolveQuestion(id = id, answers = answers, cancel = false)
+
+  fun skipQuestion(id: String) = resolveQuestion(id = id, answers = null, cancel = true)
+
+  private fun resolveQuestion(
+    id: String,
+    answers: Map<String, List<String>>?,
+    cancel: Boolean,
   ) {
     val gatewayId = currentCacheScope()?.gatewayId
+    var claimed = false
     updateQuestions { prompts ->
       prompts.map { prompt ->
-        if (prompt.record.id == id) prompt.copy(submitting = true, errorText = null) else prompt
+        if (prompt.record.id == id && prompt.status() == ChatQuestionStatus.Pending) {
+          claimed = true
+          prompt.copy(submitting = true, skipping = cancel, errorText = null)
+        } else {
+          prompt
+        }
       }
     }
+    // updateQuestions owns the question-state lock, so competing answer/skip callbacks
+    // observe the first claim as Submitting and cannot launch a second mutation.
+    if (!claimed) return
     scope.launch {
       try {
         val params =
           buildJsonObject {
             put("id", JsonPrimitive(id))
-            put(
-              "answers",
-              buildJsonObject {
-                put(
-                  "answers",
-                  buildJsonObject {
-                    answers.forEach { (questionId, values) ->
-                      put(questionId, buildJsonObject { put("answers", JsonArray(values.map(::JsonPrimitive))) })
-                    }
-                  },
-                )
-              },
-            )
+            if (cancel) {
+              put("cancel", JsonPrimitive(true))
+            } else {
+              put(
+                "answers",
+                buildJsonObject {
+                  put(
+                    "answers",
+                    buildJsonObject {
+                      answers.orEmpty().forEach { (questionId, values) ->
+                        put(questionId, buildJsonObject { put("answers", JsonArray(values.map(::JsonPrimitive))) })
+                      }
+                    },
+                  )
+                },
+              )
+            }
           }
         requestGatewayBound(gatewayId, "question.resolve", params.toString())
         updateQuestions { prompts ->
           prompts.map { prompt ->
             if (prompt.record.id == id) {
               prompt.copy(
-                record = prompt.record.copy(status = "answered"),
+                record =
+                  prompt.record.copy(
+                    status = if (cancel) "cancelled" else "answered",
+                    answers =
+                      answers?.let { values ->
+                        QuestionAnswers(values.mapValues { QuestionAnswersAnswersValue(it.value) })
+                      },
+                  ),
                 submitting = false,
-                answeredLocally = true,
+                skipping = false,
+                answeredLocally = !cancel,
+                recoveryUnavailable = false,
                 terminalObservedAtMs = prompt.terminalObservedAtMs ?: System.currentTimeMillis(),
               )
             } else {
@@ -2142,7 +2179,11 @@ class ChatController internal constructor(
       } catch (error: Throwable) {
         updateQuestions { prompts ->
           prompts.map { prompt ->
-            if (prompt.record.id == id) prompt.copy(submitting = false, errorText = error.message ?: "Question failed") else prompt
+            if (prompt.record.id == id) {
+              prompt.copy(submitting = false, skipping = false, errorText = error.message ?: "Question failed")
+            } else {
+              prompt
+            }
           }
         }
       }
@@ -2151,54 +2192,176 @@ class ChatController internal constructor(
 
   private fun refreshQuestions() {
     val gatewayScope = currentCacheScope()
-    val (refreshGeneration, stateRevision) =
+    val refreshGeneration =
       synchronized(questionStateLock) {
         questionRefreshGeneration += 1
-        questionRefreshGeneration to questionStateRevision
+        questionRefreshGeneration
       }
     scope.launch {
-      try {
-        val response = requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
-        if (gatewayScope != currentCacheScope()) return@launch
-        val records = json.decodeFromString<QuestionListResult>(response).questions
-        synchronized(questionStateLock) {
-          if (refreshGeneration != questionRefreshGeneration || stateRevision != questionStateRevision) {
-            return@synchronized
-          }
-          val current = _questions.value
-          val existing = current.associateBy { it.record.id }
-          val nowMs = System.currentTimeMillis()
-          val listedIds = records.mapTo(mutableSetOf()) { it.id }
-          val retainedTerminal = current.filter { it.record.id !in listedIds && it.shouldRetainAfterList(nowMs) }
-          val next =
-            records.map { record ->
-              existing[record.id]?.let { prompt ->
-                prompt.copy(
-                  record = record,
-                  submitting = prompt.submitting && record.status == "pending",
-                  terminalObservedAtMs =
-                    if (record.status == "pending" && nowMs < record.expiresAtMs) {
-                      null
-                    } else {
-                      prompt.terminalObservedAtMs ?: nowMs
-                    },
-                )
-              } ?: ChatQuestionPrompt(
-                record = record,
-                terminalObservedAtMs = nowMs.takeIf { record.status != "pending" },
-              )
-            } + retainedTerminal
-          if (next != current) {
-            _questions.value = next
-            questionStateRevision += 1
-          }
-          syncQuestionEvictionsLocked()
+      var retryIndex = 0
+      var retryStateRevision: Long? = null
+      while (true) {
+        val expectedStateRevision = questionRefreshCurrentRevision(refreshGeneration, gatewayScope) ?: return@launch
+        if (retryStateRevision != expectedStateRevision) {
+          retryStateRevision = expectedStateRevision
+          retryIndex = 0
         }
-      } catch (_: Throwable) {
-        // Older gateways and tokens without operator.questions keep ordinary chat usable.
+        val complete =
+          runCatching {
+            refreshQuestions(refreshGeneration, expectedStateRevision, gatewayScope)
+          }.getOrDefault(false)
+        if (complete) return@launch
+        val currentStateRevision = questionRefreshCurrentRevision(refreshGeneration, gatewayScope) ?: return@launch
+        if (currentStateRevision != expectedStateRevision) {
+          // A local mutation invalidates the whole lookup snapshot, not one transport attempt.
+          // Restart the bounded budget so the last attempt cannot strand another question.
+          retryStateRevision = currentStateRevision
+          retryIndex = 0
+        }
+        val retryDelayMs = QUESTION_REFRESH_RETRY_DELAYS_MS.getOrNull(retryIndex) ?: return@launch
+        retryIndex += 1
+        delay(retryDelayMs)
       }
     }
   }
+
+  private suspend fun refreshQuestions(
+    refreshGeneration: Long,
+    stateRevision: Long,
+    gatewayScope: ChatCacheScope?,
+  ): Boolean {
+    val response =
+      try {
+        requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
+      } catch (err: GatewayRequestRejected) {
+        val unavailable =
+          err.gatewayError.missingScope() == "operator.questions" ||
+            (
+              err.gatewayError.code == "INVALID_REQUEST" &&
+                err.gatewayError.message == "unknown method: question.list"
+            )
+        if (!unavailable) throw err
+        if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
+        return synchronized(questionStateLock) {
+          if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
+          if (_questions.value.isNotEmpty()) {
+            _questions.value = emptyList()
+            questionStateRevision += 1
+          }
+          syncQuestionEvictionsLocked()
+          true
+        }
+      }
+    if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
+    val listedRecords = json.decodeFromString<QuestionListResult>(response).questions
+    val listedIds = listedRecords.mapTo(mutableSetOf()) { it.id }
+    val missingPendingRecords =
+      synchronized(questionStateLock) {
+        if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return false
+        _questions.value
+          .filter { prompt ->
+            prompt.record.id !in listedIds &&
+              prompt.record.status == "pending" &&
+              !prompt.recoveryUnavailable
+          }.map { it.record }
+      }
+    val fallbackRecords = mutableListOf<QuestionRecord>()
+    val unresolvedIds = mutableSetOf<String>()
+    val unavailableIds = mutableSetOf<String>()
+    for (record in missingPendingRecords) {
+      val params = buildJsonObject { put("id", JsonPrimitive(record.id)) }
+      try {
+        val fallback = requestGatewayBound(gatewayScope?.gatewayId, "question.get", params.toString())
+        fallbackRecords += json.decodeFromString<QuestionGetResult>(fallback).question
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: GatewayRequestRejected) {
+        if (err.gatewayError.details?.reason == "QUESTION_NOT_FOUND") {
+          // The terminal tombstone has aged out, so the question is no longer actionable,
+          // but its answered/cancelled/expired outcome cannot be reconstructed.
+          unavailableIds += record.id
+        } else {
+          unresolvedIds += record.id
+        }
+      } catch (_: Throwable) {
+        unresolvedIds += record.id
+      }
+    }
+    if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
+    val records = listedRecords + fallbackRecords.filter { it.id !in listedIds }
+    return synchronized(questionStateLock) {
+      if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
+      val current = _questions.value
+      val existing = current.associateBy { it.record.id }
+      val nowMs = System.currentTimeMillis()
+      val refreshedIds = records.mapTo(mutableSetOf()) { it.id }
+      val retainedCandidates =
+        current
+          .filter { prompt ->
+            val status = prompt.status(nowMs)
+            prompt.record.id !in refreshedIds &&
+              (
+                prompt.record.id in unresolvedIds ||
+                  prompt.record.id in unavailableIds ||
+                  (
+                    status != ChatQuestionStatus.Pending &&
+                      status != ChatQuestionStatus.Submitting
+                  )
+              )
+          }
+      val retainedPrompts =
+        retainedCandidates.map { prompt ->
+          if (prompt.record.id in unavailableIds) {
+            prompt.copy(
+              submitting = false,
+              skipping = false,
+              terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
+              recoveryUnavailable = true,
+            )
+          } else {
+            prompt
+          }
+        }
+      val next =
+        records.map { record ->
+          existing[record.id]?.let { prompt ->
+            mergeQuestionPrompt(prompt, record, nowMs)
+          } ?: ChatQuestionPrompt(
+            record = record,
+            terminalObservedAtMs = nowMs.takeIf { record.status != "pending" || nowMs >= record.expiresAtMs },
+          )
+        } + retainedPrompts
+      if (next != current) {
+        _questions.value = next
+        questionStateRevision += 1
+      }
+      syncQuestionEvictionsLocked()
+      unresolvedIds.isEmpty()
+    }
+  }
+
+  private fun questionRefreshCurrentRevision(
+    refreshGeneration: Long,
+    gatewayScope: ChatCacheScope?,
+  ): Long? {
+    if (gatewayScope != currentCacheScope()) return null
+    return synchronized(questionStateLock) {
+      questionStateRevision.takeIf { refreshGeneration == questionRefreshGeneration }
+    }
+  }
+
+  private fun questionRefreshIsCurrent(
+    refreshGeneration: Long,
+    stateRevision: Long,
+    gatewayScope: ChatCacheScope?,
+  ): Boolean =
+    gatewayScope == currentCacheScope() &&
+      synchronized(questionStateLock) { questionRefreshIsCurrentLocked(refreshGeneration, stateRevision) }
+
+  private fun questionRefreshIsCurrentLocked(
+    refreshGeneration: Long,
+    stateRevision: Long,
+  ): Boolean = refreshGeneration == questionRefreshGeneration && stateRevision == questionStateRevision
 
   private fun handleQuestionRequested(payloadJson: String) {
     val record = runCatching { json.decodeFromString<QuestionRecord>(payloadJson) }.getOrNull() ?: return
@@ -2206,14 +2369,7 @@ class ChatController internal constructor(
       if (prompts.any { it.record.id == record.id }) {
         prompts.map { prompt ->
           if (prompt.record.id == record.id) {
-            prompt.copy(
-              record = record,
-              submitting = prompt.submitting && record.status == "pending",
-              // A replayed pending event must drop stale terminal retention or
-              // the zero-delay eviction loop respins without ever removing it.
-              terminalObservedAtMs =
-                if (record.status == "pending") null else prompt.terminalObservedAtMs,
-            )
+            mergeQuestionPrompt(prompt, record, System.currentTimeMillis())
           } else {
             prompt
           }
@@ -2225,17 +2381,43 @@ class ChatController internal constructor(
     refreshQuestions()
   }
 
+  private fun mergeQuestionPrompt(
+    prompt: ChatQuestionPrompt,
+    record: QuestionRecord,
+    nowMs: Long,
+  ): ChatQuestionPrompt {
+    // Gateway terminal state is monotonic. A delayed requested/list replay must not
+    // make an already resolved question actionable again.
+    if ((prompt.record.status != "pending" || prompt.recoveryUnavailable) && record.status == "pending") return prompt
+    return prompt.copy(
+      record = record.copy(answers = record.answers ?: prompt.record.answers),
+      submitting = prompt.submitting && record.status == "pending",
+      skipping = prompt.skipping && record.status == "pending",
+      answeredLocally = prompt.answeredLocally && record.status == "answered",
+      recoveryUnavailable = false,
+      terminalObservedAtMs =
+        if (record.status == "pending" && nowMs < record.expiresAtMs) {
+          null
+        } else {
+          prompt.terminalObservedAtMs ?: nowMs
+        },
+    )
+  }
+
   private fun handleQuestionResolved(payloadJson: String) {
     val payload = runCatching { json.parseToJsonElement(payloadJson).jsonObject }.getOrNull() ?: return
     val id = payload["id"].asStringOrNull() ?: return
     val status = payload["status"].asStringOrNull() ?: return
+    val answers = payload["answers"]?.let { runCatching { json.decodeFromJsonElement<QuestionAnswers>(it) }.getOrNull() }
     val nowMs = System.currentTimeMillis()
     updateQuestions { prompts ->
       prompts.map { prompt ->
         if (prompt.record.id == id) {
           prompt.copy(
-            record = prompt.record.copy(status = status),
+            record = prompt.record.copy(status = status, answers = answers ?: prompt.record.answers),
             submitting = false,
+            skipping = false,
+            recoveryUnavailable = false,
             terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
           )
         } else {
@@ -2272,49 +2454,33 @@ class ChatController internal constructor(
       if (questionEvictionJobs.containsKey(prompt.record.id)) continue
       val id = prompt.record.id
       val observedAt = prompt.terminalObservedAtMs
-      val remainingMs =
-        if (observedAt == null && prompt.record.status == "pending" && prompt.record.expiresAtMs != Long.MAX_VALUE) {
-          (prompt.record.expiresAtMs - nowMs).coerceAtLeast(0)
-        } else if (observedAt != null) {
-          (QUESTION_TERMINAL_RETENTION_MS - (nowMs - observedAt)).coerceAtLeast(0)
-        } else {
-          continue
-        }
+      if (observedAt != null || prompt.record.status != "pending" || prompt.record.expiresAtMs == Long.MAX_VALUE) continue
+      val remainingMs = (prompt.record.expiresAtMs - nowMs).coerceAtLeast(0)
       val job =
         scope.launch(start = CoroutineStart.LAZY) {
           delay(remainingMs)
+          var shouldRefresh = false
           synchronized(questionStateLock) {
             questionEvictionJobs.remove(id)
             val current = _questions.value
-            if (observedAt == null) {
-              val next =
-                current.map {
-                  if (it.record.id == id && it.record.status == "pending" && it.terminalObservedAtMs == null) {
-                    it.copy(terminalObservedAtMs = System.currentTimeMillis())
-                  } else {
-                    it
-                  }
-                }
-              if (next != current) {
-                _questions.value = next
-                questionStateRevision += 1
-              }
-              syncQuestionEvictionsLocked()
-              return@synchronized
-            }
             val next =
-              current.filterNot {
-                it.record.id == id &&
-                  it.terminalObservedAtMs == observedAt &&
-                  (it.status() == ChatQuestionStatus.Expired || it.record.status != "pending")
+              current.map {
+                if (it.record.id == id && it.record.status == "pending" && it.terminalObservedAtMs == null) {
+                  it.copy(terminalObservedAtMs = System.currentTimeMillis())
+                } else {
+                  it
+                }
               }
             if (next != current) {
               _questions.value = next
               questionStateRevision += 1
-            } else {
-              syncQuestionEvictionsLocked()
+              shouldRefresh = true
             }
+            syncQuestionEvictionsLocked()
           }
+          // The local deadline is only a presentation fallback. Reconcile outside
+          // the state lock in case another surface supplied the terminal outcome.
+          if (shouldRefresh) refreshQuestions()
         }
       questionEvictionJobs[id] = QuestionEvictionJob(job, observedAt)
       job.start()
@@ -4743,6 +4909,31 @@ class ChatController internal constructor(
       requestGateway(method, paramsJson)
     } else {
       requestGatewayForGateway(gatewayId, method, paramsJson)
+    }
+
+  private suspend fun requestSessionCreateWithDispositionFallback(
+    gatewayId: String?,
+    params: JsonObject,
+  ): String =
+    try {
+      requestGatewayBound(gatewayId, "sessions.create", params.toString())
+    } catch (err: GatewayRequestRejected) {
+      val message = err.gatewayError.message
+      val isOlderGateway =
+        err.gatewayError.code == "INVALID_REQUEST" &&
+          message.contains("invalid sessions.create params") &&
+          message.contains("succeedsParent")
+      if (!isOlderGateway || "succeedsParent" !in params) throw err
+
+      // Older Gateways cannot express a linked parallel child. Keep New Chat parallel by
+      // dropping the parent lifecycle fields instead of falling back to legacy rollover.
+      val legacyParams =
+        JsonObject(
+          params.filterKeys { key ->
+            key != "succeedsParent" && key != "parentSessionKey" && key != "emitCommandHooks"
+          },
+        )
+      requestGatewayBound(gatewayId, "sessions.create", legacyParams.toString())
     }
 
   private fun currentCacheScope(): ChatCacheScope? = normalizedChatCacheScope(cacheScope())

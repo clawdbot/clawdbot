@@ -248,6 +248,10 @@ async function pollMinimaxVideo(params: {
     timeoutMs: params.timeoutMs,
     label: `MiniMax video generation task ${params.taskId}`,
   });
+  const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+  });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     const url = new URL(`${params.baseUrl}/v1/query/video_generation`);
     url.searchParams.set("task_id", params.taskId);
@@ -258,10 +262,7 @@ async function pollMinimaxVideo(params: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: createProviderOperationTimeoutResolver({
-        deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-      }),
+      timeoutMs: resolveTimeoutMs,
       fetchFn: params.fetchFn,
       requestFailedMessage: "MiniMax video status request failed",
       policy: params.policy,
@@ -271,6 +272,11 @@ async function pollMinimaxVideo(params: {
       payload = await readProviderJsonResponse<MinimaxQueryResponse>(
         response,
         "MiniMax video generation failed",
+        {
+          timeoutMs: resolveTimeoutMs,
+          onTimeout: ({ timeoutMs }) =>
+            new Error(`MiniMax video generation timed out after ${timeoutMs}ms`),
+        },
       );
     } finally {
       await release();
@@ -299,11 +305,19 @@ async function downloadVideoFromUrl(params: {
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedVideoAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "MiniMax generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const { response, release } = await fetchMinimaxResponse({
     stage: "download",
     url: params.url,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     fetchFn: params.fetchFn,
     requestFailedMessage: "MiniMax generated video download failed",
     policy: params.policy,
@@ -311,6 +325,11 @@ async function downloadVideoFromUrl(params: {
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
     });
@@ -335,6 +354,14 @@ async function downloadVideoFromFileId(params: {
 }): Promise<GeneratedVideoAsset> {
   const url = new URL(`${params.baseUrl}/v1/files/retrieve`);
   url.searchParams.set("file_id", params.fileId);
+  const metadataDeadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "MiniMax generated video metadata",
+  });
+  const metadataTimeoutMs = createProviderOperationTimeoutResolver({
+    deadline: metadataDeadline,
+    defaultTimeoutMs: metadataDeadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const { response: metadataResponse, release: releaseMetadata } = await fetchMinimaxResponse({
     stage: "download",
     url: url.toString(),
@@ -342,7 +369,7 @@ async function downloadVideoFromFileId(params: {
       method: "GET",
       headers: params.headers,
     },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: metadataTimeoutMs,
     fetchFn: params.fetchFn,
     requestFailedMessage: "MiniMax generated video metadata request failed",
     policy: params.policy,
@@ -352,6 +379,13 @@ async function downloadVideoFromFileId(params: {
     metadata = await readProviderJsonResponse<MinimaxFileRetrieveResponse>(
       metadataResponse,
       "MiniMax generated video metadata",
+      {
+        timeoutMs: metadataTimeoutMs,
+        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+          new Error(
+            `MiniMax generated video metadata timed out after ${metadataDeadline.timeoutMs ?? bodyTimeoutMs}ms`,
+          ),
+      },
     );
   } finally {
     await releaseMetadata();
@@ -361,11 +395,19 @@ async function downloadVideoFromFileId(params: {
   if (!downloadUrl) {
     throw new Error("MiniMax generated video metadata missing download_url");
   }
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "MiniMax generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const { response, release } = await fetchMinimaxResponse({
     stage: "download",
     url: downloadUrl,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     fetchFn: params.fetchFn,
     requestFailedMessage: "MiniMax generated video download failed",
     policy: params.policy,
@@ -373,6 +415,11 @@ async function downloadVideoFromFileId(params: {
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
     });

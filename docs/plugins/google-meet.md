@@ -1216,6 +1216,7 @@ For clean duplex audio, route Meet output and Meet microphone through separate v
 
 ## Related
 
+- [Meeting plugins overview](/plugins/meeting-plugins)
 - [Voice call plugin](/plugins/voice-call)
 - [Talk mode](/nodes/talk)
 - [Building plugins](/plugins/building-plugins)

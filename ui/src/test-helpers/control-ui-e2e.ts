@@ -67,6 +67,8 @@ export type ControlUiMockGatewayScenario = {
   inFlightRun?: { runId: string; text?: string; plan?: unknown } | null;
   /** Session run state served alongside history (hasActiveRun/activeRunIds). */
   sessionInfo?: Record<string, unknown> | null;
+  /** Partition sessions.list fixtures by archived state after applying patches. */
+  sessionArchiveFiltering?: boolean;
   models?: Array<{
     id: string;
     name: string;
@@ -260,6 +262,7 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     sessionInfo: scenario.sessionInfo ?? null,
+    sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -578,36 +581,48 @@ function installControlUiMockGateway(input: {
         patch[key] = params[key];
       }
     }
+    if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
+      patch.archived = params.archived;
+    }
     sessionPatches.set(params.key, patch);
   }
 
-  function applySessionPatches(response: unknown): unknown {
+  function applySessionPatches(response: unknown, params: unknown): unknown {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
     }
+    const showArchived = isRecord(params) && params.archived === true;
+    const sessions = response.sessions.map((row) => {
+      if (!isRecord(row) || typeof row.key !== "string") {
+        return row;
+      }
+      const patch = sessionPatches.get(row.key);
+      const next = patch ? { ...row, ...patch } : { ...row };
+      // Replay group renames/deletes over static fixtures: the real gateway
+      // rewrites member categories server-side before the next sessions.list.
+      let category = typeof next.category === "string" ? next.category : undefined;
+      for (const rename of groupsState.renames) {
+        if (category === rename.from) {
+          category = rename.to ?? undefined;
+        }
+      }
+      if (category === undefined) {
+        delete next.category;
+      } else {
+        next.category = category;
+      }
+      return next;
+    });
+    if (!scenario.sessionArchiveFiltering) {
+      return { ...response, sessions };
+    }
+    const filteredSessions = sessions.filter(
+      (row) => isRecord(row) && (row.archived === true) === showArchived,
+    );
     return {
       ...response,
-      sessions: response.sessions.map((row) => {
-        if (!isRecord(row) || typeof row.key !== "string") {
-          return row;
-        }
-        const patch = sessionPatches.get(row.key);
-        const next = patch ? { ...row, ...patch } : { ...row };
-        // Replay group renames/deletes over static fixtures: the real gateway
-        // rewrites member categories server-side before the next sessions.list.
-        let category = typeof next.category === "string" ? next.category : undefined;
-        for (const rename of groupsState.renames) {
-          if (category === rename.from) {
-            category = rename.to ?? undefined;
-          }
-        }
-        if (category === undefined) {
-          delete next.category;
-        } else {
-          next.category = category;
-        }
-        return next;
-      }),
+      count: filteredSessions.length,
+      sessions: filteredSessions,
     };
   }
 
@@ -700,7 +715,9 @@ function installControlUiMockGateway(input: {
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      return method === "sessions.list" ? applySessionPatches(configured.value) : configured.value;
+      return method === "sessions.list"
+        ? applySessionPatches(configured.value, params)
+        : configured.value;
     }
     switch (method) {
       case "connect":
@@ -841,17 +858,20 @@ function installControlUiMockGateway(input: {
       case "models.list":
         return { models: scenario.models };
       case "sessions.list":
-        return applySessionPatches({
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
+        return applySessionPatches(
+          {
+            count: 1,
+            defaults: {
+              contextTokens: null,
+              model: "gpt-5.5",
+              modelProvider: "openai",
+            },
+            path: "",
+            sessions: [sessionRow()],
+            ts: Date.now(),
           },
-          path: "",
-          sessions: [sessionRow()],
-          ts: Date.now(),
-        });
+          params,
+        );
       case "sessions.groups.list":
         return groupsPayload();
       case "sessions.groups.put": {

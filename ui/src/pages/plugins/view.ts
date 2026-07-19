@@ -7,6 +7,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
+import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/openclaw-mascot.ts";
 import {
@@ -17,6 +18,7 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import type { McpServerSummary } from "../../lib/config/mcp-servers.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-link.ts";
 import "../../styles/plugins.css";
 import {
@@ -46,19 +48,6 @@ export type PluginRowMessage = {
   kind: "success" | "error";
   text: string;
   acknowledge?: { packageName: string; version?: string };
-};
-
-export type McpServerSummary = {
-  name: string;
-  enabled: boolean;
-  transport: "stdio" | "http" | "invalid";
-  target: string;
-  auth: string | null;
-};
-
-export type McpServerForm = {
-  name: string;
-  target: string;
 };
 
 type PluginsViewProps = {
@@ -341,6 +330,12 @@ function stateStatus(plugin: PluginCatalogItem) {
   return renderSettingsStatus({ kind, label: stateLabel(plugin) });
 }
 
+/** Rows pair the status with an Enable/Disable button that already implies the
+ * healthy states, so only the error status earns a pill next to the actions. */
+function rowStateStatus(plugin: PluginCatalogItem) {
+  return plugin.state === "error" ? stateStatus(plugin) : nothing;
+}
+
 function originLabel(origin: string): string {
   switch (origin) {
     case "bundled":
@@ -614,7 +609,7 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         ])}
       </div>
       <div class="settings-row__control">
-        ${stateStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
+        ${rowStateStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -663,12 +658,20 @@ function renderMcpSection(props: PluginsViewProps) {
           @click=${() => props.onMcpFormToggle(!props.mcpFormOpen)}
         >
           <span aria-hidden="true">${icons.plus}</span>
-          ${t("pluginsPage.mcpAdd")}
+          ${t("mcpServers.add")}
         </button>
       `,
     },
     html`
-      ${props.mcpFormOpen ? renderMcpForm(props) : nothing}
+      ${props.mcpFormOpen
+        ? renderMcpServerForm({
+            busy: props.mcpBusy,
+            disabled: !props.canMutate,
+            blockedReason: props.mutationBlockedReason,
+            onSubmit: props.onMcpAdd,
+            onCancel: () => props.onMcpFormToggle(false),
+          })
+        : nothing}
       ${props.mcpMessage
         ? html`<div
             class="plugins-row-message plugins-row-message--${props.mcpMessage
@@ -689,7 +692,9 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
       ${renderArtTile(server.name, server.name)}
       <div class="settings-row__text">
         <h3 class="settings-row__title">${server.name}</h3>
-        <span class="settings-row__desc plugins-meta__mono">${server.target}</span>
+        <span class="settings-row__desc plugins-meta__mono">
+          ${server.target || t("mcpServers.missingTransport")}
+        </span>
         ${renderMetaLine([
           t("pluginsPage.mcp"),
           server.transport,
@@ -697,10 +702,6 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
         ])}
       </div>
       <div class="settings-row__control">
-        ${renderSettingsStatus({
-          kind: server.enabled ? "ok" : "muted",
-          label: server.enabled ? t("pluginsPage.enabled") : t("pluginsPage.disabled"),
-        })}
         ${renderToggleButton(props, props.mcpBusy, {
           enabled: server.enabled,
           onToggle: (enabled) => props.onMcpToggle(server.name, enabled),
@@ -713,60 +714,11 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
   `;
 }
 
-function renderMcpForm(props: PluginsViewProps) {
-  const submit = (event: Event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const data = new FormData(form);
-    const name = data.get("mcp-name");
-    const target = data.get("mcp-target");
-    props.onMcpAdd({
-      name: typeof name === "string" ? name.trim() : "",
-      target: typeof target === "string" ? target.trim() : "",
-    });
-  };
-  return html`
-    <form class="plugins-mcp-form" @submit=${submit}>
-      <label>
-        <span>${t("pluginsPage.mcpNameLabel")}</span>
-        <input
-          name="mcp-name"
-          class="settings-input"
-          type="text"
-          required
-          placeholder="context7"
-          autocomplete="off"
-        />
-      </label>
-      <label class="plugins-mcp-form__target">
-        <span>${t("pluginsPage.mcpTargetLabel")}</span>
-        <input
-          name="mcp-target"
-          class="settings-input"
-          type="text"
-          required
-          placeholder="https://mcp.example.com/mcp  ·  npx some-mcp-server"
-          autocomplete="off"
-        />
-      </label>
-      <div class="plugins-mcp-form__actions">
-        <button type="submit" class="btn btn--sm" ?disabled=${props.mcpBusy}>
-          ${props.mcpBusy ? t("pluginsPage.mcpAdding") : t("pluginsPage.mcpAdd")}
-        </button>
-        <button type="button" class="btn btn--sm" @click=${() => props.onMcpFormToggle(false)}>
-          ${t("pluginsPage.cancel")}
-        </button>
-      </div>
-    </form>
-  `;
-}
-
 function renderInstalled(props: PluginsViewProps) {
   const plugins = installedPlugins(props.result?.plugins ?? [], props.query, props.installedFilter);
   const groups = groupInstalledByCategory(plugins);
   const filtered = Boolean(props.query || props.installedFilter !== "all");
   return html`
-    ${renderInstalledFilter(props)}
     ${groups.length === 0
       ? renderEmpty(
           filtered ? t("pluginsPage.noInstalledMatchTitle") : t("pluginsPage.noInstalledTitle"),
@@ -821,7 +773,7 @@ function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): T
         ${renderMetaLine([plugin.origin ? originLabel(plugin.origin) : nothing])}
       </div>
       <div class="settings-row__control">
-        ${plugin.installed ? stateStatus(plugin) : nothing}
+        ${plugin.installed ? rowStateStatus(plugin) : nothing}
         ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
@@ -877,7 +829,7 @@ function renderConnectorRow(
                   ?disabled=${!props.canMutate || busy}
                   @click=${() => props.onAddConnector(connector)}
                 >
-                  ${busy ? t("pluginsPage.mcpAdding") : t("pluginsPage.connectorAdd")}
+                  ${busy ? t("mcpServers.adding") : t("pluginsPage.connectorAdd")}
                 </button>
               `
           : html`
@@ -966,7 +918,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       </div>
       <div class="settings-row__control">
         ${installed
-          ? html`${stateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
+          ? html`${rowStateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
           : renderInstallButton(props, busy, key, pkg.displayName, {
               source: "clawhub",
               packageName: pkg.name,
@@ -1258,6 +1210,14 @@ function renderActivePanel(props: PluginsViewProps) {
 
 export function renderPlugins(props: PluginsViewProps) {
   const canShowCatalog = Boolean(props.result);
+  const panelState =
+    props.loading && !canShowCatalog
+      ? "loading"
+      : props.error && !canShowCatalog
+        ? "error"
+        : !props.connected && !canShowCatalog
+          ? "offline"
+          : "content";
   return renderSettingsPage(
     html`
       <div class="plugins-toolbar">
@@ -1273,6 +1233,9 @@ export function renderPlugins(props: PluginsViewProps) {
           @input=${(event: Event) =>
             props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
         />
+        ${props.activeTab === "installed" && panelState === "content"
+          ? renderInstalledFilter(props)
+          : nothing}
         <button
           type="button"
           class="btn btn--sm btn--icon plugins-refresh"
@@ -1316,11 +1279,11 @@ export function renderPlugins(props: PluginsViewProps) {
         active
         aria-labelledby=${`plugins-tab-${props.activeTab}`}
       >
-        ${props.loading && !canShowCatalog
+        ${panelState === "loading"
           ? html`<div class="plugins-search-state" role="status">${t("pluginsPage.loading")}</div>`
-          : props.error && !canShowCatalog
+          : panelState === "error"
             ? nothing
-            : !props.connected && !canShowCatalog
+            : panelState === "offline"
               ? renderEmpty(t("pluginsPage.offlineTitle"), t("pluginsPage.offlineBody"))
               : renderActivePanel(props)}
       </wa-tab-panel>

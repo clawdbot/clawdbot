@@ -56,6 +56,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,12 +76,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private const val PAGE_COUNT = 5
+private const val PAGE_COUNT = 3
 private const val CHAT_PAGE = 0
 private const val VOICE_PAGE = 1
-private const val AGENTS_PAGE = 2
-private const val SESSIONS_PAGE = 3
-private const val CONTROLS_PAGE = 4
+private const val CONTROLS_PAGE = 2
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
@@ -107,6 +107,7 @@ internal fun OpenClawWearScreens(
   onAbort: () -> Unit,
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
   onRefresh: () -> Unit,
   onGatewayEnabledChange: (Boolean) -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
@@ -188,22 +189,11 @@ internal fun OpenClawWearScreens(
             onTalk = onTalk,
             onType = onType,
             onAbort = onAbort,
+            onSelectAgent = onSelectAgent,
+            onSelectSession = onSelectSession,
+            onSelectModel = onSelectModel,
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
-          )
-        AGENTS_PAGE ->
-          AgentsPage(
-            agents = snapshot.agents,
-            supported = snapshot.agentControlsSupported,
-            actionBusy = actionBusy,
-            errorText = snapshot.errorText,
-            onSelectAgent = onSelectAgent,
-          )
-        SESSIONS_PAGE ->
-          SessionsPage(
-            sessions = snapshot.sessions,
-            actionBusy = actionBusy,
-            onSelectSession = onSelectSession,
           )
         CONTROLS_PAGE ->
           ControlsPage(
@@ -254,13 +244,22 @@ private fun ChatPage(
   onTalk: () -> Unit,
   onType: () -> Unit,
   onAbort: () -> Unit,
+  onSelectAgent: (String) -> Unit,
+  onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
   WearPage(pageLabel = stringResource(R.string.chat)) {
     item {
-      ConversationIdentity(snapshot = snapshot)
+      ConversationIdentity(
+        snapshot = snapshot,
+        actionBusy = actionBusy,
+        onSelectAgent = onSelectAgent,
+        onSelectSession = onSelectSession,
+        onSelectModel = onSelectModel,
+      )
     }
     item {
       ConversationStatus(
@@ -1020,92 +1019,6 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
 }
 
 @Composable
-private fun AgentsPage(
-  agents: List<WearAgentSummary>,
-  supported: Boolean,
-  actionBusy: Boolean,
-  errorText: String?,
-  onSelectAgent: (String) -> Unit,
-) {
-  WearPage(pageLabel = stringResource(R.string.agents)) {
-    errorText?.takeIf(String::isNotBlank)?.let { error ->
-      item { InlineError(text = error) }
-    }
-    if (!supported) {
-      item {
-        EmptyPanel(
-          title = stringResource(R.string.update_required),
-          detail = stringResource(R.string.update_required_detail),
-        )
-      }
-    } else if (agents.isEmpty()) {
-      item {
-        EmptyPanel(
-          title = stringResource(R.string.no_agents),
-          detail = stringResource(R.string.no_agents_detail),
-        )
-      }
-    } else {
-      agents.forEach { agent ->
-        item(key = agent.id) {
-          SelectionButton(
-            title =
-              listOfNotNull(
-                agent.emoji?.takeIf(String::isNotBlank),
-                agent.name,
-              ).joinToString(" "),
-            detail =
-              if (agent.selected) {
-                stringResource(R.string.active_agent)
-              } else {
-                stringResource(R.string.available_agent)
-              },
-            selected = agent.selected,
-            enabled = !actionBusy && !agent.selected,
-            onClick = { onSelectAgent(agent.id) },
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun SessionsPage(
-  sessions: List<WearSessionSummary>,
-  actionBusy: Boolean,
-  onSelectSession: (String) -> Unit,
-) {
-  WearPage(pageLabel = stringResource(R.string.sessions)) {
-    if (sessions.isEmpty()) {
-      item {
-        EmptyPanel(
-          title = stringResource(R.string.no_sessions),
-          detail = stringResource(R.string.no_sessions_detail),
-        )
-      }
-    } else {
-      sessions.forEach { session ->
-        item(key = session.id) {
-          SelectionButton(
-            title = session.title,
-            detail =
-              if (session.selected) {
-                stringResource(R.string.current_session)
-              } else {
-                stringResource(R.string.open_session)
-              },
-            selected = session.selected,
-            enabled = !actionBusy && !session.selected,
-            onClick = { onSelectSession(session.id) },
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
 private fun ControlsPage(
   snapshot: WearConversationSnapshot,
   themeMode: WearThemeMode,
@@ -1306,45 +1219,144 @@ private fun OpenClawHeader(pageLabel: String) {
 }
 
 @Composable
-private fun ConversationIdentity(snapshot: WearConversationSnapshot) {
-  val agent =
-    snapshot.agents.firstOrNull(WearAgentSummary::selected)
-      ?: snapshot.agents.firstOrNull()
-  val session =
-    snapshot.sessions.firstOrNull(WearSessionSummary::selected)
-      ?: snapshot.sessions.firstOrNull()
+private fun ConversationIdentity(
+  snapshot: WearConversationSnapshot,
+  actionBusy: Boolean,
+  onSelectAgent: (String) -> Unit,
+  onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
+) {
+  val agentIndex = snapshot.agents.indexOfFirst(WearAgentSummary::selected)
+  val sessionIndex = snapshot.sessions.indexOfFirst(WearSessionSummary::selected)
+  val modelIndex = snapshot.models.indexOfFirst(WearModelSummary::selected)
+  val agent = snapshot.agents.getOrNull(agentIndex) ?: snapshot.agents.firstOrNull()
+  val session = snapshot.sessions.getOrNull(sessionIndex) ?: snapshot.sessions.firstOrNull()
+  val model = snapshot.models.getOrNull(modelIndex)
   Panel {
-    Text(
-      text =
+    ContextPickerRow(
+      label = stringResource(R.string.agent),
+      value =
         listOfNotNull(
           agent?.emoji?.takeIf(String::isNotBlank),
           agent?.name ?: stringResource(R.string.agent),
         ).joinToString(" "),
-      color = OpenClawWearTheme.colors.text,
-      fontSize = 18.sp,
-      fontWeight = FontWeight.SemiBold,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
+      previous =
+        snapshot.agents
+          .getOrNull(agentIndex - 1)
+          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
+          ?.let { previous -> ({ onSelectAgent(previous.id) }) },
+      next =
+        snapshot.agents
+          .getOrNull(if (agentIndex < 0) 0 else agentIndex + 1)
+          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
+          ?.let { next -> ({ onSelectAgent(next.id) }) },
     )
-    Spacer(modifier = Modifier.height(2.dp))
+    ContextPickerRow(
+      label = stringResource(R.string.session),
+      value = session?.title ?: stringResource(R.string.current_session),
+      previous =
+        snapshot.sessions
+          .getOrNull(sessionIndex - 1)
+          ?.takeIf { !actionBusy }
+          ?.let { previous -> ({ onSelectSession(previous.id) }) },
+      next =
+        snapshot.sessions
+          .getOrNull(if (sessionIndex < 0) 0 else sessionIndex + 1)
+          ?.takeIf { !actionBusy }
+          ?.let { next -> ({ onSelectSession(next.id) }) },
+    )
+    ContextPickerRow(
+      label = stringResource(R.string.model),
+      value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
+      previous =
+        snapshot.models
+          .getOrNull(modelIndex - 1)
+          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
+          ?.let { previous -> ({ onSelectModel(previous.ref) }) },
+      next =
+        snapshot.models
+          .getOrNull(if (modelIndex < 0) 0 else modelIndex + 1)
+          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
+          ?.let { next -> ({ onSelectModel(next.ref) }) },
+    )
+  }
+}
+
+@Composable
+private fun ContextPickerRow(
+  label: String,
+  value: String,
+  previous: (() -> Unit)?,
+  next: (() -> Unit)?,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    PickerChevron(
+      glyph = "‹",
+      contentDescription = stringResource(R.string.previous_item, label),
+      onClick = previous,
+    )
+    Column(
+      modifier = Modifier.weight(1f),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      Text(
+        text = label.uppercase(),
+        color = OpenClawWearTheme.colors.textMuted,
+        fontSize = 8.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.8.sp,
+        maxLines = 1,
+      )
+      Text(
+        text = value,
+        color = OpenClawWearTheme.colors.text,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    PickerChevron(
+      glyph = "›",
+      contentDescription = stringResource(R.string.next_item, label),
+      onClick = next,
+    )
+  }
+}
+
+@Composable
+private fun PickerChevron(
+  glyph: String,
+  contentDescription: String,
+  onClick: (() -> Unit)?,
+) {
+  val colors = OpenClawWearTheme.colors
+  val enabled = onClick != null
+  Box(
+    modifier =
+      Modifier
+        .width(32.dp)
+        .height(30.dp)
+        .semantics { this.contentDescription = contentDescription }
+        .clickable(
+          enabled = enabled,
+          role = Role.Button,
+          onClick = { onClick?.invoke() },
+        ),
+    contentAlignment = Alignment.Center,
+  ) {
     Text(
-      text = session?.title ?: stringResource(R.string.current_session),
-      color = OpenClawWearTheme.colors.textMuted,
-      fontSize = 12.sp,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
+      text = glyph,
+      color = if (enabled) colors.primary else colors.textMuted.copy(alpha = 0.42f),
+      fontSize = 24.sp,
+      lineHeight = 24.sp,
+      fontWeight = FontWeight.SemiBold,
+      textAlign = TextAlign.Center,
     )
-    snapshot.selectedModelRef
-      ?.takeIf(String::isNotBlank)
-      ?.let { model ->
-        Text(
-          text = model,
-          color = OpenClawWearTheme.colors.textMuted,
-          fontSize = 10.sp,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
   }
 }
 

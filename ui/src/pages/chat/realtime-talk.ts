@@ -1,4 +1,5 @@
 // Control UI chat module implements realtime talk behavior.
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { normalizeTalkTransport } from "../../../../src/talk/talk-session-controller.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
@@ -26,13 +27,34 @@ type RealtimeTalkLaunchOptions = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
-  capabilities?: Array<"camera-frame">;
 };
 
 type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;
-  videoEnabled?: boolean;
+  videoDeviceId?: string;
 };
+
+const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
+
+export async function switchActiveRealtimeTalkCameras(
+  videoDeviceId: string | undefined,
+): Promise<void> {
+  let failed = false;
+  let firstError: unknown;
+  await Promise.all(
+    [...activeRealtimeTalkSessions].map(async (session) => {
+      try {
+        await session.switchCameraIfEnabled(videoDeviceId);
+      } catch (error) {
+        failed = true;
+        firstError ??= error;
+      }
+    }),
+  );
+  if (failed) {
+    throw firstError;
+  }
+}
 
 type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
 
@@ -102,6 +124,8 @@ function compactLaunchParams(
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
+  private videoEnabled = false;
+  private videoOperation = 0;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -114,7 +138,13 @@ export class RealtimeTalkSession {
   async start(): Promise<void> {
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
-    const session = await this.createSession();
+    const providerVideoCapable = await this.resolveVideoCapability();
+    if (this.closed) {
+      return;
+    }
+    const session = await this.createSession(
+      providerVideoCapable ? { ...this.options, capabilities: ["camera-frame"] } : this.options,
+    );
     if (this.closed) {
       return;
     }
@@ -123,24 +153,50 @@ export class RealtimeTalkSession {
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
       inputDeviceId: this.localOptions.inputDeviceId,
-      videoEnabled: this.localOptions.videoEnabled,
+      videoDeviceId: this.localOptions.videoDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
     });
+    this.callbacks.onVideoCapability?.(
+      providerVideoCapable && typeof this.transport.setVideoEnabled === "function",
+    );
     await this.transport.start();
   }
 
-  private async createSession(): Promise<RealtimeTalkSessionResult> {
+  private async resolveVideoCapability(): Promise<boolean> {
+    if (!this.callbacks.onVideoCapability) {
+      return false;
+    }
+    try {
+      const catalog = await this.client.request<TalkCatalogResult>("talk.catalog", {});
+      const selectedProvider = this.options.provider ?? catalog.realtime.activeProvider;
+      if (!selectedProvider) {
+        return false;
+      }
+      return (
+        catalog.realtime.providers.find(
+          (provider) =>
+            provider.id === selectedProvider || provider.aliases?.includes(selectedProvider),
+        )?.supportsVideoFrames === true
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async createSession(
+    options: RealtimeTalkLaunchOptions & { capabilities?: Array<"camera-frame"> },
+  ): Promise<RealtimeTalkSessionResult> {
     try {
       return await this.client.request<RealtimeTalkSessionResult>(
         "talk.client.create",
         compactLaunchParams({
           sessionKey: this.sessionKey,
-          ...this.options,
+          ...options,
         }),
       );
     } catch (error) {
-      let transport = this.options.transport;
+      let transport = options.transport;
       if (!transport) {
         let result: RealtimeTalkConfigResult;
         try {
@@ -162,12 +218,14 @@ export class RealtimeTalkSession {
       if (transport && transport !== "gateway-relay") {
         throw error;
       }
+      const gatewayOptions = { ...options };
+      delete gatewayOptions.capabilities;
       try {
         return await this.client.request<RealtimeTalkSessionResult>(
           "talk.session.create",
           compactLaunchParams({
             sessionKey: this.sessionKey,
-            ...this.options,
+            ...gatewayOptions,
             mode: "realtime",
             transport: transport ?? "gateway-relay",
             brain: "agent-consult",
@@ -181,8 +239,64 @@ export class RealtimeTalkSession {
 
   stop(): void {
     this.closed = true;
+    this.videoOperation += 1;
+    this.videoEnabled = false;
+    activeRealtimeTalkSessions.delete(this);
     this.callbacks.onStatus?.("idle");
     this.transport?.stop();
     this.transport = null;
+  }
+
+  async setVideoEnabled(enabled: boolean): Promise<void> {
+    const transport = this.transport;
+    if (this.closed || !transport?.setVideoEnabled) {
+      throw new Error("Camera is unavailable for this realtime session");
+    }
+    const operation = ++this.videoOperation;
+    const previousEnabled = this.videoEnabled;
+    this.videoEnabled = enabled;
+    if (enabled) {
+      activeRealtimeTalkSessions.add(this);
+    } else {
+      activeRealtimeTalkSessions.delete(this);
+    }
+    try {
+      await transport.setVideoEnabled(enabled);
+    } catch (error) {
+      if (operation === this.videoOperation && !this.closed && this.transport === transport) {
+        this.videoEnabled = previousEnabled;
+        if (previousEnabled) {
+          activeRealtimeTalkSessions.add(this);
+        } else {
+          activeRealtimeTalkSessions.delete(this);
+        }
+      }
+      throw error;
+    }
+    if (operation === this.videoOperation && (this.closed || this.transport !== transport)) {
+      this.videoEnabled = false;
+      activeRealtimeTalkSessions.delete(this);
+    }
+  }
+
+  async switchCamera(videoDeviceId: string | undefined): Promise<void> {
+    const normalizedDeviceId = videoDeviceId?.trim() || undefined;
+    this.localOptions.videoDeviceId = normalizedDeviceId;
+    if (this.closed || !this.transport?.switchCamera) {
+      throw new Error("Camera switching is unavailable for this realtime session");
+    }
+    await this.transport.switchCamera(normalizedDeviceId);
+  }
+
+  async switchCameraIfEnabled(videoDeviceId: string | undefined): Promise<void> {
+    if (!this.videoEnabled) {
+      return;
+    }
+    try {
+      await this.switchCamera(videoDeviceId);
+    } catch (error) {
+      this.callbacks.onVideoError?.(error);
+      throw error;
+    }
   }
 }

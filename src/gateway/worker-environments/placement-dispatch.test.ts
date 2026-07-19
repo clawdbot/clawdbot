@@ -58,6 +58,8 @@ function createHarness(
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
+    recordStagedWorkspaceResult: (claim, ref) =>
+      placementStore.recordStagedWorkspaceResult(claim, ref),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
     completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
       placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),

@@ -116,7 +116,7 @@ class NodeApp : Application() {
       database.close()
     }
     prefs.clearGatewayCredentials(gatewayId)
-    val deviceId = DeviceIdentityStore(this).loadOrCreate().deviceId
+    val deviceId = DeviceIdentityStore.withPrefs(this, prefs).loadOrCreate().deviceId
     val deviceAuthStore = DeviceAuthStore(prefs)
     deviceAuthStore.clearToken(gatewayId, deviceId, "node")
     deviceAuthStore.clearToken(gatewayId, deviceId, "operator")

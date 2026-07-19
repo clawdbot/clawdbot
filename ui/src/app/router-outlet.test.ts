@@ -1,9 +1,10 @@
 import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./router-outlet.ts";
 
-type RouteId = "page";
+type RouteId = "page" | "next";
 type TestContext = { label: string };
 type TestData = { label: string };
 type TestModule = { render: (data: TestData | undefined) => unknown };
@@ -52,6 +53,57 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 }
 
 describe("openclaw-router-outlet", () => {
+  it("keeps the current route mounted until nested MCP Apps finish teardown", async () => {
+    const teardown = deferred<void>();
+    const teardownView = vi.fn(() => teardown.promise);
+    const context = { label: "loaded" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            render: () => html`
+              <mcp-app-view
+                ${ref((element) => {
+                  if (element) {
+                    Reflect.set(element, "restartAfterTeardown", vi.fn());
+                    Reflect.set(element, "teardown", teardownView);
+                  }
+                })}
+              ></mcp-app-view>
+              <div data-testid="route-page">page</div>
+            `,
+          }),
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({
+            render: () => html`<div data-testid="route-next">next</div>`,
+          }),
+          loader: () => ({ label: "next" }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    await router.navigate("page", context);
+    await settleOutlet(outlet);
+
+    await router.navigate("next", context);
+    await settleOutlet(outlet);
+    expect(teardownView).toHaveBeenCalledOnce();
+    expect(outlet.querySelector('[data-testid="route-page"]')).not.toBeNull();
+    expect(outlet.querySelector('[data-testid="route-next"]')).toBeNull();
+
+    teardown.resolve(undefined);
+    await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
+    expect(outlet.querySelector("mcp-app-view")).toBeNull();
+    outlet.remove();
+    router.stop();
+  });
+
   it("renders route data through the public custom-element boundary", async () => {
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({

@@ -36,6 +36,7 @@ describe("plugin-sdk qa-runtime", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
     if (originalBundledPluginsDir === undefined) {
@@ -337,6 +338,27 @@ describe("plugin-sdk qa-runtime", () => {
       ),
     ).resolves.toBe("http://172.18.0.4:18789/");
     expect(probe.wasCanceled()).toBe(true);
+  });
+
+  it("cancels the guarded default health response before stripping its body", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel,
+      }),
+      { status: 503 },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+
+    await expect(runtime.fetchHealthUrl("http://127.0.0.1:18789/healthz")).resolves.toEqual({
+      ok: false,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("cancels waitForHealth response bodies after each probe", async () => {

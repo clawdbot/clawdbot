@@ -385,14 +385,17 @@ describe("createSessionCapability", () => {
       deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
     });
 
-    await expect(sessions.deleteMany([{ key: keptKey }, { key: deletedKey }])).resolves.toEqual({
-      deleted: [deletedKey],
-      errors: [],
-      preservedWorktrees: [],
-    });
+    await expect(
+      sessions.deleteMany([{ key: keptKey }, { key: deletedKey, archivedOnly: true }]),
+    ).resolves.toEqual({ deleted: [deletedKey], errors: [], preservedWorktrees: [] });
     expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
     expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
     expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key: deletedKey,
+      deleteTranscript: true,
+      archivedOnly: true,
+    });
     unsubscribe();
     sessions.dispose();
   });

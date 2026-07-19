@@ -86,6 +86,13 @@ export type SessionTranscriptEventRow = {
   seq: number;
 };
 
+export type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.types.js";
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   config?: OpenClawConfig;
   cwd?: string;

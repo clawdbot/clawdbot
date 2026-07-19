@@ -7,6 +7,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { mobileNavLayoutMediaQuery, shouldMergeChatChrome } from "../../app/mobile-nav-layout.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import "../../components/resizable-divider.ts";
+import { McpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -56,7 +57,7 @@ type ChatRouteData = {
 const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
-type ChatPaneElement = HTMLElement & { paneId?: string };
+type ChatPaneElement = HTMLElement & { paneId?: string; sessionKey?: string };
 
 export class ChatPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -82,6 +83,7 @@ export class ChatPage extends OpenClawLightDomElement {
   private readonly chatMessagesBySession: ChatMessageCache = new Map();
   private classicColumnId = "c1";
   private classicPaneId = "p1";
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override connectedCallback() {
     super.connectedCallback();
@@ -512,7 +514,13 @@ export class ChatPage extends OpenClawLightDomElement {
   /** Header + pane travel together so each pane owns its title bar in-flow —
    * no fixed toolbar layer mirroring the split geometry. The pane renders its
    * own header so the workspace toggle can read per-pane workspace state. */
-  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number, splitMode: boolean) {
+  private renderPaneCell(
+    pane: ChatSplitPane,
+    active: boolean,
+    weight: number,
+    splitMode: boolean,
+    ownerKey: string,
+  ) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     // Route keys can be unresolved aliases ("main"); resolve against the
     // hello defaults and match rows by equivalence like the pane itself
@@ -532,6 +540,7 @@ export class ChatPage extends OpenClawLightDomElement {
       >
         <openclaw-chat-pane
           class=${splitMode ? "chat-split-view__pane" : ""}
+          data-mcp-app-owner-key=${ownerKey}
           .paneId=${pane.id}
           .chatMessagesBySession=${this.chatMessagesBySession}
           .sessionKey=${pane.sessionKey}
@@ -603,6 +612,7 @@ export class ChatPage extends OpenClawLightDomElement {
                     pane.id === layout.activePaneId,
                     splitWeight(column.paneWeights, paneIndex, "rendered split pane weight"),
                     splitMode,
+                    JSON.stringify([column.id, pane.id, pane.sessionKey]),
                   )}
                   ${paneIndex < column.panes.length - 1
                     ? html`
@@ -660,10 +670,23 @@ export class ChatPage extends OpenClawLightDomElement {
 
   override render() {
     const indicator = this.dropIndicator;
-    const layout = this.layout;
-    return html`
+    const layout = this.layout ?? this.classicLayout();
+    const activeLocation = findPane(layout, layout.activePaneId);
+    const renderedPaneOwners = this.narrow
+      ? activeLocation
+        ? [{ columnId: activeLocation.column.id, pane: activeLocation.pane }]
+        : []
+      : layout.columns.flatMap((column) =>
+          column.panes.map((pane) => ({ columnId: column.id, pane })),
+        );
+    const nextPaneKeys = new Set(
+      renderedPaneOwners.map(({ columnId, pane }) =>
+        JSON.stringify([columnId, pane.id, pane.sessionKey]),
+      ),
+    );
+    const rendered = html`
       <div class="chat-split-view__drop-container">
-        ${this.renderSplitLayout(layout ?? this.classicLayout(), Boolean(layout))}
+        ${this.renderSplitLayout(layout, Boolean(this.layout))}
         ${indicator
           ? html`<div
               class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"
@@ -680,6 +703,11 @@ export class ChatPage extends OpenClawLightDomElement {
           : nothing}
       </div>
     `;
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), rendered, () =>
+      [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
+        (pane) => !nextPaneKeys.has(pane.dataset.mcpAppOwnerKey ?? ""),
+      ),
+    );
   }
 }
 

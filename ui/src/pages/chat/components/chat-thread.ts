@@ -23,6 +23,7 @@ import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
+import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type {
   ChatQueueItem,
@@ -48,6 +49,7 @@ import {
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
+  persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
   syncToolCardExpansionState,
@@ -63,6 +65,7 @@ import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
+  openChatRewindConfirmation,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
@@ -79,6 +82,8 @@ type ReplyTarget = {
   messageId: string;
   text: string;
   senderLabel?: string | null;
+  /** Persisted transcript id; when present chat.send carries it as replyToId. */
+  sourceMessageId?: string | null;
 };
 
 type ChatThreadState = {
@@ -141,6 +146,8 @@ type ChatThreadProps = {
   getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
+  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+  onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
   /** Sends a detached /btw side question built from the selection popup. */
   onSideQuestion?: (command: string) => void;
@@ -227,6 +234,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private announcementInitialized = false;
   private announcementKey: string | null = null;
   private currentAnnouncementText = "";
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   constructor(private readonly host: ReactiveControllerHost) {
     this.virtualizerController = new VirtualizerController(this, {
@@ -313,7 +321,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.syncAnnouncement(announcement, announce);
     const virtualizer = this.virtualizerController.getVirtualizer();
     const virtualRows = virtualizer.getVirtualItems();
-    return html`
+    const nextRowKeys = new Set(
+      virtualRows.flatMap((virtualRow) => {
+        const row = rows[virtualRow.index];
+        return row ? [row.key] : [];
+      }),
+    );
+    const rendered = html`
       <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
         <div
           class="chat-virtual-sizer"
@@ -350,6 +364,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
         </div>
       </div>
     `;
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextRowKeys]), rendered, () =>
+      this.threadInnerElement
+        ? [...this.threadInnerElement.querySelectorAll<HTMLElement>(".chat-virtual-row")].filter(
+            (row) => !nextRowKeys.has(row.dataset.virtualRowKey ?? ""),
+          )
+        : [],
+    ) as TemplateResult;
   }
 
   scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
@@ -725,6 +746,25 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   return button;
 }
 
+function createMessageActionContextButton(params: {
+  label: string;
+  disabled: boolean;
+  tooltip: string;
+  onClick: () => void;
+}): { element: HTMLElement; button: HTMLButtonElement } {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.disabled = params.disabled;
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", params.label);
+  button.textContent = params.label;
+  button.addEventListener("click", params.onClick);
+  const tooltip = document.createElement("openclaw-tooltip");
+  tooltip.content = params.tooltip;
+  tooltip.append(button);
+  return { element: tooltip, button };
+}
+
 function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
   if (typeof props.onSideQuestion !== "function") {
     return;
@@ -749,7 +789,7 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
 
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const bubble = (event.target as HTMLElement).closest(".chat-bubble");
-  if (!bubble || typeof props.onSetReply !== "function") {
+  if (!bubble) {
     return;
   }
   const group = bubble.closest(".chat-group");
@@ -765,13 +805,16 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const senderEl = group.querySelector(".chat-sender-name");
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
-  if (!text) {
+  const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
+  const isUserMessage = group.classList.contains("user") && Boolean(entryId);
+  const canReply = Boolean(text && props.onSetReply);
+  const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
+  const canFork = isUserMessage && typeof props.onForkMessage === "function";
+  if (!canReply && !canRewind && !canFork) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
-  const messageId =
-    (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
   removeReplyContextMenu();
   const menu = document.createElement("div");
   menu.className = "chat-reply-context-menu";
@@ -779,12 +822,57 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.setAttribute("aria-label", "Message actions");
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
-  const button = createReplyContextMenuButton(() => {
-    props.onSetReply?.({ messageId, text, senderLabel });
-    removeReplyContextMenu();
-    props.onFocusComposer?.();
-  });
-  menu.append(button);
+  const focusCandidates: HTMLButtonElement[] = [];
+  if (canReply) {
+    const messageId =
+      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
+    const replyButton = createReplyContextMenuButton(() => {
+      props.onSetReply?.({
+        messageId,
+        text,
+        senderLabel,
+        ...(entryId ? { sourceMessageId: entryId } : {}),
+      });
+      removeReplyContextMenu();
+      props.onFocusComposer?.();
+    });
+    menu.append(replyButton);
+    focusCandidates.push(replyButton);
+  }
+  const working = Boolean(props.runActive || props.runWorking);
+  if (canRewind) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.rewindToHere"),
+      disabled: working,
+      tooltip: working ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewindToHere"),
+      onClick: () => {
+        openChatRewindConfirmation(action.button, () => {
+          removeReplyContextMenu();
+          void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
+            if (rewound) {
+              props.onFocusComposer?.();
+            }
+          });
+        });
+      },
+    });
+    action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canFork) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.forkFromHere"),
+      disabled: working,
+      tooltip: working ? t("chat.messages.forkUnavailable") : t("chat.messages.forkFromHere"),
+      onClick: () => {
+        removeReplyContextMenu();
+        void props.onForkMessage?.(entryId);
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
   document.body.appendChild(menu);
   activeReplyContextMenu = menu;
   activeReplyContextMenuPaneId = props.paneId;
@@ -800,7 +888,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
-  button.focus();
+  focusCandidates.find((button) => !button.disabled)?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== menu) {
       return;
@@ -1039,6 +1127,11 @@ function renderChatThreadContents(
     if (deleted.has(item.key)) {
       return nothing;
     }
+    const lastMessage = item.messages.at(-1)?.message;
+    const rewindEntryId =
+      item.role.toLowerCase() === "user" && lastMessage
+        ? persistedMessageEntryId(lastMessage)
+        : null;
     return renderMessageGroup(item, {
       onOpenSidebar: props.onOpenSidebar,
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
@@ -1072,6 +1165,17 @@ function renderChatThreadContents(
         deleted.delete(item.key);
         requestUpdate();
       },
+      onRewind:
+        rewindEntryId && props.onRewindMessage
+          ? () => {
+              void Promise.resolve(props.onRewindMessage?.(rewindEntryId)).then((rewound) => {
+                if (rewound) {
+                  props.onFocusComposer?.();
+                }
+              });
+            }
+          : undefined,
+      rewindDisabled: Boolean(props.runActive || props.runWorking),
     });
   };
   const renderItem = guardChatRenderItems(state, (item) => {

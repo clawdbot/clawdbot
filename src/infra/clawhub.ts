@@ -270,6 +270,7 @@ export type ClawHubPackageSearchResult = {
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  ownerHandle?: string | null;
   displayName: string;
   summary?: string;
   version?: string;

@@ -15,7 +15,8 @@ type ThinkingCatalogEntry = {
   reasoning?: boolean;
 };
 
-const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+/** Canonical thinking levels; surfaces needing a subset derive it explicitly. */
+export const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 
 export function normalizeThinkLevel(raw?: string | null): string | undefined {
   if (!raw) {

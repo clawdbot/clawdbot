@@ -16,10 +16,12 @@ export type RealtimeTalkEvent = TalkEvent;
 
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
+  onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
   onTranscript?: (entry: { role: "user" | "assistant"; text: string; final: boolean }) => void;
   onTalkEvent?: (event: RealtimeTalkEvent) => void;
   onVideoStream?: (stream: MediaStream | null) => void;
+  onVideoError?: (error: unknown) => void;
 };
 
 type RealtimeTalkEventInput<TPayload = unknown> = {
@@ -101,6 +103,8 @@ export type RealtimeTalkSessionResult =
 export type RealtimeTalkTransport = {
   start(): Promise<void>;
   stop(): void;
+  setVideoEnabled?: (enabled: boolean) => Promise<void>;
+  switchCamera?: (videoDeviceId: string | undefined) => Promise<void>;
 };
 
 export type RealtimeTalkTransportContext = {
@@ -108,7 +112,7 @@ export type RealtimeTalkTransportContext = {
   sessionKey: string;
   callbacks: RealtimeTalkCallbacks;
   inputDeviceId?: string;
-  videoEnabled?: boolean;
+  videoDeviceId?: string;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
 };

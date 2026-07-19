@@ -21,7 +21,6 @@ import {
   type ResponsesToolCallState,
 } from "@openclaw/ai/internal/openai";
 import {
-  calculateCost,
   createFirstStreamEventAbortController,
   getEnvApiKey,
   getFirstStreamEventTimeoutHandler,
@@ -68,6 +67,7 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { recordResponsesTerminalOutcome } from "./openai-responses-terminal-outcome.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   assertCodeModeResponsesToolSurface,
@@ -1296,7 +1296,7 @@ async function processResponsesStream(
     stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
     pendingMessageText = null;
   };
-  const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
+  const appendTerminalResponseTextItem = (item: Record<string, unknown>) => {
     const text = readResponsesOutputMessageText(item);
     if (!text) {
       return;
@@ -1362,7 +1362,10 @@ async function processResponsesStream(
       partial: output,
     });
   };
-  const backfillCompletedResponseOutput = (response: Record<string, unknown> | undefined) => {
+  const backfillTerminalResponseOutput = (
+    response: Record<string, unknown> | undefined,
+    backfillOptions: { includeToolCalls: boolean },
+  ) => {
     if (output.content.length > 0 || !Array.isArray(response?.output)) {
       return;
     }
@@ -1371,13 +1374,13 @@ async function processResponsesStream(
         continue;
       }
       if (rawItem.type === "message") {
-        appendCompletedResponseTextItem(rawItem);
+        appendTerminalResponseTextItem(rawItem);
         continue;
       }
       // Any non-message item (reasoning, tool call) is a real boundary; a later
       // message must not collapse across it, mirroring the streaming path.
       lastTextBlock = null;
-      if (rawItem.type === "function_call") {
+      if (backfillOptions.includeToolCalls && rawItem.type === "function_call") {
         appendCompletedResponseToolCallItem(rawItem);
       }
     }
@@ -1698,7 +1701,7 @@ async function processResponsesStream(
           currentItem = null;
         }
       }
-    } else if (type === "response.completed") {
+    } else if (type === "response.completed" || type === "response.incomplete") {
       if (streamingToolCalls.hasActive()) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
@@ -1706,51 +1709,20 @@ async function processResponsesStream(
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
-      backfillCompletedResponseOutput(response);
-      const usage = response?.usage as
-        | {
-            input_tokens?: number;
-            output_tokens?: number;
-            total_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-            output_tokens_details?: { reasoning_tokens?: number };
-            service_tier?: ResponseCreateParamsStreaming["service_tier"];
-            status?: string;
-          }
-        | undefined;
-      if (usage) {
-        const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
-        const cacheWriteTokens = usage.input_tokens_details?.cache_write_tokens || 0;
-        const inputTokens = usage.input_tokens || 0;
-        const outputTokens = usage.output_tokens || 0;
-        const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
-        const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
-        output.usage = {
-          input,
-          output: outputTokens,
-          cacheRead: cachedTokens,
-          cacheWrite: cacheWriteTokens,
-          ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
-            ? { reasoningTokens }
-            : {}),
-          totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
+      if (type === "response.completed") {
+        backfillTerminalResponseOutput(response, { includeToolCalls: true });
       }
-      calculateCost(model as never, output.usage as never);
-      if (options?.applyServiceTierPricing) {
-        options.applyServiceTierPricing(
-          output.usage,
-          (response?.service_tier as ResponseCreateParamsStreaming["service_tier"] | undefined) ??
-            options.serviceTier,
-        );
-      }
-      output.stopReason = mapResponsesStopReason(response?.status as string | undefined);
-      if (
-        output.content.some((block) => block.type === "toolCall") &&
-        output.stopReason === "stop"
-      ) {
-        output.stopReason = "toolUse";
+      recordResponsesTerminalOutcome({
+        response,
+        output,
+        model,
+        serviceTier: options?.serviceTier,
+        applyServiceTierPricing: options?.applyServiceTierPricing,
+      });
+      if (type === "response.incomplete" && output.stopReason === "length") {
+        // Some compatible endpoints carry generated text only on the terminal event. Preserve
+        // that partial answer, but never materialize an incomplete function call for execution.
+        backfillTerminalResponseOutput(response, { includeToolCalls: false });
       }
     } else if (type === "error") {
       throw new Error(
@@ -1781,26 +1753,6 @@ async function processResponsesStream(
       `elapsedMs=${Date.now() - streamStartedAt} events=${eventCount} types=${eventTypeSummary} ` +
       `stopReason=${output.stopReason ?? "unset"} contentBlocks=${output.content.length}`,
   );
-}
-
-function mapResponsesStopReason(status: string | undefined): string {
-  if (!status) {
-    return "stop";
-  }
-  switch (status) {
-    case "completed":
-      return "stop";
-    case "incomplete":
-      return "length";
-    case "failed":
-    case "cancelled":
-      return "error";
-    case "in_progress":
-    case "queued":
-      return "stop";
-    default:
-      throw new Error(`Unhandled stop reason: ${status}`);
-  }
 }
 
 function readResponsesOutputMessageText(item: Record<string, unknown>): string {

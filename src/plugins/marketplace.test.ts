@@ -305,6 +305,67 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("rejects oversized local marketplace manifests", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      await fs.writeFile(manifestPath, Buffer.alloc(16 * 1024 * 1024 + 1, "x"));
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "Marketplace manifest too large",
+      });
+    });
+  });
+
+  it("follows a symlinked marketplace manifest to a regular file", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      const targetPath = path.join(rootDir, "real-manifest.json");
+      await fs.writeFile(
+        targetPath,
+        JSON.stringify({ plugins: [{ name: "symlinked-plugin", source: "." }] }),
+        "utf-8",
+      );
+      await fs.symlink(targetPath, manifestPath);
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result.ok).toBe(true);
+      expect(
+        (result as { ok: true; manifest: { plugins: unknown[] } }).manifest.plugins,
+      ).toHaveLength(1);
+    });
+  });
+
+  it("rejects a symlinked marketplace manifest whose target exceeds the size limit", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      const targetPath = path.join(rootDir, "real-manifest.json");
+      await fs.writeFile(targetPath, Buffer.alloc(16 * 1024 * 1024 + 1, "x"));
+      await fs.symlink(targetPath, manifestPath);
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "Marketplace manifest too large",
+      });
+    });
+  });
+
   it("resolves relative plugin paths against the marketplace root", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");

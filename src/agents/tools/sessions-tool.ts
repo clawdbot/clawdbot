@@ -34,6 +34,12 @@ const SessionsToolSchema = Type.Object(
     ),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
     label: Type.Optional(Type.String({ description: "Session label" })),
+    icon: Type.Optional(
+      Type.String({
+        description:
+          "Sidebar icon: an emoji, name:<curated-id>, or svg:<svg …> you draw yourself (tiny, sanitized). Empty string removes it.",
+      }),
+    ),
     pinned: Type.Optional(Type.Boolean({ description: "Pin session" })),
     archived: Type.Optional(Type.Boolean({ description: "Archive session" })),
     model: Type.Optional(Type.String({ description: "Model override" })),
@@ -62,6 +68,17 @@ function readBoolean(params: Record<string, unknown>, key: string): boolean | un
     throw new ToolInputError(`${key} must be boolean`);
   }
   return value;
+}
+
+function readClearableString(params: Record<string, unknown>, key: string): string | null {
+  const value = params[key];
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new ToolInputError(`${key} must be a string`);
+  }
+  return value.trim() || null;
 }
 
 function readGroupName(value: unknown, label: string): string {
@@ -169,6 +186,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         ...(params.label !== undefined
           ? { label: readStringParam(params, "label", { required: true }) }
           : {}),
+        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
         ...(params.pinned !== undefined ? { pinned: readBoolean(params, "pinned") } : {}),
         ...(params.archived !== undefined ? { archived: readBoolean(params, "archived") } : {}),
         ...(params.model !== undefined

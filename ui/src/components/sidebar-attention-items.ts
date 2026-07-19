@@ -106,20 +106,5 @@ export function buildSidebarAttentionItems(params: {
       signature: signatureOf(expired.map((provider) => provider.provider)),
     });
   }
-  const expiring = monitored.filter((provider) => provider.status === "expiring");
-  if (expiring.length > 0) {
-    items.push({
-      kind: "modelAuthExpiring",
-      severity: "warning",
-      icon: "plug",
-      label: t("attention.modelAuthExpiring", {
-        providers: expiring
-          .map((provider) => `${provider.displayName} (${provider.expiry?.label ?? "soon"})`)
-          .join(", "),
-      }),
-      action: { kind: "navigate", routeId: "model-providers" },
-      signature: signatureOf(expiring.map((provider) => provider.provider)),
-    });
-  }
   return items;
 }

@@ -57,8 +57,30 @@ function closeFenceLine(openFence: OpenFence) {
   return `${openFence.indent}${openFence.markerChar.repeat(openFence.markerLen)}`;
 }
 
-function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
-  if (!openFence) {
+function canBalanceFence(openFence: OpenFence, maxChars: number) {
+  const markerLength = closeFenceLine(openFence).length;
+  return markerLength * 2 + 3 <= maxChars;
+}
+
+// Continuation chunks reopen the fence so Discord keeps rendering the code block. Prefer the full
+// opening line (keeps the language for highlighting); degrade to a bare marker when it would not
+// leave room for the closing marker plus at least one delimiter+char of body. When even the bare
+// pair cannot fit, preserve the hard transport limit and emit the continuation without synthetic
+// fences; the original fence text is still retained in its own chunks.
+function reopenFenceLine(openFence: OpenFence, maxChars: number) {
+  const bareMarker = closeFenceLine(openFence);
+  if (!canBalanceFence(openFence, maxChars)) {
+    return null;
+  }
+  // openLine + closing marker (bareMarker + newline) + one delimiter + one body char must all fit.
+  if (openFence.openLine.length + bareMarker.length + 3 <= maxChars) {
+    return openFence.openLine;
+  }
+  return bareMarker;
+}
+
+function closeFenceIfNeeded(text: string, openFence: OpenFence | null, maxChars: number) {
+  if (!openFence || !canBalanceFence(openFence, maxChars)) {
     return text;
   }
   const closeLine = closeFenceLine(openFence);
@@ -181,15 +203,18 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     if (!current) {
       return;
     }
-    const payload = closeFenceIfNeeded(current, openFence);
+    const payload = closeFenceIfNeeded(current, openFence, maxChars);
     if (payload.trim().length) {
       chunks.push(payload);
     }
     current = "";
     currentLines = 0;
     if (openFence) {
-      current = openFence.openLine;
-      currentLines = 1;
+      const reopenLine = reopenFenceLine(openFence, maxChars);
+      if (reopenLine) {
+        current = reopenLine;
+        currentLines = 1;
+      }
     }
   };
 
@@ -211,15 +236,23 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     // A flush can fire mid-line, before `openFence` advances to `nextOpenFence` below, so it closes
     // against the still-open `openFence`. A fence-closing line that also carries trailing text would
     // otherwise reserve 0 yet still get a closing fence appended on flush, overflowing maxChars.
-    const fenceToReserve = nextOpenFence ?? openFence;
+    const candidateFence = nextOpenFence ?? openFence;
+    const fenceToReserve =
+      candidateFence && canBalanceFence(candidateFence, maxChars) ? candidateFence : null;
     const reserveChars = fenceToReserve ? closeFenceLine(fenceToReserve).length + 1 : 0;
     const reserveLines = fenceToReserve ? 1 : 0;
     const effectiveMaxChars = maxChars - reserveChars;
     const effectiveMaxLines = maxLines - reserveLines;
     const charLimit = effectiveMaxChars > 0 ? effectiveMaxChars : maxChars;
     const lineLimit = effectiveMaxLines > 0 ? effectiveMaxLines : maxLines;
+    const reopenPrefixLen = fenceToReserve
+      ? (reopenFenceLine(fenceToReserve, maxChars)?.length ?? 0)
+      : 0;
     const prefixLen = current.length > 0 ? current.length + 1 : 0;
-    const segmentLimit = Math.max(1, charLimit - prefixLen);
+    // A mid-line flush swaps `current` to the reopen prefix; size segments against whichever prefix
+    // is larger so the reopened chunk (prefix + segment + closing marker) still fits maxChars.
+    const reopenBudget = reopenPrefixLen > 0 ? reopenPrefixLen + 1 : 0;
+    const segmentLimit = Math.max(1, charLimit - Math.max(prefixLen, reopenBudget));
     const segments = splitLongLine(originalLine, segmentLimit, {
       preserveWhitespace: wasInsideFence,
     });
@@ -227,8 +260,8 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
       const segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
-      const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
-      const addition = `${delimiter}${segment}`;
+      let delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
+      let addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
       const nextLines = currentLines + (isLineContinuation ? 0 : 1);
 
@@ -237,11 +270,15 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
         flush();
+        // A fence-aware flush reopens the block as the new first line. Continuation text must
+        // start on the next line or Discord interprets it as part of the fence info string.
+        delimiter = current.length > 0 ? "\n" : "";
+        addition = `${delimiter}${segment}`;
       }
 
       if (current.length > 0) {
         current += addition;
-        if (!isLineContinuation) {
+        if (!isLineContinuation || delimiter) {
           currentLines += 1;
         }
       } else {
@@ -254,7 +291,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
   }
 
   if (current.length) {
-    const payload = closeFenceIfNeeded(current, openFence);
+    const payload = closeFenceIfNeeded(current, openFence, maxChars);
     if (payload.trim().length) {
       chunks.push(payload);
     }

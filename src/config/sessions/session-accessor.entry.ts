@@ -13,6 +13,7 @@ import {
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
+  loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
   patchSqliteSessionEntryTarget,
   readSqliteSessionUpdatedAt,
@@ -294,6 +295,11 @@ export async function updateResolvedSessionEntry<T>(
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   return loadSqliteSessionEntry(scope);
+}
+
+/** Returns one session entry without joining the agent database writable lifecycle. */
+export function loadSessionEntryReadOnly(scope: SessionAccessScope): SessionEntry | undefined {
+  return loadSqliteSessionEntryReadOnly(scope);
 }
 
 /**

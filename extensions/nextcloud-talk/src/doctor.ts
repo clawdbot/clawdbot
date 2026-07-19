@@ -13,12 +13,11 @@ import {
 } from "./doctor-contract.js";
 import {
   NEXTCLOUD_TALK_PLUGIN_ID,
+  NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
   NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
-} from "./replay-guard.js";
+  NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
+} from "./replay-migration-contract.js";
 import type { CoreConfig } from "./types.js";
-
-const REPLAY_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
-const REPLAY_DEDUPE_MAX_ENTRIES = 10_000;
 
 function sanitizeLegacyReplaySegment(value: string): string {
   const trimmed = value.trim();
@@ -72,11 +71,11 @@ async function repairNextcloudTalkReplayDedupeState(params: {
       const result = await migratePersistentDedupeLegacyJsonFile({
         filePath: legacyPath,
         namespace: accountId,
-        ttlMs: REPLAY_DEDUPE_TTL_MS,
+        ttlMs: NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
         memoryMaxSize: 0,
         pluginId: NEXTCLOUD_TALK_PLUGIN_ID,
         namespacePrefix: NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
-        stateMaxEntries: REPLAY_DEDUPE_MAX_ENTRIES,
+        stateMaxEntries: NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
         env,
       });
       changes.push(

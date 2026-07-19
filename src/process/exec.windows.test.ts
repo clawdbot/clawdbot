@@ -126,6 +126,7 @@ function expectCmdWrappedInvocation(call: ExecaCall, commandFragment = "pnpm.cmd
 }
 
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
+let runUtf8CommandWithTimeout: typeof import("./exec.js").runUtf8CommandWithTimeout;
 let runExec: typeof import("./exec.js").runExec;
 let spawnCommand: typeof import("./exec.js").spawnCommand;
 let getWindowsInstallRoots: typeof import("../infra/windows-install-roots.js").getWindowsInstallRoots;
@@ -160,7 +161,8 @@ describe("Windows command execution", () => {
     });
     ({ getWindowsInstallRoots, getWindowsSystem32ExePath } =
       await import("../infra/windows-install-roots.js"));
-    ({ runCommandWithTimeout, runExec, spawnCommand } = await import("./exec.js"));
+    ({ runCommandWithTimeout, runExec, runUtf8CommandWithTimeout, spawnCommand } =
+      await import("./exec.js"));
   });
 
   afterAll(() => {
@@ -387,6 +389,8 @@ describe("Windows command execution", () => {
       expect(execaMock).toHaveBeenCalledTimes(1);
       expect(command.stdout.destroyed).toBe(false);
       await vi.advanceTimersByTimeAsync(19);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersToNextTimerAsync();
       expect(command.stdout.destroyed).toBe(true);
       expect(command.stderr.destroyed).toBe(true);
 
@@ -525,6 +529,48 @@ describe("Windows command execution", () => {
       await expect(runExec("node", ["utf8-output.js"], 1_000)).resolves.toEqual({
         stdout: "测试",
         stderr: "",
+      });
+    });
+  });
+
+  it("keeps truncated UTF-8 head output on a code point boundary", async () => {
+    execaMock.mockImplementationOnce(() =>
+      createMockSubprocess({
+        stdoutChunks: [Buffer.from("a😀z", "utf8")],
+        stderrChunks: [Buffer.from("b😀y", "utf8")],
+      }),
+    );
+    await withMockedWindowsPlatform(async () => {
+      await expect(
+        runUtf8CommandWithTimeout(["node", "utf8-output.js"], {
+          maxOutputBytes: 3,
+          outputCapture: "head",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toMatchObject({
+        stdout: "a",
+        stderr: "b",
+        stdoutTruncatedBytes: 5,
+        stderrTruncatedBytes: 5,
+      });
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves complete legacy-code-page characters in truncated head output", async () => {
+    execaMock.mockImplementationOnce(() =>
+      createMockSubprocess({ stdoutChunks: [Buffer.from([0x61, 0xb2, 0xe2, 0xca, 0xd4])] }),
+    );
+    await withMockedWindowsPlatform(async () => {
+      await expect(
+        runCommandWithTimeout(["node", "gbk-output.js"], {
+          maxOutputBytes: 3,
+          outputCapture: "head",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toMatchObject({
+        stdout: "a测",
+        stdoutTruncatedBytes: 2,
       });
     });
   });

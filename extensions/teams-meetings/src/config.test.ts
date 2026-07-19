@@ -6,6 +6,10 @@ import {
 } from "./config.js";
 
 describe("Microsoft Teams meetings config", () => {
+  it("allows the live Teams web client enough time to reach prejoin and in-call UI", () => {
+    expect(resolveTeamsMeetingsConfig({}).chrome.waitForInCallMs).toBe(60_000);
+  });
+
   it("builds matching SoX commands from the selected audio format", () => {
     const config = resolveTeamsMeetingsConfig({ chrome: { audioBufferBytes: 2048 } });
     expect(config.chrome.audioInputCommand).toContain("sox");

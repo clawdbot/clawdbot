@@ -1581,7 +1581,7 @@ export function createExecTool(
       }
       return execParams;
     },
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
@@ -1943,6 +1943,8 @@ export function createExecTool(
             trigger: defaults?.trigger,
             agentId,
             sessionKey: defaults?.sessionKey,
+            runId: defaults?.runId,
+            toolCallId,
             sessionId: defaults?.sessionId,
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,

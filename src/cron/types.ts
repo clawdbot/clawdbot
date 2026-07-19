@@ -3,7 +3,9 @@ import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
-import type { CronJobBase } from "./types-shared.js";
+import type { CronJobBase, CronPacing } from "./types-shared.js";
+
+export type { CronPacing } from "./types-shared.js";
 
 /** Supported schedule forms persisted in cron job specs. */
 export type CronSchedule =
@@ -197,6 +199,11 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
 };
 
+/** One run's requested delay before the same paced job runs again. */
+export type CronNextCheckProposal = {
+  delayMs: number;
+};
+
 /** Embedded-agent execution phase names surfaced to cron watchdog progress. */
 export type CronAgentExecutionPhase = EmbeddedAgentExecutionPhase;
 
@@ -244,13 +251,15 @@ export type CronFailureAlertPatch = {
 export type CronPayload =
   | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
   | (CronAgentTurnPayload & CronPayloadToolAllow)
-  | (CronCommandPayload & CronPayloadToolAllow);
+  | (CronCommandPayload & CronPayloadToolAllow)
+  | (CronScriptPayload & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
   | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
-  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch);
+  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch)
+  | (CronScriptPayloadPatch & CronPayloadToolAllowPatch);
 
 type CronPayloadToolAllow = {
   /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
@@ -310,11 +319,27 @@ type CronCommandPayload = {
 type CronCommandPayloadPatch = {
   kind: "command";
 } & Partial<CronCommandPayloadFields>;
+
+type CronScriptPayloadFields = {
+  script: string;
+  timeoutSeconds?: number;
+  toolBudget?: number;
+};
+
+type CronScriptPayload = {
+  kind: "script";
+} & CronScriptPayloadFields;
+
+type CronScriptPayloadPatch = {
+  kind: "script";
+} & Partial<CronScriptPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;
   /** Exact startup catch-up slot protected from future-slot repair across restarts. */
   startupCatchupAtMs?: number;
+  /** Exact paced completion slot protected from future-slot repair until consumed. */
+  pacedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   runningAtMs?: number;
@@ -431,9 +456,11 @@ export type CronJobPatch = Partial<
     | "declarationKey"
     | "displayName"
     | "owner"
+    | "pacing"
   >
 > & {
   displayName?: string | null;
+  pacing?: CronPacing | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;

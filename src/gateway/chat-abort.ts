@@ -398,6 +398,7 @@ export type ChatAbortOps = {
     opts?: { dropIfSlow?: boolean; sessionKeys?: readonly string[] },
   ) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  onRunAborted?: (runId: string) => void;
 };
 
 type TrackedChatRunAbortOps = {
@@ -561,6 +562,13 @@ export function abortChatRunById(
   active.projectSessionTerminalPending = true;
   active.projectSessionTerminalObservedAt = undefined;
   active.registrationCleanupRequested = true;
+  // Approval cancellation and run abort share this owner so authorization
+  // cannot outlive the active run whose controller is about to terminate.
+  try {
+    ops.onRunAborted?.(runId);
+  } catch {
+    // Approval persistence failure must not prevent the requested run abort.
+  }
   active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);

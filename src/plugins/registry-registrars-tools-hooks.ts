@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
@@ -170,6 +171,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
+    policy?: PluginTypedHookPolicy,
   ) => {
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
@@ -219,9 +221,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
       return;
     }
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
       try {
-        return await handler(event, ctx);
+        // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
+        return await withTimeout(
+          Promise.resolve(handler(event, ctx)),
+          timeoutMs ?? 0,
+          `agent tool result middleware for ${record.id}`,
+        );
       } catch (error) {
         registryParams.logger.warn(
           `[plugins] agent tool result middleware failed for ${record.id}`,

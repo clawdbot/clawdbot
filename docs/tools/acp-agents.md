@@ -548,10 +548,9 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="streamTo" type='"parent"'>
   `"parent"` streams initial ACP run progress summaries back to the requester
-  session as system events. Accepted responses include `streamLogPath`
-  pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you
-  can tail for full relay history. Parent progress streams show assistant
-  commentary and ACP status progress by default unless
+  session as system events. OpenClaw records the full relay history in the
+  child agent's SQLite state and removes it with the child session. Parent
+  progress streams show assistant commentary and ACP status progress by default unless
   `streaming.progress.commentary=false`. Discord also defaults parent
   previews to progress mode when no stream mode is configured. Status
   progress still honors `acp.stream.tagVisibility`, so tags such as `plan`
@@ -791,14 +790,16 @@ Runtime controls (`spawn`, `cancel`, `steer`, `close`, `status`, `set-mode`,
 `set`, `cwd`, `permissions`, `timeout`, `model`, and `reset-options`) require
 owner identity from external channels and `operator.admin` from internal
 Gateway clients. Authorized non-owner senders can still use `sessions`,
-`doctor`, `install`, and `help`.
+`doctor`, `install`, and `help`. For non-owner senders, `/acp sessions`
+lists only the current bound or requester session; owner identity and
+`operator.admin` clients see all recent sessions.
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface
-clearly when a backend lacks a capability. `/acp sessions` reads the store
-for the current bound or requester session; target tokens (`session-key`,
-`session-id`, or `session-label`) resolve through gateway session discovery,
-including custom per-agent `session.store` roots.
+clearly when a backend lacks a capability. Commands that accept target tokens
+(`session-key`, `session-id`, or `session-label`) resolve them through gateway
+session discovery, including custom per-agent `session.store` roots. `/acp sessions`
+does not accept a target token.
 
 ### Runtime options mapping
 

@@ -788,6 +788,38 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "Google Meet plugin",
+    "target": "Google Meet 插件"
+  },
+  {
+    "source": "Meeting plugins",
+    "target": "会议插件"
+  },
+  {
+    "source": "Meeting plugins overview",
+    "target": "会议插件概览"
+  },
+  {
+    "source": "Microsoft Teams channel",
+    "target": "Microsoft Teams 频道"
+  },
+  {
+    "source": "Microsoft Teams meetings plugin",
+    "target": "Microsoft Teams 会议插件"
+  },
+  {
+    "source": "Zoom meetings plugin",
+    "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Voice call plugin",
+    "target": "语音通话插件"
+  },
+  {
+    "source": "Browser control",
+    "target": "浏览器控制"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
@@ -1202,6 +1234,10 @@
   {
     "source": "Discord voice",
     "target": "Discord 语音"
+  },
+  {
+    "source": "Discord voice channels",
+    "target": "Discord 语音频道"
   },
   {
     "source": "Plugin management",

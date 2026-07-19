@@ -3044,6 +3044,45 @@ describe("session accessor seam", () => {
     expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
   });
 
+  it("preserves transcript generation on append and rotates it on replacement", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "generation-session",
+      sessionKey: "agent:main:generation-session",
+      storePath,
+    };
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: scope.agentId,
+    }).path;
+    expect(databasePath).toBeDefined();
+    const readGeneration = () =>
+      openOpenClawAgentDatabase({ agentId: scope.agentId, path: databasePath })
+        .db.prepare("SELECT generation FROM session_transcript_generations WHERE session_id = ?")
+        .get(scope.sessionId) as { generation: string } | undefined;
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "first" },
+    });
+    const first = readGeneration()?.generation;
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: "second" },
+    });
+    expect(readGeneration()?.generation).toBe(first);
+
+    await replaceSqliteTranscriptEvents(scope, [
+      { sessionId: scope.sessionId, type: "session" },
+      { id: "replacement", parentId: null, type: "custom" },
+    ]);
+    const replaced = readGeneration()?.generation;
+    expect(replaced).toMatch(/^[0-9a-f]{32}$/);
+    expect(replaced).not.toBe(first);
+
+    await replaceSqliteTranscriptEvents(scope, []);
+    expect(readGeneration()?.generation).not.toBe(replaced);
+  });
+
   it("resolves an explicit read transcript file without agent identity", () => {
     const explicitSessionFile = path.join(tempDir, "explicit-read-session.jsonl");
 

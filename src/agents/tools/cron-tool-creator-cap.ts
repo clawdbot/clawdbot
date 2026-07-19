@@ -64,6 +64,7 @@ function capCronJobToolsAllow(params: {
   const writesToolsAllow = Object.hasOwn(params.payload, "toolsAllow");
   if (
     params.payload.kind !== "agentTurn" &&
+    params.payload.kind !== "script" &&
     !hasCronTriggerScript(params.trigger) &&
     !writesToolsAllow
   ) {
@@ -170,7 +171,12 @@ export function planCronJobUpdatePatch(params: {
 
   const trigger = Object.hasOwn(patch, "trigger") ? patch.trigger : params.currentJob.trigger;
   const writesToolsAllow = payload !== undefined && Object.hasOwn(payload, "toolsAllow");
-  if (payloadKind !== "agentTurn" && !hasCronTriggerScript(trigger) && !writesToolsAllow) {
+  if (
+    payloadKind !== "agentTurn" &&
+    payloadKind !== "script" &&
+    !hasCronTriggerScript(trigger) &&
+    !writesToolsAllow
+  ) {
     return { kind: "ready", patch };
   }
 

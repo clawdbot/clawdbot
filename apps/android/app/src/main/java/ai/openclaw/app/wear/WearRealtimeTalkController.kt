@@ -409,7 +409,10 @@ internal class WearRealtimeTalkController(
             sendWatchFrame(nodeId, message.type, message.payload)
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
-            fail("Unable to send audio to Watch")
+            fail(
+              "Unable to send audio to Watch",
+              expectedSessionId = activeSessionId,
+            )
             break
           }
           when (message.type) {
@@ -484,10 +487,13 @@ internal class WearRealtimeTalkController(
               "talk.session.appendAudio",
               params.toString(),
               8_000L,
-            ) { message -> fail(message) }
+            ) { message -> fail(message, expectedSessionId = activeSessionId) }
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
-            fail(err.message ?: "Unable to send Watch audio")
+            fail(
+              err.message ?: "Unable to send Watch audio",
+              expectedSessionId = activeSessionId,
+            )
           }
         }
       }
@@ -567,9 +573,15 @@ internal class WearRealtimeTalkController(
     )
   }
 
-  private fun fail(message: String) {
+  private fun fail(
+    message: String,
+    expectedSessionId: String? = null,
+  ) {
     val (closingSession, closingNodeId) =
       synchronized(lifecycleStateLock) {
+        // Transport callbacks and non-cancellable I/O can outlive their relay.
+        // Only that relay may own teardown, or a late error can stop its replacement.
+        if (expectedSessionId != null && sessionId != expectedSessionId) return
         Log.w(TAG, message)
         val currentSession = sessionId
         val currentNodeId = ownerNodeId

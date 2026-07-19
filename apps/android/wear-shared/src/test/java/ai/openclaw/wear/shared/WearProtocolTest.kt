@@ -69,6 +69,8 @@ class WearProtocolTest {
         WearRpcMethod.SessionsList to "sessions.list",
         WearRpcMethod.AgentsList to "agents.list",
         WearRpcMethod.AgentsSelect to "agents.select",
+        WearRpcMethod.ModelsList to "models.list",
+        WearRpcMethod.ModelsSelect to "models.select",
         WearRpcMethod.GatewayConnect to "gateway.connect",
         WearRpcMethod.GatewayDisconnect to "gateway.disconnect",
         WearRpcMethod.ChatHistory to "chat.history",
@@ -106,6 +108,7 @@ class WearProtocolTest {
     assertEquals("openclaw_wear_companion_v1", WearProtocol.WATCH_CAPABILITY)
     assertEquals("agent-controls", WearProxyCapability.AgentControls.wireValue)
     assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
+    assertEquals("model-controls", WearProxyCapability.ModelControls.wireValue)
     assertEquals("session-selection-lookup", WearProxyCapability.SessionSelectionLookup.wireValue)
     assertEquals(WearProxyCapability.AgentControls, WearProxyCapability.fromWireValue("agent-controls"))
     assertEquals(null, WearProxyCapability.fromWireValue("future-capability"))

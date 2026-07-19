@@ -1232,6 +1232,7 @@
               {
                 "group": "Sessions and memory",
                 "pages": [
+                  "concepts/main-session",
                   "concepts/session",
                   "concepts/session-search",
                   "concepts/channel-docking",
@@ -1303,8 +1304,10 @@
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/logbook",
+                  "plugins/meeting-plugins",
                   "plugins/google-meet",
                   "plugins/teams-meetings",
+                  "plugins/zoom-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
@@ -1363,6 +1366,7 @@
                   "tools/code-execution",
                   "tools/code-mode",
                   "tools/diffs",
+                  "tools/screen",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
@@ -1750,8 +1754,8 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
-                  "web/workspaces",
                   "web/dashboard",
+                  "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
                   "web/lobster"

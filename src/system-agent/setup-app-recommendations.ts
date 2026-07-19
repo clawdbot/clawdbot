@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import { z } from "zod";
 import { searchClawHubSkills } from "../infra/clawhub.js";
@@ -79,7 +80,7 @@ const MatcherOutputSchema = z.object({
         .string()
         .trim()
         .min(1)
-        .transform((value) => (value.length > 120 ? `${value.slice(0, 119)}…` : value)),
+        .transform((value) => (value.length > 120 ? `${truncateUtf16Safe(value, 119)}…` : value)),
     }),
   ),
 });

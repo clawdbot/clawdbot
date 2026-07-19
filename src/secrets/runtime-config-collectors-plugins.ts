@@ -169,6 +169,7 @@ function collectConfiguredPluginSecretAssignments(params: {
                 ownerId: fullPath,
                 requiredForGateway: false,
                 disposition: "isolate" as const,
+                contract: params.pluginConfig,
               },
             }
           : {}),

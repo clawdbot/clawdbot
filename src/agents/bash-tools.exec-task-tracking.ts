@@ -41,7 +41,6 @@ export function createBackgroundExecTask(params: {
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
       progressSummary: "Command running",
-      detail: { processSessionId: params.processSessionId },
     });
     if (!task) {
       return null;
@@ -90,7 +89,6 @@ export function finalizeBackgroundExecTask(params: {
             : "Command stopped",
       ...(status === "succeeded" ? { clearError: true } : { error: execTaskError(params.outcome) }),
       detail: {
-        processSessionId: params.handle.runId.slice("exec:".length),
         exitCode: params.outcome.exitCode,
         ...(params.outcome.exitSignal != null
           ? { exitSignal: String(params.outcome.exitSignal) }

@@ -401,14 +401,6 @@ export interface CurrentConversationBindings {
   updated_at: number;
 }
 
-export interface DatabaseVerifications {
-  error: string | null;
-  kind: string;
-  path: string;
-  result: string;
-  verified_at: number;
-}
-
 export interface DeliveryQueueEntries {
   account_id: string | null;
   channel: string | null;
@@ -509,6 +501,7 @@ export interface DiagnosticEvents {
   event_key: string;
   payload_json: string;
   scope: string;
+  sequence: Generated<number>;
 }
 
 export interface DiagnosticStabilityBundles {
@@ -1245,6 +1238,7 @@ export interface WorkerWorkspacePendingResults {
   recovery_requested_at_ms: number | null;
   run_id: string;
   session_id: string;
+  staged_result_ref: string | null;
   workspace_accepted_at_ms: number | null;
 }
 
@@ -1339,7 +1333,6 @@ export interface DB {
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
-  database_verifications: DatabaseVerifications;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;

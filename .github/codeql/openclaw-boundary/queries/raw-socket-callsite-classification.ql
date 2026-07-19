@@ -62,13 +62,10 @@ predicate allowedRawSocketClientCall(Expr call) {
   or
   allowedOwnerScope(call, "src/infra/ssh-tunnel.ts", "canConnectLocal")
   or
-  allowedOwnerScope(call, "src/infra/gateway-lock.ts", "checkPortFree")
-  or
   allowedOwnerScope(call, "src/infra/jsonl-socket.ts", "requestJsonlSocketWithMaxLineBytes")
   or
-  allowedOwnerScope(call, "src/infra/net/http-connect-tunnel.ts", "connectToProxy")
-  or
-  allowedOwnerScope(call, "src/infra/net/http-connect-tunnel.ts", "startTargetTls")
+  // This TLS layer wraps the managed CONNECT socket; it cannot open a direct route.
+  allowedOwnerScope(call, "src/infra/push-apns-http2.ts", "openApnsTlsTunnel")
   or
   allowedOwnerScope(call, "src/infra/push-apns-http2.ts", "openProxiedApnsHttp2Session")
   or

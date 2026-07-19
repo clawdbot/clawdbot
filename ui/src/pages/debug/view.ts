@@ -1,6 +1,8 @@
 // Control UI view renders debug screen content.
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import { highlightJsonHtml } from "../../components/markdown.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -34,7 +36,8 @@ function renderJsonRow(title: unknown, value: unknown) {
   return renderSettingsRow({
     title,
     stacked: true,
-    control: html`<pre class="code-block">${JSON.stringify(value ?? {}, null, 2)}</pre>`,
+    control: html`<pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(value ?? {}, null, 2)))}</pre>`,
   });
 }
 
@@ -74,7 +77,8 @@ function renderEventRow(evt: EventLogEntry) {
     title: evt.event,
     description: formatTimeMs(evt.ts, undefined, ""),
     stacked: true,
-    control: html`<pre class="code-block">${formatEventPayload(evt.payload)}</pre>`,
+    control: html`<pre class="code-block">
+${unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload)))}</pre>`,
   });
 }
 
@@ -147,7 +151,7 @@ export function renderDebug(props: DebugProps) {
         ? html`
             <div class="settings-row settings-row--stacked">
               ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-              <pre class="code-block">${props.callResult}</pre>
+              <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
             </div>
           `
         : nothing}
@@ -158,7 +162,8 @@ export function renderDebug(props: DebugProps) {
     { title: t("debug.modelsTitle"), description: t("debug.modelsSubtitle") },
     html`
       <div class="settings-row settings-row--stacked">
-        <pre class="code-block">${JSON.stringify(props.models ?? [], null, 2)}</pre>
+        <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2)))}</pre>
       </div>
     `,
   );

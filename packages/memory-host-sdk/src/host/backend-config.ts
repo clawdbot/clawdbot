@@ -495,8 +495,7 @@ export function resolveMemoryBackendConfig(params: {
     sessions: resolveSessionConfig(
       {
         ...qmdCfg?.sessions,
-        enabled:
-          qmdCfg?.sessions?.enabled === true || memorySearch?.rememberAcrossConversations === true,
+        enabled: qmdCfg?.sessions?.enabled === true || memorySearch?.rememberAcrossConversations,
       },
       workspaceDir,
       // Remember-only export is search-only for trusted recall; ordinary

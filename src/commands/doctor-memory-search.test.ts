@@ -483,6 +483,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithLancedb = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: true, config: { dbPath: ".openclaw/memory" } } },
@@ -504,6 +505,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithSlotOnly = {
+      session: { dmScope: "per-peer" },
       plugins: { slots: { memory: "memory-lancedb" } },
     } as unknown as OpenClawConfig;
 
@@ -521,6 +523,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithDisabledLancedb = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: false } },
@@ -541,6 +544,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithPlaceholderEntry = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": {} },
@@ -704,7 +708,7 @@ describe("noteMemorySearchHealth", () => {
       await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
       expect(firstNoteMessage()).toBe(
-        'Remember across conversations is enabled for agent "personal", but the current memory provider does not support protected private transcript recall. Turn off Remember across conversations or use that provider\'s own recall path; advanced Active Memory can still use its recall tools.',
+        'Remember across conversations is effectively enabled for agent "personal", but the current memory provider does not support protected private transcript recall. Set memorySearch.rememberAcrossConversations to false or use that provider\'s own recall path; advanced Active Memory can still use its recall tools.',
       );
     },
   );
@@ -726,7 +730,7 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
     expect(firstNoteMessage()).toBe(
-      'Remember across conversations is enabled for agent "personal", but the Active Memory plugin is disabled. Enable the plugin or turn off Remember across conversations.',
+      'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Enable the plugin or set memorySearch.rememberAcrossConversations to false.',
     );
   });
 
@@ -774,7 +778,7 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
     expect(firstNoteMessage()).toBe(
-      'Remember across conversations is enabled for agent "personal", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or turn off Remember across conversations.',
+      'Remember across conversations is effectively enabled for agent "personal", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memorySearch.rememberAcrossConversations to false.',
     );
   });
 
@@ -792,7 +796,7 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
     expect(firstNoteMessage()).toBe(
-      'Remember across conversations is enabled for agent "personal", but memory search is disabled. Enable memory search or turn off Remember across conversations.',
+      'Remember across conversations is effectively enabled for agent "personal", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.',
     );
   });
 

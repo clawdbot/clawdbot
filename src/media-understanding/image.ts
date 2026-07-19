@@ -5,6 +5,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import {
+  getModelProviderRequestTransport,
+  type ModelProviderRequestTransportOverrides,
+} from "../agents/provider-request-config.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
@@ -188,9 +192,11 @@ async function describeImagesWithMinimax(params: {
   prompt: string;
   timeoutMs?: number;
   images: Array<{ buffer: Buffer; mime?: string }>;
+  allowPrivateNetwork?: boolean;
+  request?: ModelProviderRequestTransportOverrides;
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
-  // MiniMax VLM owns a direct fetch path, so unwrap only at this final handoff.
+  // MiniMax VLM handles its own outbound fetch, so unwrap only at this final handoff.
   const apiKey = unwrapSecretSentinelsForProviderEgress(params.apiKey, "MiniMax VLM request");
   for (const [index, image] of params.images.entries()) {
     const prompt =
@@ -204,6 +210,8 @@ async function describeImagesWithMinimax(params: {
       imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
       modelBaseUrl: params.modelBaseUrl,
       timeoutMs: params.timeoutMs,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      request: params.request,
     });
     responses.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
   }
@@ -232,6 +240,22 @@ function resolveConfiguredProviderBaseUrl(
       return undefined;
     }
     return normalized.baseUrl.trim();
+  }
+  return undefined;
+}
+
+function resolveConfiguredProviderAllowPrivateNetwork(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+): boolean | undefined {
+  const direct = cfg.models?.providers?.[provider]?.request?.allowPrivateNetwork;
+  if (typeof direct === "boolean") {
+    return direct;
+  }
+  const normalizedProvider = normalizeMediaProviderId(provider);
+  const normalized = cfg.models?.providers?.[normalizedProvider]?.request?.allowPrivateNetwork;
+  if (typeof normalized === "boolean") {
+    return normalized;
   }
   return undefined;
 }
@@ -356,6 +380,10 @@ async function describeImagesWithModelInternal(
   const startedAtMs = Date.now();
   const controller = new AbortController();
   const configuredTimeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs);
+  const allowPrivateNetwork = resolveConfiguredProviderAllowPrivateNetwork(
+    params.cfg,
+    params.provider,
+  );
   let apiKey: string;
   let model: Model | undefined;
 
@@ -388,6 +416,7 @@ async function describeImagesWithModelInternal(
       prompt,
       timeoutMs: params.timeoutMs,
       images: params.images,
+      allowPrivateNetwork,
     });
   }
 
@@ -402,6 +431,7 @@ async function describeImagesWithModelInternal(
       prompt,
       timeoutMs: params.timeoutMs,
       images: params.images,
+      request: getModelProviderRequestTransport(model),
     });
   }
 

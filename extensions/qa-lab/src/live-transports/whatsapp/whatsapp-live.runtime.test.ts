@@ -26,6 +26,16 @@ import {
 import { getWhatsAppQaScenarioDefinition } from "./whatsapp-live.scenarios.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
+const runExecSpy = vi.hoisted(() =>
+  vi.fn<typeof import("openclaw/plugin-sdk/process-runtime").runExec>(),
+);
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  runExecSpy.mockImplementation(actual.runExec);
+  return { ...actual, runExec: runExecSpy };
+});
+
 const testing = {
   buildWhatsAppQaConfig,
   callWhatsAppGatewayMessageAction,
@@ -233,6 +243,7 @@ describe("WhatsApp QA live runtime", () => {
   it("unpacks auth archives into a caller-provided temp directory", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-qa-test-"));
     try {
+      runExecSpy.mockClear();
       const archiveBase64 = await createTgz({
         root: tempRoot,
         entries: {
@@ -248,6 +259,15 @@ describe("WhatsApp QA live runtime", () => {
       await expect(fs.readFile(path.join(authDir, "creds.json"), "utf8")).resolves.toBe("{}\n");
       await expect(fs.readFile(path.join(authDir, "session/key.json"), "utf8")).resolves.toBe(
         "{}\n",
+      );
+      const archivePath = path.join(tempRoot, "driver.tgz");
+      const execOptions = { logOutput: false, timeoutMs: 60_000 };
+      expect(runExecSpy).toHaveBeenNthCalledWith(1, "tar", ["-tzf", archivePath], execOptions);
+      expect(runExecSpy).toHaveBeenNthCalledWith(
+        2,
+        "tar",
+        ["-xzf", archivePath, "-C", authDir],
+        execOptions,
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

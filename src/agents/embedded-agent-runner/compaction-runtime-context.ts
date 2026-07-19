@@ -21,6 +21,7 @@ import {
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 
 type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
@@ -56,6 +57,37 @@ type EmbeddedCompactionRuntimeContext = {
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
 };
+
+/** Resolve the configured compaction override against the actual model/runtime candidate. */
+export function resolveEmbeddedCompactionThinkingLevel(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  inheritedLevel?: ThinkLevel;
+  agentId?: string;
+  sessionKey?: string;
+  agentRuntime?: string | null;
+}): ThinkLevel {
+  const requestedLevel =
+    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+  if (!requestedLevel) {
+    return "off";
+  }
+  // A compaction model override or fallback can change the supported level set.
+  // Revalidate the immutable request for every concrete candidate instead of
+  // carrying a level clamped for an earlier model into a later attempt.
+  return (
+    resolveCandidateThinkingLevel({
+      cfg: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+      level: requestedLevel,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      agentRuntime: params.agentRuntime,
+    }) ?? "off"
+  );
+}
 
 /**
  * Resolve the effective compaction target from config, falling back to the

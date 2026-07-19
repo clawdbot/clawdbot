@@ -1,24 +1,31 @@
-// Control UI tests cover sidebar pinned-route customization behavior.
+// Control UI tests cover sidebar entry customization behavior.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
+  DEFAULT_SIDEBAR_ENTRIES,
   SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
-  normalizeSidebarPinnedRoutes,
+  normalizeSidebarEntries,
+  parseSidebarEntry,
+  serializeSidebarEntry,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
 
 const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
 
-describe("sidebar pinned routes", () => {
+describe("sidebar entries", () => {
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).toEqual(["custodian", "usage", "cron", "plugins"]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
+      "route:custodian",
+      "route:usage",
+      "route:cron",
+      "route:plugins",
+    ]);
   });
 
-  it("drops the retired overview route from persisted pins", () => {
-    expect(normalizeSidebarPinnedRoutes(["overview", "usage"])).toEqual(["usage"]);
+  it("drops retired routes from persisted entries", () => {
+    expect(normalizeSidebarEntries(["route:overview", "route:usage"])).toEqual(["route:usage"]);
   });
 
   it("keeps management surfaces in the workspace, not settings", () => {
@@ -35,7 +42,7 @@ describe("sidebar pinned routes", () => {
     expect(isSessionsHubRoute("sessions")).toBe(true);
     expect(isSessionsHubRoute("worktrees")).toBe(true);
     expect(isSessionsHubRoute("chat")).toBe(false);
-    expect(normalizeSidebarPinnedRoutes(["worktrees", "usage"])).toEqual(["usage"]);
+    expect(normalizeSidebarEntries(["route:worktrees", "route:usage"])).toEqual(["route:usage"]);
   });
 
   it("keeps settings pages out of the customizable sidebar", () => {
@@ -65,16 +72,52 @@ describe("sidebar pinned routes", () => {
   it("keeps devices in connection settings and drops stale pinned entries", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
     expect(settingsRoutes).toContain("nodes");
-    expect(normalizeSidebarPinnedRoutes(["nodes", "usage"])).toEqual(["usage"]);
+    expect(normalizeSidebarEntries(["route:nodes", "route:usage"])).toEqual(["route:usage"]);
+  });
+
+  it("keeps the apps promo page unpinned by default but customizable", () => {
+    expect(SIDEBAR_NAV_ROUTES).toContain("apps");
+    expect(DEFAULT_SIDEBAR_ENTRIES).not.toContain("route:apps");
+    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("apps");
+    expect(settingsRoutes).not.toContain("apps");
+    expect(isSettingsNavigationRoute("apps")).toBe(false);
   });
 
   it("keeps the plugin manager in customizable workspace routes", () => {
-    expect(normalizeSidebarPinnedRoutes(["plugins", "usage", "plugins"])).toEqual([
-      "plugins",
-      "usage",
+    expect(normalizeSidebarEntries(["route:plugins", "route:usage", "route:plugins"])).toEqual([
+      "route:plugins",
+      "route:usage",
     ]);
-    expect(sidebarMoreRoutes(["usage"])).toContain("plugins");
+    expect(sidebarMoreRoutes(["route:usage", "session:agent:main:test"])).toContain("plugins");
     expect(settingsRoutes).not.toContain("plugins");
+  });
+
+  it("round-trips route and session entries", () => {
+    expect(parseSidebarEntry("route:usage")).toEqual({ type: "route", route: "usage" });
+    expect(parseSidebarEntry("session:agent:main:test")).toEqual({
+      type: "session",
+      key: "agent:main:test",
+    });
+    expect(serializeSidebarEntry({ type: "route", route: "plugins" })).toBe("route:plugins");
+    expect(serializeSidebarEntry({ type: "session", key: "agent:main:test" })).toBe(
+      "session:agent:main:test",
+    );
+  });
+
+  it("normalizes persisted entries, dropping malformed and duplicate values", () => {
+    expect(
+      normalizeSidebarEntries([
+        "route:usage",
+        "session:agent:main:test",
+        "route:tasks",
+        "route:usage",
+        "route:worktrees",
+        "session:",
+        "usage",
+        7,
+      ]),
+    ).toEqual(["route:usage", "session:agent:main:test", "route:tasks"]);
+    expect(normalizeSidebarEntries([])).toEqual([]);
   });
 
   it("keeps OpenClaw pinnable and linked from Settings without Settings chrome", () => {
@@ -83,24 +126,17 @@ describe("sidebar pinned routes", () => {
     expect(isSettingsNavigationRoute("custodian")).toBe(false);
   });
 
-  it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
-    expect(
-      normalizeSidebarPinnedRoutes(["usage", "tasks", "usage", "worktrees", "instances", 7]),
-    ).toEqual(["usage", "tasks"]);
-    expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
-  });
-
   it("falls back to null for non-list values so callers use defaults", () => {
-    expect(normalizeSidebarPinnedRoutes(undefined)).toBeNull();
-    expect(normalizeSidebarPinnedRoutes({ usage: true })).toBeNull();
-    expect(normalizeSidebarPinnedRoutes("usage")).toBeNull();
+    expect(normalizeSidebarEntries(undefined)).toBeNull();
+    expect(normalizeSidebarEntries({ usage: true })).toBeNull();
+    expect(normalizeSidebarEntries("route:usage")).toBeNull();
   });
 
-  it("puts every unpinned nav route into the More section", () => {
-    const pinned = ["tasks", "usage"] as const;
-    const more = sidebarMoreRoutes(pinned);
+  it("puts every hidden nav route into the More section", () => {
+    const entries = ["route:tasks", "session:agent:main:test", "route:usage"] as const;
+    const more = sidebarMoreRoutes(entries);
     expect(more).not.toContain("tasks");
     expect(more).not.toContain("usage");
-    expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
+    expect(new Set(["tasks", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });
 });

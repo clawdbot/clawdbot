@@ -281,6 +281,7 @@ export function getMockRuntimeIdentity() {
 
 export function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };

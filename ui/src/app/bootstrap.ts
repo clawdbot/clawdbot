@@ -36,6 +36,7 @@ import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
@@ -170,7 +171,7 @@ function createApplicationNavigationPreferences(
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
     navWidth: settings.navWidth,
-    sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
+    sidebarEntries: settings.sidebarEntries,
     pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -184,7 +185,7 @@ function createApplicationNavigationPreferences(
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.navWidth === snapshot.navWidth &&
-        nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
+        nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
         nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
@@ -192,7 +193,7 @@ function createApplicationNavigationPreferences(
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
         navWidth: nextSnapshot.navWidth,
-        sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
+        sidebarEntries: [...nextSnapshot.sidebarEntries],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;
@@ -319,6 +320,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting();
+  const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
@@ -390,6 +392,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     nativeChatDrafts,
+    nativeNotifications,
     webPush,
     skillWorkshopRevision,
     navigate: (routeId, options) => {
@@ -447,6 +450,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
+      nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
     },

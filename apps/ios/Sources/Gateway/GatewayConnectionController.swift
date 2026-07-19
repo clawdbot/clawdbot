@@ -609,20 +609,22 @@ final class GatewayConnectionController {
     }
 
     private static func clearDeviceAuthTokens(gatewayID: String) {
-        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
-        DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
-        DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
-        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
-        DeviceAuthStore.clearToken(
-            deviceId: shareIdentity.deviceId,
-            role: "node",
-            gatewayID: gatewayID,
-            profile: .shareExtension)
-        DeviceAuthStore.clearToken(
-            deviceId: shareIdentity.deviceId,
-            role: "operator",
-            gatewayID: gatewayID,
-            profile: .shareExtension)
+        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
+        }
+        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "node",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+        }
     }
 
     private func clearLegacyManualGatewayDefaults(matching stableID: String) {

@@ -215,7 +215,11 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Include absolute timestamps in message envelopes, direct agent prompt prefixes, and embedded model-input prefixes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models":
-    "Configured model catalog and allowlist (keys are full provider/model IDs or literal provider/* entries for dynamic provider catalogs).",
+    "Configured model catalog and per-model settings. Entries provide aliases, params, and runtime metadata; they do not restrict model overrides.",
+  "agents.defaults.modelPolicy":
+    "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
+  "agents.defaults.modelPolicy.allow":
+    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and provider wildcards such as "openai/*". Empty permits any model.',
   "agents.defaults.models.*.agentRuntime":
     "Optional per-model runtime policy for the default agent. Use this for model-specific runtime exceptions instead of setting a whole-agent runtime.",
   "agents.defaults.models.*.agentRuntime.id":
@@ -225,7 +229,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
   "agents.defaults.memorySearch.rememberAcrossConversations":
-    "Use relevant context from this agent's other private conversations through protected transcript recall. Groups and channels stay separate. Enable this only for a personal or fully trusted agent.",
+    'Use relevant context from this agent\'s other private conversations through protected transcript recall. Defaults on only when global session.dmScope is unset or "main" and no binding overrides DM scope; any configured DM isolation defaults it off. An explicit true or false always wins.',
   "agents.defaults.memorySearch.sources":
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "agents.defaults.memorySearch.extraPaths":

@@ -5,6 +5,7 @@
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -45,8 +46,10 @@ function browserServiceErrorFromPayload(
   status?: number,
 ): BrowserServiceError {
   const parsed = parseBrowserErrorPayload(value);
+  const message = parsed?.error ?? fallback;
+  const modelHint = resolveBrowserServiceModelHint(message, status);
   return new BrowserServiceError(
-    parsed?.error ?? fallback,
+    modelHint ? appendBrowserToolModelHint(message, modelHint) : message,
     parsed && "reason" in parsed ? parsed : undefined,
     status,
   );
@@ -126,9 +129,19 @@ function withLoopbackBrowserAuth(
   });
 }
 
-const BROWSER_TOOL_MODEL_HINT =
+const BROWSER_TOOL_PERSISTENT_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
+const BROWSER_TOOL_TRANSIENT_MODEL_HINT =
+  "This may be a transient browser error. Retry the browser tool once. " +
+  "If the same error persists, use an alternative approach or inform the user that the browser is currently unavailable.";
+
+// Retry history already lives in the model transcript. Keep this classifier stateless so one
+// session's transient failure cannot suppress browser retries in another session.
+const BROWSER_TRANSIENT_NETWORK_ERROR_RE =
+  /\b(?:ECONNRESET|ECONNABORTED|ENETRESET|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|SOCKET))\b|fetch failed|network error|other side closed|socket (?:hang up|terminated)|connection (?:reset|aborted|timed out)/i;
+const BROWSER_PERSISTENT_FAILURE_RE =
+  /\bECONNREFUSED\b|connection refused|browser control (?:is )?(?:disabled|not enabled)|invalid (?:auth|authentication|credentials|password|token)|authentication (?:failed|required)|unauthorized/i;
 
 const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 // `response/body` supports 5M characters; 32 MiB covers worst-case JSON escaping while staying bounded.
@@ -185,36 +198,85 @@ function normalizeErrorMessage(err: unknown): string {
   return String(err);
 }
 
-function appendBrowserToolModelHint(message: string): string {
-  if (message.includes(BROWSER_TOOL_MODEL_HINT)) {
-    return message;
-  }
-  return `${message} ${BROWSER_TOOL_MODEL_HINT}`;
+function appendBrowserToolModelHint(message: string, hint: string): string {
+  const messageWithoutHints = message
+    .replaceAll(BROWSER_TOOL_PERSISTENT_MODEL_HINT, "")
+    .replaceAll(BROWSER_TOOL_TRANSIENT_MODEL_HINT, "")
+    .trim();
+  return `${messageWithoutHints} ${hint}`;
 }
 
-type BrowserFetchFailureKind = "timeout" | "aborted" | "persistent";
+type BrowserFetchFailureKind = "timeout" | "aborted" | "transient-network" | "persistent";
 
 function resolveBrowserFetchTimeoutMs(timeoutMs: number | undefined): number {
   return resolveTimerTimeoutMs(timeoutMs, 5000);
 }
 
 function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {
-  const msg = normalizeErrorMessage(err);
-  const msgLower = normalizeLowercaseStringOrEmpty(msg);
+  const directCode = extractErrorCode(err);
+  const formatted = formatErrorMessage(err);
+  const detail = directCode ? `${formatted} | ${directCode}` : formatted;
+  const detailLower = normalizeLowercaseStringOrEmpty(detail);
   const nameLower = err instanceof Error ? normalizeLowercaseStringOrEmpty(err.name) : "";
+  if (nameLower === "aborterror") {
+    return "aborted";
+  }
+  if (BROWSER_PERSISTENT_FAILURE_RE.test(detail)) {
+    return "persistent";
+  }
   const looksLikeTimeout =
-    nameLower.includes("timeout") || msgLower.includes("timed out") || msgLower.includes("timeout");
+    nameLower.includes("timeout") ||
+    detailLower.includes("timed out") ||
+    detailLower.includes("timeout");
   if (looksLikeTimeout) {
     return "timeout";
   }
+  if (BROWSER_TRANSIENT_NETWORK_ERROR_RE.test(detail)) {
+    return "transient-network";
+  }
   const looksLikeAbort =
-    nameLower === "aborterror" ||
-    msgLower.includes("aborterror") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("cancelled") ||
-    msgLower.includes("canceled");
+    detailLower.includes("aborterror") ||
+    detailLower.includes("aborted") ||
+    detailLower.includes("abort") ||
+    detailLower.includes("cancelled") ||
+    detailLower.includes("canceled");
   return looksLikeAbort ? "aborted" : "persistent";
+}
+
+function isPersistentBrowserServiceFailure(message: string, status: number | undefined): boolean {
+  return status === 401 || BROWSER_PERSISTENT_FAILURE_RE.test(message);
+}
+
+function resolveBrowserServiceModelHint(
+  message: string,
+  status: number | undefined,
+): string | undefined {
+  if (message.includes(BROWSER_TOOL_PERSISTENT_MODEL_HINT)) {
+    return BROWSER_TOOL_PERSISTENT_MODEL_HINT;
+  }
+  if (message.includes(BROWSER_TOOL_TRANSIENT_MODEL_HINT)) {
+    return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
+  }
+  if (isPersistentBrowserServiceFailure(message, status)) {
+    return BROWSER_TOOL_PERSISTENT_MODEL_HINT;
+  }
+  if (status === 408 || status === 504) {
+    return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
+  }
+  if (status === undefined || status < 500 || status > 599) {
+    return undefined;
+  }
+  const kind = classifyBrowserFetchFailure(new Error(message));
+  return kind === "timeout" || kind === "transient-network"
+    ? BROWSER_TOOL_TRANSIENT_MODEL_HINT
+    : undefined;
+}
+
+function resolveBrowserToolModelHint(kind: BrowserFetchFailureKind): string | undefined {
+  if (kind === "timeout" || kind === "transient-network") {
+    return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
+  }
+  return kind === "persistent" ? BROWSER_TOOL_PERSISTENT_MODEL_HINT : undefined;
 }
 
 async function discardResponseBody(res: Response): Promise<void> {
@@ -230,8 +292,8 @@ function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const kind = classifyBrowserFetchFailure(err);
   const ownership = resolveDispatcherBrowserControlOwnership(url);
   const operatorHint = resolveBrowserFetchOperatorHint(url, { ownership });
-  const suffix =
-    kind === "persistent" ? `${operatorHint} ${BROWSER_TOOL_MODEL_HINT}` : operatorHint;
+  const modelHint = resolveBrowserToolModelHint(kind);
+  const suffix = modelHint ? `${operatorHint} ${modelHint}` : operatorHint;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
 }
@@ -242,7 +304,7 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const kind = classifyBrowserFetchFailure(err);
   if (kind === "timeout") {
     return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`,
       err instanceof Error ? { cause: err } : undefined,
     );
   }
@@ -252,9 +314,16 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
       err instanceof Error ? { cause: err } : undefined,
     );
   }
+  if (kind === "transient-network") {
+    return new Error(
+      `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg}) ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
   return new Error(
     appendBrowserToolModelHint(
       `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
+      BROWSER_TOOL_PERSISTENT_MODEL_HINT,
     ),
     err instanceof Error ? { cause: err } : undefined,
   );
@@ -298,7 +367,7 @@ async function fetchHttpJson<T>(
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         await discardResponseBody(res);
         throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_PERSISTENT_MODEL_HINT}`,
         );
       }
       // Overflow cancels the stream and releases its reader lock before the guarded fetch below.
@@ -420,7 +489,7 @@ export async function fetchBrowserJson<T>(
       if (isRateLimitStatus(result.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_PERSISTENT_MODEL_HINT}`,
         );
       }
       throw browserServiceErrorFromPayload(result.body, `HTTP ${result.status}`, result.status);

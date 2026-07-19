@@ -2092,6 +2092,27 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("runs the native state schema guard for either contract owner", () => {
+    for (const changedPath of [
+      "apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift",
+      "src/state/openclaw-state-db-contract.ts",
+    ]) {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable: false,
+      });
+
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "native state schema version guard",
+          bin: "node",
+          args: ["scripts/check-native-state-schema-version.mjs"],
+        }),
+      );
+    }
+  });
+
   it("runs macOS app CI tests for macOS packaging scripts and owner tests", () => {
     for (const changedPath of [
       "scripts/codesign-mac-app.sh",

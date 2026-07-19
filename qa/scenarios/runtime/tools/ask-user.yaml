@@ -1,0 +1,140 @@
+title: Ask user structured question roundtrip
+
+scenario:
+  id: runtime-tool-ask-user
+  surface: runtime-tool
+  coverage:
+    primary:
+      - tools.ask-user
+    secondary:
+      - channels.qa-channel
+      - gateway.chat-apis
+  objective: Verify the agent can ask three structured questions, pause, receive mixed answer shapes, and resume with the selected values.
+  successCriteria:
+    - The model calls ask_user exactly once with single-select, multi-select, and free-text-capable questions.
+    - QA Channel delivers the structured prompt while the agent run remains blocked.
+    - Gateway resolution resumes the same run with the canonical selected values.
+    - The final reply proves the agent received the selected single, multiple, and free-text answers.
+  docsRefs:
+    - docs/tools/ask-user.md
+    - docs/channels/qa-channel.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/agents/tools/ask-user-tool.ts
+    - src/gateway/server-methods/question.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-tooling.ts
+    - extensions/qa-lab/src/suite-runtime-agent-process.ts
+  execution:
+    kind: flow
+    summary: Send an inbound chat turn, observe its ask_user prompt through QA Channel, resolve three answer shapes, and verify the resumed final reply.
+    config:
+      conversationId: qa-ask-user-roundtrip
+      promptNeedle: Where should this deploy?
+      expectedFinal: ASK-USER-ROUNDTRIP-OK | deploy=Production | checks=Unit,E2E | note=night-shift
+      prompt: >-
+        Structured question QA check. Call ask_user exactly once with these three questions:
+        deploy_target asks "Where should this deploy?" with Staging (Recommended) first and Production second;
+        checks asks "Which checks should run?" with Unit (Recommended), E2E, and Lint and allows multiple selections;
+        release_note asks "Which release note label should be used?" with Routine (Recommended) and Urgent.
+        Use a 60 second timeout. After the tool returns, read its actual answers and reply on one line
+        using this format: `ASK-USER-ROUNDTRIP-OK | deploy=<deploy_target> | checks=<checks comma-separated without spaces or Recommended suffixes> | note=<release_note>`.
+        Never invent or predict the answers.
+        QA routing marker: tool search qa check target=ask_user.
+
+flow:
+  steps:
+    - name: asks, blocks, resolves, and resumes with structured answers
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            senderId:
+              ref: config.conversationId
+            senderName: QA Operator
+            text:
+              ref: config.prompt
+        - call: waitForCondition
+          saveAs: pendingQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('question.list', {})).questions.find((question) => question.status === 'pending' && question.questions.some((entry) => entry.question === config.promptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - call: waitForCondition
+          saveAs: promptMessage
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.includes(config.promptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - assert:
+            expr: "pendingQuestion.questions.length === 3 && pendingQuestion.questions[0].id === 'deploy_target' && pendingQuestion.questions[1].multiSelect === true && pendingQuestion.questions.every((question) => question.isOther === true)"
+            message:
+              expr: "`ask_user question shape drifted: ${JSON.stringify(pendingQuestion.questions)}`"
+        - set: resolution
+          value:
+            expr: >-
+              env.gateway.call('question.resolve', {
+                id: pendingQuestion.id,
+                answers: {
+                  answers: {
+                    deploy_target: { answers: ['Production'] },
+                    checks: { answers: ['Unit (Recommended)', 'E2E'] },
+                    release_note: { answers: ['night-shift'] },
+                  },
+                },
+                resolvedBy: 'qa-lab',
+              })
+        - assert:
+            expr: "resolution.status === 'answered'"
+            message:
+              expr: "`ask_user resolution failed: ${JSON.stringify(resolution)}`"
+        - call: waitForCondition
+          saveAs: resumedProviderRequest
+          args:
+            - lambda:
+                async: true
+                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.toolOutput ?? '').includes('Deploy:')) : true"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - assert:
+            expr: "!env.mock || (String(resumedProviderRequest.toolOutput).includes('Production') && String(resumedProviderRequest.toolOutput).includes('Unit (Recommended)') && String(resumedProviderRequest.toolOutput).includes('E2E') && String(resumedProviderRequest.toolOutput).includes('night-shift'))"
+            message:
+              expr: "`ask_user answers did not reach the resumed provider request: ${JSON.stringify({ toolOutput: resumedProviderRequest?.toolOutput })}`"
+        - call: waitForCondition
+          saveAs: finalMessage
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate !== promptMessage && candidate.text === config.expectedFinal)"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - assert:
+            expr: "finalMessage.text === config.expectedFinal"
+            message:
+              expr: "`ask_user resumed with unexpected final text: ${JSON.stringify(finalMessage.text)}`"
+        - set: terminalQuestion
+          value:
+            expr: "env.gateway.call('question.get', { id: pendingQuestion.id })"
+        - assert:
+            expr: "resolution.status === 'answered' && terminalQuestion.question.status === 'answered'"
+            message:
+              expr: "`ask_user question did not terminalize as answered: ${JSON.stringify({ resolution, terminalQuestion })}`"
+      detailsExpr: finalMessage.text

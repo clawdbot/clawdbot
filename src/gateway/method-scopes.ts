@@ -1,14 +1,17 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
+import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
   isCoreGatewayMethodClassified,
   isCoreNodeGatewayMethod,
   isDynamicOperatorGatewayMethod,
   resolveCoreOperatorGatewayMethodScope,
 } from "./methods/core-descriptors.js";
+import { isForbiddenBrowserProxyMutation } from "./node-browser-proxy-policy.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -85,6 +88,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "label",
   "category",
+  "icon",
   "pinned",
   "archived",
   "unread",
@@ -159,6 +163,33 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   // a single static method scope.
   if (method === "plugins.sessionAction") {
     return resolveSessionActionLeastPrivilegeScopes(params);
+  }
+  if (method === "agent") {
+    const message =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? (params as { message?: unknown }).message
+        : undefined;
+    return isAgentSessionResetCommand(message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
+  }
+  if (method === "node.invoke") {
+    const record =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? (params as { command?: unknown; params?: unknown })
+        : undefined;
+    const command = record?.command;
+    // Invalid persistent-profile mutations must reach the handler's precise fail-closed
+    // rejection instead of being disguised as an admin-scope failure.
+    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(record?.params)) {
+      return [WRITE_SCOPE];
+    }
+    return isAdminOnlyNodeInvokeCommand(command) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
+  }
+  if (method === "talk.config") {
+    const includeSecrets =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? (params as { includeSecrets?: unknown }).includeSecrets
+        : undefined;
+    return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScopes(params);
@@ -236,40 +267,26 @@ export function authorizeOperatorScopesForMethod(
     return { allowed: true };
   }
   if (isDynamicOperatorGatewayMethod(method)) {
-    if (method === "sessions.create") {
-      const missingScope = findMissingOperatorScope(
-        resolveSessionsCreateRequiredScopes(params),
-        scopes,
-      );
-      return missingScope ? { allowed: false, missingScope } : { allowed: true };
-    }
-    if (method === "sessions.patch") {
-      const missingScope = findMissingOperatorScope(
-        resolveSessionsPatchRequiredScopes(params),
-        scopes,
-      );
-      return missingScope ? { allowed: false, missingScope } : { allowed: true };
-    }
-    if (method === "sessions.delete") {
-      const missingScope = findMissingOperatorScope(
-        resolveSessionsDeleteRequiredScopes(params),
-        scopes,
-      );
-      return missingScope ? { allowed: false, missingScope } : { allowed: true };
-    }
-    const registeredScopes = resolveSessionActionRegisteredScopes(params);
-    if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
-      const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
-      const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
-      if (!pluginId || !actionId) {
-        // Malformed dynamic params cannot be matched to a plugin action. Any valid operator scope
-        // may proceed so the handler can return the precise validation error.
-        return scopes.some((scope) => isOperatorScope(scope))
-          ? { allowed: true }
-          : { allowed: false, missingScope: WRITE_SCOPE };
+    if (method === "plugins.sessionAction") {
+      const registeredScopes = resolveSessionActionRegisteredScopes(params);
+      if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
+        const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
+        const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+        if (!pluginId || !actionId) {
+          // Malformed dynamic params cannot be matched to a plugin action. Any valid operator scope
+          // may proceed so the handler can return the precise validation error.
+          return scopes.some((scope) => isOperatorScope(scope))
+            ? { allowed: true }
+            : { allowed: false, missingScope: WRITE_SCOPE };
+        }
       }
+      const missingScope = findMissingOperatorScope(registeredScopes ?? [WRITE_SCOPE], scopes);
+      return missingScope ? { allowed: false, missingScope } : { allowed: true };
     }
-    const missingScope = findMissingOperatorScope(registeredScopes ?? [WRITE_SCOPE], scopes);
+    const missingScope = findMissingOperatorScope(
+      resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params),
+      scopes,
+    );
     return missingScope ? { allowed: false, missingScope } : { allowed: true };
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;

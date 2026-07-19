@@ -25,6 +25,7 @@ import {
   type QaCliBackendAuthMode,
   type QaGatewayChildCommand,
 } from "./gateway-child.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import type {
   QaLabLatestReport,
   QaLabScenarioOutcome,
@@ -274,7 +275,9 @@ async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
         auditContext: "qa-lab-suite-wait-for-lab-ready",
       });
       try {
-        if (response.ok) {
+        const ready = response.ok;
+        await discardIgnoredResponseBody(response);
+        if (ready) {
           return;
         }
       } finally {

@@ -188,6 +188,7 @@ const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) =
       models: {
         [`${params.provider}/${params.modelId}`]: { alias: params.alias },
       },
+      modelPolicy: { allow: [`${params.provider}/${params.modelId}`] },
     },
   },
   models: {
@@ -292,6 +293,7 @@ describe("gateway server models + voicewake", () => {
           defaults: {
             model: { primary: options.primary },
             models: options.models,
+            modelPolicy: { allow: Object.keys(options.models) },
           },
         },
       },
@@ -635,7 +637,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view still prefers agents.defaults.models allowlist", async () => {
+  test("models.list configured view prefers the explicit model policy", async () => {
     await withModelsConfig(
       {
         agents: {
@@ -644,6 +646,7 @@ describe("gateway server models + voicewake", () => {
             models: {
               "openai/gpt-test-z": {},
             },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
           },
         },
         models: {
@@ -669,7 +672,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list all view bypasses agents.defaults.models allowlist", async () => {
+  test("models.list all view bypasses the explicit model policy", async () => {
     await withModelsConfig(
       {
         agents: {
@@ -678,6 +681,7 @@ describe("gateway server models + voicewake", () => {
             models: {
               "openai/gpt-test-z": {},
             },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
           },
         },
       },

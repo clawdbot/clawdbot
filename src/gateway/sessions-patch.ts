@@ -8,6 +8,7 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  normalizeSessionIconInput,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
@@ -395,6 +396,19 @@ export async function projectSessionsPatchEntry(params: {
         return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
       }
       next.category = trimmed;
+    }
+  }
+
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null) {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const normalized = normalizeSessionIconInput(raw);
+      if (!normalized.ok) {
+        return invalid(`invalid icon: ${normalized.reason}`);
+      }
+      next.icon = normalized.value;
     }
   }
 

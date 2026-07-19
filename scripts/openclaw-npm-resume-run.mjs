@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_PUBLISH_REF_PATTERN = /^release-publish\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
+// Resume checks run during release recovery, so keep enough headroom for GitHub
+// latency while preventing one stalled read from consuming the workflow budget.
+const GH_COMMAND_TIMEOUT_MS = 60_000;
 
 function fail(message) {
   throw new Error(message);
@@ -100,14 +103,17 @@ export function validateOpenClawNpmResumeRun({
   };
 }
 
-function defaultRunGh(args) {
-  return execFileSync("gh", args, {
+export function runOpenClawNpmResumeGh(args, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl("gh", args, {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     maxBuffer: 32 * 1024 * 1024,
+    timeout: GH_COMMAND_TIMEOUT_MS,
   });
 }
 
-export function resolveOpenClawNpmResumeRun({ repo, runId, runGh = defaultRunGh }) {
+export function resolveOpenClawNpmResumeRun({ repo, runId, runGh = runOpenClawNpmResumeGh }) {
   if (!/^[1-9][0-9]*$/u.test(runId)) {
     fail("OpenClaw npm resume run id must be a positive integer.");
   }

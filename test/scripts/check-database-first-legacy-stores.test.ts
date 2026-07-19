@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectDatabaseFirstNativeLegacyStoreViolations,
   collectDatabaseFirstLegacyStoreSourceFiles,
   collectDatabaseFirstLegacyStoreViolations,
 } from "../../scripts/check-database-first-legacy-stores.mjs";
@@ -313,6 +314,23 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired core audit JSONL stores", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.appendFile(path.join(stateDir, "logs", "config-audit.jsonl"), "{}\\n");
+        await fs.appendFile(path.join(stateDir, "audit", "system-agent.jsonl"), "{}\\n");
+      `,
+      "src/infra/audit-writer.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
   });
 
   it("flags runtime writes to retired managed-image record JSON", () => {
@@ -8688,6 +8706,47 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([]);
+  });
+
+  it("blocks runtime writes to the retired device identity file", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs";
+        fs.writeFileSync(path.join(stateDir, "identity/device.json"), "{}\\n");
+      `,
+      "src/infra/device-identity.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
+  });
+
+  it("allows only the device identity migration owner to retire its legacy source", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs";
+        fs.renameSync(
+          path.join(stateDir, "identity/device.json"),
+          path.join(stateDir, "identity/device.json.doctor-importing"),
+        );
+      `,
+      "src/infra/state-migrations.device-identity.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps legacy PortGuardian filenames inside the native migration owner", () => {
+    const runtimeViolations = collectDatabaseFirstNativeLegacyStoreViolations(
+      'let path = root.appendingPathComponent("port-guard.json")\n',
+      "apps/macos/Sources/OpenClaw/PortGuardian.swift",
+    );
+    const migrationViolations = collectDatabaseFirstNativeLegacyStoreViolations(
+      'let path = root.appendingPathComponent("port-guard.json")\n',
+      "apps/macos/Sources/OpenClaw/PortGuardianRecordStore.swift",
+    );
+
+    expect(runtimeViolations).toEqual([{ kind: "legacy PortGuardian file reference", line: 1 }]);
+    expect(migrationViolations).toEqual([]);
   });
 
   it("allows the workspace Doctor migration owner to claim legacy sidecars", () => {

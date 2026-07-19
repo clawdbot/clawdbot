@@ -100,7 +100,7 @@ struct RootTabsPresentationTests {
         let destinationIDs = RootTabs.SidebarDestination.allCases.map(\.rawValue)
 
         #expect(groups.map(\.title) == ["CHAT", "CONTROL", "SETTINGS", "REFERENCE"])
-        #expect(groups[0].destinations.map(\.rawValue) == ["chat", "talk"])
+        #expect(groups[0].destinations.map(\.rawValue) == ["chat"])
         #expect(groups[1].destinations == [
             .overview,
             .activity,
@@ -119,7 +119,6 @@ struct RootTabsPresentationTests {
         #expect(groups[3].destinations == [.docs])
         #expect(destinationIDs == [
             "chat",
-            "talk",
             "overview",
             "activity",
             "agents",
@@ -157,15 +156,14 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.SidebarDestination.gateway.sidebarTitle == "Connection")
     }
 
-    @Test func `phone hub uses root tabs only for native chat agent and gateway`() {
+    @Test func `phone hub routes only root destinations out of Control`() {
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.chat))
-        #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.talk))
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.agents))
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.gateway))
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.settings))
 
         for destination in RootTabs.SidebarDestination.allCases
-            where destination != .chat && destination != .talk && destination != .agents && destination != .gateway &&
+            where destination != .chat && destination != .agents && destination != .gateway &&
             destination != .settings
         {
             #expect(!RootTabs.shouldOpenRootTabFromPhoneHub(destination))
@@ -197,15 +195,15 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .control)
         #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .control)
         #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "chat"]) == .chat)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .talk)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "talk"]) == .chat)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .chat)
         #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .agent)
         #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
-    @Test func `legacy initial tabs map to matching sidebar destinations`() {
+    @Test func `initial tabs map to matching sidebar destinations`() {
         #expect(RootTabs.defaultSidebarDestination(for: .control) == .overview)
         #expect(RootTabs.defaultSidebarDestination(for: .chat) == .chat)
-        #expect(RootTabs.defaultSidebarDestination(for: .talk) == .talk)
         #expect(RootTabs.defaultSidebarDestination(for: .agent) == .agents)
         #expect(RootTabs.defaultSidebarDestination(for: .settings) == .settings)
     }
@@ -371,6 +369,18 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.transportAgentID(" Main ") == "main")
     }
 
+    @Test func `chat keeps active voice capture stoppable while attachment ownership is pinned`() {
+        #expect(ChatProTab.shouldExposeCaptureControl(
+            isAttachmentOwnerPinned: true,
+            isCaptureInFlight: true))
+        #expect(!ChatProTab.shouldExposeCaptureControl(
+            isAttachmentOwnerPinned: true,
+            isCaptureInFlight: false))
+        #expect(ChatProTab.shouldExposeCaptureControl(
+            isAttachmentOwnerPinned: false,
+            isCaptureInFlight: false))
+    }
+
     @Test func `chat view model rebuilds only when its transport owner changes`() {
         #expect(!ChatProTab.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",
@@ -421,27 +431,6 @@ struct RootTabsPresentationTests {
         let summary = try JSONDecoder().decode(IPadWorkboardDispatchSummary.self, from: payload)
 
         #expect(summary.summaryText == "2 dispatched: 1 started, 1 failed.")
-    }
-
-    @Test func `talk sidebar destination can receive reveal action`() {
-        let action = OpenClawSidebarHeaderAction(
-            systemName: "sidebar.left",
-            accessibilityLabel: .verbatim("Show Sidebar"),
-            action: {})
-        let routed = TalkProTab(headerLeadingAction: action, openSettings: {})
-        let embedded = TalkProTab(
-            headerLeadingAction: action,
-            ownsNavigationStack: false,
-            openSettings: {})
-
-        #expect(routed.headerLeadingAction?.systemName == "sidebar.left")
-        guard case let .verbatim(accessibilityLabel)? = routed.headerLeadingAction?.accessibilityLabel else {
-            Issue.record("expected routed sidebar action to preserve its verbatim accessibility label")
-            return
-        }
-        #expect(accessibilityLabel == "Show Sidebar")
-        #expect(routed.ownsNavigationStack)
-        #expect(!embedded.ownsNavigationStack)
     }
 
     @Test func `settings can use parent navigation stack for sidebar routes`() {

@@ -103,7 +103,10 @@ the credential with the same live test before storing its auth profile. Next
 remains locked until one backend has passed, so the first agent chat cannot
 start without working inference. After that live check passes, OpenClaw becomes
 available to help configure the remaining workspace, Gateway, channels, and
-other optional features; it is also available later under Settings → OpenClaw.
+other optional features. When OpenClaw offers a short list of choices, the app
+shows native option cards; choosing one sends the selection, and **Skip for
+now** always leaves the choice optional. OpenClaw is also available later under
+Settings → OpenClaw.
 </Step>
 <Step title="Import memories (shown when detected)">
 For a local Gateway, onboarding checks the Mac for memories from supported AI

@@ -1353,6 +1353,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
           },
+          // Keep the channel-owned progress lane present even when private-API
+          // typing is unavailable. Fast-mode notices are then consumed here
+          // instead of falling back to a durable iMessage bubble.
+          onToolResult: async () => {
+            await directTypingController?.startTypingLoop();
+          },
           ...(supportsTyping
             ? {
                 onToolStart: async () => {

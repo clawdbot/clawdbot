@@ -35,7 +35,18 @@
   --input: #1e2028;
   --ring: #ff5c5c;
 
-  /* Accent - Punchy signature red */
+  /*
+   * Accent - Punchy signature red
+   *
+   * WCAG 2.1 AA audit (bg = #0e1015, relative luminance ≈ 0.005):
+   *   --accent #ff5c5c on bg: 6.3:1 AA text ✓
+   *   --primary-foreground #ffffff on #d13c3c button: 4.75:1 AA ✓
+   *   --primary-foreground #ffffff on #c22e2e hover: 5.64:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
+   *   --card/--popover/--secondary foreground pairs: 15.4:1 / 14.9:1 / 15.4:1 ✓
+   *   --selection-fg #ffffff on --selection-bg #005fcc: 6.0:1 AA ✓
+   */
   --accent: #ff5c5c;
   --accent-hover: #ff7070;
   --accent-muted: #ff5c5c;
@@ -44,7 +55,8 @@
   --accent-glow: rgba(255, 92, 92, 0.2);
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
-  --primary: #ff5c5c;
+  --primary: #d13c3c;
+  --primary-hover: #c22e2e;
   --primary-foreground: #ffffff;
 
   /* Secondary */
@@ -134,6 +146,12 @@
   --z-dropdown: 100;
 
   color-scheme: dark;
+}
+
+/* The claw family deepens only the text-bearing destructive fill. */
+:root[data-theme="dark"] {
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 }
 
 /* Light theme tokens apply to every light-mode family. */
@@ -241,7 +259,10 @@
    * WCAG 2.1 AA audit (bg = #080808, relative luminance ≈ 0.003):
    *   --accent #e5243b  L ≈ 0.118  contrast ≈ 5.8:1  AA text ✓
    *   --accent-hover #f03e52  L ≈ 0.163  contrast ≈ 7.2:1  ✓
-   *   --primary-foreground #fafafa on #e5243b button: 4.6:1 AA ✓
+   *   --primary-foreground #fafafa on #d92a3f button: 4.62:1 AA ✓
+   *   --primary-foreground #fafafa on #c22537 hover: 5.57:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   focus-ring at 70% opacity: ≈ 3.4:1 against bg ✓ (non-text 3:1 required)
    */
   --ring: #e5243b;
@@ -250,8 +271,13 @@
   --accent-muted: #e5243b;
   --accent-subtle: rgba(229, 36, 59, 0.12);
   --accent-glow: rgba(229, 36, 59, 0.24);
-  --primary: #e5243b;
+  --primary: #d92a3f;
+  --primary-hover: #c22537;
   --primary-foreground: #fafafa;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 
   /* Focus — crimson ring */
   --focus: rgba(229, 36, 59, 0.2);
@@ -378,6 +404,9 @@
    *   --accent #b47840  L ≈ 0.235  contrast ≈ 5.0:1  AA text ✓  (floor: #a8703c → 4.4:1, fails)
    *   --accent-hover #c8885a  L ≈ 0.306  contrast ≈ 6.3:1  ✓
    *   --primary-foreground #1a1210 on #b47840 button: 5.0:1 AA ✓
+   *   --primary-foreground #1a1210 on #c8885a hover: 6.26:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   focus-ring at 80% opacity: ≈ 3.5:1 against bg ✓ (non-text 3:1 required)
    */
   --ring: #b47840;
@@ -388,6 +417,10 @@
   --accent-glow: rgba(180, 120, 64, 0.24);
   --primary: #b47840;
   --primary-foreground: #1a1210;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 
   /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
   --focus: rgba(180, 120, 64, 0.2);
@@ -632,6 +665,13 @@ textarea,
 select {
   font: inherit;
   color: inherit;
+}
+
+/* One accent for every native check control; without this, surfaces that
+   forget a local override render the browser's stock blue. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
 }
 
 input,

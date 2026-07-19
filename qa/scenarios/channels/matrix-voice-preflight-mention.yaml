@@ -5,19 +5,39 @@ scenario:
   coverage:
     primary:
       - channels.media-rich-content
+  gatewayConfigPatch:
+    tools:
+      media:
+        audio:
+          enabled: true
+          echoTranscript: true
+          models:
+            - provider: openai
+              model: gpt-4o-transcribe
+          prompt: MATRIX_QA_VOICE_PREFLIGHT_TRIGGER
+    messages:
+      groupChat:
+        mentionPatterns:
+          - 'matrix\W+qa\W+voice\W+pre[ -]?flight\W+ok(?:ay)?'
   execution:
     profiles: { "matrix:all": 54, "matrix:media": 3 }
     kind: flow
     channel: matrix
-    providerMode: live-frontier
-    timeoutMs: 180000
+    providerMode: mock-openai
+    timeoutMs: 90000
     retryCount: 0
     config:
+      matrixRequireCanary: true
       matrixConfigOverrides:
         audio:
           enabled: true
+          echoTranscript: true
+          models:
+            - provider: openai
+              model: gpt-4o-transcribe
+          prompt: MATRIX_QA_VOICE_PREFLIGHT_TRIGGER
         groupMentionPatterns:
-          - \S
+          - 'matrix\W+qa\W+voice\W+pre[ -]?flight\W+ok(?:ay)?'
       matrixTopology:
         defaultRoomKey: main
         rooms:

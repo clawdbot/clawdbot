@@ -37,12 +37,30 @@ import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
+  createCodexSessionGenerationSupersededError,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+
+function applyStoredBindingPermissions(params: {
+  appServer: ReturnType<typeof resolveCodexBindingAppServerConnection>["appServer"];
+  binding: CodexAppServerThreadBinding | undefined;
+  execPolicyTouched: boolean;
+}) {
+  if (params.execPolicyTouched || params.binding?.connectionScope === "supervision") {
+    return params.appServer;
+  }
+  // `/codex permissions` owns per-session policy. Explicit OpenClaw exec config
+  // and supervised private connections remain authoritative when present.
+  return {
+    ...params.appServer,
+    approvalPolicy: params.binding?.approvalPolicy ?? params.appServer.approvalPolicy,
+    sandbox: params.binding?.sandbox ?? params.appServer.sandbox,
+  };
+}
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -119,9 +137,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       config: params.config,
     });
     if (!reclaimed) {
-      throw new Error(
-        `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
-      );
+      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
     }
     startupBinding = await bindingStore.read(bindingIdentity);
   }
@@ -136,16 +152,20 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
   }
   const resolveRuntimeOptionsForBinding = (selection: { modelProvider?: string; model?: string }) =>
-    resolveCodexBindingAppServerConnection({
+    applyStoredBindingPermissions({
+      appServer: resolveCodexBindingAppServerConnection({
+        binding: startupBinding,
+        pluginConfig,
+        execPolicy,
+        modelProvider: selection.modelProvider,
+        model: selection.model,
+        config: params.config,
+        agentDir,
+        openClawSandboxActive: sandbox?.enabled === true,
+      }).appServer,
       binding: startupBinding,
-      pluginConfig,
-      execPolicy,
-      modelProvider: selection.modelProvider,
-      model: selection.model,
-      config: params.config,
-      agentDir,
-      openClawSandboxActive: sandbox?.enabled === true,
-    }).appServer;
+      execPolicyTouched: execPolicy.touched,
+    });
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
   const preparedAuthRoute = usesSupervisionConnection
@@ -328,16 +348,20 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     modelProvider?: string;
     model?: string;
   }) =>
-    resolveCodexBindingAppServerConnection({
+    applyStoredBindingPermissions({
+      appServer: resolveCodexBindingAppServerConnection({
+        binding: mutable.startupBinding,
+        pluginConfig,
+        execPolicy,
+        modelProvider: selection.modelProvider,
+        model: selection.model,
+        config: params.config,
+        agentDir,
+        openClawSandboxActive: sandbox?.enabled === true,
+      }).appServer,
       binding: mutable.startupBinding,
-      pluginConfig,
-      execPolicy,
-      modelProvider: selection.modelProvider,
-      model: selection.model,
-      config: params.config,
-      agentDir,
-      openClawSandboxActive: sandbox?.enabled === true,
-    }).appServer;
+      execPolicyTouched: execPolicy.touched,
+    });
   return {
     params,
     options,

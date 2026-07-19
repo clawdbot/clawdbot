@@ -24,6 +24,17 @@ export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 /** Image compression/detail preference used before sending image inputs to models. */
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+/** Canonical thinking levels accepted by agent defaults and compaction overrides. */
+export type AgentThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max"
+  | "ultra";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -44,6 +55,11 @@ export type AgentModelEntryConfig = {
   agentRuntime?: AgentRuntimePolicyConfig;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+};
+
+export type AgentModelPolicyConfig = {
+  /** Model refs allowed for session/run overrides. Empty or omitted allows any model. */
+  allow?: string[];
 };
 
 export type AgentModelListConfig = {
@@ -258,6 +274,8 @@ export type AgentDefaultsConfig = {
   pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Explicit model override policy. Empty or omitted allow permits any model. */
+  modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
@@ -354,16 +372,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?:
-    | "off"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "adaptive"
-    | "max"
-    | "ultra";
+  thinkingDefault?: AgentThinkingLevel;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**
@@ -586,6 +595,8 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
+  /** Override the session thinking level for embedded OpenClaw compaction summaries. */
+  thinkingLevel?: AgentThinkingLevel;
   /** Embedded OpenClaw reserve target before floor and context-window caps. */
   reserveTokens?: number;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */

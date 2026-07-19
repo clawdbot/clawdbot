@@ -132,9 +132,10 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
   });
 
-  it("keeps QMD session export off by default", () => {
+  it("keeps QMD session export off by default when DM isolation is configured", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
+      session: { dmScope: "per-peer" },
       memory: { backend: "qmd", qmd: {} },
     } as OpenClawConfig;
 

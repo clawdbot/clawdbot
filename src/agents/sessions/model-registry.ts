@@ -208,6 +208,7 @@ const ModelsConfigSchema = Type.Object({
 const validateModelsConfig = Compile(ModelsConfigSchema);
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
+type MaxTokensSource = "configured" | "discovered";
 
 function formatValidationPath(error: TLocalizedValidationError): string {
   if (error.keyword === "required") {
@@ -451,7 +452,12 @@ export class ModelRegistry {
         }
       }
 
-      const models = this.parseModels(configForUse);
+      // Root models.json rows are author-owned; generated plugin shards are
+      // catalog-owned. Preserve that distinction before runtime resolution.
+      const models = this.parseModels(
+        configForUse,
+        options.requireGeneratedCatalog === true ? "discovered" : "configured",
+      );
       const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
         for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
@@ -522,7 +528,7 @@ export class ModelRegistry {
     }
   }
 
-  private parseModels(config: ModelsConfig): Model[] {
+  private parseModels(config: ModelsConfig, maxTokensSource: MaxTokensSource): Model[] {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
@@ -566,6 +572,7 @@ export class ModelRegistry {
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
+          ...(modelDef.maxTokens !== undefined ? { maxTokensSource } : {}),
           params: modelDef.params,
           headers: undefined,
           compat,

@@ -57,4 +57,39 @@ describe("forced worker environment abandonment", () => {
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
+
+  it("releases a pending worker claim when its workspace is already gone", async () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const { environmentId } = createDispatchEnvironmentFixtures();
+    const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = store.claimTurn({
+      ...REQUEST,
+      claimId: "forced-missing-workspace-claim",
+      runId: "forced-missing-workspace-run",
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+    store.markWorkspaceResultPending(claim);
+    store.recordStagedWorkspaceResult(
+      claim,
+      "refs/openclaw/worker-results/forced-missing-workspace-claim",
+    );
+
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId,
+      resolveWorkspacePath: async () => {
+        throw new Error("session-owned managed worktree is missing");
+      },
+    });
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+  });
 });

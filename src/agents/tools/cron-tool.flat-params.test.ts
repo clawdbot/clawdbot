@@ -119,6 +119,24 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("recovers a flat trigger when adding a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-add", {
+      action: "add",
+      name: "watcher",
+      schedule: { kind: "every", everyMs: 60_000 },
+      message: "report the change",
+      trigger: { script: "json({ fire: false })", once: true },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      trigger?: { script?: string; once?: boolean };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.trigger).toEqual({ script: "json({ fire: false })", once: true });
+  });
+
   it("rejects flat on-exit schedule shorthand for add", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
@@ -242,6 +260,43 @@ describe("cron tool flat-params", () => {
       tz: "America/Los_Angeles",
       staggerMs: 30_000,
     });
+  });
+
+  it("recovers a flat trigger when updating a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-update", {
+      action: "update",
+      jobId: "job-trigger",
+      trigger: { script: "json({ fire: true })", once: false },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { trigger?: { script?: string; once?: boolean } };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({
+      id: "job-trigger",
+      patch: { trigger: { script: "json({ fire: true })", once: false } },
+    });
+  });
+
+  it("recovers a flat trigger clear when updating a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-clear", {
+      action: "update",
+      jobId: "job-trigger",
+      trigger: null,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { trigger?: null };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({ id: "job-trigger", patch: { trigger: null } });
   });
 
   it("trims trailing whitespace from recognized job object keys (#95407)", async () => {

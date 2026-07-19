@@ -174,7 +174,9 @@ async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Pr
 describe("watch node HTTP transport", () => {
   it("rejects capabilities and identities outside the bounded watch surface", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-surface-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -231,7 +233,9 @@ describe("watch node HTTP transport", () => {
 
   it("accepts a supported notification permission set to false", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-permissions-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -258,7 +262,9 @@ describe("watch node HTTP transport", () => {
 
   it("does not let attacker challenges evict another client nonce", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-challenge-eviction-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -295,7 +301,9 @@ describe("watch node HTTP transport", () => {
 
   it("requires an authenticated disconnect and emits one lifecycle teardown", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-disconnect-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -353,7 +361,9 @@ describe("watch node HTTP transport", () => {
 
   it("rejects empty shadow credentials without consuming the challenge", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-auth-fields-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -397,9 +407,9 @@ describe("watch node HTTP transport", () => {
     };
 
     const abortedBaseDir = await tempDirs.make("openclaw-watch-node-aborted-connect-");
-    const abortedIdentity = loadOrCreateDeviceIdentity(
-      path.join(abortedBaseDir, "watch-identity.json"),
-    );
+    const abortedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(abortedBaseDir, "watch-identity.sqlite"),
+    });
     const abortedBootstrap = await issueDeviceBootstrapToken({
       baseDir: abortedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -433,9 +443,9 @@ describe("watch node HTTP transport", () => {
     }
 
     const completedBaseDir = await tempDirs.make("openclaw-watch-node-completed-connect-");
-    const completedIdentity = loadOrCreateDeviceIdentity(
-      path.join(completedBaseDir, "watch-identity.json"),
-    );
+    const completedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(completedBaseDir, "watch-identity.sqlite"),
+    });
     const completedBootstrap = await issueDeviceBootstrapToken({
       baseDir: completedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -471,7 +481,9 @@ describe("watch node HTTP transport", () => {
 
   it("bootstraps, registers, polls an invoke, and accepts its result", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-http-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,

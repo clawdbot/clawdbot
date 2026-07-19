@@ -100,7 +100,7 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
 type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
 
 /** Emit a lifecycle result and mirror its message to text output. */
-export function emitDaemonActionMessage(params: {
+function emitDaemonActionMessage(params: {
   json: boolean;
   emit: DaemonEmit;
   payload: Omit<DaemonActionResponse, "action">;

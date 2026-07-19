@@ -1,6 +1,4 @@
 import { consume } from "@lit/context";
-import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -13,10 +11,22 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import {
+  buildAddMcpServerPatch,
+  buildRemoveMcpServerPatch,
+  buildToggleMcpServerPatch,
+  MCP_SERVER_NAME_PATTERN,
+  parseMcpTarget,
+  patchMcpServers,
+  summarizeMcpServers,
+  type McpServerSummary,
+  type McpServersPatchBuildResult,
+} from "../../lib/config/mcp-servers.ts";
 import {
   installPlugin,
   loadPluginCatalog,
@@ -41,8 +51,6 @@ import {
   pluginRowKey,
   renderPlugins,
   type InstalledFilter,
-  type McpServerForm,
-  type McpServerSummary,
   type PluginRowMessage,
   type PluginsTab,
 } from "./view.ts";
@@ -87,47 +95,6 @@ function mutationSuccessMessage(
   const warnings = "warnings" in result ? (result.warnings ?? []) : [];
   const lines = [t(key, { name: result.plugin.name }), ...warnings];
   return lines.filter(Boolean).join("\n");
-}
-
-/** Cold MCP server summary mirroring the config page's row projection. */
-function summarizeMcpServers(config: Record<string, unknown> | null): McpServerSummary[] | null {
-  if (!config) {
-    return null;
-  }
-  const servers = asRecord(asRecord(config.mcp)?.servers) ?? {};
-  return Object.entries(servers)
-    .map(([name, value]) => {
-      const server = asRecord(value) ?? {};
-      const url = typeof server.url === "string" ? server.url : "";
-      // Command only, mirroring the config page: stdio args routinely carry
-      // tokens and this surface is visible to read-only operators.
-      const command = typeof server.command === "string" ? server.command : "";
-      const launch = url || command || "missing transport";
-      return {
-        name,
-        enabled: server.enabled !== false,
-        transport: url ? ("http" as const) : command ? ("stdio" as const) : ("invalid" as const),
-        target: url ? redactSensitiveUrlLikeString(launch) : launch,
-        auth: typeof server.auth === "string" ? server.auth : null,
-      };
-    })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-}
-
-const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
-
-function parseMcpTarget(target: string): Record<string, unknown> | null {
-  if (/^https?:\/\//i.test(target)) {
-    // The runtime defaults URL-only servers to SSE; modern MCP endpoints are
-    // streamable HTTP unless the /sse path convention says otherwise.
-    const transport = /\/sse\/?$/i.test(target.split("?")[0] ?? target) ? "sse" : "streamable-http";
-    return { url: target, transport };
-  }
-  const [command, ...args] = target.trim().split(/\s+/u);
-  if (!command) {
-    return null;
-  }
-  return args.length > 0 ? { command, args } : { command };
 }
 
 class PluginsPage extends OpenClawLightDomElement {
@@ -849,15 +816,8 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  /**
-   * Apply one mutation to config.mcp.servers through the shared config seam.
-   * config.patch uses RFC 7396 merge semantics, so `buildPatch` must return a
-   * minimal fragment (with explicit nulls for deletions), never a full config.
-   */
   private async mutateMcpServers(params: {
-    buildPatch: (
-      servers: Readonly<Record<string, unknown>>,
-    ) => { patch: Record<string, unknown> } | { error: string };
+    buildPatch: (servers: Readonly<Record<string, unknown>>) => McpServersPatchBuildResult;
     note: string;
     successText: string;
     busyKey?: string;
@@ -883,24 +843,13 @@ class PluginsPage extends OpenClawLightDomElement {
       return false;
     };
     try {
-      await runtimeConfig.ensureLoaded();
-      const base = resolveEditableSnapshotConfig(runtimeConfig.state.configSnapshot);
-      if (!base) {
-        return fail(t("pluginsPage.mcpConfigUnavailable"));
-      }
-      const servers = asRecord(asRecord(base.mcp)?.servers) ?? {};
-      const built = params.buildPatch(servers);
-      if ("error" in built) {
-        return fail(built.error);
-      }
-      const patched = await runtimeConfig.patch({
-        raw: { mcp: { servers: built.patch } },
+      const result = await patchMcpServers(runtimeConfig, {
+        buildPatch: params.buildPatch,
         note: params.note,
       });
-      if (!patched) {
-        return fail(runtimeConfig.state.lastError ?? t("pluginsPage.mcpConfigUnavailable"));
+      if (!result.ok) {
+        return fail(result.error);
       }
-      await runtimeConfig.refresh();
       this.syncMcpServers();
       this.mcpMessage = { kind: "success", text: params.successText };
       return true;
@@ -917,21 +866,18 @@ class PluginsPage extends OpenClawLightDomElement {
   private async addMcpServer(form: McpServerForm) {
     const name = form.name.trim();
     if (!MCP_SERVER_NAME_PATTERN.test(name)) {
-      this.mcpMessage = { kind: "error", text: t("pluginsPage.mcpNameInvalid") };
+      this.mcpMessage = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;
     }
     const config = parseMcpTarget(form.target);
     if (!config) {
-      this.mcpMessage = { kind: "error", text: t("pluginsPage.mcpTargetInvalid") };
+      this.mcpMessage = { kind: "error", text: t("mcpServers.targetInvalid") };
       return;
     }
     const added = await this.mutateMcpServers({
-      buildPatch: (servers) =>
-        servers[name]
-          ? { error: t("pluginsPage.mcpNameTaken", { name }) }
-          : { patch: { [name]: config } },
+      buildPatch: (servers) => buildAddMcpServerPatch(servers, name, config),
       note: `plugins: add MCP server ${name}`,
-      successText: t("pluginsPage.mcpAddedSuccess", { name }),
+      successText: t("mcpServers.addedSuccess", { name }),
     });
     if (added) {
       this.mcpFormOpen = false;
@@ -940,13 +886,9 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private async toggleMcpServer(name: string, enabled: boolean) {
     await this.mutateMcpServers({
-      buildPatch: (servers) =>
-        servers[name]
-          ? // Enabling deletes the key so the config keeps its enabled-by-default shape.
-            { patch: { [name]: { enabled: enabled ? null : false } } }
-          : { error: t("pluginsPage.mcpMissing", { name }) },
+      buildPatch: (servers) => buildToggleMcpServerPatch(servers, name, enabled),
       note: `plugins: ${enabled ? "enable" : "disable"} MCP server ${name}`,
-      successText: t(enabled ? "pluginsPage.enabledSuccess" : "pluginsPage.disabledSuccess", {
+      successText: t(enabled ? "mcpServers.enabledSuccess" : "mcpServers.disabledSuccess", {
         name,
       }),
     });
@@ -954,12 +896,9 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private async removeMcpServer(name: string) {
     await this.mutateMcpServers({
-      buildPatch: (servers) =>
-        servers[name]
-          ? { patch: { [name]: null } }
-          : { error: t("pluginsPage.mcpMissing", { name }) },
+      buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
       note: `plugins: remove MCP server ${name}`,
-      successText: t("pluginsPage.mcpRemovedSuccess", { name }),
+      successText: t("mcpServers.removedSuccess", { name }),
     });
   }
 
@@ -980,9 +919,7 @@ class PluginsPage extends OpenClawLightDomElement {
           : t("pluginsPage.connectorAddedReady", { name: connector.name });
     const added = await this.mutateMcpServers({
       buildPatch: (servers) =>
-        servers[mcp.serverName]
-          ? { error: t("pluginsPage.mcpNameTaken", { name: mcp.serverName }) }
-          : { patch: { [mcp.serverName]: structuredClone(mcp.config) } },
+        buildAddMcpServerPatch(servers, mcp.serverName, structuredClone(mcp.config)),
       note: `plugins: add MCP connector ${mcp.serverName}`,
       successText,
       busyKey: rowKey,

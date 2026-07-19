@@ -15,6 +15,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
@@ -224,8 +225,7 @@ function mergeConfig(
   agentId: string,
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
-  const rememberAcrossConversations =
-    overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations ?? false;
+  const rememberAcrossConversations = resolveRememberAcrossConversations(cfg, agentId);
   const configuredSessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const sessionMemory = rememberAcrossConversations || configuredSessionMemory;

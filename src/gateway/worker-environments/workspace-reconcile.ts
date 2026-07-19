@@ -1,12 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runCommandBuffered } from "../../process/exec.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import {
-  gitFileMode,
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
@@ -15,6 +12,21 @@ import {
   type WorkerWorkspaceReconciliationJournal,
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
+import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import {
+  prepareNonDirectoryTargets,
+  reconciliationDirectories,
+  reconciliationEntries,
+} from "./workspace-reconcile-derived-paths.js";
+import {
+  absoluteEntryMatches,
+  clearTemporaryWorkspace,
+  directoryContainsOnlyDerivedWorkspaceEntries,
+  directoryContainsOnlyJournalPaths,
+  entryMatches,
+  localPath,
+  readWorkspaceTreeFile,
+} from "./workspace-reconcile-fs.js";
 export {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -30,49 +42,13 @@ const PATCH_TIMEOUT_MS = 10 * 60_000;
 
 class ConcurrentWorkspacePathError extends Error {}
 
-function localPath(root: string, relative: string): string {
-  return path.join(root, ...relative.split("/"));
-}
-
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
-  }
-  return hash.digest("hex");
-}
-
-async function absoluteEntryMatches(
-  absolute: string,
-  entry: WorkerWorkspaceManifestEntry,
-): Promise<boolean> {
-  const stats = await fs.lstat(absolute).catch(() => undefined);
-  if (!stats) {
-    return false;
-  }
-  if (entry.type === "symlink") {
-    return stats.isSymbolicLink() && (await fs.readlink(absolute)) === entry.target;
-  }
-  return (
-    stats.isFile() &&
-    !stats.isSymbolicLink() &&
-    gitFileMode(stats.mode & 0o777) === entry.mode &&
-    stats.size === entry.size &&
-    (await sha256File(absolute)) === entry.sha256
-  );
-}
-
-async function entryMatches(root: string, entry: WorkerWorkspaceManifestEntry): Promise<boolean> {
-  return await absoluteEntryMatches(localPath(root, entry.path), entry);
-}
-
 export async function assertWorkspaceMatchesManifest(params: {
   root: string;
   manifest: WorkerWorkspaceManifest;
   entries?: readonly WorkerWorkspaceManifestEntry[];
 }): Promise<void> {
   const root = await fs.realpath(params.root);
-  for (const entry of params.entries ?? params.manifest.entries) {
+  for (const entry of reconciliationEntries(params.entries ?? params.manifest.entries)) {
     if (!(await entryMatches(root, entry))) {
       throw new ConcurrentWorkspacePathError(
         `Gateway workspace changed after cloud dispatch: ${entry.path}`,
@@ -92,8 +68,12 @@ function changedPaths(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
 ): Set<string> {
-  const baseByPath = new Map(base.entries.map((entry) => [entry.path, entry]));
-  const currentByPath = new Map(current.entries.map((entry) => [entry.path, entry]));
+  const baseByPath = new Map(
+    reconciliationEntries(base.entries).map((entry) => [entry.path, entry]),
+  );
+  const currentByPath = new Map(
+    reconciliationEntries(current.entries).map((entry) => [entry.path, entry]),
+  );
   return new Set(
     [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
       (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
@@ -117,52 +97,32 @@ function hasReplacedBaseEntryAncestor(
   return false;
 }
 
-export function workerWorkspaceTransferPaths(
-  current: WorkerWorkspaceManifest,
-  base: WorkerWorkspaceManifest,
-): string[] {
-  const changed = changedPaths(base, current);
-  const paths = current.entries
-    .filter((entry) => changed.has(entry.path))
-    .map((entry) => {
-      if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-        throw new Error(`Cloud workspace result is too large: ${entry.path}`);
-      }
-      return entry.path;
-    });
-  if (paths.length > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  return paths;
-}
-
 async function preflightWorkspaceApply(params: {
   root: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
 }): Promise<void> {
   await assertWorkspaceMatchesManifest({ root: params.root, manifest: params.base });
-  const baseByPath = new Map(params.base.entries.map((entry) => [entry.path, entry]));
-  const currentByPath = new Map(params.current.entries.map((entry) => [entry.path, entry]));
-  const baseDirectories = new Set(params.base.directories ?? []);
-  const baseNonemptyDirectories = new Set<string>();
-  for (const entry of params.base.entries) {
-    const segments = entry.path.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      baseNonemptyDirectories.add(segments.slice(0, index).join("/"));
-    }
-  }
+  const baseEntries = reconciliationEntries(params.base.entries);
+  const currentEntries = reconciliationEntries(params.current.entries);
+  const baseByPath = new Map(baseEntries.map((entry) => [entry.path, entry]));
+  const currentByPath = new Map(currentEntries.map((entry) => [entry.path, entry]));
+  const baseDirectories = new Set(reconciliationDirectories(params.base.directories));
   const directoryContainsOnlyBase = async (entryPath: string): Promise<boolean> => {
     const pending = [entryPath];
     while (pending.length > 0) {
       const directory = pending.pop()!;
       for (const name of await fs.readdir(localPath(params.root, directory))) {
         const childPath = `${directory}/${name}`;
+        if (isDerivedWorkspacePath(childPath)) {
+          continue;
+        }
         const stats = await fs.lstat(localPath(params.root, childPath));
         if (stats.isDirectory() && !stats.isSymbolicLink()) {
           if (!baseDirectories.has(childPath)) {
+            if (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, childPath)) {
+              continue;
+            }
             return false;
           }
           pending.push(childPath);
@@ -176,7 +136,7 @@ async function preflightWorkspaceApply(params: {
     }
     return true;
   };
-  for (const entry of params.current.entries) {
+  for (const entry of currentEntries) {
     if (baseByPath.has(entry.path)) {
       continue;
     }
@@ -207,9 +167,8 @@ async function preflightWorkspaceApply(params: {
     if (
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
-      baseDirectories.has(entry.path) &&
-      baseNonemptyDirectories.has(entry.path) &&
-      (await directoryContainsOnlyBase(entry.path))
+      ((baseDirectories.has(entry.path) && (await directoryContainsOnlyBase(entry.path))) ||
+        (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entry.path)))
     ) {
       continue;
     }
@@ -225,9 +184,11 @@ export async function assertWorkspaceResultStable(params: {
   current: WorkerWorkspaceManifest;
 }): Promise<void> {
   await assertWorkspaceMatchesManifest({ root: params.root, manifest: params.current });
-  const currentPaths = new Set(params.current.entries.map((entry) => entry.path));
-  const currentDirectories = new Set(params.current.directories ?? []);
-  for (const entry of params.base.entries) {
+  const currentPaths = new Set(
+    reconciliationEntries(params.current.entries).map((entry) => entry.path),
+  );
+  const currentDirectories = new Set(reconciliationDirectories(params.current.directories));
+  for (const entry of reconciliationEntries(params.base.entries)) {
     if (currentPaths.has(entry.path) || currentDirectories.has(entry.path)) {
       continue;
     }
@@ -292,7 +253,7 @@ async function writeRawWorkspaceTree(params: {
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Uint8Array }> =
     [];
   let mark = 1;
-  for (const entry of params.entries.toSorted((left, right) =>
+  for (const entry of reconciliationEntries(params.entries).toSorted((left, right) =>
     left.path.localeCompare(right.path),
   )) {
     const content =
@@ -472,29 +433,6 @@ function validateJournalSnapshot(journal: WorkerWorkspaceReconciliationJournal):
   }
 }
 
-async function directoryContainsOnlyJournalPaths(
-  root: string,
-  directory: string,
-  paths: ReadonlySet<string>,
-  directories: ReadonlySet<string>,
-): Promise<boolean> {
-  for (const name of await fs.readdir(localPath(root, directory))) {
-    const child = `${directory}/${name}`;
-    const stats = await fs.lstat(localPath(root, child));
-    if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (!directories.has(child)) {
-        return false;
-      }
-      if (!(await directoryContainsOnlyJournalPaths(root, child, paths, directories))) {
-        return false;
-      }
-    } else if (!paths.has(child)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 async function createWorkspaceRecoveryPatch(params: {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
@@ -504,10 +442,10 @@ async function createWorkspaceRecoveryPatch(params: {
     await requireGit(temporary, ["init", "--quiet", "--object-format=sha1"]);
     await requireGit(temporary, ["index-pack", "--stdin"], params.journal.basePack);
     await requireGit(temporary, ["cat-file", "-e", `${params.journal.baseTree}^{tree}`]);
-    const baseByPath = new Map(params.journal.baseEntries.map((entry) => [entry.path, entry]));
-    const appliedByPath = new Map(
-      params.journal.appliedEntries.map((entry) => [entry.path, entry]),
-    );
+    const baseEntries = reconciliationEntries(params.journal.baseEntries);
+    const appliedEntries = reconciliationEntries(params.journal.appliedEntries);
+    const baseByPath = new Map(baseEntries.map((entry) => [entry.path, entry]));
+    const appliedByPath = new Map(appliedEntries.map((entry) => [entry.path, entry]));
     const paths = new Set([...baseByPath.keys(), ...appliedByPath.keys()]);
     const directories = new Set<string>();
     for (const entryPath of paths) {
@@ -545,8 +483,9 @@ async function createWorkspaceRecoveryPatch(params: {
       const isJournalDirectory =
         stats.isDirectory() &&
         !stats.isSymbolicLink() &&
-        directories.has(entryPath) &&
-        (await directoryContainsOnlyJournalPaths(params.root, entryPath, paths, directories));
+        ((directories.has(entryPath) &&
+          (await directoryContainsOnlyJournalPaths(params.root, entryPath, paths, directories))) ||
+          (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entryPath)));
       if (!isJournalDirectory) {
         throw new ConcurrentWorkspacePathError(
           `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
@@ -564,6 +503,26 @@ async function createWorkspaceRecoveryPatch(params: {
       repositoryRoot: temporary,
       entries: actualEntries,
     });
+    let recoveryBaseTree = params.journal.baseTree;
+    if (baseEntries.length !== params.journal.baseEntries.length) {
+      await clearTemporaryWorkspace(temporary);
+      for (const entry of baseEntries) {
+        const content =
+          entry.type === "file"
+            ? await readWorkspaceTreeFile({
+                repositoryRoot: temporary,
+                tree: params.journal.baseTree,
+                entry,
+              })
+            : undefined;
+        await materializeSnapshotEntry({ root: temporary, entry, content });
+      }
+      recoveryBaseTree = await writeRawWorkspaceTree({
+        repositoryRoot: temporary,
+        entries: baseEntries,
+      });
+      await clearTemporaryWorkspace(temporary);
+    }
     const diff = await runCommandBuffered(
       [
         "git",
@@ -574,7 +533,7 @@ async function createWorkspaceRecoveryPatch(params: {
         "--full-index",
         "--no-renames",
         actualTree,
-        params.journal.baseTree,
+        recoveryBaseTree,
         "--",
       ],
       {
@@ -605,7 +564,9 @@ async function assertWorkspaceRecoveryBase(params: {
     root: params.root,
     manifest: { version: 1, baseCommit: null, entries: params.journal.baseEntries },
   });
-  const basePaths = new Set(params.journal.baseEntries.map((entry) => entry.path));
+  const baseEntries = reconciliationEntries(params.journal.baseEntries);
+  const appliedEntries = reconciliationEntries(params.journal.appliedEntries);
+  const basePaths = new Set(baseEntries.map((entry) => entry.path));
   const baseDirectories = new Set<string>();
   for (const entryPath of basePaths) {
     const segments = entryPath.split("/");
@@ -613,7 +574,7 @@ async function assertWorkspaceRecoveryBase(params: {
       baseDirectories.add(segments.slice(0, index).join("/"));
     }
   }
-  for (const entry of params.journal.appliedEntries) {
+  for (const entry of appliedEntries) {
     if (basePaths.has(entry.path)) {
       continue;
     }
@@ -651,6 +612,7 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
     // The journal may be persisted before, during, or after the multi-file apply.
   }
   const recoveryPatch = await createWorkspaceRecoveryPatch({ root, journal: params.journal });
+  await prepareNonDirectoryTargets(root, params.journal.baseEntries);
   await applyWorkspacePatch({ root, patch: recoveryPatch });
   await assertWorkspaceRecoveryBase({ root, journal: params.journal });
 }
@@ -671,11 +633,17 @@ export async function applyStagedWorkerWorkspace(params: {
     params.journal.commit(params.currentManifestRef);
     return;
   }
-  const baseByPath = new Map(params.base.entries.map((entry) => [entry.path, entry]));
-  const currentByPath = new Map(params.current.entries.map((entry) => [entry.path, entry]));
-  const baseEntries = params.base.entries.filter((entry) => changed.has(entry.path));
+  const baseByPath = new Map(
+    reconciliationEntries(params.base.entries).map((entry) => [entry.path, entry]),
+  );
+  const currentByPath = new Map(
+    reconciliationEntries(params.current.entries).map((entry) => [entry.path, entry]),
+  );
+  const baseEntries = reconciliationEntries(params.base.entries).filter((entry) =>
+    changed.has(entry.path),
+  );
   const appliedEntries: WorkerWorkspaceManifestEntry[] = [];
-  for (const entry of params.current.entries) {
+  for (const entry of reconciliationEntries(params.current.entries)) {
     if (!changed.has(entry.path)) {
       continue;
     }
@@ -712,6 +680,7 @@ export async function applyStagedWorkerWorkspace(params: {
   };
   params.journal.begin(journal);
   try {
+    await prepareNonDirectoryTargets(root, appliedEntries);
     await applyWorkspacePatch({ root, patch: snapshot.patch });
     await assertWorkspaceResultStable({ root, base: params.base, current: params.current });
     params.journal.commit(params.currentManifestRef);

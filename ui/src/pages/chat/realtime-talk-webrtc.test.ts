@@ -84,7 +84,6 @@ function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
   inputDeviceId?: string,
-  videoEnabled?: boolean,
 ): WebRtcSdpRealtimeTalkTransport {
   return new WebRtcSdpRealtimeTalkTransport(
     {
@@ -97,7 +96,6 @@ function createOpenAiTransport(
       sessionKey: "main",
       callbacks: callbacks as never,
       inputDeviceId,
-      videoEnabled,
     },
   );
 }

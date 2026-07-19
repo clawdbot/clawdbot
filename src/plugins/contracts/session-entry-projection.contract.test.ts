@@ -299,6 +299,11 @@ describe("plugin session extension SessionEntry projection", () => {
           description: "bad fresh-main slot",
           sessionEntrySlotKey: "subagentRecovery",
         });
+        api.registerSessionExtension({
+          namespace: "run-error",
+          description: "bad run error slot",
+          sessionEntrySlotKey: "lastRunError",
+        });
       },
     });
 
@@ -317,6 +322,10 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: subagentRecovery",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: lastRunError",
       },
     ]);
   });

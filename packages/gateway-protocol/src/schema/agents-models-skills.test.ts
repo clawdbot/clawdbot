@@ -2,6 +2,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  AgentsDeleteResultSchema,
   AgentsListResultSchema,
   AgentsUpdateParamsSchema,
   ModelsListParamsSchema,
@@ -14,6 +15,20 @@ import {
   ToolsEffectiveResultSchema,
   ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
+
+describe("AgentsDeleteResultSchema", () => {
+  it("accepts per-path cleanup outcomes", () => {
+    expect(
+      Value.Check(AgentsDeleteResultSchema, {
+        ok: true,
+        agentId: "ops",
+        removedBindings: 1,
+        removed: [{ path: "/state/agents/ops/agent", method: "trash" }],
+        failed: [{ path: "/state/workspace-ops", reason: "trash unavailable" }],
+      }),
+    ).toBe(true);
+  });
+});
 
 /**
  * Schema regression tests for agent metadata, skill proposals, and effective

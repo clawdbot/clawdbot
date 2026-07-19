@@ -8,6 +8,8 @@ type StripMarkdownOptions = {
   assistantTranscriptRolePrefix?: string;
   /** Link projection after formatting is removed. Default: label-and-url. */
   linkStyle?: "label" | "label-and-url";
+  /** Plain-text cleanup target. Speech removes decorative symbol and punctuation runs. */
+  mode?: "plain-text" | "speech";
 };
 
 type PlainTextInsertion = {
@@ -83,6 +85,26 @@ function applyPlainTextInsertions(text: string, insertions: PlainTextInsertion[]
   return output + text.slice(cursor);
 }
 
+function cleanSpeechText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      if (/^[\p{P}\p{S}\s]+$/u.test(line)) {
+        return "";
+      }
+      return line
+        .replace(/^[•◦▪‣⁃]\s+/u, "")
+        .replace(/(?:[\p{So}\p{Sk}]\s*){2,}/gu, " ")
+        .replace(/\.{4,}/g, "...")
+        .replace(/([!?,;:])\1+/g, "$1")
+        .replace(/[ \t]{2,}/g, " ")
+        .trim();
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** Parse Markdown, then protect role headers exposed by the final plain-text projection. */
 export function stripMarkdown(text: string, options: StripMarkdownOptions = {}): string {
   // The IR parser preserves links when role annotations are enabled so this
@@ -105,8 +127,9 @@ export function stripMarkdown(text: string, options: StripMarkdownOptions = {}):
     ...collectLinkInsertions(ir, options),
     ...collectParsedAssistantTranscriptRoleInsertions(ir, options),
   ]).trim();
-  return applyPlainTextInsertions(
+  const projected = applyPlainTextInsertions(
     plainText,
     collectAssistantTranscriptRoleInsertions(plainText, options),
   ).trim();
+  return options.mode === "speech" ? cleanSpeechText(projected) : projected;
 }

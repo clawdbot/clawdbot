@@ -4,9 +4,9 @@ import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metada
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCronTriggerEvaluator } from "./trigger-script.js";
+import { createCronScriptRuntime } from "./trigger-script.js";
 
-type EvaluatorDeps = Parameters<typeof createCronTriggerEvaluator>[0];
+type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
 type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0];
 
@@ -52,16 +52,20 @@ function createPreparedRuntime(config: OpenClawConfig) {
 function createEvaluator(
   runHeadless: (
     params: Parameters<
-      NonNullable<Parameters<typeof createCronTriggerEvaluator>[0]["runHeadless"]>
+      NonNullable<Parameters<typeof createCronScriptRuntime>[0]["runHeadless"]>
     >[0],
   ) => Promise<CodeModeHeadlessResult>,
 ) {
   const config = {} as OpenClawConfig;
   const prepareRuntime = vi.fn(async () => createPreparedRuntime(config));
   return {
-    evaluate: createCronTriggerEvaluator({ config, runHeadless, prepareRuntime }),
+    evaluate: createCronScriptRuntime({ config, runHeadless, prepareRuntime }).evaluateTrigger,
     prepareRuntime,
   };
+}
+
+function createCronTriggerEvaluator(deps: EvaluatorDeps) {
+  return createCronScriptRuntime(deps).evaluateTrigger;
 }
 
 describe("cron trigger script evaluator", () => {
@@ -103,11 +107,11 @@ describe("cron trigger script evaluator", () => {
     );
   });
 
-  it("falls back to the last json output entry", async () => {
+  it("falls back to the last json output entry when the returned object is not a trigger result", async () => {
     const { evaluate } = createEvaluator(
       vi.fn(async () =>
         completed({
-          value: null,
+          value: { ignored: true },
           output: [
             { type: "json", value: { fire: false, state: { old: true } } },
             { type: "text", text: "ignored" },
@@ -393,5 +397,141 @@ describe("cron trigger script evaluator", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("cron script payload evaluator", () => {
+  it("uses payload-grade capped budgets and exposes frozen trigger state", async () => {
+    const config = {} as OpenClawConfig;
+    const runHeadless = vi.fn(async (_params: HeadlessParams) =>
+      completed({
+        value: {
+          notify: "queue changed",
+          wake: "now",
+          state: { revision: 2 },
+          nextCheck: "5m",
+        },
+      }),
+    );
+    const runtime = createCronScriptRuntime({
+      config,
+      runHeadless,
+      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
+    });
+
+    await expect(
+      runtime.executePayload({
+        jobId: "payload-job",
+        script: "return result",
+        state: { revision: 1 },
+        timeoutSeconds: 10_000,
+        toolBudget: 10_000,
+      }),
+    ).resolves.toEqual({
+      kind: "completed",
+      notify: "queue changed",
+      wake: "now",
+      stateChanged: true,
+      state: { revision: 2 },
+      nextCheck: { delayMs: 300_000 },
+    });
+    expect(runHeadless).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxToolCalls: 200,
+        extraNamespaces: [
+          {
+            id: "cron:trigger",
+            globalName: "trigger",
+            scope: {
+              kind: "object",
+              entries: [["state", { kind: "value", value: { revision: 1 } }]],
+            },
+          },
+        ],
+      }),
+    );
+    const headlessParams = runHeadless.mock.calls[0]?.[0];
+    expect(headlessParams?.wallClockMs).toBeGreaterThanOrEqual(899_000);
+    expect(headlessParams?.wallClockMs).toBeLessThanOrEqual(900_000);
+  });
+
+  it("uses payload defaults and accepts an omitted result state", async () => {
+    const config = {} as OpenClawConfig;
+    const runHeadless = vi.fn(async (_params: HeadlessParams) => completed({ value: {} }));
+    const runtime = createCronScriptRuntime({
+      config,
+      runHeadless,
+      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
+    });
+
+    await expect(
+      runtime.executePayload({ jobId: "payload-defaults", script: "return {}", state: null }),
+    ).resolves.toEqual({ kind: "completed", stateChanged: false });
+    expect(runHeadless).toHaveBeenCalledWith(expect.objectContaining({ maxToolCalls: 50 }));
+    const headlessParams = runHeadless.mock.calls[0]?.[0];
+    expect(headlessParams?.wallClockMs).toBeGreaterThanOrEqual(299_000);
+    expect(headlessParams?.wallClockMs).toBeLessThanOrEqual(300_000);
+  });
+
+  it("canonicalizes returned state to the JSON value that will be persisted", async () => {
+    const config = {} as OpenClawConfig;
+    const runtime = createCronScriptRuntime({
+      config,
+      runHeadless: vi.fn(async () =>
+        completed({
+          value: { state: { keep: 1, dropped: undefined, nonFinite: Number.NaN } },
+        }),
+      ),
+      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
+    });
+
+    await expect(
+      runtime.executePayload({ jobId: "payload-json-state", script: "return state", state: null }),
+    ).resolves.toEqual({
+      kind: "completed",
+      stateChanged: true,
+      state: { keep: 1, nonFinite: null },
+    });
+  });
+
+  it.each([
+    [{ notify: 42 }, "notify must be a string"],
+    [{ wake: "later" }, 'wake must be "now" or "next-heartbeat"'],
+    [{ nextCheck: "tomorrowish" }, "nextCheck must be a positive duration"],
+    [{ state: "x".repeat(17 * 1024) }, "state exceeds the 16KB limit"],
+  ] as const)("rejects an invalid result %#", async (value, error) => {
+    const config = {} as OpenClawConfig;
+    const runtime = createCronScriptRuntime({
+      config,
+      runHeadless: vi.fn(async () => completed({ value })),
+      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
+    });
+
+    await expect(
+      runtime.executePayload({ jobId: "payload-invalid", script: "return result", state: null }),
+    ).resolves.toMatchObject({ kind: "error", error: expect.stringContaining(error) });
+  });
+
+  it("surfaces executor failures through the cron error contract", async () => {
+    const config = {} as OpenClawConfig;
+    const runtime = createCronScriptRuntime({
+      config,
+      runHeadless: vi.fn(async () => ({
+        status: "failed" as const,
+        code: "tool_budget_exceeded" as const,
+        error: "tool budget exceeded",
+        output: [],
+        toolCallCount: 51,
+      })),
+      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
+    });
+
+    await expect(
+      runtime.executePayload({ jobId: "payload-failed", script: "return result", state: null }),
+    ).resolves.toEqual({
+      kind: "error",
+      code: "tool_budget_exceeded",
+      error: "tool budget exceeded",
+    });
   });
 });

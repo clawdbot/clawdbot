@@ -4600,6 +4600,44 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
   });
 
+  it("derives ask_user QA summaries from the returned answers", async () => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Nothing to say: entire reply exactly NO_REPLY",
+            },
+          ],
+        },
+        makeUserInput(
+          "QA routing marker: tool search qa check target=ask_user. Ask structured questions, then summarize their actual answers.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_ask_user_1",
+          output: JSON.stringify({
+            content: [
+              {
+                type: "text",
+                text: 'Deploy: Canary\nChecks: Lint, Unit (Recommended)\nNote: weekend-only\n\n{"status":"answered"}',
+              },
+            ],
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(
+      "ASK-USER-ROUNDTRIP-OK | deploy=Canary | checks=Lint,Unit | note=weekend-only",
+    );
+  });
+
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 
@@ -5236,6 +5274,32 @@ describe("qa mock openai server", () => {
     expect(quiet.status).toBe(200);
     await expect(quiet.json()).resolves.toEqual({
       text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
+    });
+  });
+
+  it("serves deterministic Matrix voice preflight transcription for the request prompt", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body:
+        '--qa\r\ncontent-disposition: form-data; name="file"; filename="audio.wav"\r\n\r\n' +
+        'fixture audio\r\n--qa\r\ncontent-disposition: form-data; name="prompt"\r\n\r\n' +
+        "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER\r\n--qa--\r\n",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      text: "C3PLQA reply with only these words Matrix QA voice pre-flight OK.",
     });
   });
 

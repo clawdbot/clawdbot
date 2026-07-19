@@ -109,6 +109,11 @@ data class QuestionRecord(
 )
 
 @Serializable
+data class QuestionGetResult(
+  val question: QuestionRecord,
+)
+
+@Serializable
 data class QuestionListResult(
   val questions: List<QuestionRecord>,
 )
@@ -303,6 +308,10 @@ enum class GatewayMethod(
   SessionsCompactionGet("sessions.compaction.get"),
   SessionsCompactionBranch("sessions.compaction.branch"),
   SessionsCompactionRestore("sessions.compaction.restore"),
+  SessionsBranchesList("sessions.branches.list"),
+  SessionsBranchesSwitch("sessions.branches.switch"),
+  SessionsRewind("sessions.rewind"),
+  SessionsFork("sessions.fork"),
   SessionsCreate("sessions.create"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),

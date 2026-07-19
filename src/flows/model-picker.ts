@@ -37,6 +37,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { computeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -1496,26 +1497,65 @@ export function applyModelAllowlist(
   const normalized = normalizeModelKeys(models);
   const scopeKeys = opts.scopeKeys ? normalizeModelKeys(opts.scopeKeys) : [];
   const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
+  const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
+  const legacyAllow = computeModelPolicyAllowlist({
+    root: cfg,
+    defaults,
+  });
+  const existingAllow = normalizeModelKeys(defaults?.modelPolicy?.allow ?? legacyAllow ?? []);
+  const scopeProviders = new Set(
+    scopeKeys.map((key) => normalizeProviderId(key.slice(0, key.indexOf("/")))),
+  );
+  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const isPolicyRefInScope = (raw: string): boolean => {
+    const trimmed = raw.trim();
+    if (trimmed.endsWith("/*")) {
+      return scopeProviders.has(normalizeProviderId(trimmed.slice(0, -2)));
+    }
+    const resolved = resolveModelRefFromString({
+      cfg,
+      raw: trimmed,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    return Boolean(
+      resolved && scopeKeySet?.has(modelKey(resolved.ref.provider, resolved.ref.model)),
+    );
+  };
   if (normalized.length === 0) {
-    if (!defaults?.models) {
+    // No agent defaults means no policy/legacy map to edit; nothing to clear.
+    if (!defaults || (!defaults.modelPolicy && !legacyAllow)) {
       return cfg;
     }
     if (scopeKeySet) {
-      const nextModels = { ...defaults.models };
-      for (const key of scopeKeySet) {
-        delete nextModels[key];
-      }
-      const { models: _ignored, ...restDefaults } = defaults;
+      const nextAllow = existingAllow.filter((key) => !isPolicyRefInScope(key));
+      const { modelPolicy: _modelPolicy, ...restDefaults } = defaults;
       return {
         ...cfg,
         agents: {
           ...cfg.agents,
-          defaults:
-            Object.keys(nextModels).length > 0 ? { ...defaults, models: nextModels } : restDefaults,
+          defaults: {
+            ...restDefaults,
+            ...(nextAllow.length > 0 || legacyAllow
+              ? { modelPolicy: { ...defaults?.modelPolicy, allow: nextAllow } }
+              : {}),
+          },
         },
       };
     }
-    const { models: _ignored, ...restDefaults } = defaults;
+    if (legacyAllow) {
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...defaults,
+            modelPolicy: { ...defaults?.modelPolicy, allow: [] },
+          },
+        },
+      };
+    }
+    const { modelPolicy: _modelPolicy, ...restDefaults } = defaults;
     return {
       ...cfg,
       agents: {
@@ -1525,14 +1565,16 @@ export function applyModelAllowlist(
     };
   }
 
-  const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
   if (scopeKeySet) {
     const nextModels = { ...existingModels };
-    for (const key of scopeKeySet) {
-      delete nextModels[key];
-    }
     for (const key of normalized) {
       nextModels[key] = existingModels[key] ?? {};
+    }
+    const nextAllow = existingAllow.filter((key) => !isPolicyRefInScope(key));
+    for (const key of normalized) {
+      if (!nextAllow.includes(key)) {
+        nextAllow.push(key);
+      }
     }
     return {
       ...cfg,
@@ -1541,12 +1583,13 @@ export function applyModelAllowlist(
         defaults: {
           ...defaults,
           models: nextModels,
+          modelPolicy: { ...defaults?.modelPolicy, allow: nextAllow },
         },
       },
     };
   }
 
-  const nextModels: Record<string, { alias?: string }> = {};
+  const nextModels: Record<string, { alias?: string }> = { ...existingModels };
   for (const key of normalized) {
     nextModels[key] = existingModels[key] ?? {};
   }
@@ -1558,6 +1601,7 @@ export function applyModelAllowlist(
       defaults: {
         ...defaults,
         models: nextModels,
+        modelPolicy: { ...defaults?.modelPolicy, allow: normalized },
       },
     },
   };

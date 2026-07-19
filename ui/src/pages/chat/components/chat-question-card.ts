@@ -18,6 +18,7 @@ type QuestionPanelViewModel = {
   requestKey: string;
   title: string;
   questions: QuestionPanelQuestion[];
+  collapsed: boolean;
   disabled: boolean;
   submitting?: boolean;
   countdown?: string;
@@ -32,6 +33,7 @@ type QuestionPanelProps = {
   onSkip?: () => void | Promise<void>;
   onAnswersChange?: (answersById: Record<string, string[]>) => void;
   onDismissError?: () => void;
+  onCollapsedChange?: (collapsed: boolean) => void;
   onPreviousRequest?: () => void;
   onNextRequest?: () => void;
 };
@@ -41,6 +43,8 @@ type GatewayQuestionPanelOptions = {
   onChange?: () => void;
   onSubmit?: (answers: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   requestPosition?: { current: number; total: number };
   onPreviousRequest?: () => void;
   onNextRequest?: () => void;
@@ -84,6 +88,7 @@ export function createGatewayQuestionPanelProps(
       requestKey: prompt.id,
       title: t("chat.questions.eyebrow"),
       questions: prompt.questions,
+      collapsed: options.collapsed ?? false,
       disabled: prompt.status !== "pending" || prompt.submitting,
       submitting: prompt.submitting,
       countdown:
@@ -121,6 +126,7 @@ export function createGatewayQuestionPanelProps(
             options.onChange?.();
           }
         : undefined,
+    onCollapsedChange: options.onCollapsedChange,
     onPreviousRequest: options.onPreviousRequest,
     onNextRequest: options.onNextRequest,
   };
@@ -132,6 +138,9 @@ function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion)
   }
   if (prompt.status === "expired") {
     return t("chat.questions.expired");
+  }
+  if (prompt.status === "unavailable") {
+    return t("chat.questions.unavailable");
   }
   const answer = prompt.answers?.answers[question.id]?.answers.join(", ");
   if (answer) {
@@ -178,22 +187,40 @@ class ChatQuestionPanel extends LitElement {
   @state() private selectedById = new Map<string, string[]>();
   @state() private freeTextById = new Map<string, string>();
   @state() private currentQuestionIndex = 0;
-  @state() private collapsed = false;
   @state() private pendingAction: "submit" | "skip" | null = null;
   private requestKey: string | null = null;
+  private collapsed = false;
+  private focusAfterUpdate = false;
   private syncedAnswersSignature: string | null = null;
+
+  private setCollapsed(collapsed: boolean): void {
+    if (this.props?.onCollapsedChange) {
+      this.props.onCollapsedChange(collapsed);
+      return;
+    }
+    this.collapsed = collapsed;
+    this.focusAfterUpdate = !collapsed;
+    this.requestUpdate();
+  }
 
   override willUpdate() {
     const model = this.props?.model;
     const nextRequestKey = model?.requestKey ?? null;
+    const nextCollapsed = model?.collapsed ?? false;
     if (nextRequestKey !== this.requestKey) {
       this.requestKey = nextRequestKey;
       this.selectedById = new Map();
       this.freeTextById = new Map();
       this.currentQuestionIndex = 0;
-      this.collapsed = false;
       this.pendingAction = null;
       this.syncedAnswersSignature = null;
+      this.collapsed = nextCollapsed;
+      this.focusAfterUpdate = !nextCollapsed;
+    } else if (this.props?.onCollapsedChange) {
+      if (this.collapsed && !nextCollapsed) {
+        this.focusAfterUpdate = true;
+      }
+      this.collapsed = nextCollapsed;
     }
     if (!model?.answersById) {
       return;
@@ -219,6 +246,14 @@ class ChatQuestionPanel extends LitElement {
     }
     this.selectedById = selectedById;
     this.freeTextById = freeTextById;
+  }
+
+  override updated(): void {
+    if (!this.focusAfterUpdate || this.collapsed) {
+      return;
+    }
+    this.focusAfterUpdate = false;
+    this.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
   }
 
   private answerValues(question: QuestionPanelQuestion): string[] {
@@ -441,8 +476,7 @@ class ChatQuestionPanel extends LitElement {
             class="chat-question-panel__collapsed-button"
             type="button"
             @click=${() => {
-              this.collapsed = false;
-              this.focusPanel();
+              this.setCollapsed(false);
             }}
             aria-label=${t("chat.questions.expand")}
           >
@@ -504,7 +538,7 @@ class ChatQuestionPanel extends LitElement {
           <button
             class="chat-question-panel__collapse"
             type="button"
-            @click=${() => (this.collapsed = true)}
+            @click=${() => this.setCollapsed(true)}
             aria-label=${t("chat.questions.collapse")}
           >
             ${icons.chevronDown}

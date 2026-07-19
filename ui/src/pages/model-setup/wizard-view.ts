@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 
 type WizardViewProps = {
@@ -25,7 +26,7 @@ function renderDeviceCode(step: Extract<ModelSetupWizardState, { phase: "step" }
       <button
         type="button"
         class="btn btn--sm"
-        @click=${() => void navigator.clipboard?.writeText(step.deviceCode!.code)}
+        @click=${() => void copyToClipboard(step.deviceCode!.code)}
       >
         ${t("modelSetup.wizard.copy")}
       </button>

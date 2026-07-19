@@ -56,10 +56,14 @@ describe("gateway method authorization", () => {
     const denied = await dispatch(["operator.read"]);
 
     expect(allowed).toHaveBeenCalledWith(true, { ok: true });
-    expect(denied).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "missing scope: operator.write" }),
-    );
+    expect(denied).toHaveBeenCalledWith(false, undefined, {
+      code: "FORBIDDEN",
+      message: "missing scope: operator.write",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.write",
+        requiredScopes: ["operator.write"],
+      },
+    });
   });
 });

@@ -395,6 +395,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
       recoverCorruptTargetStore: undefined,
+      doctorOnlyStateMigrations: undefined,
     });
     expect(note).toHaveBeenCalledWith("- cron-imported", "Doctor changes");
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
@@ -884,7 +885,20 @@ describe("runDoctorConfigPreflight state migration", () => {
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
       recoverCorruptTargetStore: true,
+      doctorOnlyStateMigrations: undefined,
     });
+  });
+
+  it("passes explicit Doctor-only migration authority only when requested", async () => {
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: true }),
+    );
   });
 
   it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
@@ -955,6 +969,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       pluginDoctorConfig: resolvedConfig,
       env: process.env,
       recoverCorruptTargetStore: undefined,
+      doctorOnlyStateMigrations: undefined,
     });
   });
 

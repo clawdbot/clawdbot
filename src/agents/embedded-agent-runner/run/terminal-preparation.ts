@@ -138,6 +138,9 @@ export function prepareEmbeddedRunTerminal(input: {
   const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
     payloads,
     toolMediaUrls: attempt.toolMediaUrls,
+    // Preserve harness provenance through terminal delivery. Without it,
+    // message-tool-only routes silently drop native runtime artifacts.
+    hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
     toolAudioAsVoice: attempt.toolAudioAsVoice,
     toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,

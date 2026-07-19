@@ -8,7 +8,10 @@ import {
   type SessionRunTerminal,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
-import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
@@ -123,7 +126,8 @@ export function hasAbortableSessionRun(host: {
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && isSessionRunActive(session),
+      (session) =>
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
     ),
   );
 }

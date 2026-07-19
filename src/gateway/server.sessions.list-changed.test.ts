@@ -919,6 +919,26 @@ test("sessions.changed mutation events include session management metadata", asy
     pinnedAt: null,
   });
 
+  const icon = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    icon: "name:spark",
+  });
+  expectChangedBroadcast(icon.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    icon: "name:spark",
+  });
+
+  const iconCleared = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    icon: null,
+  });
+  expectChangedBroadcast(iconCleared.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    icon: null,
+  });
+
   const unread = await invokeSessionsPatch({
     key: "discord:group:dev",
     unread: true,

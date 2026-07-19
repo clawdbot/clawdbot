@@ -2175,7 +2175,8 @@ describe("cron method validation", () => {
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: 'isolated/current/session cron jobs require payload.kind="agentTurn"',
+      messageIncludes:
+        'isolated cron jobs require payload.kind="agentTurn", "command", or "script"; script payloads do not support current/session targets',
     });
   });
 

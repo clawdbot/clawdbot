@@ -502,7 +502,15 @@ describe("gateway server agent", () => {
         idempotencyKey: "idem-agent-write-reset",
       });
       expect(viaAgent.ok).toBe(false);
-      expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
+      expect(viaAgent.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
 
       const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(stored?.sessionId).toBe("sess-main-before-write-reset");

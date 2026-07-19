@@ -52,6 +52,11 @@ function buildRuntime(
   resolve: GatewayPluginRuntime["channel"]["routing"]["resolveAgentRoute"],
 ): GatewayPluginRuntime {
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: { resolveAgentRoute: resolve },

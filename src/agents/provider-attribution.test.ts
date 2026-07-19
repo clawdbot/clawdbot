@@ -27,6 +27,10 @@ const providerEndpointPlugins = vi.hoisted(() => [
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
       { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
       { endpointClass: "mistral-public", hosts: ["api.mistral.ai"] },
+      {
+        endpointClass: "minimax-native",
+        hosts: ["api.minimax.io", "api.minimaxi.com"],
+      },
       { endpointClass: "chutes-native", hosts: ["llm.chutes.ai"] },
       { endpointClass: "deepseek-native", hosts: ["api.deepseek.com"] },
       { endpointClass: "github-copilot-native", hostSuffixes: [".githubcopilot.com"] },
@@ -526,6 +530,27 @@ describe("provider attribution", () => {
         knownProviderFamily: "mistral",
       },
     );
+  });
+
+  it("classifies native MiniMax hosts centrally", () => {
+    for (const hostname of ["api.minimax.io", "api.minimaxi.com"]) {
+      expectRecordFields(resolveProviderEndpoint(`https://${hostname}/v1`), {
+        endpointClass: "minimax-native",
+        hostname,
+      });
+      expectRecordFields(
+        resolveProviderRequestCapabilities({
+          provider: "minimax",
+          baseUrl: `https://${hostname}`,
+          capability: "image",
+          transport: "media-understanding",
+        }),
+        {
+          endpointClass: "minimax-native",
+          isKnownNativeEndpoint: true,
+        },
+      );
+    }
   });
 
   it("classifies native OpenAI-compatible vendor hosts centrally", () => {

@@ -101,7 +101,7 @@ account.
 
 <AccordionGroup>
   <Accordion title="Model allowlist">
-    If you enable a model allowlist (`agents.defaults.models`), add every
+    If you enable a model allowlist (`agents.defaults.modelPolicy.allow`), add every
     Synthetic model you plan to use. Models not in the allowlist are hidden
     from the agent.
   </Accordion>

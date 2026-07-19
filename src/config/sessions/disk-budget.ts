@@ -553,6 +553,7 @@ export async function enforceSessionDiskBudget(params: {
   dryRun?: boolean;
   log?: SessionDiskBudgetLogger;
   onRemoveFile?: (canonicalPath: string) => void;
+  commitEvictedIndex?: () => Promise<void>;
 }): Promise<SessionDiskBudgetSweepResult | null> {
   const maxBytes = params.maintenance.maxDiskBytes;
   const highWaterBytes = params.maintenance.highWaterBytes;
@@ -637,6 +638,7 @@ export async function enforceSessionDiskBudget(params: {
   let removedFiles = 0;
   let removedEntries = 0;
   let freedBytes = 0;
+  const commitEvictedIndex = params.commitEvictedIndex;
 
   const referencedPaths = resolveReferencedSessionArtifactPaths({
     sessionsDir,
@@ -704,6 +706,27 @@ export async function enforceSessionDiskBudget(params: {
     removedFiles += 1;
   }
 
+  const deferredEvictedArtifactPaths: string[] = [];
+  const planEvictedArtifactRemoval = (rawPath: string, canonicalPathHint?: string): number => {
+    // An evicted artifact may only be unlinked after its reduced index is durable.
+    // Callers without that boundary retain the artifact as a reclaimable orphan.
+    if (!dryRun && !commitEvictedIndex) {
+      return 0;
+    }
+    const resolvedPath = path.resolve(rawPath);
+    const canonicalPath = canonicalPathHint ?? canonicalizePathForComparison(resolvedPath);
+    if (simulatedRemovedPaths.has(canonicalPath)) {
+      return 0;
+    }
+    const size = fileSizesByPath.get(canonicalPath) ?? 0;
+    if (size <= 0) {
+      return 0;
+    }
+    simulatedRemovedPaths.add(canonicalPath);
+    deferredEvictedArtifactPaths.push(resolvedPath);
+    return size;
+  };
+
   if (total > highWaterBytes) {
     const activeSessionKey = normalizeOptionalLowercaseString(params.activeSessionKey);
     const sessionIdRefCounts = buildSessionIdRefCounts(params.store);
@@ -762,20 +785,16 @@ export async function enforceSessionDiskBudget(params: {
                 tempStaleCutoffMs,
               )
             ) {
-              const deletedBytes = await removePromptBlobFileForBudget({
-                file: blobFile,
-                projectedPromptBlobRefCounts,
-                promptBlobCutoffMs: promptBlobOrphanCutoffMs,
-                tempCutoffMs: tempStaleCutoffMs,
-                dryRun,
-                fileSizesByPath,
-                simulatedRemovedPaths,
-                onRemovedPath: params.onRemoveFile,
-              });
-              if (deletedBytes > 0) {
-                total -= deletedBytes;
-                freedBytes += deletedBytes;
-                removedFiles += 1;
+              const plannedBytes = planEvictedArtifactRemoval(
+                blobFile.path,
+                blobFile.canonicalPath,
+              );
+              if (plannedBytes > 0) {
+                total -= plannedBytes;
+                if (dryRun) {
+                  freedBytes += plannedBytes;
+                  removedFiles += 1;
+                }
               }
             }
           }
@@ -794,20 +813,34 @@ export async function enforceSessionDiskBudget(params: {
       }
       sessionIdRefCounts.delete(sessionId);
       for (const artifactPath of resolveSessionArtifactPathsForEntry({ sessionsDir, entry })) {
-        const deletedBytes = await removeFileForBudget({
-          filePath: artifactPath,
-          dryRun,
-          fileSizesByPath,
-          simulatedRemovedPaths,
-          onRemovedPath: params.onRemoveFile,
-        });
-        if (deletedBytes <= 0) {
+        const plannedBytes = planEvictedArtifactRemoval(artifactPath);
+        if (plannedBytes <= 0) {
           continue;
         }
-        total -= deletedBytes;
-        freedBytes += deletedBytes;
-        removedFiles += 1;
+        total -= plannedBytes;
+        if (dryRun) {
+          freedBytes += plannedBytes;
+          removedFiles += 1;
+        }
       }
+    }
+  }
+
+  if (!dryRun && commitEvictedIndex && deferredEvictedArtifactPaths.length > 0) {
+    await commitEvictedIndex();
+    for (const filePath of deferredEvictedArtifactPaths) {
+      const deletedBytes = await removeFileForBudget({
+        filePath,
+        dryRun: false,
+        fileSizesByPath,
+        simulatedRemovedPaths,
+        onRemovedPath: params.onRemoveFile,
+      });
+      if (deletedBytes <= 0) {
+        continue;
+      }
+      freedBytes += deletedBytes;
+      removedFiles += 1;
     }
   }
 

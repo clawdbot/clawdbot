@@ -1,11 +1,7 @@
 import { consume } from "@lit/context";
 import { property } from "lit/decorators.js";
 import type { UpdateAvailable } from "../api/types.ts";
-import {
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
-  type NavigationRouteId,
-  type SidebarNavRoute,
-} from "../app-navigation.ts";
+import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
   applicationContext,
@@ -28,8 +24,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
-  @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
-    DEFAULT_SIDEBAR_PINNED_ROUTES;
+  @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
   /** Agents surfaced first in the chip quick switcher when many exist. */
   @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];
   @property({ attribute: false }) themeMode: ThemeMode = "system";
@@ -49,7 +44,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   ) => void;
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
-  @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
+  @property({ attribute: false }) onUpdateSidebarEntries?: (entries: string[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;

@@ -50,18 +50,23 @@ Use `chromeNode.node` to run Chrome, BlackHole, and SoX on a paired macOS node. 
 | ------------ | --------------------------------------------------------------------------- |
 | `agent`      | Realtime transcription consults the configured OpenClaw agent; TTS replies. |
 | `bidi`       | A realtime voice model listens and replies directly.                        |
-| `transcribe` | Observe-only join. Caption snapshots are currently empty.                   |
+| `transcribe` | Observe-only join with live-caption transcript snapshots.                   |
 
-Caption scraping is disabled by default. Teams live-caption DOM selectors need validation across live work and consumer tenants before the plugin can promise transcript capture.
+Transcribe mode enables Teams live captions after admission and captures speaker-attributed caption rows. The `transcript` action returns the bounded caption buffer for the active OpenClaw meeting session.
 
 ## Guest join limits
 
-The browser adapter dismisses the app interstitial, fills the guest name, turns the camera off, configures the microphone for the selected mode, and clicks the join button. In-call state uses the hang-up control; lobby, tenant sign-in, and device-permission states return explicit manual-action reasons.
+The browser adapter dismisses the app interstitial, fills the guest name, turns the camera off, configures the microphone for the selected mode, and clicks the join button. In-call state uses the hang-up control; lobby, tenant sign-in, and device-permission states return explicit manual-action reasons. Consumer meeting launcher redirects and the `BlackHole 2ch (Virtual)` labels shown by Chrome are supported.
 
 Teams tenant policy can require sign-in, email verification, or organizer admission. Complete that step in the OpenClaw Chrome profile, then retry status or speech. The plugin does not bypass tenant policy.
 
-All in-page selectors are best-effort pending live validation. Work and consumer Teams UI changes can require selector updates. Validate these flows before unattended use: app interstitial, guest-name entry, prejoin microphone/camera toggles, join, lobby admission, tenant sign-in/email verification, media permissions, in-call detection, BlackHole output routing, leave confirmation, and consumer-meeting behavior.
+The consumer Teams web client has been live-validated for the app interstitial, guest-name entry, prejoin microphone/camera toggles, join, lobby admission, media permissions, in-call detection, live captions, BlackHole input/output routing, leave, and post-call detection. Work tenants can impose different sign-in, email-verification, admission, and leave-confirmation policy; complete any reported manual action in the OpenClaw Chrome profile.
 
 ## Tool and gateway surface
 
 The `teams_meetings` agent tool supports `join`, `leave`, `status`, `transcript`, and `speak`. Gateway methods use the `teamsmeetings.*` prefix. The node command is `teamsmeetings.chrome`.
+
+## Related
+
+- [Meeting plugins overview](/plugins/meeting-plugins)
+- [Microsoft Teams channel](/channels/msteams)

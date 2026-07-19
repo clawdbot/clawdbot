@@ -59,9 +59,11 @@ type LeaseCall = Parameters<PluginStateLeaseRunner>;
 type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
 
 interface MockChild extends EventEmitter {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
   stdout: MockStream;
   stderr: MockStream;
-  kill: (signal?: NodeJS.Signals) => void;
+  kill: (signal?: NodeJS.Signals) => boolean;
   closeWith: (code?: number | null) => void;
 }
 
@@ -69,13 +71,18 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
   const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child: MockChild = Object.assign(new EventEmitter(), {
+    exitCode: null,
+    signalCode: null,
     stdout,
     stderr,
     closeWith: (code: number | null = 0) => {
-      child.emit("close", code);
+      child.exitCode = code;
+      child.emit("close", code, child.signalCode);
     },
-    kill: () => {
+    kill: (signal: NodeJS.Signals = "SIGTERM") => {
+      child.signalCode = signal;
       // Let timeout rejection win in tests that simulate hung QMD commands.
+      return true;
     },
   });
   if (params?.autoClose !== false) {
@@ -873,7 +880,20 @@ describe("QmdMemoryManager", () => {
     cfg?: OpenClawConfig;
     agentId?: string;
   }) {
-    const cfgToUse = params?.cfg ?? cfg;
+    const sourceCfg = params?.cfg ?? cfg;
+    const cfgToUse: OpenClawConfig = {
+      ...sourceCfg,
+      agents: {
+        ...sourceCfg.agents,
+        defaults: {
+          ...sourceCfg.agents?.defaults,
+          memorySearch: {
+            rememberAcrossConversations: false,
+            ...sourceCfg.agents?.defaults?.memorySearch,
+          },
+        },
+      },
+    };
     const selectedAgentId = params?.agentId ?? agentId;
     const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId: selectedAgentId });
     const manager = trackManager(
@@ -937,6 +957,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+            rememberAcrossConversations: false,
             store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },

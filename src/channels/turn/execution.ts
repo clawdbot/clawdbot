@@ -151,6 +151,7 @@ async function runPreparedChannelTurnCoreInTrace<
   const botLoopDrop = resolveBotLoopProtectionDrop(params);
   if (botLoopDrop) {
     clearPendingHistoryAfterTurn(params.history);
+    await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
   }
   emit({
@@ -219,6 +220,8 @@ async function runPreparedChannelTurnCoreInTrace<
   try {
     if (admission.kind === "observeOnly" && !options.suppressObserveOnlyDispatch) {
       await params.runDispatch();
+    } else if (admission.kind === "observeOnly") {
+      await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
     }
     dispatchResult =
       admission.kind === "observeOnly"

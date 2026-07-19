@@ -29,24 +29,33 @@ flow:
     - name: delegates a bounded task and reports the result
       actions:
         - call: reset
-        - call: runAgentPrompt
-          args:
-            - ref: env
-            - sessionKey: agent:qa:subagent
-              message:
-                expr: config.prompt
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 90000)
-        - call: waitForAgentHistoryReply
-          saveAs: outbound
-          args:
-            - ref: env
-            - agent:qa:subagent
-            - lambda:
-                params: [text]
-                expr: "(() => { const lower = normalizeLowercaseStringOrEmpty(text); return lower.includes('delegated task') && lower.includes('result') && lower.includes('evidence') && !lower.includes('waiting'); })()"
-            - expr: liveTurnTimeoutMs(env, 45000)
-            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - try:
+            actions:
+              - call: runAgentPrompt
+                args:
+                  - ref: env
+                  - sessionKey: agent:qa:subagent
+                    message:
+                      expr: config.prompt
+                    timeoutMs:
+                      expr: liveTurnTimeoutMs(env, 90000)
+              - call: waitForAgentHistoryReply
+                saveAs: outbound
+                args:
+                  - ref: env
+                  - agent:qa:subagent
+                  - lambda:
+                      params: [text]
+                      expr: "(() => { const lower = normalizeLowercaseStringOrEmpty(text); return lower.includes('delegated task') && lower.includes('result') && lower.includes('evidence') && !lower.includes('waiting'); })()"
+                  - expr: liveTurnTimeoutMs(env, 45000)
+                  - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+            catchAs: handoffError
+            catch:
+              - set: handoffTasks
+                value:
+                  expr: "await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: formatErrorMessage(error) }))"
+              - throw:
+                  expr: "`subagent handoff stalled: ${formatErrorMessage(handoffError)}; outbound=${recentOutboundSummary(state, 8)} tasks=${JSON.stringify(handoffTasks)}`"
         - assert:
             expr: "!['failed to delegate','could not delegate','subagent unavailable'].some((needle) => normalizeLowercaseStringOrEmpty(outbound.text).includes(needle))"
             message:

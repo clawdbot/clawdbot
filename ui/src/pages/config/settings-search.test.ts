@@ -201,6 +201,23 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes workspace queries to the sessions-hub pages", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "worktree",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "worktrees",
+        label: "Managed Worktrees",
+        hash: "",
+      }),
+    ]);
+  });
+
   it("does not create block results for an empty query", () => {
     expect(
       findSettingsSearchBlocks({

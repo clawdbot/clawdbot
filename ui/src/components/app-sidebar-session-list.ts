@@ -1,8 +1,9 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
+import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
@@ -24,54 +25,33 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import {
+  renderSessionAttentionIcon,
+  renderSessionState,
+  sessionAttentionSubtitle,
+} from "./session-attention-presentation.ts";
+import { resolveSessionIcon } from "./session-icon-registry.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import "./elapsed-time.ts";
+
+const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
   @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
-  private renderSessionState(session: SidebarRecentSession) {
-    if (session.hasActiveRun || (session.isChild && session.status === "running")) {
-      return html`<span
-        class="session-run-spinner sidebar-recent-session__state"
-        role="img"
-        aria-label=${t("sessionsView.activeRun")}
-        title=${t("sessionsView.activeRun")}
-      ></span>`;
+  protected override willUpdate(changed: PropertyValues<this>) {
+    super.willUpdate(changed);
+    // A fresh draft must be visible where it will live: genuinely expand a
+    // collapsed Threads section (persisted) instead of overriding at render
+    // time, so the header toggle keeps matching the visible state.
+    if (
+      changed.has("draftSessionAgentId") &&
+      this.draftSessionAgentId &&
+      this.collapsedSessionSections.has("ungrouped")
+    ) {
+      this.toggleSessionSection("ungrouped");
     }
-    if (!session.isChild) {
-      return session.unread
-        ? html`<span
-            class="session-unread-dot sidebar-recent-session__unread"
-            role="img"
-            aria-label=${t("sessionsView.unread")}
-          ></span>`
-        : nothing;
-    }
-    const status = session.status;
-    if (!status) {
-      return nothing;
-    }
-    const statusBadge =
-      status === "done"
-        ? { icon: icons.check, label: t("sessionsView.statusDone") }
-        : status === "killed"
-          ? { icon: icons.stop, label: t("sessionsView.statusKilled") }
-          : status === "timeout"
-            ? { icon: icons.alertTriangle, label: t("sessionsView.statusTimeout") }
-            : status === "failed"
-              ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
-              : null;
-    return statusBadge
-      ? html`<span
-          class="sidebar-child-session__status sidebar-child-session__status--${status}"
-          role="img"
-          aria-label=${statusBadge.label}
-          title=${statusBadge.label}
-          >${statusBadge.icon}</span
-        >`
-      : nothing;
   }
 
   private renderRecentSession(
@@ -79,16 +59,27 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     display?: CatalogBackingSessionDisplay,
   ) {
     const label = display?.label ?? session.label;
-    const subtitle = display
-      ? display.subtitle
-      : session.subtitle && session.workSession && session.subtitle !== session.label
-        ? session.subtitle
-        : undefined;
+    const subtitle =
+      sessionAttentionSubtitle(session.attention) ??
+      (display
+        ? display.subtitle
+        : session.subtitle && session.workSession && session.subtitle !== session.label
+          ? session.subtitle
+          : undefined);
     const meta = display?.meta ?? session.meta;
+    const rowMeta = session.pinned ? "" : meta;
     const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
     const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
     const menuSession = display ? { ...session, meta } : session;
-    const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
+    const title = display?.title ?? [label, rowMeta].filter(Boolean).join(" · ");
+    // Pinned rows reposition the state badge into the nav-item slot; render
+    // every state renderSessionState knows (spinner, unread, child terminal
+    // badges) so pinning a subagent session cannot hide its outcome.
+    const sessionState = renderSessionState(session);
+    const pinnedState =
+      session.pinned && sessionState !== nothing
+        ? html`<span class="nav-item__state">${sessionState}</span>`
+        : nothing;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -97,6 +88,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       this.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
+      session.attention.kind === "error"
+        ? "sidebar-recent-session--attention-danger"
+        : session.attention.kind !== "none"
+          ? "sidebar-recent-session--attention-amber"
+          : "",
       this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
     ]
       .filter(Boolean)
@@ -113,12 +109,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
               if (event.dataTransfer) {
                 writeSessionDragData(event.dataTransfer, session.key);
                 this.draggingSessionKey = session.key;
+                this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
               }
             }}
         @dragend=${session.isChild
           ? nothing
           : () => {
-              this.draggingSessionKey = null;
+              this.finishSidebarEntryDrag();
               this.sessionDropTarget = null;
             }}
         @contextmenu=${session.isChild
@@ -139,14 +136,30 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
+          ${session.attention.kind !== "none"
+            ? renderSessionAttentionIcon(session.attention)
+            : session.pinned
+              ? html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
+                  >${resolveSessionIcon(session.icon)}</span
+                >`
+              : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${subtitle
               ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
-          ${this.renderSessionState(session)}
-          ${session.isChild ? nothing : renderSessionRowBadges(session)}
+          ${!session.isChild && sessionHasBoard(session.key)
+            ? html`<span
+                class="sidebar-board-glyph"
+                role="img"
+                aria-label=${t("sessionsView.dashboardAvailable")}
+                title=${t("sessionsView.dashboardAvailable")}
+                >${icons.barChart}</span
+              >`
+            : nothing}
+          ${session.pinned ? nothing : sessionState}
+          ${session.isChild ? nothing : renderSessionRowBadges(session)} ${pinnedState}
         </a>
         ${session.childSessionKeys.length > 0
           ? html`<button
@@ -242,6 +255,23 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
 
   private renderSessionTree(session: SidebarRecentSession): TemplateResult {
     const expanded = this.isSessionChildrenExpanded(session);
+    const showAllChildren = this.fullyShownChildSessionKeys.has(session.key);
+    // The cap hides quiet children only: the active branch and any branch with
+    // live runs (runningChildCount is transitive) must stay visible, or an
+    // auto-expanded parent would omit its own selection or a running session.
+    const visibleChildren = showAllChildren
+      ? session.children
+      : session.children.filter(
+          (child, index) =>
+            index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT ||
+            child.visuallyActive ||
+            child.containsActiveDescendant ||
+            child.hasActiveRun ||
+            child.status === "running" ||
+            child.runningChildCount > 0 ||
+            child.attention.kind !== "none",
+        );
+    const hiddenChildCount = session.children.length - visibleChildren.length;
     return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
       ${this.renderRecentSession(session)}
       ${expanded
@@ -249,13 +279,30 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             class="sidebar-session-tree__children"
             aria-label=${t("sessionsView.childSessions")}
           >
-            ${session.children.map((child) => this.renderSessionTree(child))}
+            ${visibleChildren.map((child) => this.renderSessionTree(child))}
+            ${hiddenChildCount > 0
+              ? html`<button
+                  class="sidebar-session-tree__show-more"
+                  type="button"
+                  data-show-more-children=${session.key}
+                  aria-label=${t("sessionsView.showMoreChildren", {
+                    count: String(hiddenChildCount),
+                  })}
+                  @click=${() => this.showAllSessionChildren(session.key)}
+                >
+                  ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
+                </button>`
+              : nothing}
             ${session.loadingChildren && session.children.length === 0
               ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
               : nothing}
           </div>`
         : nothing}
     </div>`;
+  }
+
+  protected renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
+    return this.renderSessionTree(session);
   }
 
   private renderSessionSection(
@@ -269,6 +316,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       totalRowCount?: number;
     },
     trailing: TemplateResult | typeof nothing = nothing,
+    showDraft = false,
   ) {
     const totalRowCount = section.totalRowCount ?? section.rows.length;
     const group = section.category;
@@ -296,6 +344,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     // Collapsed Coding still signals live runs so background work stays visible.
     const collapsedRunningDot =
       collapsed && section.work && section.rows.some((row) => row.hasActiveRun);
+    const collapsedAttentionDot =
+      collapsed && section.rows.some((row) => row.attention.kind !== "none");
     const acceptsSessions =
       isPinned ||
       (this.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group)));
@@ -380,6 +430,14 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                         title=${t("sessionsView.activeRun")}
                       ></span>`
                     : nothing}
+                  ${collapsedAttentionDot
+                    ? html`<span
+                        class="sidebar-session-group-attention"
+                        role="img"
+                        aria-label=${t("sessionsView.attentionRequired")}
+                        title=${t("sessionsView.attentionRequired")}
+                      ></span>`
+                    : nothing}
                 </button>
                 ${section.id === "ungrouped"
                   ? html`
@@ -440,8 +498,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ${collapsed
           ? nothing
           : html`
-              ${section.rows.length > 0
+              ${section.rows.length > 0 || showDraft
                 ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
+                    ${showDraft ? this.renderDraftSessionRow() : nothing}
                     ${section.rows.map((session) => this.renderSessionTree(session))}
                   </div>`
                 : nothing}
@@ -473,8 +532,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
   ) {
     const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(rows);
     return html`
-      ${options.showDraft ? this.renderDraftSessionRow() : nothing}
       ${sections.map((section) => {
+        const showDraft = section.id === "ungrouped" && options.showDraft;
         if (section.id === "work") {
           // Coding hosts live work/ACP rows plus the CLI catalogs; hide the
           // whole zone when both are empty.
@@ -483,7 +542,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           }
           return this.renderSessionSection(section, options.codingTrailing ?? nothing);
         }
-        return this.renderSessionSection(section);
+        // Threads hides its bare header when empty, except while a draft needs
+        // a home or a session drag needs the unpin drop target. Empty custom
+        // categories keep rendering: they are user-created containers and the
+        // "New group…" / drag-into-group flows depend on seeing them.
+        if (
+          section.id === "ungrouped" &&
+          section.totalRowCount === 0 &&
+          !showDraft &&
+          this.draggingSessionKey === null
+        ) {
+          return nothing;
+        }
+        return this.renderSessionSection(section, nothing, showDraft);
       })}
       ${this.renderSessionPagination(expandedRows, visibleRows.length)}
     `;
@@ -532,7 +603,14 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
     return html`
-      <section class="sidebar-sessions">
+      <section
+        class="sidebar-sessions ${this.sessionListRemovalDrop
+          ? "sidebar-sessions--removal-drop"
+          : ""}"
+        @dragover=${(event: DragEvent) => this.handleSessionListDragOver(event)}
+        @dragleave=${(event: DragEvent) => this.handleSessionListDragLeave(event)}
+        @drop=${(event: DragEvent) => this.handleSessionListDrop(event)}
+      >
         ${this.sessionMutationError
           ? html`
               <div
@@ -564,6 +642,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             codingTrailing: html`${this.renderSessionCatalogs(navigationState)}`,
             codingTrailingPresent: this.sessionCatalogs.length > 0,
           })}
+          <button
+            type="button"
+            class="sidebar-view-archived"
+            @click=${() => this.onNavigate?.("sessions", { search: "?showArchived=1" })}
+          >
+            ${icons.archive} ${t("sessionsView.viewArchived")}
+          </button>
         </div>
       </section>
     `;

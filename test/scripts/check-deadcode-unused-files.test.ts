@@ -55,6 +55,22 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
   throw new Error(`timeout waiting for ${filePath}`);
 }
 
+// Pid files are written with plain writeFileSync, so an existence poll can
+// observe the open-truncate 0-byte window and parse NaN. Wait for a real pid.
+async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (existsSync(filePath)) {
+      const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    }
+    await sleep(5);
+  }
+  throw new Error(`timeout waiting for pid in ${filePath}`);
+}
+
 async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
@@ -353,8 +369,7 @@ Delete the files or model their real entrypoints in Knip.`,
           writeStatus: () => {},
         });
 
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         await expect(resultPromise).resolves.toMatchObject({
@@ -412,8 +427,7 @@ Delete the files or model their real entrypoints in Knip.`,
         });
 
         await waitForFile(readyPath, 2_000);
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");

@@ -7,6 +7,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
@@ -258,4 +259,42 @@ export function renderSettingsValue(value: unknown, options: { mono?: boolean } 
 
 export function renderSettingsEmpty(message: unknown): TemplateResult {
   return html`<div class="settings-empty">${message}</div>`;
+}
+
+/** Secret text input with an inset reveal toggle — one field, no trailing
+ * button, so secret rows line up with plain input rows in the same group. */
+export function renderSettingsSecretInput(props: {
+  value: string;
+  placeholder?: string;
+  visible: boolean;
+  showLabel: string;
+  hideLabel: string;
+  toggleLabel: string;
+  onInput: (next: string) => void;
+  onToggle: () => void;
+}): TemplateResult {
+  return html`
+    <span class="settings-secret">
+      <input
+        class="settings-input"
+        type=${props.visible ? "text" : "password"}
+        autocomplete="off"
+        spellcheck="false"
+        .value=${props.value}
+        placeholder=${props.placeholder ?? ""}
+        @input=${(e: Event) => props.onInput((e.target as HTMLInputElement).value)}
+      />
+      <openclaw-tooltip .content=${props.visible ? props.hideLabel : props.showLabel}>
+        <button
+          type="button"
+          class="settings-secret__toggle"
+          aria-label=${props.toggleLabel}
+          aria-pressed=${props.visible}
+          @click=${props.onToggle}
+        >
+          ${props.visible ? icons.eye : icons.eyeOff}
+        </button>
+      </openclaw-tooltip>
+    </span>
+  `;
 }

@@ -38,6 +38,23 @@ describe("agent defaults schema", () => {
     expect(agent.utilityModel).toBe("google/gemini-3.1-flash-lite-preview");
   });
 
+  it("accepts explicit model policy on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      modelPolicy: { allow: ["openai/*", "anthropic/claude-sonnet-4-6"] },
+    });
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      modelPolicy: { allow: [] },
+    });
+
+    expect(defaults?.modelPolicy?.allow).toEqual(["openai/*", "anthropic/claude-sonnet-4-6"]);
+    expect(agent.modelPolicy?.allow).toEqual([]);
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ modelPolicy: { allow: "openai/*" } }),
+      "modelPolicy.allow",
+    );
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
@@ -325,6 +342,28 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.compaction?.truncateAfterCompaction).toBe(true);
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it.each([
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "adaptive",
+    "max",
+    "ultra",
+  ] as const)("accepts compaction.thinkingLevel=%s", (thinkingLevel) => {
+    const result = AgentDefaultsSchema.parse({ compaction: { thinkingLevel } })!;
+    expect(result.compaction?.thinkingLevel).toBe(thinkingLevel);
+  });
+
+  it("rejects an unknown compaction thinking level", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ compaction: { thinkingLevel: "extreme" } }),
+      "compaction.thinkingLevel",
+    );
   });
 
   it("rejects unsafe byte-size strings in compaction defaults", () => {

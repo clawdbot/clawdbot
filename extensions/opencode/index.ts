@@ -4,7 +4,6 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import {
   buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
-  resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
@@ -16,6 +15,7 @@ import {
   normalizeOpencodeZenBaseUrl,
   resolveOpencodeZenModel,
 } from "./provider-catalog.js";
+import { resolveThinkingProfile as resolveOpencodeThinkingProfile } from "./provider-policy-api.js";
 import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 
 const PROVIDER_ID = "opencode";
@@ -151,7 +151,7 @@ export default definePluginEntry({
       augmentModelCatalog: () => listOpencodeZenModelCatalogEntries(),
       ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
-      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
+      resolveThinkingProfile: resolveOpencodeThinkingProfile,
     });
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
     registerOpenCodeSessionCatalog(api);

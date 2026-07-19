@@ -519,7 +519,9 @@ See [Inferred commitments](/concepts/commitments).
       locale: "en",
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatPersistCommentary: false,
       chatSendShortcut: "enter", // enter | modifier-enter
+      chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
     },
   },
 }

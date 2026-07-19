@@ -3,8 +3,9 @@ import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import {
   cancelRoutePreload,
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
+  DEFAULT_SIDEBAR_ENTRIES,
   scheduleRoutePreload,
+  serializeSidebarEntry,
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -314,7 +315,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     const trigger = this.customizeMenuTrigger;
     return renderSidebarCustomizeMenu({
       position,
-      pinnedRoutes: this.sidebarPinnedRoutes,
+      sidebarEntries: this.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
@@ -324,14 +325,20 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.closeCustomizeMenu({ restoreFocus });
       },
       onToggleRoute: (routeId) => {
-        const pinned = this.sidebarPinnedRoutes;
-        const next = pinned.includes(routeId)
-          ? pinned.filter((route) => route !== routeId)
-          : [...pinned, routeId];
-        this.onUpdatePinnedRoutes?.(next);
+        const entry = serializeSidebarEntry({ type: "route", route: routeId });
+        const canonical = this.reconciledSidebarZone().sidebarEntries;
+        const next = canonical.includes(entry)
+          ? canonical.filter((candidate) => candidate !== entry)
+          : [...canonical, entry];
+        this.onUpdateSidebarEntries?.(next);
       },
       onReset: () => {
-        this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
+        // Canonical list, not the render list: unknown-state session slots
+        // (other agents, still-loading caches) must survive a route reset.
+        const sessions = this.reconciledSidebarZone().sidebarEntries.filter((entry) =>
+          entry.startsWith("session:"),
+        );
+        this.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
         this.closeCustomizeMenu({ restoreFocus: true });
       },
     });
@@ -399,6 +406,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         <openclaw-session-menu
           .session=${{
             label: session.label,
+            icon: session.icon,
             pinned: session.pinned,
             unread: batchRows ? allUnread : session.unread,
             archived: false,
@@ -445,6 +453,9 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
               case "toggle-pin":
                 void this.patchSession(session, { pinned: !session.pinned });
                 break;
+              case "set-icon":
+                void this.patchSession(session, { icon: action.icon });
+                break;
               case "toggle-unread":
                 void this.patchSession(session, { unread: !session.unread });
                 break;
@@ -465,7 +476,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 this.createSessionGroup([session]);
                 break;
               case "toggle-archived":
-                void this.patchSession(session, { archived: true });
+                void this.archiveSessionWithUndo(session);
                 break;
               case "stop-cloud-worker":
                 void this.stopCloudWorker(session);
@@ -564,7 +575,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       open: this.moreMenuPosition !== null,
       active: sidebarMoreMenuHoldsActiveRoute({
         activeRouteId: this.activeRouteId,
-        pinnedRoutes: this.sidebarPinnedRoutes,
+        sidebarEntries: this.sidebarEntries,
         isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       }),
       onToggle: (trigger) => this.toggleMoreMenu(trigger),
@@ -579,7 +590,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       basePath: this.basePath,
       activeRouteId: this.activeRouteId,
       activePluginTabId: this.activePluginTabId,
-      pinnedRoutes: this.sidebarPinnedRoutes,
+      sidebarEntries: this.sidebarEntries,
       pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),

@@ -2191,7 +2191,7 @@ describe("systemd service control", () => {
         env: {},
         onMutation,
       }),
-    ).resolves.toEqual({ outcome: "completed" });
+    ).resolves.toBeUndefined();
 
     expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-start" });
     expect(

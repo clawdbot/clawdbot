@@ -52,6 +52,7 @@ const schemaNames = new Map<string, string>([
   ["Question", "Question"],
   ["QuestionAnswers", "QuestionAnswers"],
   ["QuestionRecord", "QuestionRecord"],
+  ["QuestionGetResult", "QuestionGetResult"],
   ["QuestionListResult", "QuestionListResult"],
 ]);
 

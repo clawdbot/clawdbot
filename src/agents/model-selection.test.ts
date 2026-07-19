@@ -7,6 +7,7 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
@@ -148,6 +149,7 @@ const EXPLICIT_ALLOWLIST_CONFIG = {
       models: {
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
       },
+      modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
     },
   },
 } as OpenClawConfig;
@@ -261,6 +263,7 @@ function createAgentFallbackConfig(params: {
         models: {
           "openai/gpt-4o": {},
         },
+        modelPolicy: { allow: ["openai/gpt-4o"] },
         model: {
           primary: params.primary ?? "openai/gpt-4o",
           fallbacks: params.fallbacks ?? [],
@@ -1044,6 +1047,45 @@ describe("model-selection", () => {
     });
   });
 
+  describe("buildConfiguredAllowlistKeys", () => {
+    it("resolves per-agent policy aliases to the enforcement key", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+          },
+          list: [
+            {
+              id: "research",
+              models: {
+                "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+              },
+              modelPolicy: { allow: ["sonnet"] },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      const keys = buildConfiguredAllowlistKeys({
+        cfg,
+        defaultProvider: "openai",
+        agentId: "research",
+      });
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        agentId: "research",
+      });
+
+      expect(keys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
+      expect(keys?.has("openai/sonnet")).toBe(false);
+      expect(policy.allowsKey("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(policy.allowsKey("openai/sonnet")).toBe(false);
+    });
+  });
+
   describe("buildAllowedModelSet", () => {
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
       const result = buildAllowedModelSet({
@@ -1072,6 +1114,7 @@ describe("model-selection", () => {
             models: {
               "openai/gpt-test-z": { alias: "GPT Test Z Alias" },
             },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
           },
         },
         models: {
@@ -1206,6 +1249,7 @@ describe("model-selection", () => {
               "openai/*": {},
               "vllm/*": {},
             },
+            modelPolicy: { allow: ["openai/*", "vllm/*"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1243,6 +1287,7 @@ describe("model-selection", () => {
             models: {
               "openai/*": {},
             },
+            modelPolicy: { allow: ["openai/*"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1268,6 +1313,7 @@ describe("model-selection", () => {
               "openai/*": {},
               "anthropic/claude-sonnet-4-6": {},
             },
+            modelPolicy: { allow: ["openai/*", "anthropic/claude-sonnet-4-6"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1308,6 +1354,7 @@ describe("model-selection", () => {
               "vllm/*": {},
               "vllm/manual": {},
             },
+            modelPolicy: { allow: ["vllm/*", "vllm/manual"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1338,6 +1385,7 @@ describe("model-selection", () => {
               "openai/*": {},
               "google/gemini-test": {},
             },
+            modelPolicy: { allow: ["openai/*", "google/gemini-test"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1369,6 +1417,7 @@ describe("model-selection", () => {
               "anthropic/claude-sonnet-4-6": {},
               "openai/*": {},
             },
+            modelPolicy: { allow: ["anthropic/claude-sonnet-4-6", "openai/*"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1401,6 +1450,7 @@ describe("model-selection", () => {
             models: {
               "modelscope/Qwen/Qwen3.5-35B-A3B": {},
             },
+            modelPolicy: { allow: ["modelscope/Qwen/Qwen3.5-35B-A3B"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1433,6 +1483,7 @@ describe("model-selection", () => {
             models: {
               "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
             },
+            modelPolicy: { allow: ["nvidia/moonshotai/kimi-k2.5"] },
           },
         },
         models: {
@@ -1477,7 +1528,7 @@ describe("model-selection", () => {
       ]);
     });
 
-    it("includes fallback models in allowed set", () => {
+    it("keeps fallback models separate from explicit override authorization", () => {
       const cfg = createAgentFallbackConfig({
         fallbacks: ["anthropic/claude-sonnet-4-6", "google/gemini-3-pro"],
       });
@@ -1490,8 +1541,11 @@ describe("model-selection", () => {
       });
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
-      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
+      expect(result.automaticFallbackKeys).toEqual(
+        new Set(["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"]),
+      );
       expect(result.allowAny).toBe(false);
     });
 
@@ -1524,8 +1578,9 @@ describe("model-selection", () => {
       });
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
-      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
+      expect(result.automaticFallbackKeys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
       expect(result.allowAny).toBe(false);
     });
   });

@@ -95,7 +95,7 @@ targets:
           export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
           "$SRCROOT/../../scripts/check-swift-tools.sh" swiftformat
           swiftformat --lint --config "$SRCROOT/../../config/swiftformat" \
-            --unexclude "$SRCROOT/Sources,$SRCROOT/ShareExtension,$SRCROOT/ActivityWidget,$SRCROOT/WatchApp,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawChatUI,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawKit,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawProtocol,$SRCROOT/../swabble/Sources/SwabbleKit" \
+            --unexclude "$SRCROOT/Sources,$SRCROOT/ShareExtension,$SRCROOT/ActivityWidget,$SRCROOT/WatchApp,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawChatUI,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawKit,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawNativeState,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawProtocol,$SRCROOT/../swabble/Sources/SwabbleKit" \
             --filelist "$SRCROOT/SwiftSources.input.xcfilelist"
       - name: SwiftLint
         basedOnDependencyAnalysis: false
@@ -262,6 +262,9 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+      # Shared continuous avatar waveform; dependency-free for widget isolation.
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
+        group: Shared
       - path: Sources/Fonts
         buildPhase: resources
       - path: Resources/Localizable.xcstrings

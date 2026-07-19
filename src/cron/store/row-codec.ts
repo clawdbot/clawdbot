@@ -6,7 +6,7 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import type { CronJob, CronJobState, CronSchedule, CronStoreFile } from "../types.js";
+import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } from "../types.js";
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
@@ -239,12 +239,24 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   return null;
 }
 
+function pacingFromRow(row: CronJobRow): CronPacing | undefined {
+  const pacing = parseJsonObject<Record<string, unknown>>(row.job_json, {}).pacing;
+  if (!isRecord(pacing) || Array.isArray(pacing)) {
+    return undefined;
+  }
+  return {
+    ...(typeof pacing.min === "string" ? { min: pacing.min } : {}),
+    ...(typeof pacing.max === "string" ? { max: pacing.max } : {}),
+  };
+}
+
 function rowToCronJob(row: CronJobRow): CronJob | null {
   const schedule = scheduleFromRow(row);
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
+  const pacing = pacingFromRow(row);
   if (!schedule || !payload) {
     return null;
   }
@@ -273,6 +285,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
     ...(row.session_key ? { sessionKey: row.session_key } : {}),
     schedule,
+    ...(pacing !== undefined ? { pacing } : {}),
     sessionTarget: row.session_target as CronJob["sessionTarget"],
     wakeMode: row.wake_mode as CronJob["wakeMode"],
     ...(trigger ? { trigger } : {}),

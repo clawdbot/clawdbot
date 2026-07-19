@@ -93,9 +93,10 @@ describe("widget prompts", () => {
       postPrompt(port, "  Show details  ");
       await flushPorts();
       expect(received).toEqual(["Show details"]);
-      // Slash commands would run UI commands such as /approve on the widget's
-      // behalf; the send path must only ever receive conversational text.
+      // Slash and bang commands would run host commands on the widget's behalf;
+      // the send path must only ever receive conversational text.
       postPrompt(port, "/approve");
+      postPrompt(port, "!pwd");
       postPrompt(port, "   ");
       postPrompt(port, 42);
       postPrompt(port, "x".repeat(4_001));

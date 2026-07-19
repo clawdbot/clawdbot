@@ -434,47 +434,16 @@ describe("canvas host", () => {
     }
   });
 
-  it("serves sandbox-marked documents with a CSP sandbox header and no live reload", async () => {
+  it("leaves managed document requests to the core host", async () => {
     const dir = await createCaseDir();
-    const docDir = path.join(dir, "documents", "widget-1");
-    await fs.mkdir(docDir, { recursive: true });
-    await fs.writeFile(
-      path.join(docDir, "manifest.json"),
-      JSON.stringify({ id: "widget-1", cspSandbox: "scripts" }),
-      "utf8",
-    );
-    await fs.writeFile(path.join(docDir, "index.html"), "<html><body>widget</body></html>", "utf8");
-    const plainDir = path.join(dir, "documents", "plain-1");
-    await fs.mkdir(plainDir, { recursive: true });
-    await fs.writeFile(
-      path.join(plainDir, "manifest.json"),
-      JSON.stringify({ id: "plain-1" }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(plainDir, "index.html"),
-      "<html><body>plain</body></html>",
-      "utf8",
-    );
     const handler = await createTestCanvasHostHandler(dir);
 
     try {
-      const widget = await captureHandlerResponse(
+      const response = await captureHandlerResponse(
         handler,
         `${CANVAS_HOST_PATH}/documents/widget-1/index.html`,
       );
-      expect(widget.status).toBe(200);
-      // Opaque origin on direct navigation: widget script must not run as the app origin.
-      expect(widget.headers["content-security-policy"]).toBe("sandbox allow-scripts");
-      expect(widget.body).toContain("widget");
-      expect(widget.body).not.toContain(CANVAS_WS_PATH);
-
-      const plain = await captureHandlerResponse(
-        handler,
-        `${CANVAS_HOST_PATH}/documents/plain-1/index.html`,
-      );
-      expect(plain.status).toBe(200);
-      expect(plain.headers["content-security-policy"]).toBeUndefined();
+      expect(response.handled).toBe(false);
     } finally {
       await handler.close();
     }

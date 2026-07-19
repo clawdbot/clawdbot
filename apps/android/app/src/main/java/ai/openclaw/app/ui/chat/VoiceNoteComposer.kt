@@ -141,6 +141,9 @@ internal fun VoiceNotePreparing(modifier: Modifier = Modifier) {
 }
 
 @Composable
+internal fun voiceNoteRecordLabel(): String = nativeString("Record voice note")
+
+@Composable
 internal fun VoiceNoteRecordButton(
   enabled: Boolean,
   onClick: () -> Unit,
@@ -155,7 +158,7 @@ internal fun VoiceNoteRecordButton(
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.Default.Mic, contentDescription = nativeString("Record voice note"), modifier = Modifier.size(18.dp))
+      Icon(imageVector = Icons.Default.Mic, contentDescription = voiceNoteRecordLabel(), modifier = Modifier.size(18.dp))
     }
   }
 }

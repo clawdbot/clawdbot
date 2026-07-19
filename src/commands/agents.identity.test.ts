@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
+const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
+
 const configMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn().mockResolvedValue(undefined);
   return {
@@ -231,6 +233,27 @@ describe("agents set-identity command", () => {
     expect(getWrittenMainIdentity()).toEqual({
       avatar: "https://example.com/avatar.png",
     });
+  });
+
+  it("errors when an explicit identity file exceeds the size cap", async () => {
+    const { workspace } = await createIdentityWorkspace();
+    const identityPath = await writeIdentityFile(workspace, [
+      "- Name: Oversized",
+      "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1),
+    ]);
+
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { list: [{ id: "main" }] } },
+    });
+
+    await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Identity file ${identityPath} exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("errors when identity data is missing", async () => {

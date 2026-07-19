@@ -113,6 +113,7 @@ export function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps
     getRuntimeConfig: context.getRuntimeConfig,
     broadcast: context.broadcast,
     nodeSendToSession: context.nodeSendToSession,
+    onRunAborted: context.cancelRunBoundApprovals,
   };
 }
 

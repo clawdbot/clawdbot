@@ -37,6 +37,7 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "qqbot",
+      "approvalFlags": ["native"],
       "label": "QQ Bot",
       "selectionLabel": "QQ Bot (Official API)",
       "detailLabel": "QQ Bot",

@@ -36,6 +36,26 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toEqual([]);
   });
 
+  it("does not offer external CLIs whose version probes time out", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: async (command) => ({
+          command,
+          found: true,
+          timedOut: true,
+          error: "timed out after 1500ms",
+        }),
+        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        readCodexCliCredentials: () => ({ type: "oauth" }),
+        readGeminiCliCredentials: () => ({ type: "oauth" }),
+      },
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
   it("orders the ladder: existing model, env keys, then CLI logins", async () => {
     const candidates = await detectInferenceBackends({
       config: { agents: { defaults: { model: "zai/glm-5.2" } } },

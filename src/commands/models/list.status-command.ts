@@ -40,7 +40,10 @@ import {
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
+import {
+  modelCatalogLogicalKey,
+  resolveConfiguredModelPolicyAllow,
+} from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
@@ -484,7 +487,7 @@ export async function modelsStatusCommand(
       }
       return acc;
     }, {});
-    const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
+    const allowed = [...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs];
 
     const modelsPath = path.join(agentDir, "models.json");
     const aliasIndex = buildModelAliasIndex({
@@ -1415,7 +1418,7 @@ export async function modelsStatusCommand(
       )}`,
     );
     runtime.log(
-      `${label(`Configured models (${allowed.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
+      `${label(`Allowed models (${allowed.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
         rich,
         allowed.length ? theme.info : theme.muted,
         allowed.length ? allowed.join(", ") : "all",

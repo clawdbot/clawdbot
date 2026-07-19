@@ -76,7 +76,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
 
   refresh:
@@ -283,7 +283,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ github.event.repository.default_branch }}
           head-branch: automation/native-app-locale-refresh

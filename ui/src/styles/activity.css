@@ -49,7 +49,6 @@
 
 .activity-status-filter input {
   margin: 0;
-  accent-color: var(--accent);
 }
 
 .activity-status-filter:focus-within,

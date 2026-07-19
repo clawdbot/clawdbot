@@ -21,6 +21,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,12 +39,17 @@ import kotlinx.coroutines.delay
 internal fun ChatQuestionCard(
   prompt: ChatQuestionPrompt,
   onSubmit: (String, Map<String, List<String>>) -> Unit,
+  onSkip: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var draft by remember(prompt.record.id) { mutableStateOf(ChatQuestionDraft()) }
   var nowMs by remember(prompt.record.id) { mutableLongStateOf(System.currentTimeMillis()) }
   val status = prompt.status(nowMs)
   val pending = status == ChatQuestionStatus.Pending
+  if (!pending && status != ChatQuestionStatus.Submitting) {
+    ChatQuestionSummary(prompt = prompt, status = status, modifier = modifier)
+    return
+  }
   LaunchedEffect(prompt.record.id, prompt.record.expiresAtMs, status) {
     while (status == ChatQuestionStatus.Pending || status == ChatQuestionStatus.Submitting) {
       delay(1000)
@@ -75,7 +81,43 @@ internal fun ChatQuestionCard(
         status = status,
         nowMs = nowMs,
         onSubmit = onSubmit,
+        onSkip = onSkip,
       )
+    }
+  }
+}
+
+@Composable
+private fun ChatQuestionSummary(
+  prompt: ChatQuestionPrompt,
+  status: ChatQuestionStatus,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(ClawTheme.radii.row),
+    color = ClawTheme.colors.surfaceRaised,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Column(
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      prompt.record.questions.forEach { question ->
+        Column {
+          Text(
+            text = question.header + ':',
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.text,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Text(
+            text = terminalQuestionAnswer(prompt, question, status),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
     }
   }
 }
@@ -143,6 +185,7 @@ private fun QuestionFooter(
   status: ChatQuestionStatus,
   nowMs: Long,
   onSubmit: (String, Map<String, List<String>>) -> Unit,
+  onSkip: (String) -> Unit,
 ) {
   val answers = draft.answers(prompt.record.questions)
   if (status == ChatQuestionStatus.Pending || status == ChatQuestionStatus.Submitting) {
@@ -153,44 +196,51 @@ private fun QuestionFooter(
         color = ClawTheme.colors.textMuted,
       )
       Spacer(Modifier.weight(1f))
+      TextButton(
+        onClick = { onSkip(prompt.record.id) },
+        enabled = status == ChatQuestionStatus.Pending,
+      ) {
+        Text(nativeString("Skip"))
+      }
       Button(
         onClick = { answers?.let { onSubmit(prompt.record.id, it) } },
         enabled = answers != null && status == ChatQuestionStatus.Pending,
       ) {
-        Text(if (status == ChatQuestionStatus.Submitting) nativeString("Submitting…") else nativeString("Submit"))
+        Text(
+          if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
+            nativeString("Submitting…")
+          } else {
+            nativeString("Submit")
+          },
+        )
       }
     }
     prompt.errorText?.let { error ->
       Text(text = error, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
     }
-  } else {
-    Text(
-      text =
-        when (status) {
-          ChatQuestionStatus.Answered -> nativeString("Answered")
-          ChatQuestionStatus.AnsweredElsewhere -> nativeString("Answered elsewhere")
-          ChatQuestionStatus.Expired -> nativeString("Expired")
-          ChatQuestionStatus.Cancelled -> nativeString("Cancelled")
-          ChatQuestionStatus.Pending -> nativeString("Pending")
-          ChatQuestionStatus.Submitting -> nativeString("Submitting…")
-        },
-      style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textMuted,
-      fontWeight = FontWeight.SemiBold,
-    )
   }
+}
+
+internal fun terminalQuestionAnswer(
+  prompt: ChatQuestionPrompt,
+  question: Question,
+  status: ChatQuestionStatus,
+): String {
+  if (status == ChatQuestionStatus.Cancelled) return nativeString("Skipped")
+  if (status == ChatQuestionStatus.Expired) return nativeString("Expired")
+  if (status == ChatQuestionStatus.Unavailable) return nativeString("Unavailable")
+  prompt.record.answers?.answers?.get(question.id)?.answers?.takeIf { it.isNotEmpty() }?.let {
+    return it.joinToString(", ")
+  }
+  return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")
 }
 
 // nativeString is the non-composable resource accessor (nativeStringResource
 // is the @Composable variant), so this helper is safe outside composition.
-private fun questionCountdown(
+internal fun questionCountdown(
   expiresAtMs: Long,
   nowMs: Long,
 ): String {
   val seconds = ((expiresAtMs - nowMs).coerceAtLeast(0) + 999) / 1000
-  return if (seconds >= 60) {
-    nativeString("Expires in \${seconds / 60}m \${seconds % 60}s", seconds / 60, seconds % 60)
-  } else {
-    nativeString("Expires in \${seconds}s", seconds)
-  }
+  return (seconds / 60).toString() + ':' + (seconds % 60).toString().padStart(2, '0')
 }

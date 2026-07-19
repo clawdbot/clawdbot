@@ -33,6 +33,7 @@ openclaw gateway run   # equivalent, explicit form
 <AccordionGroup>
   <Accordion title="Startup behavior">
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
+    - When startup finds a repairable invalid config, an interactive terminal offers to run `openclaw doctor --fix` and retries startup once after consent. Non-interactive runs never repair automatically; they print the command instead. If the repaired config is still invalid, startup remains stopped.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths today; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
@@ -340,6 +341,7 @@ openclaw gateway status --require-rpc
     - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant.
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
+    - Human output includes `Gateway heap:` with the applied limit and its adaptive derivation. JSON output exposes the same report as `service.gatewayHeap`.
 
   </Accordion>
   <Accordion title="Linux systemd auth-drift checks">
@@ -523,6 +525,14 @@ openclaw gateway restart
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery stays active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots.
     - Gateway lifecycle mutations append best-effort key-value audit records to `<state-dir>/logs/gateway-restart.log`, including CLI start, stop, and restart operations, safe restart requests, supervisor restarts, and detached handoffs.
     - Lifecycle commands accept `--json` for scripting.
+
+  </Accordion>
+  <Accordion title="Managed Gateway heap sizing">
+    - `gateway install` writes a heap-only `NODE_OPTIONS` value for the managed Gateway service. It targets 50% of constrained memory when Node reports a container or service limit, otherwise 50% of physical memory.
+    - The nominal target range is 2048–8192 MiB, with an additional 75% native-headroom cap. On small hosts, that headroom cap can put the applied limit below the nominal 2048 MiB floor.
+    - A valid explicit `--max-old-space-size` already stored in the installed service is preserved across forced reinstalls and doctor repairs. Other `NODE_OPTIONS` flags are not carried into the managed service.
+    - Ambient shell `NODE_OPTIONS` does not override this policy. Use `gateway status` or `doctor` to inspect the installed value; run `openclaw gateway install --force` to regenerate older service metadata that has no managed heap setting.
+    - The policy applies only to the managed Gateway service. Foreground `gateway run`, node services, and hand-written supervisor units retain their own runtime configuration.
 
   </Accordion>
   <Accordion title="Auth and SecretRefs at install time">

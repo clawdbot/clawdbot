@@ -513,7 +513,7 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs),
     cleanup: async () => {
-      run.dispose();
+      await run.dispose();
       await rm(tempDir, { recursive: true, force: true });
     },
   };
@@ -561,12 +561,12 @@ describe.sequential("TUI PTY harness", () => {
 
   afterAll(async () => {
     for (const run of activeRuns.splice(0)) {
-      run.dispose();
+      await run.dispose();
     }
     for (const started of [fixture, compactFooterFixture, slowStartupFixture]) {
       await (started as Awaited<ReturnType<typeof startTuiFixture>> | undefined)?.cleanup();
     }
-  });
+  }, STARTUP_TEST_TIMEOUT_MS);
 
   it("renders local ready on startup", () => {
     expect(fixture.run.output()).toContain("local ready");

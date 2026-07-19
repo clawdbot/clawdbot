@@ -114,7 +114,9 @@ function loadSkillsFromDirInternal(
   }
 
   const root = rootDir ?? dir;
-  const ig = addIgnoreRules(dir, root, ignoreMatcher);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });

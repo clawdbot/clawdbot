@@ -1,5 +1,6 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -25,6 +26,7 @@ import {
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
@@ -91,17 +93,24 @@ async function readStdin(
   stream: NodeJS.ReadableStream = process.stdin,
   maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
 ): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.byteLength;
-    if (total > maxBytes) {
-      throw new Error(`Exec approvals stdin exceeds ${maxBytes} bytes.`);
-    }
-    chunks.push(buffer);
+  const bytes = await readByteStreamWithLimit(stream, {
+    maxBytes,
+    onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
+  });
+  return bytes.toString("utf8");
+}
+
+async function readApprovalsFile(filePath: string): Promise<string> {
+  // Explicit CLI file inputs have historically followed symlinks and readable
+  // special files. Pin that opened target while bounding the bytes consumed.
+  const handle = await fs.open(filePath, "r");
+  try {
+    return (await readFileDescriptorBounded(handle.fd, EXEC_APPROVALS_STDIN_MAX_BYTES)).toString(
+      "utf8",
+    );
+  } finally {
+    await handle.close();
   }
-  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
@@ -804,7 +813,7 @@ export function registerExecApprovalsCli(program: Command) {
         }
         const { source, nodeId, targetLabel, baseHash, kind } =
           await loadWritableSnapshotTarget(opts);
-        const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
+        const raw = opts.stdin ? await readStdin() : await readApprovalsFile(String(opts.file));
         let input: unknown;
         try {
           input = JSON5.parse(raw);

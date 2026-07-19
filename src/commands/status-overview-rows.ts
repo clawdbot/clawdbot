@@ -113,7 +113,7 @@ export function buildStatusCommandOverviewRows(
   const degradedSecretsValue =
     degradedSecretOwners.length > 0
       ? params.warn(
-          `${degradedSecretOwners.length} unavailable · ${degradedSecretOwners
+          `${degradedSecretOwners.length} degraded · ${degradedSecretOwners
             .map((owner) => `${owner.ownerKind}:${owner.ownerId}`)
             .join(", ")}`,
         )

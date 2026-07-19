@@ -126,11 +126,55 @@ struct ChatGatewayRequestTests {
             agentID: "reviewer",
             label: nil,
             parentSessionKey: "global",
-            worktree: true)
+            worktree: true,
+            worktreeBaseRef: " origin/release ")
         #expect(create.params["key"]?.value as? String == "agent:reviewer:new")
         #expect(create.params["agentId"]?.value as? String == "reviewer")
         #expect(create.params["parentSessionKey"]?.value as? String == "global")
         #expect(create.params["worktree"]?.value as? Bool == true)
+        #expect(create.params["worktreeBaseRef"]?.value as? String == "origin/release")
+    }
+
+    @Test func `message rewind and fork requests preserve routing identity`() {
+        let rewind = OpenClawChatGatewayRequests.rewindSession(
+            sessionKey: "agent:reviewer:telegram:group:1",
+            agentID: " reviewer ",
+            entryId: " message-42 ")
+        let fork = OpenClawChatGatewayRequests.forkAtMessage(
+            sessionKey: "global",
+            agentID: nil,
+            entryId: "message-43")
+
+        #expect(rewind.method == "sessions.rewind")
+        #expect(rewind.timeoutMs == 15000)
+        #expect(rewind.params["sessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
+        #expect(rewind.params["agentId"]?.value as? String == "reviewer")
+        #expect(rewind.params["entryId"]?.value as? String == "message-42")
+        #expect(rewind.params["key"] == nil)
+
+        #expect(fork.method == "sessions.fork")
+        #expect(fork.timeoutMs == 15000)
+        #expect(fork.params["sessionKey"]?.value as? String == "global")
+        #expect(fork.params["agentId"] == nil)
+        #expect(fork.params["entryId"]?.value as? String == "message-43")
+        #expect(fork.params["key"] == nil)
+    }
+
+    @Test func `session group requests encode exact gateway contracts`() {
+        let list = OpenClawChatGatewayRequests.sessionGroupsList()
+        let put = OpenClawChatGatewayRequests.sessionGroupsPut(names: ["Work", "Personal"])
+        let rename = OpenClawChatGatewayRequests.sessionGroupsRename(name: "Work", to: "Projects")
+        let delete = OpenClawChatGatewayRequests.sessionGroupsDelete(name: "Personal")
+
+        #expect(list.method == "sessions.groups.list")
+        #expect(list.params.isEmpty)
+        #expect(put.method == "sessions.groups.put")
+        #expect(put.params["names"]?.value as? [String] == ["Work", "Personal"])
+        #expect(rename.method == "sessions.groups.rename")
+        #expect(rename.params["name"]?.value as? String == "Work")
+        #expect(rename.params["to"]?.value as? String == "Projects")
+        #expect(delete.method == "sessions.groups.delete")
+        #expect(delete.params["name"]?.value as? String == "Personal")
     }
 
     @Test func `rename clear archive and fork use session mutation contracts`() {
@@ -207,6 +251,22 @@ struct ChatGatewayRequestTests {
         let values = try #require(answers["answers"] as? [String: Any])
         let meal = try #require(values["meal"] as? [String: Any])
         #expect(meal["answers"] as? [String] == ["Pizza", "Salad"])
+    }
+
+    @Test func `question get request carries id`() {
+        let request = OpenClawChatGatewayRequests.questionGet(id: "ask_123")
+
+        #expect(request.method == "question.get")
+        #expect(request.params["id"]?.value as? String == "ask_123")
+    }
+
+    @Test func `question cancel request uses resolve cancel contract`() {
+        let request = OpenClawChatGatewayRequests.cancelQuestion(id: "ask_123")
+
+        #expect(request.method == "question.resolve")
+        #expect(request.params["id"]?.value as? String == "ask_123")
+        #expect(request.params["cancel"]?.value as? Bool == true)
+        #expect(request.params["answers"] == nil)
     }
 
     @Test func `long running requests share exact gateway timeout margins`() {

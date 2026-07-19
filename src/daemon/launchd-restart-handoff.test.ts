@@ -138,7 +138,6 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[0]).toBe("-c");
     expect(args[2]).toBe("openclaw-launchd-restart-handoff");
     expect(args[6]).toBe("9876");
-    expect(args[7]).toBe("ai.openclaw.gateway");
     expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
     expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
     expect(args[1]).toContain("openclaw restart attempt source=handoff mode=kickstart");
@@ -153,7 +152,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
 
-  it("passes the plain label separately for start-after-exit mode", () => {
+  it("uses the service target for start-after-exit mode", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
@@ -165,7 +164,6 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     });
 
     const [, args] = requireSpawnCall();
-    expect(args[7]).toBe("ai.openclaw.gateway");
     expect(args[1]).toContain('if launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("reason=launchd-auto-reload");
     expect(args[1]).toContain("print_retry_count=$((print_retry_count - 1))");

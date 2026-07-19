@@ -106,6 +106,7 @@ import ai.openclaw.app.wear.WearProxyAgent
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
+import ai.openclaw.app.wear.WearProxyModel
 import ai.openclaw.app.wear.WearRealtimeTalkController
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
@@ -593,7 +594,7 @@ class NodeRuntime private constructor(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val canvas = CanvasController()
-  val camera = CameraCaptureManager(appContext)
+  val camera = CameraCaptureManager(appContext) { prefs.preferredCameraFacing.value }
   val location = LocationCaptureManager(appContext)
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
@@ -628,12 +629,14 @@ class NodeRuntime private constructor(
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = _voiceCaptureMode.asStateFlow()
+  private val _activeAudioInputDevicePreference = MutableStateFlow<String?>(null)
+  val activeAudioInputDevicePreference: StateFlow<String?> = _activeAudioInputDevicePreference.asStateFlow()
 
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
   val discoveryStatusText: StateFlow<String> = discovery.statusText
 
-  private val identityStore = DeviceIdentityStore(appContext)
+  private val identityStore = DeviceIdentityStore.withPrefs(appContext, prefs)
   private var connectedEndpoint: GatewayEndpoint? = null
   private var activeGatewayAuth: GatewayConnectAuth? = null
 
@@ -1053,6 +1056,7 @@ class NodeRuntime private constructor(
   private val voiceCaptureOwnershipLock = Any()
   private var voiceWakeSuppressionRevision = 0L
   private var voiceNoteOwnsMic = false
+  private var dictationOwnsMic = false
   private var cameraAudioOwnsMic = false
   private val voiceReplySpeechDepth = AtomicInteger(0)
   private val voiceCapturePreparationMutex = Mutex()
@@ -1161,6 +1165,24 @@ class NodeRuntime private constructor(
           selectChatAgent(agentId)
           true
         }
+      },
+      models = {
+        chatModelCatalog.value
+          .asSequence()
+          .filter { model -> model.available != false }
+          .map { model ->
+            val provider = model.provider.trim()
+            val ref =
+              if (provider.isEmpty() || model.id.startsWith("$provider/")) {
+                model.id
+              } else {
+                "$provider/${model.id}"
+              }
+            WearProxyModel(ref = ref, name = model.name)
+          }.toList()
+      },
+      selectSessionModel = { sessionKey, modelRef ->
+        chat.setSessionModelAwait(sessionKey = sessionKey, modelRef = modelRef)
       },
       connectGateway = { refreshGatewayConnection() },
       disconnectGateway = { disconnect() },
@@ -1525,6 +1547,12 @@ class NodeRuntime private constructor(
     MicCaptureManager(
       context = appContext,
       scope = scope,
+      preferredAudioInputDevice = { prefs.preferredAudioInputDevice.value },
+      onAppliedAudioInputChanged = { key ->
+        if (_voiceCaptureMode.value == VoiceCaptureMode.ManualMic) {
+          _activeAudioInputDevicePreference.value = key
+        }
+      },
       createTranscriptionSession = {
         val gatewayId = connectedEndpoint?.stableId ?: error("not connected")
         val params =
@@ -1632,6 +1660,12 @@ class NodeRuntime private constructor(
       session = operatorSession,
       isConnected = { gatewayConnectionDisplay.value.isConnected },
       gatewayStableId = { connectedEndpoint?.stableId },
+      preferredAudioInputDevice = { prefs.preferredAudioInputDevice.value },
+      onAppliedAudioInputChanged = { key ->
+        if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode) {
+          _activeAudioInputDevicePreference.value = key
+        }
+      },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
@@ -2433,6 +2467,8 @@ class NodeRuntime private constructor(
     answers: Map<String, List<String>>,
   ) = chat.resolveQuestion(id, answers)
 
+  fun skipChatQuestion(id: String) = chat.skipQuestion(id)
+
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
     _serverName.value = "OpenClaw Gateway"
@@ -2562,6 +2598,14 @@ class NodeRuntime private constructor(
     scope.launch {
       nativeLocaleChanges.drop(1).collect {
         updateHomeCanvasState()
+      }
+    }
+
+    scope.launch {
+      chatModelCatalog.drop(1).distinctUntilChanged().collect {
+        // Chat metadata arrives after the connection event. Invalidate the Watch snapshot so
+        // its Home model picker cannot stay empty until the user refreshes manually.
+        if (operatorSession.isReady()) wearProxyBridge()?.publishResync()
       }
     }
 
@@ -2885,7 +2929,7 @@ class NodeRuntime private constructor(
   internal fun tryAcquireVoiceNoteMic(): Boolean {
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
+        if (voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
         voiceNoteOwnsMic = true
         createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, true)
       }
@@ -2898,6 +2942,33 @@ class NodeRuntime private constructor(
       synchronized(voiceCaptureOwnershipLock) {
         voiceNoteOwnsMic = false
         createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, false)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+  }
+
+  internal fun tryAcquireDictationMic(): Boolean {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        if (
+          dictationOwnsMic ||
+          voiceNoteOwnsMic ||
+          cameraAudioOwnsMic ||
+          !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+        ) {
+          return false
+        }
+        dictationOwnsMic = true
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, true)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+    return true
+  }
+
+  internal fun releaseDictationMic() {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        dictationOwnsMic = false
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, false)
       }
     applyVoiceWakeSuppression(suppressionUpdate)
   }
@@ -3064,6 +3135,9 @@ class NodeRuntime private constructor(
           if (voiceNoteOwnsMic) {
             throw IllegalStateException("MIC_BUSY: voice note recording is active")
           }
+          if (dictationOwnsMic) {
+            throw IllegalStateException("MIC_BUSY: dictation is active")
+          }
           if (cameraAudioOwnsMic) {
             throw IllegalStateException("MIC_BUSY: camera audio recording is active")
           }
@@ -3179,6 +3253,12 @@ class NodeRuntime private constructor(
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
 
+  val preferredCameraFacing: StateFlow<String>
+    get() = prefs.preferredCameraFacing
+
+  val preferredAudioInputDevice: StateFlow<String?>
+    get() = prefs.preferredAudioInputDevice
+
   fun setSpeakerEnabled(value: Boolean) {
     prefs.setSpeakerEnabled(value)
     if (voiceReplySpeakerLazy.isInitialized()) {
@@ -3186,6 +3266,14 @@ class NodeRuntime private constructor(
     }
     // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
+  }
+
+  fun setPreferredCameraFacing(value: String) {
+    prefs.setPreferredCameraFacing(value)
+  }
+
+  fun setPreferredAudioInputDevice(value: String?) {
+    prefs.setPreferredAudioInputDevice(value)
   }
 
   fun setVoiceWakeEnabled(value: Boolean) {
@@ -3392,7 +3480,7 @@ class NodeRuntime private constructor(
     var startAfterSuppression: VoiceCaptureMode? = null
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
+        if (mode != VoiceCaptureMode.Off && (voiceNoteOwnsMic || dictationOwnsMic)) return
         if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
         talkPttCommandEpoch.incrementAndGet()
         voiceCaptureOwnershipEpoch.incrementAndGet()
@@ -3402,6 +3490,7 @@ class NodeRuntime private constructor(
         if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
         talkPttOwnership.set(null)
         _voiceCaptureMode.value = captureMode
+        _activeAudioInputDevicePreference.value = null
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false
@@ -3496,7 +3585,12 @@ class NodeRuntime private constructor(
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
         if (active) {
-          if (cameraAudioOwnsMic || voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) {
+          if (
+            cameraAudioOwnsMic ||
+            voiceNoteOwnsMic ||
+            dictationOwnsMic ||
+            !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+          ) {
             return false
           }
           cameraAudioOwnsMic = true
@@ -7426,7 +7520,7 @@ class NodeRuntime private constructor(
         .split(' ', '-', '_')
         .filter { it.isNotBlank() }
         .take(2)
-        .mapNotNull { token -> token.firstOrNull()?.uppercaseChar()?.toString() }
+        .mapNotNull { token -> token.uppercaseFirstGraphemeOrNull() }
         .joinToString("")
     return if (initials.isNotEmpty()) initials else "OC"
   }

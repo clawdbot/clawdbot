@@ -39,7 +39,7 @@ function nextAuthIdentityPath(prefix: string): string {
     poolId +
     "-" +
     String(authIdentityPathSeq++) +
-    ".json";
+    ".sqlite";
   return path.join(os.tmpdir(), fileName);
 }
 
@@ -181,7 +181,7 @@ async function createSignedDevice(params: {
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../infra/device-identity.js");
   const identity = params.identityPath
-    ? loadOrCreateDeviceIdentity(params.identityPath)
+    ? loadOrCreateDeviceIdentity({ path: params.identityPath })
     : loadOrCreateDeviceIdentity();
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
@@ -331,7 +331,7 @@ async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: strin
   const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
   const { getPairedDevice } = await import("../infra/device-pairing.js");
 
-  const identity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: deviceIdentityPath });
   const paired = await getPairedDevice(identity.deviceId);
   const deviceToken = paired?.tokens?.operator?.token;
   expect(paired?.deviceId).toBe(identity.deviceId);

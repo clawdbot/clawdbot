@@ -14,10 +14,16 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 base64 = "0.22.1"
+ed25519-dalek = "3.0.0"
+futures-util = "0.3.32"
+getrandom = "0.4.3"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 mdns-sd = { version = "0.20", default-features = false }
+rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+sha2 = "0.11.0"
+subtle = "2.6.1"
 tauri = { version = "2.11.5", features = ["image-png", "tray-icon"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-deep-link = "2.4.9"
@@ -27,6 +33,10 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
+tokio = { version = "1.52.3", features = ["macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
+uuid = { version = "1.23.5", features = ["v4"] }
+zeroize = "1.9.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cairo-rs = { version = "0.18.5", features = ["png"] }

@@ -362,6 +362,9 @@ export function reconcileSessionChanged(
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
   }
+  if (rowFields.icon === null) {
+    delete row.icon;
+  }
   if (rowFields.label === null) {
     delete row.label;
   }
@@ -373,6 +376,9 @@ export function reconcileSessionChanged(
   }
   if (rowFields.thinkingLevel === null) {
     delete row.thinkingLevel;
+  }
+  if (rowFields.lastRunError === null) {
+    delete row.lastRunError;
   }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,

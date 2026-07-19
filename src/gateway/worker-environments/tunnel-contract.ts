@@ -32,6 +32,10 @@ export type WorkerWorkspaceReconcileRequest = {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  stagedResult?: {
+    ref: string;
+    record(ref: string): void;
+  };
 };
 
 export type WorkerWorkspaceReconcileResult = {
@@ -41,6 +45,11 @@ export type WorkerWorkspaceReconcileResult = {
   verifyStable(): Promise<void>;
   /** Re-read the accepted local result after the remote stability fence. */
   verifyLocalStable(): Promise<void>;
+  /** Apply the prepared candidate locally without making it restart-authoritative. */
+  applyPreparedStagedResult?(): Promise<void>;
+  /** Publish the verified candidate for restart recovery. */
+  publishStagedResult?(): Promise<void>;
+  discardPreparedStagedResult?(): Promise<void>;
 };
 
 export type WorkerWorkspaceQuiescence = {

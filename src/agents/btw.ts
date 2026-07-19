@@ -488,7 +488,10 @@ async function resolveRuntimeModel(params: {
 }> {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir);
+  const authStorage = discoverAuthStorage(params.agentDir, {
+    config: params.cfg,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   const modelRegistry = discoverModels(authStorage, params.agentDir, {
     config: params.cfg,
     ...modelsOptions,

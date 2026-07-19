@@ -29,12 +29,12 @@ function hubTabLabel(tab: SessionsHubTab): string {
 /**
  * Every hub page marks its main content container with
  * id="sessions-hub-panel" so aria-controls stays valid on each route.
- * Styled through the settings design language's segmented control.
+ * Styled as page-level navigation (.hub-tabs in ui/src/styles/plugins.css).
  */
 export function renderSessionsHubTabs(props: SessionsHubTabsProps) {
   return html`
     <wa-tab-group
-      class="settings-segmented plugins-hub-tabs sessions-hub-tabs"
+      class="hub-tabs plugins-hub-tabs sessions-hub-tabs"
       aria-label=${t("sessionsPage.hubTablistLabel")}
       .active=${props.active}
       activation="manual"
@@ -49,7 +49,7 @@ export function renderSessionsHubTabs(props: SessionsHubTabsProps) {
             id=${`sessions-tab-${tab}`}
             panel=${tab}
             aria-controls="sessions-hub-panel"
-            class="settings-segmented__btn ${selected ? "settings-segmented__btn--active" : ""}"
+            class="hub-tab"
             ?active=${selected}
           >
             ${hubTabLabel(tab)}

@@ -78,7 +78,7 @@
   height: 14px;
   padding: 0 3px;
   border-radius: var(--radius-full);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground, #fff);
   font-size: 9px;
   font-weight: 650;

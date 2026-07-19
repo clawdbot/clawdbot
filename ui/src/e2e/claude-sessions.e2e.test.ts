@@ -205,8 +205,17 @@ function hostGroupedNativeCatalogs() {
   return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
 }
 
+async function expandCodingSection(page: Page) {
+  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
+  await toggle.waitFor({ state: "visible" });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
+}
+
 async function openClaudeCatalogTerminal(page: Page) {
   await page.goto(`${server.baseUrl}chat`);
+  await expandCodingSection(page);
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
@@ -237,6 +246,7 @@ suite("Claude native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       for (const catalogId of ["claude", "codex"]) {
         const section = page.locator(`[data-session-section="catalog:${catalogId}"]`);
         const gatewayHost = section.locator('[data-session-catalog-host="gateway:local"]');
@@ -459,7 +469,8 @@ suite("Claude native session catalog", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
-    await page.getByRole("button", { name: "Load more sessions" }).click();
+    await expandCodingSection(page);
+    await page.getByRole("button", { name: "Load more threads" }).click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
@@ -508,7 +519,7 @@ suite("Claude native session catalog", () => {
     expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
     expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
     await expect
-      .poll(() => page.getByText("This session is on a paired node and is view-only.").count())
+      .poll(() => page.getByText("This thread is on a paired node and is view-only.").count())
       .toBe(1);
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const expectCenteredLayout = async (screenshotName: string) => {

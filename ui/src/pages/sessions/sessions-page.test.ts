@@ -25,6 +25,7 @@ type TestSessionsPage = HTMLElement & {
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  showArchived: boolean;
   selectedKeys: Set<string>;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
@@ -40,6 +41,7 @@ type TestSessionsPage = HTMLElement & {
   loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
+  deleteAllArchived: () => Promise<void>;
   stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
   rememberCustomGroup: (name: string) => Promise<void>;
   openSessionMenu: (
@@ -47,7 +49,8 @@ type TestSessionsPage = HTMLElement & {
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) => void;
-  patchSession: (key: string, patch: { archived?: boolean }) => Promise<void>;
+  patchSession: (key: string, patch: { archived?: boolean; pinned?: boolean }) => Promise<unknown>;
+  archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
   forkSession: (key: string) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
@@ -177,6 +180,7 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 async function createRenderedPage(
   context: ApplicationContext,
   result: SessionsListResult,
+  showArchived = false,
 ): Promise<TestSessionsPage> {
   const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
   page.context = context;
@@ -186,7 +190,7 @@ async function createRenderedPage(
     result,
     error: null,
     expandedSessionKey: null,
-    showArchived: false,
+    showArchived,
   };
   document.body.append(page);
   await page.updateComplete;
@@ -199,6 +203,186 @@ afterEach(() => {
 });
 
 describe("sessions page lifecycle", () => {
+  it("switches between Active and Archived with the route parameter", async () => {
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, createSessions());
+    const page = await createRenderedPage(context, {
+      ts: Date.now(),
+      path: "",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    });
+
+    const archived = [
+      ...page.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button"),
+    ].find((button) => button.textContent?.trim() === "Archived");
+    archived?.click();
+    await page.updateComplete;
+
+    expect(page.showArchived).toBe(true);
+    expect(context.navigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
+    expect(archived?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("re-enumerates all archived sessions before bulk deletion", async () => {
+    // The rendered result holds one archived row; enumeration must find both.
+    const archivedKeys = ["agent:main:old-1", "agent:main:old-2"];
+    const sessions = createSessions({
+      list: vi.fn(async () => ({
+        count: 2,
+        sessions: archivedKeys.map((key) => ({ key, archived: true })),
+      })) as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({
+        deleted: archivedKeys,
+        errors: [],
+        preservedWorktrees: [],
+      })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      {
+        count: 2,
+        sessions: [
+          { key: archivedKeys[0], archived: true },
+          { key: "agent:main:active", archived: false },
+        ],
+      } as SessionsListResult,
+      true,
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
+    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+
+    expect(sessions.list).toHaveBeenCalledWith(
+      expect.objectContaining({ showArchived: true, limit: 1000 }),
+    );
+    expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      {
+        key: archivedKeys[0],
+        agentId: undefined,
+        deleteTranscript: true,
+        archivedOnly: true,
+      },
+      {
+        key: archivedKeys[1],
+        agentId: undefined,
+        deleteTranscript: true,
+        archivedOnly: true,
+      },
+    ]);
+  });
+
+  it("aborts delete-all when an enumeration page fails", async () => {
+    const sessions = createSessions({
+      list: vi.fn(async () => null) as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    });
+    sessions.state.error = "list failed";
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      {
+        count: 1,
+        sessions: [{ key: "agent:main:old-1", archived: true }],
+      } as SessionsListResult,
+      true,
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
+    await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledOnce());
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("paginates the archived enumeration until the listing is exhausted", async () => {
+    const pageOne = ["agent:main:old-1", "agent:main:old-2"];
+    const pageTwo = ["agent:main:old-3"];
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        count: 3,
+        sessions: pageOne.map((key) => ({ key, archived: true })),
+        hasMore: true,
+        nextOffset: 2,
+      })
+      .mockResolvedValueOnce({
+        count: 3,
+        sessions: pageTwo.map((key) => ({ key, archived: true })),
+        hasMore: false,
+        nextOffset: null,
+      });
+    const sessions = createSessions({
+      list: list as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({
+        deleted: [...pageOne, ...pageTwo],
+        errors: [],
+        preservedWorktrees: [],
+      })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      {
+        count: 1,
+        sessions: [{ key: pageOne[0], archived: true }],
+      } as SessionsListResult,
+      true,
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
+    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
+    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
+    expect(sessions.deleteMany).toHaveBeenCalledWith(
+      [...pageOne, ...pageTwo].map((key) => ({
+        key,
+        agentId: undefined,
+        deleteTranscript: true,
+        archivedOnly: true,
+      })),
+    );
+  });
+
+  it("offers undo after archiving from the Sessions page", async () => {
+    const key = "agent:main:pinned";
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key,
+      entry: { sessionId: key },
+    }));
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({ sessionKey: key });
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
+
+    await page.archiveSessionWithUndo({ key, pinned: true } as GatewaySessionRow);
+    await toast.updateComplete;
+    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mutableGateway.setSessionKey).toHaveBeenLastCalledWith(key));
+
+    expect(patch).toHaveBeenNthCalledWith(1, key, { archived: true }, { agentId: undefined });
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      key,
+      { archived: false, pinned: true },
+      { agentId: undefined },
+    );
+  });
+
   it("submits one trimmed bounded transcript search and adopts its status", async () => {
     const response = deferred<SessionsSearchResult>();
     const request = vi.fn(() => response.promise);

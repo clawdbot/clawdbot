@@ -83,15 +83,15 @@ Remote-gateway onboarding keeps its legacy conversational handoff
 
 ## Phases
 
-| #   | Phase                                                                                                                                                                     | Surface              | Status                                                                                                          |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                                              | classic + guided CLI | merged ([#109668](https://github.com/openclaw/openclaw/pull/109668))                                            |
-| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                                | guided CLI           | merged ([`a83ed13204f1`](https://github.com/openclaw/openclaw/commit/a83ed13204f118adf1009e5ac88d5afe1905b86c)) |
-| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                                | CLI → web            | merged ([#110054](https://github.com/openclaw/openclaw/pull/110054))                                            |
-| 4   | Web custodian surface (option-card renderer shared with the question tool, scripted pre-AI states over `openclaw.chat`, post-wizard chat handoff)                         | Control UI           | planned                                                                                                         |
-| 5   | Hatch and bootstrap (blank-agent creation, self-naming, self-drawn avatar via image-gen when available, recommendations as the last bootstrap step, self-learning opt-in) | agent bootstrap      | planned                                                                                                         |
-| 6   | Custodian presence (pinned sidebar entry, Settings dock with event-reactive commentary, channel summon and agent-down recovery, weak-model script)                        | web + channels       | planned                                                                                                         |
-| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                                   | gateway              | follow-up                                                                                                       |
+| #   | Phase                                                                                                                                                     | Surface              | Status                                                                                                                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                              | classic + guided CLI | merged ([#109668](https://github.com/openclaw/openclaw/pull/109668))                                                              |
+| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                | guided CLI           | merged ([`a83ed13204f1`](https://github.com/openclaw/openclaw/commit/a83ed13204f118adf1009e5ac88d5afe1905b86c))                   |
+| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                | CLI → web            | merged ([#110054](https://github.com/openclaw/openclaw/pull/110054))                                                              |
+| 4   | Web custodian surface (option cards, typed `question` field on `openclaw.chat`, wizard-step mirroring, first-run handoff)                                 | Control UI           | merged ([#110141](https://github.com/openclaw/openclaw/pull/110141), [#110242](https://github.com/openclaw/openclaw/pull/110242)) |
+| 5   | Hatch and bootstrap (recommendations store with once-semantics, self-naming birth sequence, auto-hatch handoff after fresh setup; avatar ladder deferred) | agent bootstrap      | merged ([#110173](https://github.com/openclaw/openclaw/pull/110173), [#110331](https://github.com/openclaw/openclaw/pull/110331)) |
+| 6   | Custodian presence PR1 (pinned sidebar entry, Ask OpenClaw in Settings, normal-chrome caretaker greeting; event commentary and channel summon are PR2)    | web + channels       | merged ([#110269](https://github.com/openclaw/openclaw/pull/110269))                                                              |
+| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                   | gateway              | follow-up                                                                                                                         |
 
 ## Implementation notes per phase
 
@@ -171,19 +171,22 @@ Remote-gateway onboarding keeps its legacy conversational handoff
   terminal hatch. An earlier "token mismatch" hold was a test-harness
   artifact — see the testing playbook below.
 
-### Phase 4 — web custodian surface (planned)
+### Phase 4 — web custodian surface (merged: #110141, #110242)
 
-- One option-card component (header, question, 2-4 cards, one recommended,
-  always skippable) shared by scripted onboarding and the agent question tool
-  (`src/agents/harness/user-input-bridge.ts` shapes).
-- Scripted pre-AI dialogue as a small state machine consumed by CLI and web;
-  the web page runs over the existing `openclaw.chat` RPC in the chrome-hiding
-  onboarding mode. The model-setup wizard pages remain as the "More options"
-  fallback, embedded as cards.
-- Browser handoff should deep-link into the onboarding-mode custodian chat
-  once this exists (today it lands on the normal dashboard).
+- `/custodian` page over `openclaw.chat` with the option-card component
+  (2-4 cards, one recommended max, always skippable); onboarding chrome via
+  `?onboarding=1`; model-setup first-run completion hands off into it.
+- Structured questions are a typed additive `question` field on
+  `SystemAgentChatResult` (per-option `reply` text; prose always stands alone
+  for the macOS app/TUI). Producers: both onboarding welcome variants and
+  hosted wizard select/confirm steps with 2-4 closed options — real channel
+  wizards render as cards. The PR1 string-marker stopgap was deleted.
+- Session ownership is scoped to gateway URL + every presented credential
+  (token, password, bootstrap token, stored device token — sticky across
+  transient hello drops); failed user turns are never replayable; sensitive
+  input is sent verbatim and masked in the transcript.
 
-### Phase 5 — hatch and bootstrap (planned)
+### Phase 5 — hatch and bootstrap (merged: #110173, #110331)
 
 - Custodian creates a nameless agent (tool call); the agent's bootstrap opens
   with self-naming. PR1 ships the ceremony capped at three beats (name → soul
@@ -204,14 +207,20 @@ Remote-gateway onboarding keeps its legacy conversational handoff
 - Self-learning is asked, not announced, and doubles as skill-workshop
   consent; describe ClawHub's release-trust, scan, verification, and integrity
   checks plus the publisher-code warning — never imply every release is signed.
-- Zero agents on first run auto-hatches with the announcement; zero agents
-  after deletion offers instead (the emptiness was intentional).
+- Auto-hatch shipped: a fresh-install setup apply announces the hatch and
+  hands off (terminal TUI / `open-agent` for gateway clients); the web page
+  lands in agent chat with the "Wake up, my friend!" draft prefilled. The
+  handoff fires only on clean post-write verification. Zero agents after
+  deletion offering (instead of auto) remains follow-up polish.
 
-### Phase 6 — custodian presence (planned)
+### Phase 6 — custodian presence (PR1 merged: #110269; commentary/summon are PR2)
 
-- Pinned sidebar entry (permanent session — it is the config audit trail) and
-  Settings landing pane docked with the same session; replies deep-link into
-  settings sections. The surface keeps the name "Settings".
+- Shipped in PR1: default-pinned "OpenClaw" sidebar entry (fresh profiles;
+  existing users keep saved pins and reach it via customize/More), "Ask
+  OpenClaw" as the first Settings entry, and normal-chrome `/custodian` visits
+  that request the caretaker greeting (no onboarding welcome variant), with
+  Exit setup rendered only in onboarding mode. A docked inline Settings pane
+  needs shared conversation-view extraction (follow-up).
 - Event-reactive commentary with anti-Clippy guardrails: consequential or
   failed changes only, at most once per settings visit unless asked. The same
   event seam makes the custodian the voice for degraded auth or broken
@@ -224,11 +233,32 @@ Remote-gateway onboarding keeps its legacy conversational handoff
 - The custodian knows its internal nickname ("some folks call me the
   custodian — OpenClaw's fine") and always refers to the agent by name.
 
-### Phase 7 — resilience (follow-up)
+### Phase 7 — resilience (needs an owner decision before building)
 
-- The custodian must be reachable no matter how broken the config is: salvage
-  working surfaces (per the gateway's degraded-start SecretRef rules), say
-  plainly what is broken, and run `openclaw doctor` automatically.
+The original sketch — "the custodian must be reachable no matter how broken
+the config is" — collides with the repo's security policy: the root guide
+states the Gateway **refuses startup** when config is structurally invalid,
+and only SecretRef-owner failures degrade into configured-unavailable
+capabilities. Serving any surface from an invalid config is a policy change,
+not an implementation detail. Two scopes, pick one:
+
+- **Option A (recommended, policy-compliant): CLI-side auto-doctor.** When a
+  gateway or CLI start fails with a known-shape invalid config, the CLI offers
+  (or with consent runs) `openclaw doctor --fix`, then retries once and
+  reports plainly. No gateway behavior changes; the custodian stays reachable
+  through the existing degraded-SecretRef path and the terminal.
+- **Option B (needs explicit owner sign-off + security review): gateway
+  minimal-surface mode.** On structurally invalid config, start a locked-down
+  surface serving only the custodian conversation and doctor actions. This
+  rewrites the fail-closed startup contract and must define its own ingress
+  protection story before any code.
+
+Remaining follow-ups from phases 4-6 (tracked, unscheduled): avatar/image-gen
+ladder for the hatch; macOS app rendering of the typed `question` field; a
+docked inline Settings pane for the custodian (needs shared conversation-view
+extraction); event-reactive commentary and channel summon/agent-down recovery
+(phase 6 PR2); automatic `localModelLean` for weak models; whether existing
+users' saved sidebar pins should adopt the OpenClaw entry.
 
 ## Testing and landing playbook (hard-won; read before phases 4-6)
 

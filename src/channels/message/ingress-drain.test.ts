@@ -82,6 +82,47 @@ describe("channel ingress drain", () => {
     });
   });
 
+  it("dispatches a resubmitted dead letter exactly once", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<Payload>({
+        channelId: "test",
+        accountId: "a",
+        stateDir,
+      });
+      await queue.enqueue("evt-replay", { text: "recover" }, { laneKey: "lane-a" });
+      const originalClaim = await queue.claim("evt-replay", { ownerId: "worker" });
+      if (!originalClaim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(originalClaim, { reason: "handler-error", failedAt: 20 });
+      if (!queue.resubmit) {
+        throw new Error("Expected queue.resubmit");
+      }
+      await expect(queue.resubmit("evt-replay", { resubmittedAt: 30 })).resolves.toMatchObject({
+        kind: "resubmitted",
+        record: { attempts: 0, receivedAt: 30 },
+      });
+
+      const dispatch = vi.fn(
+        async (_event: unknown, lifecycle: ChannelIngressDispatchLifecycle) => {
+          await lifecycle.onAdopted();
+        },
+      );
+      const drain = createChannelIngressDrain<Payload>({ queue, dispatchClaimedEvent: dispatch });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+        id: "evt-replay",
+        payload: { text: "recover" },
+        attempts: 0,
+      });
+      drain.dispose();
+    });
+  });
+
   it("complete-at-adoption: adoption tombstones; settle is not required", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<Payload>({

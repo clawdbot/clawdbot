@@ -274,13 +274,18 @@ describe("gateway session utils", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = {
       recent: { sessionId: "recent", updatedAt: 30 },
-      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
+      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40, icon: "name:spark" },
       archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
     } satisfies Record<string, SessionEntry>;
 
     const active = listSessionsFromStore({ cfg, storePath: "", store, opts: {} });
     expect(active.sessions.map((session) => session.key)).toEqual(["pinned", "recent"]);
-    expect(active.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 40, archived: false });
+    expect(active.sessions[0]).toMatchObject({
+      pinned: true,
+      pinnedAt: 40,
+      icon: "name:spark",
+      archived: false,
+    });
 
     const archived = listSessionsFromStore({
       cfg,
@@ -543,6 +548,32 @@ describe("gateway session utils", () => {
     } finally {
       registerSessionAutomationSource(null);
     }
+  });
+
+  test("session rows and update events project the latest run failure reason", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const failed = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:failed",
+      lightweightListRow: true,
+      skipTranscriptUsageFallback: true,
+      entry: {
+        sessionId: "session-failed",
+        updatedAt: 1,
+        status: "failed",
+        lastRunError: "Provider credits exhausted",
+      },
+    });
+
+    expect(failed.lastRunError).toBe("Provider credits exhausted");
+    expect(buildGatewaySessionEventFields({ sessionRow: failed }).lastRunError).toBe(
+      "Provider credits exhausted",
+    );
+
+    const cleared = { ...failed, status: "running" as const, lastRunError: undefined };
+    expect(buildGatewaySessionEventFields({ sessionRow: cleared }).lastRunError).toBeNull();
   });
 
   test("session rows ignore malformed compaction checkpoints", () => {

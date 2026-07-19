@@ -20,6 +20,8 @@ export type ChatQueueItem = {
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  /** Transcript id of the replied-to message; Gateway hydrates reply context. */
+  replyToId?: string;
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;

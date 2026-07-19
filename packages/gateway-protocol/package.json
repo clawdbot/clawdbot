@@ -29,6 +29,11 @@
       "import": "./dist/frame-guards.mjs",
       "default": "./dist/frame-guards.mjs"
     },
+    "./gateway-error-details": {
+      "types": "./dist/gateway-error-details.d.mts",
+      "import": "./dist/gateway-error-details.mjs",
+      "default": "./dist/gateway-error-details.mjs"
+    },
     "./schema": {
       "types": "./dist/schema.d.mts",
       "import": "./dist/schema.mjs",
@@ -46,7 +51,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/client-info.ts src/connect-error-details.ts src/frame-guards.ts src/schema.ts src/startup-unavailable.ts src/version.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/client-info.ts src/connect-error-details.ts src/frame-guards.ts src/gateway-error-details.ts src/schema.ts src/startup-unavailable.ts src/version.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "typebox": "1.3.3"

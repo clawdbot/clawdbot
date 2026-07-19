@@ -6,11 +6,15 @@ const mocks = vi.hoisted(() => ({
   finalizeStream: vi.fn(),
   logDebug: vi.fn(),
   logError: vi.fn(),
+  settleRequesterAfterSessionSpawns: vi.fn(),
   runPrompt: vi.fn(),
 }));
 
 vi.mock("../logger.js", () => ({
   log: { debug: mocks.logDebug, error: mocks.logError },
+}));
+vi.mock("../../subagent-registry.js", () => ({
+  settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 vi.mock("../runs.js", () => ({ clearActiveEmbeddedRun: mocks.clearActiveEmbeddedRun }));
 vi.mock("./attempt-prompt-phase.js", () => ({
@@ -327,5 +331,69 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(mocks.logError).toHaveBeenCalledWith(
       expect.stringContaining("unsubscribe failed, possible resource leak"),
     );
+  });
+
+  it("re-arms delivered children only after a yielded requester becomes idle", async () => {
+    const fixture = createFixture();
+    mocks.completeResult.mockImplementationOnce(() => {
+      fixture.order.push("result");
+      return {
+        ...fixture.result,
+        yieldDetected: true,
+        acceptedSessionSpawns: [
+          { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+        ],
+      };
+    });
+    mocks.settleRequesterAfterSessionSpawns.mockImplementationOnce(() => {
+      fixture.order.push("resume-requester");
+      return true;
+    });
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main",
+      requesterTurnRunId: "run-1",
+      requesterYielded: true,
+      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
+    });
+    expect(fixture.order.indexOf("clear-active-run")).toBeLessThan(
+      fixture.order.indexOf("resume-requester"),
+    );
+  });
+
+  it("releases requester-turn retention after a normal final answer", async () => {
+    const fixture = createFixture();
+    mocks.completeResult.mockReturnValueOnce({
+      ...fixture.result,
+      yieldDetected: false,
+      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
+    });
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main",
+      requesterTurnRunId: "run-1",
+      requesterYielded: false,
+      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
+    });
+  });
+
+  it("surfaces durable re-arm failures after releasing the active requester", async () => {
+    const fixture = createFixture();
+    const failure = new Error("sqlite unavailable");
+    mocks.completeResult.mockReturnValueOnce({
+      ...fixture.result,
+      yieldDetected: true,
+      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
+    });
+    mocks.settleRequesterAfterSessionSpawns.mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toThrow(failure);
+    expect(fixture.order).toContain("clear-active-run");
   });
 });

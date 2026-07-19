@@ -2020,6 +2020,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
       "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
       "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: {
@@ -2034,6 +2035,9 @@ describe("legacy migrate sandbox scope aliases", () => {
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },
         },
+      },
+      modelPolicy: {
+        allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
       },
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
@@ -2062,12 +2066,14 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: "anthropic/claude-opus-4-7",
       models: {
         "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
       },
+      modelPolicy: { allow: ["anthropic/claude-opus-4-7"] },
     });
   });
 
@@ -3392,6 +3398,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3423,6 +3430,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."VLLM/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3454,6 +3462,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwen_thinking_format to models.providers.vllm.models[0].compat.thinkingFormat ("qwen").',
     ]);
   });
@@ -3493,6 +3502,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Removed agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat; models.providers.vllm.models[0].compat.thinkingFormat is already "qwen-chat-template".',
     ]);
   });
@@ -3528,6 +3538,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3914,8 +3925,23 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toMatchObject({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/Qwen/Qwen3-8B"] },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          },
+        },
+      },
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      models: { providers: { vllm: { models: "malformed" } } },
+    });
+    expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    ]);
   });
 
   it("leaves malformed vLLM provider ancestors untouched during legacy Qwen migration", () => {
@@ -3938,8 +3964,23 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toMatchObject({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/Qwen/Qwen3-8B"] },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          },
+        },
+      },
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      models: { providers: { vllm: "malformed" } },
+    });
+    expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    ]);
   });
 
   it("reports legacy vLLM Qwen thinking params before doctor fix", () => {

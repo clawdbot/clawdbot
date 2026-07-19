@@ -11,6 +11,7 @@ struct ChatSessionSidebarModelTests {
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil,
+        category: String? = nil,
         parentSessionKey: String? = nil,
         spawnedBy: String? = nil,
         childSessions: [String]? = nil,
@@ -38,6 +39,7 @@ struct ChatSessionSidebarModelTests {
             modelProvider: nil,
             model: nil,
             contextTokens: nil,
+            category: category,
             pinned: pinned,
             archived: archived,
             unread: unread,
@@ -73,6 +75,39 @@ struct ChatSessionSidebarModelTests {
 
         #expect(sections.count == 1)
         #expect(sections[0].title == nil)
+    }
+
+    @Test func `gateway groups render between pinned and recent and retain trees`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "pinned", pinned: true),
+                self.entry(key: "parent", category: "Projects", childSessions: ["child"]),
+                self.entry(key: "child", category: "Projects", parentSessionKey: "parent"),
+                self.entry(key: "recent"),
+            ],
+            currentSessionKey: "recent",
+            groups: [OpenClawChatSessionGroup(name: "Projects", position: 0)],
+            query: "")
+
+        #expect(sections.map(\.id) == ["pinned", "group:Projects", "recent"])
+        #expect(sections[1].nodes.map(\.id) == ["parent"])
+        #expect(sections[1].nodes[0].children.map(\.id) == ["child"])
+    }
+
+    @Test func `group placement uses exact gateway category names`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "exact", category: "Projects"),
+                self.entry(key: "case", category: "projects"),
+                self.entry(key: "spaces", category: " Projects "),
+            ],
+            currentSessionKey: "exact",
+            groups: [OpenClawChatSessionGroup(name: "Projects", position: 0)],
+            query: "")
+
+        #expect(sections.map(\.id) == ["group:Projects", "recent"])
+        #expect(sections[0].sessions.map(\.key) == ["exact"])
+        #expect(Set(sections[1].sessions.map(\.key)) == Set(["case", "spaces"]))
     }
 
     @Test func `pinned descendants move to pinned section independently`() {
@@ -197,6 +232,10 @@ struct ChatSessionSidebarModelTests {
           "hasActiveRun": true,
           "hasActiveSubagentRun": true,
           "lastInteractionAt": 1700000000000,
+          "startedAt": 1700000001000,
+          "endedAt": 1700000003000,
+          "runtimeMs": 2000,
+          "agentRuntime": {"id": "codex", "fallback": "openclaw", "source": "session"},
           "worktree": {"id": "wt-1", "branch": "feature/chat", "repoRoot": "/repo"}
         }
         """.data(using: .utf8))
@@ -210,9 +249,56 @@ struct ChatSessionSidebarModelTests {
         #expect(entry.hasActiveRun == true)
         #expect(entry.hasActiveSubagentRun == true)
         #expect(entry.lastInteractionAt == 1_700_000_000_000)
+        #expect(entry.startedAt == 1_700_000_001_000)
+        #expect(entry.endedAt == 1_700_000_003_000)
+        #expect(entry.runtimeMs == 2000)
+        #expect(entry.agentRuntime?.id == "codex")
         #expect(entry.worktree?.id == "wt-1")
         #expect(entry.worktree?.branch == "feature/chat")
         #expect(entry.worktree?.repoRoot == "/repo")
+    }
+
+    @Test func `inspector derives gateway metadata without composer overrides`() {
+        let session = OpenClawChatSessionEntry(
+            key: "agent:reviewer:child",
+            kind: "subagent",
+            displayName: "Review",
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: 1_700_000_000_000,
+            sessionId: "session-1",
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: "high",
+            verboseLevel: "full",
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: "openai",
+            model: "gpt-5.6",
+            contextTokens: nil,
+            category: "Projects",
+            hasActiveRun: true,
+            worktree: OpenClawChatSessionWorktree(
+                id: "wt-1",
+                branch: "feature/review",
+                repoRoot: "/repo"),
+            runtimeMs: 1500,
+            agentRuntime: OpenClawChatAgentRuntime(id: "codex", fallback: nil, source: "session"))
+
+        let details = ChatSessionInspectorDetails(session: session)
+
+        #expect(details.title == "Review")
+        #expect(details.agentID == "reviewer")
+        #expect(details.group == "Projects")
+        #expect(details.runState == "Running")
+        #expect(details.model == "gpt-5.6")
+        #expect(details.provider == "openai")
+        #expect(details.runtime == "codex")
+        #expect(details.runDurationMs == 1500)
+        #expect(details.worktreeBranch == "feature/review")
     }
 
     @Test func `tree nests children and bubbles run failure and unread badges`() {

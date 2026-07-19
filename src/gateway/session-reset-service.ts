@@ -1220,6 +1220,7 @@ export async function performGatewaySessionReset(params: {
                 : currentEntry?.execCwd,
             responseUsage: currentEntry?.responseUsage,
             pinnedAt: currentEntry?.pinnedAt,
+            icon: currentEntry?.icon,
             // Resets should keep the user's explicit selection, but clear any
             // temporary fallback model that was pinned during the previous run.
             ...resetPreservedSelection,

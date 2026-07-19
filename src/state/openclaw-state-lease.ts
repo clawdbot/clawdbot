@@ -18,13 +18,16 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 type AgentLeaseDatabase = Pick<OpenClawAgentKyselyDatabase, "state_leases">;
 type LeaseKysely = ReturnType<typeof getNodeSqliteKysely<LeaseDatabase>>;
 
-type OpenClawStateLeaseDatabase = { scope: "shared" } | { scope: "agent"; agentId: string };
+type OpenClawStateLeaseDatabase =
+  | { scope: "shared"; options?: OpenClawStateDatabaseOptions }
+  | { scope: "agent"; agentId: string };
 
 type OpenClawStateLeaseOptions = {
   scope: string;
@@ -175,11 +178,11 @@ function withLeaseWriteTransaction<T>(
   busyTimeoutMs = LEASE_DB_BUSY_TIMEOUT_MS,
 ): T {
   if (database.scope === "shared") {
-    const stateDatabase = openOpenClawStateDatabase();
+    const stateDatabase = openOpenClawStateDatabase(database.options);
     const run = () =>
       runOpenClawStateWriteTransaction(
         ({ db }) => operation(db, getNodeSqliteKysely<LeaseDatabase>(db)),
-        {},
+        database.options,
         { operationLabel, busyTimeoutMs },
       );
     return withBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
@@ -200,7 +203,7 @@ function withLeaseRead<T>(
 ): T {
   const sqlite =
     database.scope === "shared"
-      ? openOpenClawStateDatabase().db
+      ? openOpenClawStateDatabase(database.options).db
       : openOpenClawAgentDatabase({ agentId: database.agentId }).db;
   return operation(sqlite, getNodeSqliteKysely<LeaseDatabase>(sqlite));
 }

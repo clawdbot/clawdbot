@@ -59,6 +59,11 @@ export const OpenClawSchemaShape = {
             .pipe(z.string()),
         ])
         .optional(),
+      migrations: z
+        .strictObject({
+          modelPolicyAllowlist: z.literal(true).optional(),
+        })
+        .optional(),
     })
     .optional(),
   env: z
@@ -82,6 +87,7 @@ export const OpenClawSchemaShape = {
       lastRunCommit: z.string().optional(),
       lastRunCommand: z.string().optional(),
       lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+      localModelLeanAutoModel: z.string().optional(),
       securityAcknowledgedAt: z.string().optional(),
     })
     .optional(),
@@ -294,7 +300,9 @@ export const OpenClawSchemaShape = {
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),
+          chatPersistCommentary: z.boolean().optional(),
           chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
+          chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
         })
         .optional(),
     })

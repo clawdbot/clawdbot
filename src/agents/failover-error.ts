@@ -16,6 +16,7 @@ import {
 } from "./embedded-agent-helpers/errors.js";
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -893,6 +894,9 @@ export function resolveModelFallbackError(
   err: unknown,
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
+  if (err instanceof AgentHarnessSessionSupersededError) {
+    return { kind: "coordination", error: err };
+  }
   // A direct takeover remains a coordination failure unless the dedicated
   // cleanup wrapper owns a preserved prompt error. Its message alone must not
   // reclassify session-state loss as a provider failure.

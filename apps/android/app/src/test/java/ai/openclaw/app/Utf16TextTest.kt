@@ -23,6 +23,18 @@ class Utf16TextTest {
   }
 
   @Test
+  fun uppercaseFirstGraphemeOrNullPreservesUserPerceivedCharacters() {
+    assertEquals("🧭", "🧭 Scout".uppercaseFirstGraphemeOrNull())
+    assertEquals("🇺🇸", "🇺🇸 Scout".uppercaseFirstGraphemeOrNull())
+    assertEquals("👩🏽‍💻", "👩🏽‍💻 Dev".uppercaseFirstGraphemeOrNull())
+    assertEquals("A\u0308", "a\u0308lice".uppercaseFirstGraphemeOrNull())
+    assertEquals("S", "scout".uppercaseFirstGraphemeOrNull())
+    assertEquals("ß", "ßcout".uppercaseFirstGraphemeOrNull())
+    assertEquals("\uD801\uDC00", "\uD801\uDC28cout".uppercaseFirstGraphemeOrNull())
+    assertNull("".uppercaseFirstGraphemeOrNull())
+  }
+
+  @Test
   fun localizedInitialPreservesGraphemesAndLocale() {
     assertEquals("🧭", localizedInitial("🧭 Scout", languageTag = "en", fallbackLocale = Locale.US))
     assertEquals("🇺🇸", localizedInitial("🇺🇸 Scout", languageTag = "en", fallbackLocale = Locale.US))

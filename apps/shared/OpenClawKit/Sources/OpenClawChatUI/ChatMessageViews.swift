@@ -280,38 +280,46 @@ private struct ChatMessageBody: View {
     var body: some View {
         let text = self.primaryText
         let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
+        let shouldRenderBubble = self.shouldRenderBubble
+        let toolActivityItems = self.toolActivityItems
 
-        if self.usesBubble {
-            self.messageContent(text: text, textColor: textColor)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 12)
-                .background(self.bubbleBackground)
-                .clipShape(self.bubbleShape)
-                .overlay(self.bubbleBorder)
-                .shadow(
-                    color: self.bubbleShadowColor,
-                    radius: self.bubbleShadowRadius,
-                    y: self.bubbleShadowYOffset)
-                .padding(.leading, self.tailPaddingLeading)
-                .padding(.trailing, self.tailPaddingTrailing)
-        } else {
-            self.messageContent(text: text, textColor: textColor)
-                .padding(.vertical, 5)
-                .padding(.horizontal, 4)
+        VStack(alignment: .leading, spacing: 6) {
+            if shouldRenderBubble {
+                if self.usesBubble {
+                    self.messageContent(text: text, textColor: textColor)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
+                        .background(self.bubbleBackground)
+                        .clipShape(self.bubbleShape)
+                        .overlay(self.bubbleBorder)
+                        .shadow(
+                            color: self.bubbleShadowColor,
+                            radius: self.bubbleShadowRadius,
+                            y: self.bubbleShadowYOffset)
+                        .padding(.leading, self.tailPaddingLeading)
+                        .padding(.trailing, self.tailPaddingTrailing)
+                } else {
+                    self.messageContent(text: text, textColor: textColor)
+                        .padding(.vertical, 5)
+                        .padding(.horizontal, 4)
+                }
+            }
+
+            if !toolActivityItems.isEmpty {
+                ChatToolActivityList(items: toolActivityItems)
+                    .padding(.horizontal, 4)
+            }
+
+            if !shouldRenderBubble, let usagePresentation = self.usagePresentation {
+                self.usageLine(usagePresentation)
+                    .padding(.horizontal, 4)
+            }
         }
     }
 
     private func messageContent(text: String, textColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            if self.isToolResultMessage {
-                if self.displayOptions.contains(.toolActivity), !text.isEmpty {
-                    ToolResultCard(
-                        title: self.toolResultTitle,
-                        text: text,
-                        isUser: self.isUser,
-                        toolName: self.message.toolName)
-                }
-            } else if self.isUser {
+            if self.isUser {
                 ChatMarkdownRenderer(
                     text: text,
                     context: .user,
@@ -342,44 +350,54 @@ private struct ChatMessageBody: View {
                     resolveResource: self.inlineWidgetResourceResolver)
             }
 
-            if self.displayOptions.contains(.toolActivity), !self.toolCalls.isEmpty {
-                ForEach(self.toolCalls.indices, id: \.self) { idx in
-                    ToolCallCard(
-                        content: self.toolCalls[idx])
-                }
-            }
-
-            if self.displayOptions.contains(.toolActivity), !self.inlineToolResults.isEmpty {
-                ForEach(self.inlineToolResults.indices, id: \.self) { idx in
-                    let toolResult = self.inlineToolResults[idx]
-                    let display = ToolDisplayRegistry.resolve(name: toolResult.name ?? "tool", args: nil)
-                    ToolResultCard(
-                        title: "\(display.emoji) \(display.title)",
-                        text: toolResult.text ?? "",
-                        isUser: self.isUser,
-                        toolName: toolResult.name)
-                }
-            }
-
             if let usagePresentation = self.usagePresentation {
-                Text(usagePresentation.text)
-                    .font(OpenClawChatTypography.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(self.usageTint(usagePresentation.pressure))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(String(localized: "Message usage"))
-                    .accessibilityValue(usagePresentation.accessibilityValue)
+                self.usageLine(usagePresentation)
             }
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
     }
 
+    private func usageLine(_ presentation: ChatMessageUsagePresentation) -> some View {
+        Text(presentation.text)
+            .font(OpenClawChatTypography.caption2)
+            .monospacedDigit()
+            .foregroundStyle(self.usageTint(presentation.pressure))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(String(localized: "Message usage"))
+            .accessibilityValue(presentation.accessibilityValue)
+    }
+
     private var usesBubble: Bool {
         // Keep the guarded base condition; iOS additionally opts assistant
         // messages into bubbles via the clean-chrome environment flag.
         self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
+    }
+
+    private var shouldRenderBubble: Bool {
+        guard !self.isToolResultMessage else { return false }
+        return !self.primaryText.isEmpty ||
+            !self.inlineAttachments.isEmpty ||
+            !self.inlineWidgets.isEmpty ||
+            (self.showsLinkPreview && chatFirstPreviewURL(in: self.primaryText) != nil)
+    }
+
+    private var toolActivityItems: [ChatToolActivityItem] {
+        guard self.displayOptions.contains(.toolActivity) else { return [] }
+        // Results normally reach us merged into the calling assistant message
+        // (OpenClawChatView.mergeToolResults); this branch is the orphan
+        // fallback for results whose call is not in the preceding message.
+        if self.isToolResultMessage {
+            return [ChatToolActivityItem(
+                id: self.message.content.first?.id ?? "result-0",
+                name: self.message.toolName,
+                arguments: nil,
+                resultText: self.primaryText,
+                isPending: false)]
+        }
+        guard self.message.role.lowercased() == "assistant" else { return [] }
+        return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults)
     }
 
     private var showsLinkPreview: Bool {
@@ -459,15 +477,6 @@ private struct ChatMessageBody: View {
         case .danger:
             OpenClawChatTheme.danger
         }
-    }
-
-    private var toolResultTitle: String {
-        if let name = self.message.toolName, !name.isEmpty {
-            let display = ToolDisplayRegistry.resolve(name: name, args: nil)
-            return "\(display.emoji) \(display.title)"
-        }
-        let display = ToolDisplayRegistry.resolve(name: "tool", args: nil)
-        return "\(display.emoji) \(display.title)"
     }
 
     private var bubbleFillColor: Color {
@@ -562,106 +571,6 @@ private struct AttachmentRow: View {
 
     private var isAudio: Bool {
         self.att.mimeType?.hasPrefix("audio/") == true
-    }
-}
-
-private struct ToolCallCard: View {
-    let content: OpenClawChatMessageContent
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(self.toolName)
-                    .font(OpenClawChatTypography.footnoteSemiBold)
-                Spacer(minLength: 0)
-            }
-
-            if let summary = self.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
-    }
-
-    private var toolName: String {
-        "\(self.display.emoji) \(self.display.title)"
-    }
-
-    private var summary: String? {
-        self.display.detailLine
-    }
-
-    private var display: ToolDisplaySummary {
-        ToolDisplayRegistry.resolve(name: self.content.name ?? "tool", args: self.content.arguments)
-    }
-}
-
-private struct ToolResultCard: View {
-    let title: String
-    let text: String
-    let isUser: Bool
-    let toolName: String?
-    @State private var expanded = false
-
-    var body: some View {
-        if !self.displayContent.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Text(self.title)
-                        .font(OpenClawChatTypography.footnoteSemiBold)
-                    Spacer(minLength: 0)
-                }
-
-                Text(self.displayText)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
-                    .lineLimit(self.expanded ? nil : Self.previewLineLimit)
-
-                if self.shouldShowToggle {
-                    Button(self.expanded ? "Show less" : "Show full output") {
-                        self.expanded.toggle()
-                    }
-                    .buttonStyle(.plain)
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(OpenClawChatTheme.subtleCard)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
-        }
-    }
-
-    private static let previewLineLimit = 8
-
-    private var displayContent: String {
-        ToolResultTextFormatter.format(text: self.text, toolName: self.toolName)
-    }
-
-    private var lines: [Substring] {
-        self.displayContent.components(separatedBy: .newlines).map { Substring($0) }
-    }
-
-    private var displayText: String {
-        guard !self.expanded, self.lines.count > Self.previewLineLimit else { return self.displayContent }
-        return self.lines.prefix(Self.previewLineLimit).joined(separator: "\n") + "\n…"
-    }
-
-    private var shouldShowToggle: Bool {
-        self.lines.count > Self.previewLineLimit
     }
 }
 
@@ -889,44 +798,27 @@ struct ChatStreamingAssistantBubble: View {
 @MainActor
 struct ChatPendingToolsBubble: View {
     let toolCalls: [OpenClawChatPendingToolCall]
-    let isClean: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Running tools…", systemImage: "hammer")
-                .font(OpenClawChatTypography.caption)
-                .foregroundStyle(.secondary)
+        ChatToolActivityList(items: self.items)
+            .padding(4)
+    }
 
-            ForEach(self.toolCalls) { call in
-                let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(verbatim: "\(display.emoji) \(display.label)")
-                            .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        ProgressView().controlSize(.mini)
-                    }
-                    if let detail = display.detailLine, !detail.isEmpty {
-                        Text(detail)
-                            .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-                .padding(10)
-                .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
+    private var items: [ChatToolActivityItem] {
+        self.toolCalls.map { call in
+            ChatToolActivityItem(
+                id: call.id,
+                name: call.name,
+                arguments: call.args,
+                resultText: nil,
+                isPending: true)
         }
-        .padding(self.isClean ? 4 : 12)
-        .assistantBubbleContainerStyle(isClean: self.isClean)
     }
 }
 
 extension ChatPendingToolsBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.toolCalls == rhs.toolCalls && lhs.isClean == rhs.isClean
+        lhs.toolCalls == rhs.toolCalls
     }
 }
 

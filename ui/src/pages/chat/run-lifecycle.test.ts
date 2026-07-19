@@ -4,6 +4,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
+  hasAbortableSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
@@ -22,6 +23,20 @@ type TestRow = {
 function makeSessionsResult(rows: TestRow[]): SessionsListResult {
   return { sessions: rows } as unknown as SessionsListResult;
 }
+
+describe("hasAbortableSessionRun", () => {
+  it("recognizes the canonical main row while chat uses its main alias", () => {
+    expect(
+      hasAbortableSessionRun({
+        chatRunId: null,
+        sessionKey: "main",
+        sessionsResult: makeSessionsResult([
+          { key: "agent:main:main", hasActiveRun: true, status: "running" },
+        ]),
+      }),
+    ).toBe(true);
+  });
+});
 
 function makeHost(over: Partial<ReconcileHost> = {}): ReconcileHost {
   return {

@@ -74,6 +74,11 @@ const emptyAllowlist: QQBotInboundAccess["state"]["allowlists"]["dm"] = {
 
 function makeRuntime(): GatewayPluginRuntime {
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: {

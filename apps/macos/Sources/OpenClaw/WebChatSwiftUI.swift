@@ -226,6 +226,45 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             sessions: decoded.sessions)
     }
 
+    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.agentsList())
+        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        return OpenClawChatAgentsListResponse(
+            defaultId: result.defaultid,
+            agents: result.agents.map {
+                OpenClawChatAgentChoice(
+                    id: $0.id,
+                    name: $0.name,
+                    workspaceGit: $0.workspacegit)
+            })
+    }
+
+    func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse? {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.sessionGroupsList())
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsResponse.self, from: data)
+    }
+
+    func putSessionGroups(names: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        let request = OpenClawChatGatewayRequests.sessionGroupsPut(names: names)
+        let data = try await GatewayConnection.shared.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+    }
+
+    func renameSessionGroup(
+        name: String,
+        to: String) async throws -> OpenClawChatSessionGroupsMutationResponse
+    {
+        let request = OpenClawChatGatewayRequests.sessionGroupsRename(name: name, to: to)
+        let data = try await GatewayConnection.shared.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+    }
+
+    func deleteSessionGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        let request = OpenClawChatGatewayRequests.sessionGroupsDelete(name: name)
+        let data = try await GatewayConnection.shared.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+    }
+
     func setSessionModel(sessionKey: String, model: String?) async throws {
         let target = self.sessionTarget(for: sessionKey)
         _ = try await self.patchSessionModel(
@@ -460,7 +499,25 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         parentSessionKey: String?,
         worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
-        let agentID = OpenClawChatSessionKey.agentID(from: key)
+        try await self.createSession(
+            key: key,
+            label: label,
+            agentID: nil,
+            parentSessionKey: parentSessionKey,
+            worktree: worktree,
+            worktreeBaseRef: nil)
+    }
+
+    func createSession(
+        key: String,
+        label: String?,
+        agentID explicitAgentID: String?,
+        parentSessionKey: String?,
+        worktree: Bool?,
+        worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        let agentID = explicitAgentID
+            ?? OpenClawChatSessionKey.agentID(from: key)
             ?? parentSessionKey.flatMap { OpenClawChatSessionKey.agentID(from: $0) }
             ?? self.routingIdentity.currentAgentID()
         let request = OpenClawChatGatewayRequests.createSession(
@@ -468,7 +525,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: agentID,
             label: label,
             parentSessionKey: parentSessionKey,
-            worktree: worktree)
+            worktree: worktree,
+            worktreeBaseRef: worktreeBaseRef)
         let data = try await GatewayConnection.shared.request(request)
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: data)
     }
@@ -510,9 +568,19 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
     }
 
+    func getQuestion(id: String) async throws -> QuestionRecord {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.questionGet(id: id))
+        return try JSONDecoder().decode(QuestionGetResult.self, from: data).question
+    }
+
     func resolveQuestion(id: String, answers: [String: [String]]) async throws {
         _ = try await GatewayConnection.shared.request(
             OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
+    }
+
+    func cancelQuestion(id: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            OpenClawChatGatewayRequests.cancelQuestion(id: id))
     }
 
     func waitForRunCompletion(

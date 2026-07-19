@@ -23,6 +23,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { renderLanguageSelect } from "./language-select.ts";
@@ -67,7 +68,9 @@ type QuickSettingsProps = {
   version: string;
 };
 
-const THINKING_LEVELS = ["off", "low", "medium", "high"];
+// The compact General hub intentionally omits "minimal"; the full list stays
+// available on session-level pickers.
+const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
 
 /** Section wrapper that keeps the stable settings-search scroll target ids. */
 function renderTargetSection(
@@ -97,6 +100,7 @@ function renderGeneralSection(props: QuickSettingsProps) {
   return renderSettingsSection({ title: t("nav.settingsGeneral") }, [
     renderSettingsRow({
       title: t("quickSettings.language"),
+      description: t("configView.syncedHint"),
       control: renderLanguageSelect(props.locale, props.onLocaleChange),
     }),
   ]);

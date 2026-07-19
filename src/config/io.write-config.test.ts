@@ -2492,6 +2492,7 @@ describe("config io write", () => {
           meta: {
             lastTouchedAt: persisted.meta?.lastTouchedAt,
             lastTouchedVersion: persisted.meta?.lastTouchedVersion,
+            migrations: { modelPolicyAllowlist: true },
           },
         });
         expect(typeof persisted.meta?.lastTouchedAt).toBe("string");

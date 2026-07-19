@@ -35,6 +35,19 @@ func chatReaderHasNewerContent(
     return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
 }
 
+/// `hasNewerContentBelow` is derived structurally (a later message or streaming text exists),
+/// which is true from the first Writing tick of a turn even when the whole transcript is on
+/// screen. Gating on the live-edge geometry keeps the jump affordance hidden until content is
+/// actually below the viewport; without it the button flashes during every reply (#108693).
+func chatReaderShowsJumpToLatest(
+    hasNewerContentBelow: Bool,
+    isAtLiveEdge: Bool,
+    hasVisibleContent: Bool,
+    isLoading: Bool) -> Bool
+{
+    hasNewerContentBelow && !isAtLiveEdge && hasVisibleContent && !isLoading
+}
+
 /// The view's own one-shot positioning always runs in a nil-animation transaction, so
 /// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
 /// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
@@ -47,6 +60,11 @@ func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
     @unknown default:
         false
     }
+}
+
+private enum ScrollFollowTarget: Equatable {
+    case latest
+    case user(UUID)
 }
 
 public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
@@ -99,6 +117,7 @@ public struct OpenClawChatView: View {
     @State private var followTarget: ScrollFollowTarget? = .latest
     @State private var isAtLiveEdge = true
     @State private var isUserScrolling = false
+    @State private var isKeyboardVisible = false
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
@@ -117,13 +136,9 @@ public struct OpenClawChatView: View {
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
+    private let dictationControl: OpenClawChatDictationControl?
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
-
-    private enum ScrollFollowTarget: Equatable {
-        case latest
-        case user(UUID)
-    }
 
     private enum Layout {
         #if os(macOS)
@@ -172,6 +187,7 @@ public struct OpenClawChatView: View {
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [StarterPrompt] = [],
         talkControl: OpenClawChatTalkControl? = nil,
+        dictationControl: OpenClawChatDictationControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
         speech: OpenClawChatSpeechController? = nil)
     {
@@ -193,6 +209,7 @@ public struct OpenClawChatView: View {
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
+        self.dictationControl = dictationControl
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
     }
@@ -277,6 +294,7 @@ public struct OpenClawChatView: View {
                 && !self.viewModel.isSendingAttachmentDraft,
             messagePlaceholder: self.messagePlaceholder,
             talkControl: self.talkControl,
+            dictationControl: self.dictationControl,
             voiceNoteControl: self.voiceNoteControl)
     }
 
@@ -383,6 +401,14 @@ public struct OpenClawChatView: View {
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
             self.handleTimelineChange()
         }
+        #if canImport(UIKit) && !os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            self.isKeyboardVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            self.isKeyboardVisible = false
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -423,9 +449,7 @@ public struct OpenClawChatView: View {
         }
 
         if self.displayOptions.contains(.toolActivity), !self.viewModel.pendingToolCalls.isEmpty {
-            ChatPendingToolsBubble(
-                toolCalls: self.viewModel.pendingToolCalls,
-                isClean: self.composerChrome == .clean)
+            ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls)
                 .equatable()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -481,6 +505,8 @@ public struct OpenClawChatView: View {
                 self.copyMessageButton(for: msg)
                 self.replyMessageButton(for: msg)
                 self.openFullMessageButton(for: msg)
+                self.rewindMessageButton(for: msg)
+                self.forkMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -523,6 +549,8 @@ public struct OpenClawChatView: View {
                 self.copyMessageButton(for: msg)
                 self.replyMessageButton(for: msg)
                 self.openFullMessageButton(for: msg)
+                self.rewindMessageButton(for: msg)
+                self.forkMessageButton(for: msg)
                 Button {
                     if speech.isActive(msg.id) {
                         speech.stop()
@@ -551,6 +579,8 @@ public struct OpenClawChatView: View {
                     self.copyMessageButton(for: msg)
                     self.replyMessageButton(for: msg)
                     self.openFullMessageButton(for: msg)
+                    self.rewindMessageButton(for: msg)
+                    self.forkMessageButton(for: msg)
                 }
         }
     }
@@ -606,7 +636,11 @@ public struct OpenClawChatView: View {
     }
 
     private var showsJumpToLatest: Bool {
-        self.hasNewerContentBelow && self.hasVisibleMessageListContent && !self.viewModel.isLoading
+        chatReaderShowsJumpToLatest(
+            hasNewerContentBelow: self.hasNewerContentBelow,
+            isAtLiveEdge: self.isAtLiveEdge,
+            hasVisibleContent: self.hasVisibleMessageListContent,
+            isLoading: self.viewModel.isLoading)
     }
 
     private var jumpToLatestButton: some View {
@@ -615,17 +649,19 @@ public struct OpenClawChatView: View {
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
         } label: {
-            Label("Jump to latest", systemImage: "arrow.down")
-                .font(OpenClawChatTypography.body(size: 16, weight: .semibold, relativeTo: .callout))
-                .padding(.horizontal, 13)
-                .padding(.vertical, 8)
+            Image(systemName: "arrow.down")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 36, height: 36)
+                .background(
+                    Circle()
+                        .fill(OpenClawChatTheme.subtleCard)
+                        .shadow(color: .black.opacity(0.16), radius: 8, y: 3))
+                // Padding keeps a ~44pt tap target around the compact visual circle.
+                .padding(4)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawChatTheme.assistantText)
-        .background(
-            Capsule()
-                .fill(OpenClawChatTheme.subtleCard)
-                .shadow(color: .black.opacity(0.16), radius: 10, y: 4))
         .accessibilityLabel("Jump to latest reply")
     }
 
@@ -827,9 +863,17 @@ public struct OpenClawChatView: View {
             return
         case let .added(latestUserMessageID):
             self.lastUserMessageID = latestUserMessageID
-            self.followTarget = .user(latestUserMessageID)
             self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
+            // The anchored-question layout assumes a viewport tall enough to read the turn
+            // below the anchor. With the keyboard up that space is gone and the reply streams
+            // straight past the fold (#108692), so follow the live edge instead.
+            if self.isKeyboardVisible {
+                self.followTarget = .latest
+                self.moveScrollPosition(to: self.scrollerBottomID)
+            } else {
+                self.followTarget = .user(latestUserMessageID)
+                self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
+            }
             return
         case .unchanged:
             break
@@ -1063,6 +1107,52 @@ extension OpenClawChatView {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func rewindMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "user",
+           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            Button {
+                Task { await self.viewModel.rewindToMessage(message) }
+            } label: {
+                Label {
+                    Text("Rewind to Here")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+            }
+            .disabled(self.messageSessionActionsDisabled)
+        }
+    }
+
+    @ViewBuilder
+    private func forkMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "user",
+           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            Button {
+                Task { await self.viewModel.forkAtMessage(message) }
+            } label: {
+                Label {
+                    Text("Fork from Here")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrow.triangle.branch")
+                }
+            }
+            .disabled(self.messageSessionActionsDisabled)
+        }
+    }
+
+    private var messageSessionActionsDisabled: Bool {
+        self.viewModel.hasBlockingRunActivity ||
+            self.viewModel.isSending ||
+            self.viewModel.isAborting
     }
 
     @ViewBuilder

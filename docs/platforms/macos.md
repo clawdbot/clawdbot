@@ -110,6 +110,9 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
   permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
 
+In the embedded Control UI, **Settings → Notifications** shows the app's native
+notification permission instead of browser push because the app delivers notifications natively.
+
 The app does **not** replace the Gateway or general CLI docs. Gateway
 configuration, providers, plugins, channels, tools, and security live in their
 own docs.

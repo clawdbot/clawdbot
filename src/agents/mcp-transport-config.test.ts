@@ -1,4 +1,5 @@
 // Verifies MCP transport config normalization and startup-safety filtering.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -44,6 +45,32 @@ describe("resolveMcpTransportConfig", () => {
         connectionTimeoutMs: 2_000,
         requestTimeoutMs: 7_000,
         supportsParallelToolCalls: true,
+      }),
+    );
+  });
+
+  it("clamps oversized MCP request timeout aliases to the Node timer maximum", () => {
+    const seconds = resolveMcpTransportConfig("probe", {
+      command: "node",
+      connectTimeout: 1e306,
+      timeout: 1e306,
+    });
+    const milliseconds = resolveMcpTransportConfig("probe", {
+      command: "node",
+      connectionTimeoutMs: 1e306,
+      requestTimeoutMs: 1e306,
+    });
+
+    expect(seconds).toEqual(
+      expect.objectContaining({
+        connectionTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+        requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    );
+    expect(milliseconds).toEqual(
+      expect.objectContaining({
+        connectionTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+        requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       }),
     );
   });

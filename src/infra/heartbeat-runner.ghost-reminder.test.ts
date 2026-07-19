@@ -41,6 +41,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     storePath: string;
     target?: "telegram" | "none";
     isolatedSession?: boolean;
+    activeHours?: boolean;
   }): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -50,6 +51,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
             every: "5m",
             target: params.target ?? "telegram",
             ...(params.isolatedSession === true ? { isolatedSession: true } : {}),
+            ...(params.activeHours === true
+              ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" as const } }
+              : {}),
           },
         },
       },
@@ -196,6 +200,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
     owningCronLaneTaskMarker?: CommandLaneTaskMarker;
     cronLaneDepth?: number;
     cronNestedLaneDepth?: number;
+    activeHours?: boolean;
+    nowMs?: number;
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
@@ -215,6 +221,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           storePath,
           target: params.target,
           isolatedSession: params.isolatedSession,
+          activeHours: params.activeHours,
         });
         params.enqueue(sessionKey);
         const owningCronJobMarker = params.owningCronJobId
@@ -244,6 +251,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
             deps: {
               getReplyFromConfig: getReplySpy,
               telegram: sendTelegram,
+              nowMs: () => params.nowMs ?? Date.now(),
               ...(params.cronLaneDepth === undefined && params.cronNestedLaneDepth === undefined
                 ? {}
                 : {
@@ -307,6 +315,30 @@ describe("Ghost reminder bug (issue #13317)", () => {
     );
     expect(result.status).toBe("ran");
     expectCronEventPrompt(calledCtx, "Reminder: Check Base Scout results");
+    expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("runs the tagged cron payload outside heartbeat active hours", async () => {
+    const reminderText = "Reminder: Send the overnight report";
+    const { result, sendTelegram, calledCtx, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-quiet-hours-",
+      replyText: "Overnight report sent",
+      reason: "cron:overnight-report",
+      source: "cron",
+      intent: "immediate",
+      activeHours: true,
+      nowMs: Date.UTC(2025, 0, 1, 7, 0, 0),
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent(reminderText, {
+          sessionKey,
+          contextKey: "cron:overnight-report",
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replyCallCount).toBe(1);
+    expectCronEventPrompt(calledCtx, reminderText);
     expect(sendTelegram).toHaveBeenCalled();
   });
 

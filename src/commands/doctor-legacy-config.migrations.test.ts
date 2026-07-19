@@ -9,6 +9,7 @@ import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js"
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
+import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupCliBackend: () => undefined,
@@ -712,6 +713,186 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("repairs agent model refs whose configured provider was deleted", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        models: {
+          providers: {
+            custom: { baseUrl: "http://localhost:1234", models: [] },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "deleted/default-primary",
+              fallbacks: ["custom/kept", "openai/gpt-5.6-sol", "deleted/default-fallback"],
+            },
+            models: {
+              "custom/kept": { alias: "kept" },
+              "deleted/models-add-row": { alias: "stale" },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              model: "deleted/agent-primary",
+              models: {
+                "plugin-provider/kept": {},
+                "deleted/agent-models-add-row": {},
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(["plugin-provider"]),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
+      fallbacks: ["custom/kept"],
+    });
+    expect(result.config.agents?.defaults?.models).toEqual({
+      "custom/kept": { alias: "kept" },
+      "openai/gpt-5.6-sol": {},
+    });
+    expect(result.config.agents?.list?.[0]).toMatchObject({
+      id: "main",
+      models: { "plugin-provider/kept": {}, "openai/gpt-5.6-sol": {} },
+    });
+    expect(result.config.agents?.list?.[0]?.model).toBeUndefined();
+    expect(result.changes).toEqual([
+      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-5.6-sol" (provider "deleted" is unavailable).',
+      'Removed stale agents.defaults.model fallback "deleted/default-fallback" (provider "deleted" is unavailable).',
+      'Removed duplicate agents.defaults.model fallback "openai/gpt-5.6-sol" after selecting it as the default primary.',
+      'Removed stale agents.defaults.models entry "deleted/models-add-row" (provider "deleted" is unavailable).',
+      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Removed stale agents.list[0].model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
+      'Removed stale agents.list[0].models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
+      'Added agents.list[0].models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+    ]);
+  });
+
+  it("preserves configured CLI backends and agent-local models.json providers", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: {
+            model: "my-cli/model",
+            cliBackends: { "my-cli": { command: "my-cli" } },
+          },
+          list: [
+            { id: "worker", model: "agent-local/model" },
+            { id: "core", model: "anthropic/claude-sonnet-4-6" },
+          ],
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(["anthropic"]),
+        persistedProviderIdsByAgentId: new Map([["worker", new Set(["agent-local"])]]),
+      },
+    );
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
+    expect(result.config.agents?.list?.[0]?.model).toBe("agent-local/model");
+    expect(result.config.agents?.list?.[1]?.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("does not treat one agent-local provider as globally available", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: { model: "agent-local/model" },
+          list: [{ id: "main" }, { id: "worker" }],
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map([
+          ["main", new Set(["agent-local"])],
+          ["worker", new Set()],
+        ]),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.changes).toEqual([
+      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-5.6-sol" (provider "agent-local" is unavailable).',
+    ]);
+  });
+
+  it("keeps a repaired model allowlist restrictive", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: {
+            model: "deleted/main",
+            models: { "deleted/main": {} },
+          },
+        },
+      } as OpenClawConfig,
+      { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
+    );
+
+    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-5.6-sol": {} });
+    expect(result.changes).toContain(
+      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+    );
+  });
+
+  it("does not throw on malformed best-effort model config", () => {
+    expect(() =>
+      repairStaleAgentModelRefs(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "deleted/main", fallbacks: 42 },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
+      ),
+    ).not.toThrow();
+  });
+
+  it("uses only explicit providers when models.mode is replace", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        models: {
+          mode: "replace",
+          providers: {
+            custom: {
+              baseUrl: "http://localhost:1234",
+              models: [{ id: "kept", name: "Kept" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "deleted/main",
+              fallbacks: ["plugin-provider/model", "custom/kept"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(["plugin-provider"]),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toEqual({ primary: "custom/kept" });
+    expect(result.changes).toEqual([
+      'Replaced stale agents.defaults.model primary "deleted/main" with default "custom/kept" (provider "deleted" is unavailable).',
+      'Removed stale agents.defaults.model fallback "plugin-provider/model" (provider "plugin-provider" is unavailable).',
+      'Removed duplicate agents.defaults.model fallback "custom/kept" after selecting it as the default primary.',
+    ]);
+  });
+
   it("does not mark untagged manual OpenAI Codex metadata overrides", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {
@@ -972,6 +1153,10 @@ describe("normalizeCompatibilityConfigValues", () => {
       "openai/gpt-5.6-sol": { alias: "codex", agentRuntime: { id: "codex" } },
       "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
     });
+    expect(repaired.cfg.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-5.6-sol",
+      "openai/gpt-5.4-mini",
+    ]);
     expect(repaired.cfg.models?.providers).not.toHaveProperty("codex");
     expect(repaired.cfg.models?.providers?.openai?.models?.[0]).toMatchObject({
       id: "gpt-5.6-sol",

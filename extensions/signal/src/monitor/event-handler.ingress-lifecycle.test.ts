@@ -43,18 +43,6 @@ vi.mock("../send-reactions.js", () => ({
   removeReactionSignal: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
-    "openclaw/plugin-sdk/reply-runtime",
-  );
-  return {
-    ...actual,
-    dispatchInboundMessage: dispatchInboundMessageMock,
-    dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
-    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
@@ -73,12 +61,22 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
             if (!("route" in resolved) || !("delivery" in resolved)) {
               return resolved;
             }
-            const { cfg: _cfg, delivery: _delivery, route, ...turn } = resolved;
+            const {
+              cfg: _cfg,
+              delivery: _delivery,
+              dispatcherOptions: _dispatcherOptions,
+              route,
+              ...turn
+            } = resolved;
             return {
               ...turn,
               routeSessionKey: route.sessionKey,
               storePath: "/tmp/openclaw/signal-sessions.json",
               recordInboundSession: recordInboundSessionMock,
+              runDispatchLifecycle: {
+                turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+                onDispatchSkipped: () => {},
+              },
               runDispatch: async () =>
                 await dispatchInboundMessageMock({
                   ctx: resolved.ctxPayload,

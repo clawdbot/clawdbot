@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
   | { path: string; type: "file"; mode: number; size: number; sha256: string }
@@ -145,10 +146,11 @@ function validateAndProjectEntries(values: unknown[]): {
   }
   return {
     entries: rawEntries.filter(
-      (entry): entry is WorkerWorkspaceManifestEntry => entry.type !== "directory",
+      (entry): entry is WorkerWorkspaceManifestEntry =>
+        entry.type !== "directory" && !isDerivedWorkspacePath(entry.path),
     ),
     directories: rawEntries
-      .filter((entry) => entry.type === "directory")
+      .filter((entry) => entry.type === "directory" && !isDerivedWorkspacePath(entry.path))
       .map((entry) => entry.path),
   };
 }

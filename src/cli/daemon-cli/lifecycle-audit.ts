@@ -2,8 +2,10 @@ import {
   appendGatewayLifecycleAuditLog,
   type GatewayLifecycleAuditSource,
 } from "../../daemon/restart-logs.js";
+import { createGatewayLifecycleMutationReporter } from "../../daemon/service-mutation.js";
 /** Gateway lifecycle audit helpers shared by managed and unmanaged CLI paths. */
 import type { GatewayLifecycleMutation } from "../../daemon/service-types.js";
+import type { GatewayLifecycleMutationMode } from "../../daemon/service-types.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 
 type GatewayLifecycleAction = "start" | "stop" | "restart";
@@ -11,7 +13,7 @@ type GatewayLifecycleAction = "start" | "stop" | "restart";
 export function appendGatewayLifecycleAudit(params: {
   action: GatewayLifecycleAction;
   source: GatewayLifecycleAuditSource;
-  mode: string;
+  mode: GatewayLifecycleMutationMode;
   pid?: number;
   env?: NodeJS.ProcessEnv;
 }): void {
@@ -29,15 +31,15 @@ export function createGatewayLifecycleMutationAudit(params: {
   source?: GatewayLifecycleAuditSource;
   env?: NodeJS.ProcessEnv;
 }): (mutation: GatewayLifecycleMutation) => void {
-  return (mutation) => {
+  const reportMutation = createGatewayLifecycleMutationReporter((mutation) => {
     appendGatewayLifecycleAudit({
       action: params.action,
       source: params.source ?? "cli",
       mode: mutation.mode,
-      ...(mutation.pid === undefined ? {} : { pid: mutation.pid }),
       ...(params.env === undefined ? {} : { env: params.env }),
     });
-  };
+  });
+  return (mutation) => reportMutation(mutation.mode);
 }
 
 export function createServiceLifecycleMutationAudit(params: {

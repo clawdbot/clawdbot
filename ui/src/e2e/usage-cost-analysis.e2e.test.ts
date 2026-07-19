@@ -328,6 +328,29 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
       await expect
         .poll(() => page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent())
         .toContain("openai");
+      const messagesHint = page.locator("#usage-summary-hint-messages");
+      const messagesTooltip = page.locator("#usage-summary-hint-messages-tooltip");
+      await messagesHint.hover();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await page.mouse.move(1, 1);
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+
+      await messagesHint.focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await page.getByRole("button", { name: "Cost", exact: true }).focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+
+      await messagesHint.click();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await expect
+        .poll(() => messagesTooltip.textContent())
+        .toContain("Total user and assistant messages in range.");
+      await page.getByRole("button", { name: "Cost", exact: true }).click();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+      await messagesHint.focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await messagesHint.press("Escape");
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
       const providerCards = page.locator(".provider-usage-card");
       await expect.poll(() => providerCards.count()).toBe(3);
       await expect

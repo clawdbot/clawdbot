@@ -749,15 +749,15 @@ describe("lobster pet element", () => {
   });
 });
 
-describe("lobster pet logo stand-in", () => {
-  function trackLogoPhases(element: LobsterPetElement): LobsterLogoVisitDetail[] {
-    const phases: LobsterLogoVisitDetail[] = [];
-    element.addEventListener(LOBSTER_LOGO_VISIT_EVENT, (event) => {
-      phases.push((event as CustomEvent<LobsterLogoVisitDetail>).detail);
-    });
-    return phases;
-  }
+function trackLogoPhases(element: LobsterPetElement): LobsterLogoVisitDetail[] {
+  const phases: LobsterLogoVisitDetail[] = [];
+  element.addEventListener(LOBSTER_LOGO_VISIT_EVENT, (event) => {
+    phases.push((event as CustomEvent<LobsterLogoVisitDetail>).detail);
+  });
+  return phases;
+}
 
+describe("lobster pet logo stand-in", () => {
   // Seed 70 is a planned logo load, not shy, first arrival ~25s.
   const LOGO_SEED = 70;
 
@@ -830,12 +830,57 @@ describe("lobster pet logo stand-in", () => {
   it("keeps unplanned loads on the ledge without logo events", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    // Seed 42 also rolls no logo scare on its first arrival, so a full visit
+    // passes with the brand mark untouched.
     const element = createPet(42);
     const phases = trackLogoPhases(element);
 
     await arrive(element);
 
     expect(spritePresent(element)).toBe(true);
+    expect(phases).toEqual([]);
+  });
+});
+
+describe("lobster pet logo scare", () => {
+  // Seed 91: a normal ledge load (not a logo load), not shy, first arrival
+  // ~19s, and the first arrival's scare roll hits (~0.07 < 0.3).
+  const SCARE_SEED = 91;
+
+  it("hides the logo without a stand-in mid-visit, restoring after the exit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(SCARE_SEED);
+    const phases = trackLogoPhases(element);
+
+    const scared = await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(scared).toBe(true);
+    // Unlike a perch, the crab stays on the ledge while the logo hides.
+    expect(spritePresent(element)).toBe(true);
+    const first = expectDefined(phases[0], "first scare phase");
+    expect(first.phase).toBe("in");
+    expect(first.look).toBeNull();
+    expect(first.name).toBeNull();
+
+    const left = await advanceUntil(element, () => phases.some((p) => p.phase === "out"), 400_000);
+    expect(left).toBe(true);
+    expect(phases.map((p) => p.phase)).toEqual(["in", "leaving", "out"]);
+  });
+
+  it("never scares the logo under reduced motion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true }) as MediaQueryList),
+    );
+    const element = createPet(SCARE_SEED);
+    const phases = trackLogoPhases(element);
+
+    const arrived = await advanceUntil(element, () => spritePresent(element), 200_000);
+    expect(arrived).toBe(true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await element.updateComplete;
     expect(phases).toEqual([]);
   });
 });

@@ -236,6 +236,28 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
   });
 
+  it("announces the lean surface after local-model activation", async () => {
+    const announcement =
+      "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.";
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({
+      prompter,
+      activate: vi.fn(async () => ({
+        ok: true as const,
+        modelRef: "lmstudio/qwen-local",
+        latencyMs: 1250,
+        lines: ["Inference verified: lmstudio/qwen-local", announcement],
+      })),
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(announcement),
+      "Inference ready",
+    );
+  });
+
   it("skips persisting an unchanged access mode", async () => {
     readConfigFileSnapshot.mockResolvedValue({
       exists: true,

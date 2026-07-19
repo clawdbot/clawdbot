@@ -820,7 +820,7 @@ export function restoreEnvVarRefs(
   if (isPlainObject(incoming) && isPlainObject(parsed)) {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(incoming)) {
-      if (key in parsed) {
+      if (Object.hasOwn(parsed, key)) {
         result[key] = restoreEnvVarRefs(value, parsed[key], env);
       } else {
         // New key added by caller — keep as-is

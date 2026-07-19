@@ -73,6 +73,7 @@ type AgentTurnPayload = {
 
 type SelectModelOptions = {
   cfg?: Record<string, unknown>;
+  cfgWithAgentDefaults?: Record<string, unknown>;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   payload?: AgentTurnPayload;
   sessionEntry?: {
@@ -137,7 +138,7 @@ async function selectModel(options: SelectModelOptions = {}) {
   const cfg = options.cfg ?? {};
   return resolveCronModelSelection({
     cfg: cfg as never,
-    cfgWithAgentDefaults: cfg as never,
+    cfgWithAgentDefaults: (options.cfgWithAgentDefaults ?? cfg) as never,
     agentConfigOverride: options.agentConfigOverride,
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
@@ -247,8 +248,68 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
+          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
       });
+    });
+
+    it("reports the active per-agent allowlist path and refs", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        error: "model not allowed: openai/gpt-5.5",
+      });
+
+      await expect(
+        selectModel({
+          agentId: "ops",
+          cfg: {
+            agents: {
+              list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
+            },
+          },
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/gpt-5.5" },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          "cron payload.model 'openai/gpt-5.5' rejected by agents.list[].modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
+      });
+    });
+
+    it("authorizes cron payload aliases against the original agent policy scope", async () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.5": { alias: "approved" } },
+            modelPolicy: { allow: ["approved"] },
+          },
+          list: [
+            {
+              id: "worker",
+              models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } },
+            },
+          ],
+        },
+      };
+      const cfgWithAgentDefaults = {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents.defaults,
+            models: cfg.agents.list[0]?.models,
+          },
+        },
+      };
+
+      await selectModel({
+        cfg,
+        cfgWithAgentDefaults,
+        agentId: "worker",
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "approved" },
+      });
+
+      expect(resolveAllowedModelRefMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg, agentId: "worker", raw: "approved" }),
+      );
     });
 
     it("normalizes provider casing", async () => {

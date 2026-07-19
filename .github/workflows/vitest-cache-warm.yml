@@ -45,14 +45,33 @@ jobs:
           import { appendFileSync } from "node:fs";
           import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mjs";
 
-          // The unit-fast graph is striped across jobs; warm the union of its
-          // configs as whole suites so the seed covers every stripe's imports.
-          const shards = createNodeTestShards().filter((candidate) =>
+          // Warm whole configs for the striped unit-fast graph plus the import-
+          // bound graphs that remained cold in measured protected-cache readers.
+          const additionalShardNames = new Set([
+            "agentic-agents-embedded",
+            "agentic-gateway-methods",
+            "auto-reply-reply-commands-3",
+          ]);
+          const allShards = createNodeTestShards();
+          const coreShards = allShards.filter((candidate) =>
             candidate.shardName.startsWith("core-unit-fast"),
           );
-          if (shards.length === 0) {
+          if (coreShards.length === 0) {
             throw new Error("core-unit-fast cache seed shards are missing");
           }
+          const additionalShards = allShards.filter((candidate) =>
+            additionalShardNames.has(candidate.shardName),
+          );
+          const foundAdditionalShardNames = new Set(
+            additionalShards.map((shard) => shard.shardName),
+          );
+          const missingShardNames = [...additionalShardNames].filter(
+            (name) => !foundAdditionalShardNames.has(name),
+          );
+          if (missingShardNames.length > 0) {
+            throw new Error(`cache seed shards are missing: ${missingShardNames.join(", ")}`);
+          }
+          const shards = [...coreShards, ...additionalShards];
           const configs = [...new Set(shards.flatMap((shard) => shard.configs))];
           appendFileSync(
             process.env.GITHUB_ENV,

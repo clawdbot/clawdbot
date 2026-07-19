@@ -5,7 +5,7 @@ import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent } from "./service/state.js";
 import { createCronServiceState } from "./service/state.js";
 import { runMissedJobs } from "./service/timer.js";
-import { saveCronStore } from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
@@ -56,6 +56,14 @@ describe("CronService restart catch-up", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: `tick-${id}` },
       state: { nextRunAtMs },
+    };
+  }
+
+  function createOverdueIsolatedEveryJob(id: string, nextRunAtMs: number): CronJob {
+    return {
+      ...createOverdueEveryJob(id, nextRunAtMs),
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: `run-${id}` },
     };
   }
 
@@ -184,6 +192,90 @@ describe("CronService restart catch-up", () => {
         expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
       },
     );
+  });
+
+  it("preserves delivery target writeback from a startup catch-up run", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    const originalTarget = "https://t.me/obviyus";
+    const rewrittenTarget = "-10012345/6789";
+    const job: CronJob = {
+      ...createOverdueIsolatedEveryJob("restart-writeback", startNow - 60_000),
+      delivery: { mode: "announce", channel: "telegram", to: originalTarget },
+    };
+    await writeStoreJobs(store.storePath, [job]);
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startNow,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
+        const persisted = await loadCronStore(store.storePath);
+        const targetJob = persisted.jobs.find((entry) => entry.id === params.job.id);
+        if (targetJob?.delivery?.channel === "telegram") {
+          targetJob.delivery.to = rewrittenTarget;
+        }
+        await saveCronStore(store.storePath, persisted);
+        return { status: "ok" as const, summary: "done", delivered: true };
+      }),
+    });
+
+    try {
+      await runMissedJobs(state);
+
+      const persisted = await loadCronStore(store.storePath);
+      const updated = persisted.jobs.find((entry) => entry.id === job.id);
+      expect(updated?.delivery?.to).toBe(rewrittenTarget);
+      expect(updated?.state.lastRunStatus).toBe("ok");
+      expect(updated?.state.lastDelivered).toBe(true);
+    } finally {
+      await store.cleanup();
+    }
+  });
+
+  it("does not resurrect a job removed during startup catch-up", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    const job = createOverdueIsolatedEveryJob("restart-self-removal", startNow - 60_000);
+    await writeStoreJobs(store.storePath, [job]);
+
+    const events: CronEvent[] = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startNow,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      onEvent: (event) => {
+        events.push(event);
+      },
+      runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
+        const persisted = await loadCronStore(store.storePath);
+        await saveCronStore(store.storePath, {
+          ...persisted,
+          jobs: persisted.jobs.filter((entry) => entry.id !== params.job.id),
+        });
+        return { status: "ok" as const, summary: "removed", delivered: false };
+      }),
+    });
+
+    try {
+      await runMissedJobs(state);
+
+      expect((await loadCronStore(store.storePath)).jobs).toStrictEqual([]);
+      expect(state.store?.jobs).toStrictEqual([]);
+      expect(
+        events.some(
+          (event) => event.jobId === job.id && event.action === "finished" && event.status === "ok",
+        ),
+      ).toBe(true);
+    } finally {
+      await store.cleanup();
+    }
   });
 
   it("does not replay completed one-shot jobs restored with lastRunStatus only", async () => {

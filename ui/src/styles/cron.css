@@ -903,7 +903,6 @@
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--accent);
 }
 
 /* Run entries: flat list separated by hairlines inside the group. */

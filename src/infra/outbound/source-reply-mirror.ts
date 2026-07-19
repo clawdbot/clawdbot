@@ -18,7 +18,7 @@ import {
   type RestartRecoveryTerminalDeliveryScope,
 } from "../../config/sessions/restart-recovery-receipt.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
@@ -27,6 +27,8 @@ type SourceReplyTranscriptMirrorParams = {
   channel: string;
   actionParams: Record<string, unknown>;
   cfg: OpenClawConfig;
+  accountId?: string | null;
+  currentAccountId?: string | null;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
@@ -35,6 +37,7 @@ type SourceReplyTranscriptMirrorParams = {
   sourceReplyFinal?: boolean;
   toolCallId?: string;
   deliveredPayload?: unknown;
+  replyToIsExplicit?: boolean;
 };
 
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
@@ -102,6 +105,14 @@ function resolveSourceReplyThreadPlacement(
   if (params.actionParams.topLevel === true) {
     return currentThreadId ? "mismatch" : "match";
   }
+  if (
+    params.channel === "slack" &&
+    params.replyToIsExplicit === true &&
+    !currentThreadId &&
+    normalizeOptionalString(params.actionParams.replyTo)
+  ) {
+    return "mismatch";
+  }
   for (const key of ["threadId", "messageThreadId"] as const) {
     if (!Object.hasOwn(params.actionParams, key)) {
       continue;
@@ -133,20 +144,44 @@ function resolveThreadedSourceTarget(
   );
 }
 
-function hasExplicitDeliveryFailure(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
+  if (!payload || typeof payload !== "object" || depth > 4) {
     return false;
   }
+  if (Array.isArray(payload)) {
+    return payload.some((value) => hasExplicitDeliveryFailure(value, depth + 1));
+  }
   const record = payload as Record<string, unknown>;
-  if (record.ok === false) {
+  if (record.ok === false || record.delivered === false || record.dryRun === true) {
+    return true;
+  }
+  const messageId = normalizeOptionalLowercaseString(record.messageId);
+  if (messageId === "skipped" || messageId === "suppressed") {
     return true;
   }
   const status = normalizeOptionalLowercaseString(record.status);
-  if (status === "failed" || status === "error") {
+  if (
+    status === "failed" ||
+    status === "error" ||
+    status === "skipped" ||
+    status === "suppressed" ||
+    status === "dry_run"
+  ) {
     return true;
   }
   const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
-  return deliveryStatus === "failed" || deliveryStatus === "error";
+  if (
+    deliveryStatus === "failed" ||
+    deliveryStatus === "error" ||
+    deliveryStatus === "skipped" ||
+    deliveryStatus === "suppressed" ||
+    deliveryStatus === "dry_run"
+  ) {
+    return true;
+  }
+  return ["details", "payload", "result", "results", "sendResult", "toolResult"].some((key) =>
+    hasExplicitDeliveryFailure(record[key], depth + 1),
+  );
 }
 
 function resolveCurrentSourceTurnId(
@@ -269,6 +304,16 @@ function isCurrentSourceConversation(
   if (!toolContext) {
     return false;
   }
+  const accountId = normalizeOptionalString(params.accountId);
+  if (accountId) {
+    const currentAccountId = normalizeOptionalString(params.currentAccountId);
+    if (
+      !currentAccountId ||
+      normalizeAccountId(accountId) !== normalizeAccountId(currentAccountId)
+    ) {
+      return false;
+    }
+  }
   const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
   if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
     return false;
@@ -315,6 +360,13 @@ function isExactCurrentSourceConversation(
 ): params is MirrorableSourceReplyTranscriptParams {
   return (
     resolveSourceReplyThreadPlacement(params) === "match" && isCurrentSourceConversation(params)
+  );
+}
+
+/** Confirms that a successful send reached the exact trusted source conversation. */
+export function isDeliveredCurrentSourceReply(params: SourceReplyTranscriptMirrorParams): boolean {
+  return (
+    !hasExplicitDeliveryFailure(params.deliveredPayload) && isExactCurrentSourceConversation(params)
   );
 }
 

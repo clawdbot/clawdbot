@@ -191,13 +191,44 @@ internal object AndroidScreenshotFixture {
     buildJsonObject {
       put("sessionId", JsonPrimitive("screenshot-session"))
       put("thinkingLevel", JsonPrimitive("low"))
-      put("messages", buildJsonArray {})
+      put(
+        "messages",
+        buildJsonArray {
+          add(chatMessage("user", "What is blocking the Android release?", 1_783_555_020_000))
+          add(
+            chatMessage(
+              "assistant",
+              "Two review threads are still open on the release branch, and the localization sync needs one more pass. " +
+                "Once those land, the changelog draft is ready for review and the tag can go out.",
+              1_783_555_080_000,
+            ),
+          )
+          add(chatMessage("user", "Summarize the open review feedback for me.", 1_783_555_140_000))
+          add(
+            chatMessage(
+              "assistant",
+              "The main thread asks for a regression test around session restore, and the second one wants the new " +
+                "config key documented before merge. Both are small; I can draft patches for each if you want.",
+              1_783_555_200_000,
+            ),
+          )
+          add(chatMessage("user", "Draft a short status update for the team.", 1_783_555_260_000))
+          add(
+            chatMessage(
+              "assistant",
+              "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
+                "the changelog can be reviewed and the tag can go out.",
+              1_783_555_320_000,
+            ),
+          )
+        },
+      )
       put(
         "sessionInfo",
         buildJsonObject {
           put("key", JsonPrimitive(mainSessionKey))
           put("displayName", JsonPrimitive("New chat"))
-          put("updatedAt", JsonPrimitive(1_783_555_200_000))
+          put("updatedAt", JsonPrimitive(1_783_555_320_000))
           put("unread", JsonPrimitive(false))
           put("modelProvider", JsonPrimitive("openai"))
           put("model", JsonPrimitive("gpt-5.2"))
@@ -205,6 +236,16 @@ internal object AndroidScreenshotFixture {
         },
       )
     }.toString()
+
+  private fun chatMessage(
+    role: String,
+    content: String,
+    timestamp: Long,
+  ) = buildJsonObject {
+    put("role", JsonPrimitive(role))
+    put("content", JsonPrimitive(content))
+    put("timestamp", JsonPrimitive(timestamp))
+  }
 
   private fun sessionList(): String =
     buildJsonObject {

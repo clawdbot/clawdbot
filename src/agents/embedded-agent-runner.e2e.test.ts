@@ -43,6 +43,7 @@ const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
+let getReplyPayloadMetadata: typeof import("../auto-reply/reply-payload.js").getReplyPayloadMetadata;
 
 vi.mock("openclaw/plugin-sdk/llm", async () => {
   const actual =
@@ -180,6 +181,7 @@ beforeAll(async () => {
   vi.useRealTimers();
   vi.resetModules();
   installRunEmbeddedMocks();
+  ({ getReplyPayloadMetadata } = await import("../auto-reply/reply-payload.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
   const { SessionManager: LoadedSessionManager } =
@@ -1121,6 +1123,41 @@ describe("runEmbeddedAgent", () => {
     expect(result.payloads?.[0]?.text).toBe(
       "I'll inspect the files, make the change, and run the checks.",
     );
+  });
+
+  it("preserves harness-owned media provenance through terminal preparation", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        toolMediaUrls: ["/tmp/generated.png"],
+        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      sessionId: "session:test",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "generate an image",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("host-owned-media"),
+      sourceReplyDeliveryMode: "message_tool_only",
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]).toMatchObject({
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+    });
+    expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it("handles prompt error paths without dropping user state", async () => {

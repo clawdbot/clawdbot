@@ -91,7 +91,7 @@ async function resolveRevisionSessionKey(
   });
   const sessionKey = resolveSessionKey(createdKey, gatewayHello).trim();
   if (!sessionKey) {
-    throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop session.");
+    throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
   }
   return sessionKey;
 }
@@ -448,7 +448,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       return;
     }
     if (!sessionKey) {
-      throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop session.");
+      throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
     }
     try {
       scope.revision.prepare({

@@ -43,8 +43,9 @@ export const INFRASTRUCTURE_SECTION_KEYS = [
   "discovery",
   "media",
   "acp",
-  "mcp",
 ] as const;
+
+export const MCP_SECTION_KEYS = ["mcp"] as const;
 
 export const AI_AGENTS_SECTION_KEYS = [
   "agents",
@@ -62,6 +63,7 @@ export const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
   ...SECURITY_SECTION_KEYS,
   ...AUTOMATION_SECTION_KEYS,
   ...INFRASTRUCTURE_SECTION_KEYS,
+  ...MCP_SECTION_KEYS,
   ...AI_AGENTS_SECTION_KEYS,
 ]);
 
@@ -75,7 +77,7 @@ const CONFIG_SECTION_KEYS_BY_PAGE = {
   notifications: NOTIFICATION_SECTION_KEYS,
   security: SECURITY_SECTION_KEYS,
   automation: AUTOMATION_SECTION_KEYS,
-  mcp: INFRASTRUCTURE_SECTION_KEYS,
+  mcp: MCP_SECTION_KEYS,
   infrastructure: INFRASTRUCTURE_SECTION_KEYS,
   "ai-agents": AI_AGENTS_SECTION_KEYS,
   advanced: undefined,

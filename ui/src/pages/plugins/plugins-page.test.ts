@@ -49,7 +49,7 @@ function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalog
   return {
     id: "workboard",
     name: "Workboard",
-    description: "Agent work queue and session handoff.",
+    description: "Agent work queue and thread handoff.",
     origin: "bundled",
     installed: true,
     enabled: false,
@@ -869,7 +869,7 @@ describe("PluginsPage", () => {
     addButton?.click();
     await page.updateComplete;
 
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
@@ -1021,7 +1021,7 @@ describe("PluginsPage", () => {
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "bad name!";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "https://x.example/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));

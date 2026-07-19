@@ -2,6 +2,7 @@
 import { once } from "node:events";
 import http2 from "node:http2";
 import tls from "node:tls";
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { openProxyConnectTunnel } from "@openclaw/proxyline";
 import { toErrorObject } from "./errors.js";
@@ -26,7 +27,8 @@ const APNS_RESPONSE_BODY_MAX_BYTES = 8192;
 const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 
 type ApnsResponseBodyCapture = {
-  text: string;
+  chunks: Buffer[];
+  capturedBytes: number;
   bytes: number;
   truncated: boolean;
 };
@@ -205,7 +207,7 @@ function resolveApnsHttp2TimeoutMs(timeoutMs: number): number {
 }
 
 export function createApnsResponseBodyCapture(): ApnsResponseBodyCapture {
-  return { text: "", bytes: 0, truncated: false };
+  return { chunks: [], capturedBytes: 0, bytes: 0, truncated: false };
 }
 
 export function appendApnsResponseBodyCapture(
@@ -213,18 +215,25 @@ export function appendApnsResponseBodyCapture(
   chunk: unknown,
   maxBytes = APNS_RESPONSE_BODY_MAX_BYTES,
 ): void {
-  const buffer = Buffer.from(String(chunk));
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
   capture.bytes += buffer.byteLength;
-  const remaining = maxBytes - Buffer.byteLength(capture.text);
+  const remaining = maxBytes - capture.capturedBytes;
   if (remaining <= 0) {
     capture.truncated = capture.truncated || buffer.byteLength > 0;
     return;
   }
   const slice = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
-  capture.text += slice.toString("utf8");
+  capture.chunks.push(Buffer.from(slice));
+  capture.capturedBytes += slice.byteLength;
   if (slice.byteLength < buffer.byteLength) {
     capture.truncated = true;
   }
+}
+
+export function getApnsResponseBodyCaptureText(capture: ApnsResponseBodyCapture): string {
+  return decodeTextPrefix(Buffer.concat(capture.chunks, capture.capturedBytes), {
+    truncated: capture.truncated,
+  });
 }
 
 /** Sends an intentionally invalid APNs push through a proxy to prove HTTP/2 reachability. */
@@ -278,7 +287,6 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       });
 
       session.once("error", fail);
-      request.setEncoding("utf8");
       request.on("response", (headers) => {
         const rawStatus = headers[":status"];
         status = typeof rawStatus === "number" ? rawStatus : Number(rawStatus);
@@ -302,7 +310,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
           reject(new Error("APNs reachability probe ended without an HTTP/2 status"));
           return;
         }
-        resolve({ status, body: body.text, responseHeaders });
+        resolve({ status, body: getApnsResponseBodyCaptureText(body), responseHeaders });
       });
       request.end(JSON.stringify({ aps: { alert: "OpenClaw APNs proxy validation" } }));
     });

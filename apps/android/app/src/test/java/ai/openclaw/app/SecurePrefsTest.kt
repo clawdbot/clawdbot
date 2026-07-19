@@ -105,6 +105,29 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun cameraAndAudioInputPreferencesDefaultAndPersist() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+
+    assertEquals("front", prefs.preferredCameraFacing.value)
+    assertEquals(null, prefs.preferredAudioInputDevice.value)
+
+    prefs.setPreferredCameraFacing("back")
+    prefs.setPreferredAudioInputDevice("7|usb%3A1|Desk+Mic")
+
+    val restored = testPrefs(context)
+    assertEquals("back", restored.preferredCameraFacing.value)
+    assertEquals("7|usb%3A1|Desk+Mic", restored.preferredAudioInputDevice.value)
+
+    restored.setPreferredCameraFacing("side")
+    restored.setPreferredAudioInputDevice(null)
+    assertEquals("front", restored.preferredCameraFacing.value)
+    assertEquals(null, restored.preferredAudioInputDevice.value)
+  }
+
+  @Test
   fun installedAppsSharing_defaultsOffAndPersistsDisclosureConsent() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

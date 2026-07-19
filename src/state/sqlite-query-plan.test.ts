@@ -209,6 +209,45 @@ describe("sqlite hot query plans", () => {
     );
     expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
+    expectPlanIncludes({
+      db: database.db,
+      expected: "sqlite_autoindex_session_transcript_generations_1",
+      params: ["session-1"],
+      sql: `
+        SELECT generation
+          FROM session_transcript_generations
+         WHERE session_id = ?
+      `,
+    });
+    const rawDeltaPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT seq, LENGTH(CAST(event_json AS BLOB)) + 1 AS serialized_bytes
+          FROM transcript_events
+         WHERE session_id = ? AND seq > ?
+         ORDER BY seq ASC
+         LIMIT 1001
+      `,
+      ["session-1", 90_000],
+    );
+    expect(rawDeltaPlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(rawDeltaPlan).not.toContain("SCAN transcript_events");
+    expect(rawDeltaPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    const rawFrontierPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT seq
+          FROM transcript_events
+         WHERE session_id = ?
+         ORDER BY seq DESC
+         LIMIT 1
+      `,
+      ["session-1"],
+    );
+    expect(rawFrontierPlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(rawFrontierPlan).not.toContain("SCAN transcript_events");
+    expect(rawFrontierPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
     const historyPagePlan = explainQueryPlan(
       database.db,
       `
@@ -227,6 +266,55 @@ describe("sqlite hot query plans", () => {
     expect(historyPagePlan).toContain("idx_agent_transcript_active_messages");
     expect(historyPagePlan).toContain("sqlite_autoindex_transcript_events_1");
     expect(historyPagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const visibleDeltaPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT active.event_seq, active.message_position,
+               LENGTH(CAST(event.event_json AS BLOB)) + 1 AS serialized_bytes
+          FROM session_transcript_active_events AS active
+          JOIN transcript_events AS event
+            ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ?
+           AND active.message_position IS NOT NULL
+           AND active.message_position >= ?
+         ORDER BY active.message_position ASC
+         LIMIT 1001
+      `,
+      ["session-1", 100],
+    );
+    expect(visibleDeltaPlan).toContain("idx_agent_transcript_active_messages");
+    expect(visibleDeltaPlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(visibleDeltaPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const visibleDeltaPayloadPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT active.event_seq, active.message_position, event.event_json,
+               parent_identity.event_id AS parent_id
+          FROM session_transcript_active_events AS active
+          JOIN transcript_events AS event
+            ON event.session_id = active.session_id AND event.seq = active.event_seq
+          LEFT JOIN session_transcript_active_events AS parent_active
+            ON parent_active.session_id = active.session_id
+           AND parent_active.active_position = active.active_position - 1
+          LEFT JOIN transcript_event_identities AS parent_identity
+            ON parent_identity.session_id = parent_active.session_id
+           AND parent_identity.seq = parent_active.event_seq
+         WHERE active.session_id = ?
+           AND active.message_position >= ?
+           AND active.message_position < ?
+         ORDER BY active.message_position ASC
+      `,
+      ["session-1", 100, 125],
+    );
+    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_active_messages");
+    expect(visibleDeltaPayloadPlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(visibleDeltaPayloadPlan).toContain(
+      "sqlite_autoindex_session_transcript_active_events_1",
+    );
+    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_sequence");
+    expect(visibleDeltaPayloadPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
     const historyAnchorPlan = explainQueryPlan(
       database.db,

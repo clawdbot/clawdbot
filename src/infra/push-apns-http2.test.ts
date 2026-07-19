@@ -64,8 +64,13 @@ const {
     setEncoding: vi.fn(),
     end: vi.fn(() => {
       queueMicrotask(() => {
+        const responseBody = Buffer.from(
+          '{"reason":"InvalidProviderToken","detail":"split 🚀 response"}',
+        );
+        const emojiOffset = responseBody.indexOf(Buffer.from("🚀"));
         fakeRequestLocal.emit("response", { ":status": 403 });
-        fakeRequestLocal.emit("data", '{"reason":"InvalidProviderToken"}');
+        fakeRequestLocal.emit("data", responseBody.subarray(0, emojiOffset + 2));
+        fakeRequestLocal.emit("data", responseBody.subarray(emojiOffset + 2));
         fakeRequestLocal.emit("end");
       });
     }),
@@ -373,9 +378,10 @@ describe("connectApnsHttp2Session", () => {
 
     expect(result).toEqual({
       status: 403,
-      body: '{"reason":"InvalidProviderToken"}',
+      body: '{"reason":"InvalidProviderToken","detail":"split 🚀 response"}',
       responseHeaders: {},
     });
+    expect(fakeRequest.setEncoding).not.toHaveBeenCalled();
     const tunnelCall = lastTunnelCall();
     const proxyUrl = tunnelCall.proxyUrl;
     expect(proxyUrl).toBeInstanceOf(URL);

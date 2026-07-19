@@ -170,7 +170,7 @@ describe("setup app recommendation matcher", () => {
   });
 
   it("tolerates fenced JSON with extra keys and long reasons", async () => {
-    const reason = `useful ${"very ".repeat(40)}integration`;
+    const reason = `${"a".repeat(118)}🤖suffix`;
     const result = await getSetupAppRecommendations({
       inventorySource,
       runtime: defaultRuntime,
@@ -200,6 +200,7 @@ describe("setup app recommendation matcher", () => {
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.matches[0]?.candidateId).toBe("notes-tools");
+      expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
       expect(result.matches[0]?.reason.length).toBeLessThanOrEqual(120);
     }
   });

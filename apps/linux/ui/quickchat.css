@@ -220,9 +220,96 @@ body.shown .composer {
     opacity 120ms ease;
 }
 
-.composer.has-error .status {
+.composer.has-error > .status,
+.reply.has-error .reply-error {
   max-height: 16px;
   opacity: 1;
+}
+
+.reply {
+  padding: 10px 3px 2px 46px;
+  border-top: 1px solid rgb(255 255 255 / 7%);
+  margin-top: 9px;
+}
+
+.reply-header {
+  display: flex;
+  min-height: 24px;
+  margin-bottom: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reply-agent {
+  display: inline-flex;
+  min-width: 0;
+  padding: 2px 7px 2px 2px;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 999px;
+  color: #d7d7da;
+  background: rgb(255 255 255 / 4%);
+}
+
+.reply-agent .agent-avatar-mini {
+  flex-basis: 20px;
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+
+.reply-agent-name {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-state {
+  padding-right: 3px;
+  color: #7f7f84;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  text-transform: uppercase;
+  transition: opacity 120ms ease;
+}
+
+.reply.is-terminal .reply-state {
+  opacity: 1;
+}
+
+.reply-scroll {
+  max-height: 228px;
+  padding-right: 5px;
+  overflow-y: auto;
+  scrollbar-color: rgb(255 255 255 / 16%) transparent;
+  scrollbar-width: thin;
+}
+
+.reply-text {
+  overflow-wrap: anywhere;
+  color: #ededee;
+  font: 400 13px/1.5 inherit;
+  white-space: pre-wrap;
+}
+
+.reply-thinking {
+  display: inline-block;
+  color: transparent;
+  font-size: 12px;
+  background: linear-gradient(100deg, #777 20%, #d2d2d4 48%, #777 76%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-size: 220% 100%;
+  animation: shimmer 1.35s ease-in-out infinite;
+}
+
+.reply-error {
+  margin-left: 0;
+  white-space: normal;
 }
 
 .popover {
@@ -356,6 +443,16 @@ body.shown .popover:not([hidden]) {
   }
 }
 
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -100% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -368,5 +465,10 @@ body.shown .popover:not([hidden]) {
   .composer,
   body.shown .composer {
     transform: none;
+  }
+
+  .reply-thinking {
+    color: #8e8e93;
+    background: none;
   }
 }

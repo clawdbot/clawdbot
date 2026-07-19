@@ -374,6 +374,119 @@ describe("openai transport stream", () => {
     expect(output.usage.cost.total).toBeCloseTo(0.0007475);
   });
 
+  it("records Responses usage and cost when the turn ends incomplete", async () => {
+    const model = makeResponsesModel({
+      ...createAzureResponsesModel(),
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    });
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-incomplete",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            usage: {
+              input_tokens: 100,
+              output_tokens: 10,
+              total_tokens: 110,
+              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expectRecordFields(output.usage, {
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      reasoningTokens: 0,
+      totalTokens: 110,
+    });
+    // Sub-cent totals round to 0 at toBeCloseTo's default precision, so assert non-zero too.
+    expect(output.usage.cost.total).toBeGreaterThan(0);
+    expect(output.usage.cost.total).toBeCloseTo(0.0007475, 7);
+    expect(output.stopReason).toBe("length");
+  });
+
+  it("reports content-filtered incomplete Responses turns as errors", async () => {
+    const model = makeResponsesModel(createAzureResponsesModel());
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-filtered",
+            status: "incomplete",
+            incomplete_details: { reason: "content_filter" },
+            usage: { input_tokens: 12, output_tokens: 0, total_tokens: 12 },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toBe("Provider incomplete_reason: content_filter");
+    expectRecordFields(output.usage, { input: 12, output: 0 });
+  });
+
+  it("backfills partial message output but not tool calls from an incomplete Responses turn", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-incomplete-output",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [
+              {
+                type: "message",
+                id: "msg_truncated",
+                role: "assistant",
+                content: [{ type: "text", text: "TRUNCATED_HALF_SENTENCE" }],
+              },
+              {
+                type: "function_call",
+                id: "fc_truncated",
+                call_id: "call_truncated",
+                name: "write",
+                arguments: '{"path":"unfinished',
+              },
+            ],
+            usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.content).toMatchObject([{ type: "text", text: "TRUNCATED_HALF_SENTENCE" }]);
+    expect(output.stopReason).toBe("length");
+    expectRecordFields(output.usage, { input: 8, output: 4 });
+  });
+
   it("backfills Azure Responses completed message output when item events are absent", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

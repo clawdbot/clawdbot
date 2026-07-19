@@ -221,9 +221,14 @@ const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
   /\bcodex app-server client closed before turn completed\b/iu;
 const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
   /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
+  /\bcodex session generation is no longer current\b/iu;
 
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
+    return "⚠️ This Codex session changed before your message could run. Please send it again.";
+  }
   if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
     return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
   }

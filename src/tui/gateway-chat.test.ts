@@ -653,6 +653,34 @@ describe("GatewayChatClient", () => {
     vi.useRealTimers();
   });
 
+  it("waits for gateway transport teardown on stop", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    let finishStop: (() => void) | undefined;
+    const stopAndWait = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStop = resolve;
+        }),
+    );
+    (client as unknown as { client: { stopAndWait: typeof stopAndWait } }).client.stopAndWait =
+      stopAndWait;
+
+    let stopped = false;
+    const stopPromise = client.stop().then(() => {
+      stopped = true;
+    });
+
+    expect(stopAndWait).toHaveBeenCalledOnce();
+    expect(stopped).toBe(false);
+    finishStop?.();
+    await stopPromise;
+    expect(stopped).toBe(true);
+  });
+
   it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", async () => {
     const constructedOptions: Array<Record<string, unknown>> = [];
 
@@ -839,6 +867,81 @@ describe("GatewayChatClient", () => {
       preserveSideRuns: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "chat.abort", { sessionKey: "main" });
+  });
+
+  it("retries session creation without disposition on older Gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:tui-next" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.createSession({
+        key: "tui-next",
+        parentSessionKey: "agent:main:main",
+        succeedsParent: true,
+      }),
+    ).resolves.toEqual({ ok: true, key: "agent:main:tui-next" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
+      key: "tui-next",
+      parentSessionKey: "agent:main:main",
+      succeedsParent: true,
+      emitCommandHooks: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.create", {
+      key: "tui-next",
+      parentSessionKey: "agent:main:main",
+      emitCommandHooks: true,
+    });
+  });
+
+  it("retries parallel session creation without parent lifecycle on older Gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:tui-parallel" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.createSession({
+        key: "tui-parallel",
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        succeedsParent: false,
+      }),
+    ).resolves.toEqual({ ok: true, key: "agent:main:tui-parallel" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
+      key: "tui-parallel",
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+      succeedsParent: false,
+      emitCommandHooks: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.create", {
+      key: "tui-parallel",
+      agentId: "main",
+    });
   });
 
   it("returns the actual chat send ack status from the gateway", async () => {

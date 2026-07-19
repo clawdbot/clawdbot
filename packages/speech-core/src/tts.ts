@@ -37,7 +37,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withSpeakerSelectionCompat } from "../speaker.js";
 import {
@@ -51,6 +50,7 @@ import {
   type VoiceProviderCandidate,
 } from "../voice-models.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
+import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
@@ -1074,6 +1074,7 @@ export async function synthesizeSpeech(params: {
   }
 
   const { cfg, config, persona, providers } = setup;
+  const textForSynthesis = normalizeSpeechText(params.text);
   const target = resolveTtsSynthesisTarget(params.channel);
 
   const errors: string[] = [];
@@ -1122,7 +1123,7 @@ export async function synthesizeSpeech(params: {
       });
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
-        text: params.text,
+        text: textForSynthesis,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
         providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
@@ -1660,6 +1661,12 @@ export async function maybeApplyTtsToPayload(params: {
   let textForAudio = ttsText.trim();
   let wasSummarized = false;
 
+  if (!explicitTtsText && isCodeHeavySpeechText(textForAudio)) {
+    // The visible reply already carries code-heavy detail. Skip noisy voice-note audio instead of
+    // telling channel users to look at a screen they may not have.
+    return nextPayload;
+  }
+
   if (textForAudio.length > maxLength) {
     if (!isSummarizationEnabled(prefsPath)) {
       logVerbose(
@@ -1691,11 +1698,11 @@ export async function maybeApplyTtsToPayload(params: {
     }
   }
 
-  textForAudio = stripMarkdown(textForAudio).trim();
-  if (!textForAudio) {
+  const normalizedTextForAudio = normalizeSpeechText(textForAudio);
+  if (!normalizedTextForAudio) {
     return nextPayload;
   }
-  if (!explicitTtsText && textForAudio.length < 10) {
+  if (!explicitTtsText && normalizedTextForAudio.length < 10) {
     return nextPayload;
   }
 

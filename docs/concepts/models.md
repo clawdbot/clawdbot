@@ -55,7 +55,8 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 
 Related model-config surfaces:
 
-- `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use, plus aliases. Use `provider/*` entries to allow every discovered model from a provider without listing each one.
+- `agents.defaults.models` stores aliases and per-model settings. Adding an entry does not restrict model overrides.
+- `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or `provider/*` entries; omit it or set `[]` to allow any model. Per-agent `agents.list[].modelPolicy.allow` replaces the default policy for that agent.
 - `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.list[].utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
@@ -79,7 +80,7 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when set (including `provider/*` wildcard entries), otherwise `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including `provider/*` wildcard entries; otherwise it shows configured models plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 Full mechanics: [Model failover](/concepts/model-failover).
@@ -107,14 +108,14 @@ Reauthentication preserves an existing explicit primary model, including
 
 ## "Model is not allowed" (and why replies stop)
 
-If `agents.defaults.models` is set, it becomes the allowlist for `/model` and session overrides. Selecting a model outside that allowlist returns, before any normal reply is generated:
+If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the allowlist for `/model`, session overrides, and `--model`. Selecting a model outside that allowlist returns before any normal reply is generated. A per-agent `agents.list[].modelPolicy.allow` replaces the default policy for that agent.
 
 ```text
-Model "provider/model" is not allowed. Use /models to list providers, or /models <provider> to list models.
-Add it with: openclaw config set agents.defaults.models '{"provider/model":{}}' --strict-json --merge
+Model override "provider/model" is not allowed by agents.defaults.modelPolicy.allow.
+Add "provider/model" or "provider/*" to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.
 ```
 
-Fix it by adding the model to `agents.defaults.models`, clearing the allowlist entirely (remove the key), or picking a model from `/model list`. If the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same `/model ... --runtime ...` command.
+Fix it by adding the model or a provider wildcard to the named `modelPolicy.allow` key, removing/emptying that list, or picking a model from `/model list`. If the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same command.
 
 For local/GGUF models, the allowlist needs the full provider-prefixed ref, for example `ollama/gemma4:26b` or `lmstudio/Gemma4-26b-a4-it-gguf` — check `openclaw models list --provider <provider>` for the exact string. Bare filenames or display names are not enough once the allowlist is active.
 
@@ -124,9 +125,8 @@ To limit providers without listing every model, use `provider/*` wildcard entrie
 {
   agents: {
     defaults: {
-      models: {
-        "openai/*": {},
-        "vllm/*": {},
+      modelPolicy: {
+        allow: ["openai/*", "vllm/*"],
       },
     },
   },
@@ -135,13 +135,16 @@ To limit providers without listing every model, use `provider/*` wildcard entrie
 
 `/model`, `/models`, and model pickers then show the discovered catalog for those providers only, and new models can appear without editing the allowlist. Mix exact `provider/model` entries with `provider/*` entries to pull in one specific model from another provider.
 
-Example allowlist with aliases:
+Example allowlist with aliases and per-model settings:
 
 ```json5
 {
   agents: {
     defaults: {
       model: { primary: "anthropic/claude-sonnet-4-6" },
+      modelPolicy: {
+        allow: ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6"],
+      },
       models: {
         "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
         "anthropic/claude-opus-4-6": { alias: "Opus" },
@@ -151,14 +154,14 @@ Example allowlist with aliases:
 }
 ```
 
-<Accordion title="Safe allowlist edits from the CLI">
-Use `--merge` for additive changes:
+<Accordion title="Edit the allowlist explicitly">
+Set the complete list directly:
 
 ```bash
-openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
+openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthropic/*"]' --strict-json
 ```
 
-`openclaw config set` refuses plain-object assignments to `agents.defaults.models`, `models.providers`, or `models.providers.<id>.models` when they would drop existing entries; use `--replace` only when the new value should become the complete target value. Interactive provider setup and `openclaw configure --section model` already merge provider-scoped selections into the allowlist, so adding a provider does not drop unrelated entries; configure preserves an existing `agents.defaults.model.primary`. Explicit commands like `openclaw models auth login --provider <id> --set-default` and `openclaw models set <model>` still replace the primary.
+`openclaw models set`, provider setup, and `openclaw models aliases add` can add entries under `agents.defaults.models`, but they never change `modelPolicy.allow`. This keeps model metadata and aliases independent from override policy.
 </Accordion>
 
 ## `/model` in chat

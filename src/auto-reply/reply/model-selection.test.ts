@@ -1138,10 +1138,14 @@ describe("createModelSelectionState respects session model override", () => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-4o" },
+          model: {
+            primary: "openai/gpt-4o",
+            fallbacks: ["openai/gpt-4o-mini"],
+          },
           models: {
             "openai/gpt-4o": {},
           },
+          modelPolicy: { allow: ["openai/gpt-4o"] },
         },
       },
     } as OpenClawConfig;

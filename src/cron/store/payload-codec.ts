@@ -89,6 +89,28 @@ function parseCommandPayloadMessage(
   };
 }
 
+function parseScriptPayloadMessage(
+  raw: string | null,
+): Omit<Extract<CronPayload, { kind: "script" }>, "kind" | "timeoutSeconds"> | null {
+  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.script !== "string" || !record.script.trim()) {
+    return null;
+  }
+  const toolBudget = normalizeNumber(
+    typeof record.toolBudget === "number" || typeof record.toolBudget === "bigint"
+      ? record.toolBudget
+      : null,
+  );
+  return {
+    script: record.script,
+    ...(toolBudget != null ? { toolBudget } : {}),
+  };
+}
+
 /** Maps cron payload variants into normalized SQLite columns. */
 export function bindPayloadColumns(
   payload: CronPayload,
@@ -129,6 +151,26 @@ export function bindPayloadColumns(
     } = payload;
     return {
       payload_kind: "command",
+      payload_message: serializeJson(payloadMessage),
+      payload_model: null,
+      payload_fallbacks_json: null,
+      payload_thinking: null,
+      payload_timeout_seconds: payload.timeoutSeconds ?? null,
+      payload_allow_unsafe_external_content: null,
+      payload_external_content_source_json: null,
+      payload_light_context: null,
+      ...bindPayloadToolAllowColumns(payload),
+    };
+  }
+  if (payload.kind === "script") {
+    const {
+      timeoutSeconds: _timeoutSeconds,
+      toolsAllow: _toolsAllow,
+      toolsAllowIsDefault: _toolsAllowIsDefault,
+      ...payloadMessage
+    } = payload;
+    return {
+      payload_kind: "script",
       payload_message: serializeJson(payloadMessage),
       payload_model: null,
       payload_fallbacks_json: null,
@@ -205,6 +247,19 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
     return {
       kind: "command",
       ...command,
+      ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
+      ...payloadToolAllowFromRow(row),
+    };
+  }
+  if (row.payload_kind === "script") {
+    const script = parseScriptPayloadMessage(row.payload_message);
+    if (!script) {
+      return null;
+    }
+    const timeoutSeconds = normalizeNumber(row.payload_timeout_seconds);
+    return {
+      kind: "script",
+      ...script,
       ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
       ...payloadToolAllowFromRow(row),
     };

@@ -687,7 +687,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         sessionPrefix: slashCommand.sessionPrefix,
         userId: command.user_id,
         targetSessionKey: route.sessionKey,
-        lowercaseSessionKey: true,
+        sessionKeyCase: "lowercase",
       });
       const slashReplyTarget =
         !slashCommand.ephemeral && isRoomish

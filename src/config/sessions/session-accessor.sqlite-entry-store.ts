@@ -39,6 +39,8 @@ import type { SessionEntry } from "./types.js";
 
 // Canonical owner for session_entries row selection, alias snapshots, and writes.
 
+type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "db">;
+
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_entries"]>;
 export type ResolvedSessionEntryRow = {
   entry: SessionEntry;
@@ -82,7 +84,7 @@ export function createSqliteSessionIdentitySnapshot(
 }
 
 export function readSessionEntryRow(
-  database: OpenClawAgentDatabase,
+  database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
   const db = getSessionKysely(database.db);
@@ -157,7 +159,7 @@ export function assertSqliteSessionEntrySelectionUnchanged(
 }
 
 export function collectSessionEntryLookupKeys(
-  database: OpenClawAgentDatabase,
+  database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): string[] {
   const trimmedKey = sessionKey.trim();
@@ -184,7 +186,7 @@ export function collectSessionEntryLookupKeys(
 }
 
 export function readExactSessionEntryRow(
-  database: OpenClawAgentDatabase,
+  database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
   const db = getSessionKysely(database.db);

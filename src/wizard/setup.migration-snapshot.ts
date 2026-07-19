@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withFileLock } from "../infra/file-lock.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -24,10 +25,6 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "skills",
 ] as const;
 const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-}
 
 function canonicalizeJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -149,7 +146,7 @@ async function hashTargetPath(
   try {
     stat = await fs.lstat(candidate);
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (isNotFoundPathError(error)) {
       hash.update(`missing:${snapshotPath}\0`);
       return;
     }
@@ -187,7 +184,7 @@ async function hashSourcePath(
   try {
     stat = await fs.lstat(candidate);
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (isNotFoundPathError(error)) {
       hash.update(`missing:${snapshotPath}\0`);
       return;
     }

@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.cronWakeModeLabel
 import ai.openclaw.app.ui.cronWakeModeOptions
@@ -264,7 +264,7 @@ class CronJobManagementTest {
         code = "INVALID_REQUEST",
         message = "changed",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "CRON_JOB_CHANGED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = null,

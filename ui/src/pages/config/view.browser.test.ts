@@ -1,11 +1,18 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
 describe("config view", () => {
+  // The view module warms the lazy JSON5 parser on load; tests assert the
+  // steady state where raw diffs parse synchronously.
+  beforeAll(async () => {
+    await warmJson5();
+  });
+
   const baseProps = () => ({
     raw: "{\n}\n",
     originalRaw: "{\n}\n",
@@ -1294,6 +1301,14 @@ describe("config view", () => {
       },
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh: vi.fn(),
+      camera: {
+        devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
+        selectedDeviceId: "camera-1",
+        loading: false,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh: vi.fn(),
     });
 
     const shortcutSelect = queryRequired(
@@ -1321,6 +1336,12 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+    expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
+    expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
+      "System default",
+      "Desk Camera",
+    ]);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

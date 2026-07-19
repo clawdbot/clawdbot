@@ -242,6 +242,74 @@ public struct OpenClawChatSessionWorktree: Codable, Sendable, Hashable {
     public let repoRoot: String?
 }
 
+public struct OpenClawChatAgentRuntime: Codable, Sendable, Hashable {
+    public let id: String
+    public let fallback: String?
+    public let source: String?
+}
+
+public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashable {
+    public var id: String {
+        self.name
+    }
+
+    public let name: String
+    public let position: Int
+
+    public init(name: String, position: Int) {
+        self.name = name
+        self.position = position
+    }
+}
+
+public struct OpenClawChatSessionGroupsResponse: Codable, Sendable, Equatable {
+    public let groups: [OpenClawChatSessionGroup]
+
+    public init(groups: [OpenClawChatSessionGroup]) {
+        self.groups = groups
+    }
+}
+
+public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equatable {
+    public let ok: Bool
+    public let groups: [OpenClawChatSessionGroup]
+    public let updatedSessions: Int?
+
+    public init(ok: Bool, groups: [OpenClawChatSessionGroup], updatedSessions: Int? = nil) {
+        self.ok = ok
+        self.groups = groups
+        self.updatedSessions = updatedSessions
+    }
+}
+
+public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable {
+    public let id: String
+    public let name: String?
+    public let workspaceGit: Bool?
+
+    public init(id: String, name: String? = nil, workspaceGit: Bool? = nil) {
+        self.id = id
+        self.name = name
+        self.workspaceGit = workspaceGit
+    }
+
+    public var displayName: String {
+        let normalized = self.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalized, !normalized.isEmpty else { return self.id }
+        return normalized
+    }
+}
+
+public struct OpenClawChatAgentsListResponse: Codable, Sendable, Equatable {
+    public let defaultId: String
+    public let agents: [OpenClawChatAgentChoice]
+
+    public init(defaultId: String, agents: [OpenClawChatAgentChoice]) {
+        self.defaultId = defaultId
+        self.agents = agents
+    }
+}
+
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {
     public var id: String {
         self.key
@@ -274,6 +342,10 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var hasActiveRun: Bool?
     public var hasActiveSubagentRun: Bool?
     public var worktree: OpenClawChatSessionWorktree?
+    public var startedAt: Double?
+    public var endedAt: Double?
+    public var runtimeMs: Double?
+    public var agentRuntime: OpenClawChatAgentRuntime?
 
     public var systemSent: Bool?
     public var abortedLastRun: Bool?
@@ -336,7 +408,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         hasActiveSubagentRun: Bool? = nil,
         worktree: OpenClawChatSessionWorktree? = nil,
         fastMode: OpenClawChatFastMode? = nil,
-        effectiveFastMode: OpenClawChatFastMode? = nil)
+        effectiveFastMode: OpenClawChatFastMode? = nil,
+        startedAt: Double? = nil,
+        endedAt: Double? = nil,
+        runtimeMs: Double? = nil,
+        agentRuntime: OpenClawChatAgentRuntime? = nil)
     {
         self.key = key
         self.kind = kind
@@ -364,6 +440,10 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.hasActiveRun = hasActiveRun
         self.hasActiveSubagentRun = hasActiveSubagentRun
         self.worktree = worktree
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.runtimeMs = runtimeMs
+        self.agentRuntime = agentRuntime
         self.systemSent = systemSent
         self.abortedLastRun = abortedLastRun
         self.thinkingLevel = thinkingLevel

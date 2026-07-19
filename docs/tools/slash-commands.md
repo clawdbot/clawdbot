@@ -371,8 +371,9 @@ use the Control UI Tools panel or config surfaces.
 ```
 
 On Discord, `/model` and `/models` open an interactive picker with provider and
-model dropdowns. The picker respects `agents.defaults.models`, including
-`provider/*` entries.
+model dropdowns. The picker respects `agents.defaults.modelPolicy.allow`,
+including `provider/*` entries. Without an explicit allowlist, model entries and
+aliases do not restrict selection.
 
 ## `/config`: on-disk config writes
 

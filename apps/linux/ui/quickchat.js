@@ -1,3 +1,46 @@
+// Pure stream helpers stay above browser bindings so the Node regression test can exercise the
+// Gateway-compatible assembler without constructing a WebView.
+function chatMessageText(message) {
+  const content = message?.content;
+  if (Array.isArray(content)) {
+    const textBlocks = content
+      .filter((block) => block?.type === "text" && typeof block.text === "string")
+      .map((block) => block.text);
+    if (textBlocks.length > 0) {
+      return textBlocks.join("\n\n");
+    }
+  }
+  // Match the Control UI fallback contract in ui/src/lib/chat/message-extract.ts: typed content
+  // blocks, then plain-string content, then top-level message.text.
+  if (typeof content === "string") {
+    return content;
+  }
+  return typeof message?.text === "string" ? message.text : null;
+}
+
+function assembleChatDelta(currentText, payload) {
+  const snapshot = chatMessageText(payload?.message);
+  if (typeof payload?.deltaText === "string") {
+    if (payload.replace === true) {
+      return payload.deltaText;
+    }
+    if (currentText === null) {
+      return snapshot ?? payload.deltaText;
+    }
+    if (snapshot !== null) {
+      const prefixLength = snapshot.length - payload.deltaText.length;
+      if (
+        prefixLength !== currentText.length ||
+        snapshot.slice(0, prefixLength) !== currentText
+      ) {
+        return snapshot;
+      }
+    }
+    return `${currentText}${payload.deltaText}`;
+  }
+  return snapshot;
+}
+
 const tauri = window["__TAURI__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
@@ -9,6 +52,14 @@ const elements = {
   agentMenu: document.querySelector("#agent-menu"),
   composer: document.querySelector("#composer"),
   input: document.querySelector("#message"),
+  reply: document.querySelector("#reply"),
+  replyAgentAvatar: document.querySelector("#reply-agent-avatar"),
+  replyAgentName: document.querySelector("#reply-agent-name"),
+  replyError: document.querySelector("#reply-error"),
+  replyScroll: document.querySelector("#reply-scroll"),
+  replyState: document.querySelector("#reply-state"),
+  replyText: document.querySelector("#reply-text"),
+  replyThinking: document.querySelector("#reply-thinking"),
   send: document.querySelector("#send"),
   sendIcon: document.querySelector("#send-icon"),
   shortcutCapture: document.querySelector("#shortcut-capture"),
@@ -32,9 +83,16 @@ let acceptedTimer = null;
 let visibilitySequence = 0;
 let popoverSequence = 0;
 let sendError = "";
+let gatewayState = "down";
+let gatewayNotice = "";
+let gatewayDisconnectSequence = 0;
 let openPopover = null;
 let menuIndex = 0;
 let capturingShortcut = false;
+let activeReply = null;
+let pendingChatEvents = [];
+
+const MAX_PENDING_CHAT_EVENTS = 64;
 
 function friendlyError(error, fallback = "Could not send the message.") {
   if (typeof error === "string") {
@@ -48,13 +106,50 @@ function setError(message = "") {
   elements.composer.classList.toggle("has-error", Boolean(message));
 }
 
+function renderStatus() {
+  if (gatewayState === "pairing-required") {
+    setError(gatewayNotice || "Approve this device in the dashboard (Nodes)");
+    return;
+  }
+  if (gatewayState === "credential-required") {
+    setError(
+      gatewayNotice || "Gateway requires a credential — open the dashboard on the gateway host",
+    );
+    return;
+  }
+  if (gatewayState === "tls-failure") {
+    setError("Gateway TLS trust failed — check the certificate fingerprint");
+    return;
+  }
+  setError(
+    gatewayState === "up" ? sendError : gatewayNotice || "Gateway unreachable — retrying",
+  );
+}
+
+function setGatewayState(payload) {
+  const wasUp = gatewayState === "up";
+  gatewayState = payload?.state || "down";
+  gatewayNotice = typeof payload?.notice === "string" ? payload.notice : "";
+  if (gatewayState !== "up") {
+    gatewayDisconnectSequence += 1;
+    terminalizeDisconnectedReply();
+  }
+  renderStatus();
+  updateSendButton();
+  if (gatewayState === "up" && !wasUp) {
+    void refreshAgents();
+  }
+}
+
 function updateSendButton() {
   const empty = !elements.input.value.trim();
-  elements.send.disabled = empty || selectingAgent || sending || accepted;
+  const streaming = activeReply !== null && !activeReply.terminal;
+  elements.send.disabled =
+    gatewayState !== "up" || empty || selectingAgent || sending || accepted || streaming;
   elements.send.classList.toggle("sending", sending);
   elements.send.classList.toggle("accepted", accepted);
   elements.sendIcon.textContent = sending ? "" : accepted ? "✓" : "↑";
-  elements.input.readOnly = sending || accepted;
+  elements.input.readOnly = sending || accepted || streaming;
 }
 
 function nameHue(name) {
@@ -89,6 +184,150 @@ function renderAvatar(target, identity) {
   });
   image.src = avatarUrl;
   target.replaceChildren(image);
+}
+
+function resetAccepted() {
+  window.clearTimeout(acceptedTimer);
+  acceptedTimer = null;
+  accepted = false;
+}
+
+function clearReply() {
+  activeReply = null;
+  elements.reply.hidden = true;
+  elements.reply.classList.remove("has-error", "is-terminal");
+  elements.replyError.textContent = "";
+  elements.replyState.textContent = "";
+  elements.replyText.textContent = "";
+  elements.replyThinking.hidden = true;
+}
+
+function scrollReplyToEnd() {
+  window.requestAnimationFrame(() => {
+    elements.replyScroll.scrollTop = elements.replyScroll.scrollHeight;
+  });
+}
+
+function renderReplyText() {
+  // Deliberately plain text: this small native surface avoids a Markdown dependency and preserves
+  // whitespace, leaving Markdown punctuation visible instead of interpreting agent output.
+  elements.replyText.textContent = activeReply?.text || "";
+  scrollReplyToEnd();
+}
+
+function stopReplyThinking() {
+  elements.replyThinking.hidden = true;
+}
+
+function terminalizeDisconnectedReply() {
+  if (!activeReply || activeReply.terminal) {
+    return;
+  }
+  // Chat events are not replayed after a socket gap. Unlock the composer instead of leaving a
+  // reply waiting forever for a terminal frame that may have been lost while disconnected.
+  activeReply.terminal = true;
+  stopReplyThinking();
+  elements.reply.classList.add("has-error", "is-terminal");
+  elements.replyState.textContent = "Interrupted";
+  elements.replyError.textContent = "Connection lost before the reply completed.";
+  scrollReplyToEnd();
+}
+
+function replyTargetMatches(target, payload) {
+  if (!target || payload?.sessionKey !== target.sessionKey) {
+    return false;
+  }
+  return target.agentId == null || payload?.agentId === target.agentId;
+}
+
+function startReply(target, identity, runId) {
+  activeReply = {
+    runId,
+    target: {
+      sessionKey: target.sessionKey,
+      agentId: typeof target.agentId === "string" ? target.agentId : null,
+    },
+    terminal: false,
+    text: null,
+  };
+  elements.reply.hidden = false;
+  elements.reply.classList.remove("has-error", "is-terminal");
+  elements.replyError.textContent = "";
+  elements.replyState.textContent = "";
+  elements.replyText.textContent = "";
+  elements.replyThinking.textContent = reducedMotion.matches ? "…" : "Thinking…";
+  elements.replyThinking.hidden = false;
+  renderAvatar(elements.replyAgentAvatar, identity);
+  elements.replyAgentName.textContent = identity?.name?.trim() || "Agent";
+  void invoke("quickchat_set_expanded", { expanded: true });
+}
+
+function applyChatEvent(payload) {
+  if (!activeReply) {
+    return;
+  }
+  // The chat.send ACK owns this reply. Exact runId equality is primary; the routing target remains
+  // a secondary guard so concurrent turns from other surfaces never enter this reply area.
+  if (payload?.runId !== activeReply.runId || !replyTargetMatches(activeReply.target, payload)) {
+    return;
+  }
+  if (activeReply.terminal) {
+    return;
+  }
+
+  const hasTextUpdate =
+    typeof payload?.deltaText === "string" || chatMessageText(payload?.message) !== null;
+  if (hasTextUpdate) {
+    const nextText = assembleChatDelta(activeReply.text, payload);
+    if (nextText !== null) {
+      activeReply.text = nextText;
+      renderReplyText();
+    }
+  }
+
+  if (payload?.state === "delta") {
+    stopReplyThinking();
+    return;
+  }
+  if (!["final", "aborted", "error"].includes(payload?.state)) {
+    return;
+  }
+
+  activeReply.terminal = true;
+  pendingChatEvents = [];
+  stopReplyThinking();
+  elements.reply.classList.add("is-terminal");
+  if (payload.state === "final") {
+    elements.replyState.textContent = "Done";
+  } else if (payload.state === "aborted") {
+    activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}(stopped)`;
+    elements.replyState.textContent = "Stopped";
+    renderReplyText();
+  } else {
+    elements.reply.classList.add("has-error");
+    elements.replyState.textContent = "Error";
+    elements.replyError.textContent =
+      typeof payload.errorMessage === "string" && payload.errorMessage.trim()
+        ? payload.errorMessage
+        : "Gateway reply failed.";
+    scrollReplyToEnd();
+  }
+  updateSendButton();
+}
+
+function handleChatEvent(payload) {
+  if (activeReply) {
+    applyChatEvent(payload);
+    return;
+  }
+  if (sending) {
+    // The Gateway may stream before the chat.send ack reaches invoke; replay only after the native
+    // command returns the accepted routing target, then apply the same session/run filters.
+    if (pendingChatEvents.length === MAX_PENDING_CHAT_EVENTS) {
+      pendingChatEvents.shift();
+    }
+    pendingChatEvents.push(payload);
+  }
 }
 
 function renderIdentity(identity) {
@@ -160,7 +399,7 @@ async function selectAgent(agentId) {
     closePopover();
   } catch (error) {
     sendError = friendlyError(error, "Could not select that agent.");
-    setError(sendError);
+    renderStatus();
   } finally {
     selectingAgent = false;
     updateSendButton();
@@ -194,7 +433,7 @@ async function openNamedPopover(kind) {
     await invoke("quickchat_set_expanded", { expanded: true });
   } catch (error) {
     sendError = friendlyError(error, "Could not open Quick Chat settings.");
-    setError(sendError);
+    renderStatus();
     return;
   }
   if (sequence !== popoverSequence) {
@@ -216,7 +455,7 @@ function closePopover(focusInput = true, compact = true) {
   ++popoverSequence;
   setPopoverVisibility(null);
   if (compact) {
-    void invoke("quickchat_set_expanded", { expanded: false });
+    void invoke("quickchat_set_expanded", { expanded: !elements.reply.hidden });
   }
   if (focusInput) {
     elements.input.focus();
@@ -294,13 +533,14 @@ async function saveShortcut(accelerator) {
   }
 }
 
-async function requestHide(force = false) {
-  if ((accepted && !force) || hiding) {
+async function requestHide() {
+  if (hiding) {
     return;
   }
   visibilitySequence += 1;
   const hideSequence = visibilitySequence;
   hiding = true;
+  pendingChatEvents = [];
   closePopover(false, false);
   document.body.classList.remove("shown");
   window.clearTimeout(hideTimer);
@@ -308,10 +548,12 @@ async function requestHide(force = false) {
     async () => {
       try {
         await invoke("quickchat_hide");
+        resetAccepted();
+        clearReply();
       } catch (error) {
         if (visibilitySequence === hideSequence) {
           sendError = friendlyError(error);
-          setError(sendError);
+          renderStatus();
           document.body.classList.add("shown");
           elements.input.focus();
         }
@@ -327,52 +569,81 @@ async function requestHide(force = false) {
 
 function reveal() {
   window.clearTimeout(hideTimer);
-  if (accepted) {
-    window.clearTimeout(acceptedTimer);
-    acceptedTimer = null;
-    accepted = false;
-  }
+  resetAccepted();
   hiding = false;
   setPopoverVisibility(null);
-  setError(sendError);
+  renderStatus();
   updateSendButton();
   document.body.classList.remove("shown");
   window.requestAnimationFrame(() => {
     document.body.classList.add("shown");
     elements.input.focus();
   });
-  void refreshAgents();
+  if (gatewayState === "up") {
+    void refreshAgents();
+  }
   void refreshShortcutStatus();
 }
 
 async function send(openDashboard) {
   const message = elements.input.value.trim();
-  if (!message || selectingAgent || sending || accepted) {
+  if (gatewayState !== "up" || !message || selectingAgent || sending || accepted) {
     return;
   }
   sending = true;
+  const sendDisconnectSequence = gatewayDisconnectSequence;
+  const sendVisibilitySequence = visibilitySequence;
+  clearReply();
+  pendingChatEvents = [];
+  void invoke("quickchat_set_expanded", { expanded: false });
   sendError = "";
-  setError();
+  renderStatus();
   updateSendButton();
   try {
-    await invoke("quickchat_send", { message });
+    const sentIdentity = { ...activeIdentity };
+    const result = await invoke("quickchat_send", { message });
+    if (!result || typeof result.sessionKey !== "string") {
+      throw new Error("Gateway accepted the message without a routing target.");
+    }
+    if (typeof result.runId !== "string" || !result.runId) {
+      throw new Error("Gateway accepted the message without a run ID.");
+    }
     sending = false;
-    accepted = true;
     sendError = "";
     elements.input.value = "";
+    if (visibilitySequence !== sendVisibilitySequence || hiding) {
+      pendingChatEvents = [];
+      updateSendButton();
+      return;
+    }
+    accepted = true;
+    startReply(result, sentIdentity, result.runId);
+    const bufferedEvents = pendingChatEvents;
+    pendingChatEvents = [];
+    for (const payload of bufferedEvents) {
+      applyChatEvent(payload);
+    }
+    if (gatewayDisconnectSequence !== sendDisconnectSequence || gatewayState !== "up") {
+      terminalizeDisconnectedReply();
+    }
     updateSendButton();
     if (openDashboard) {
       void invoke("quickchat_show_dashboard");
     }
     acceptedTimer = window.setTimeout(() => {
       accepted = false;
+      acceptedTimer = null;
       updateSendButton();
-      void requestHide(true);
     }, 450);
   } catch (error) {
     sending = false;
+    pendingChatEvents = [];
+    if (visibilitySequence !== sendVisibilitySequence || hiding) {
+      updateSendButton();
+      return;
+    }
     sendError = friendlyError(error);
-    setError(sendError);
+    renderStatus();
     updateSendButton();
     elements.input.focus();
     // A strict send failure can mean the pinned agent vanished; re-sync the chip.
@@ -382,7 +653,7 @@ async function send(openDashboard) {
 
 elements.input.addEventListener("input", () => {
   sendError = "";
-  setError();
+  renderStatus();
   updateSendButton();
 });
 elements.input.addEventListener("keydown", (event) => {
@@ -400,7 +671,7 @@ elements.input.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter" && !openPopover) {
     event.preventDefault();
-    void send(event.ctrlKey);
+    void send(event.ctrlKey || event.metaKey);
   }
 });
 elements.agentChip.addEventListener("click", () => {
@@ -481,6 +752,12 @@ await listen("quickchat:shown", () => {
 await listen("quickchat:hide-requested", () => {
   void requestHide();
 });
+await listen("quickchat:gateway-state", (event) => {
+  setGatewayState(event.payload);
+});
+await listen("quickchat:chat-event", (event) => {
+  handleChatEvent(event.payload);
+});
 
 const readySequence = visibilitySequence;
 try {
@@ -489,9 +766,9 @@ try {
     if (shouldShow) {
       reveal();
     } else {
-      void requestHide(true);
+      void requestHide();
     }
   }
 } catch {
-  void requestHide(true);
+  void requestHide();
 }

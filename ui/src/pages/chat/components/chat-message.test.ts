@@ -105,6 +105,12 @@ function expectSameOriginGet(init: RequestInit | undefined) {
   expect(init?.method).toBe("GET");
 }
 
+function rejectWhenAborted<T>(signal: AbortSignal, rejection: () => Error): Promise<T> {
+  return new Promise<T>((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(rejection()), { once: true });
+  });
+}
+
 function renderAssistantMessage(
   container: HTMLElement,
   message: unknown,
@@ -655,6 +661,43 @@ describe("grouped chat rendering", () => {
       "chat-delete-confirm",
       "chat-delete-confirm--right",
     ]);
+  });
+
+  it("renders a confirmed rewind action only for user groups", () => {
+    const container = document.createElement("div");
+    const onRewind = vi.fn();
+    localStorageValues.delete("openclaw:skip-rewind-confirm");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup({ role: "user", content: "rewind me", timestamp: 1000 }, "user"),
+        createMessageGroup({ role: "assistant", content: "answer", timestamp: 1001 }, "assistant"),
+      ],
+      { onRewind },
+    );
+
+    const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
+    expect(rewindButtons).toHaveLength(1);
+    rewindButtons[0]!.click();
+    expect(container.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+      "Rewind to before this message?",
+    );
+    container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+    expect(onRewind).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables rewind while the agent is working", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [createMessageGroup({ role: "user", content: "busy", timestamp: 1000 }, "user")],
+      { onRewind: vi.fn(), rewindDisabled: true },
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
+    const tooltip = button?.closest("openclaw-tooltip");
+    expect(button?.disabled).toBe(true);
+    expect(tooltip?.content).toBe("Rewind is unavailable while the agent is working");
   });
 
   it("places the delete confirm below the trigger near the top viewport edge", () => {
@@ -2676,6 +2719,130 @@ describe("grouped chat rendering", () => {
     });
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
     expectSameOriginGet(fetchInit);
+  });
+
+  it("aborts a stalled managed outgoing image fetch after the deadline", async () => {
+    vi.useFakeTimers();
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("missing managed image signal");
+      }
+      return await rejectWhenAborted<Response>(signal, () => {
+        const reason = signal.reason;
+        return reason instanceof Error ? reason : new Error("managed image fetch aborted");
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: managedChatImageUrl,
+            alt: "Generated image timeout",
+            width: 1,
+            height: 1,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "test-auth-token",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    expectSameOriginGet(fetchInit);
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("falls back when a managed outgoing image body stalls after headers", async () => {
+    vi.useFakeTimers();
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("missing managed image signal");
+      }
+      return {
+        ok: true,
+        blob: async () =>
+          await rejectWhenAborted<Blob>(
+            signal,
+            () => new DOMException("The operation was aborted.", "AbortError"),
+          ),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: [
+        {
+          type: "image",
+          url: managedChatImageUrl,
+          alt: "Generated image body stall",
+          width: 1,
+          height: 1,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    expectSameOriginGet(fetchInit);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("treats a failed managed outgoing image fetch as a missing preview", async () => {
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const fetchMock = vi.fn(async () => {
+      throw new Error("gateway unavailable");
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: [
+        {
+          type: "image",
+          url: managedChatImageUrl,
+          alt: "Unavailable generated image",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(container.querySelector(".chat-message-image")).toBeNull();
   });
 
   it("bounds managed outgoing image blob URLs with least-recently-used eviction", async () => {

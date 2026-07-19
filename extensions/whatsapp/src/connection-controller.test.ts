@@ -51,7 +51,7 @@ vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => {
 });
 
 vi.mock("./runtime.js", () => ({
-  getWhatsAppRuntime: () => ({ channel: runtimeContextMocks.channelRuntime }),
+  getWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
 }));
 
 vi.mock("./connection-owner.js", () => ({

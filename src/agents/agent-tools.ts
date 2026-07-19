@@ -763,6 +763,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         allowBackground,
         scopeKey,
         sessionKey: options?.sessionKey,
+        runId: options?.runId,
         sessionId: options?.sessionId,
         sessionStore: options?.config?.session?.store,
         mainKey: options?.config?.session?.mainKey,

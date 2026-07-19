@@ -511,7 +511,7 @@ describe("device bootstrap tokens", () => {
 
   it("accepts equivalent public key encodings after binding the bootstrap token", async () => {
     const baseDir = await createTempDir();
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "device.json"));
+    const identity = loadOrCreateDeviceIdentity({ path: path.join(baseDir, "device.sqlite") });
     const issued = await issueDeviceBootstrapToken({ baseDir });
     const rawPublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
 

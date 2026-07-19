@@ -128,6 +128,14 @@ function selectSegmented(control: HTMLElement) {
   group.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function findToggleByLabel(container: Element, label: string) {
+  return (
+    Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find((toggle) =>
+      toggle.textContent?.includes(label),
+    ) ?? null
+  );
+}
+
 describe("cron view list pane", () => {
   it("uses agent-scoped summary values", () => {
     const container = renderView({
@@ -559,7 +567,18 @@ describe("cron view editor", () => {
     selectSegmented(
       getElement(everyContainer, '[data-test-id="cron-schedule-kind-cron"]', HTMLElement),
     );
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron" });
+    expect(onFormChange).toHaveBeenCalledWith({
+      scheduleKind: "cron",
+      deleteAfterRun: false,
+    });
+
+    selectSegmented(
+      getElement(everyContainer, '[data-test-id="cron-schedule-kind-at"]', HTMLElement),
+    );
+    expect(onFormChange).toHaveBeenCalledWith({
+      scheduleKind: "at",
+      deleteAfterRun: true,
+    });
 
     const atContainer = renderView({
       createOpen: true,
@@ -569,9 +588,18 @@ describe("cron view editor", () => {
 
     const cronContainer = renderView({
       createOpen: true,
-      form: { ...DEFAULT_CRON_FORM, scheduleKind: "cron" },
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "cron", deleteAfterRun: true },
+      onFormChange,
     });
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
+    expect(findToggleByLabel(cronContainer, "Delete after run")).toBeNull();
+    selectSegmented(
+      getElement(cronContainer, '[data-test-id="cron-schedule-kind-every"]', HTMLElement),
+    );
+    expect(onFormChange).toHaveBeenCalledWith({
+      scheduleKind: "every",
+      deleteAfterRun: false,
+    });
 
     // on-exit jobs keep a pill so they can convert to an editable schedule;
     // the on-exit pill only exists while it is the current value.
@@ -582,7 +610,18 @@ describe("cron view editor", () => {
     expect(
       onExitContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]'),
     ).not.toBeNull();
+    expect(findToggleByLabel(onExitContainer, "Delete after run")).not.toBeNull();
     expect(everyContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]')).toBeNull();
+    const onExitFormChange = vi.fn();
+    const keptOnExitContainer = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "on-exit", deleteAfterRun: false },
+      onFormChange: onExitFormChange,
+    });
+    selectSegmented(
+      getElement(keptOnExitContainer, '[data-test-id="cron-schedule-kind-at"]', HTMLElement),
+    );
+    expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
   });
 
   it("shows a live schedule summary when inputs are valid", () => {

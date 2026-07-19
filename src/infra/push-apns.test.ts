@@ -6,7 +6,11 @@ import net from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
-import { appendApnsResponseBodyCapture, createApnsResponseBodyCapture } from "./push-apns-http2.js";
+import {
+  appendApnsResponseBodyCapture,
+  createApnsResponseBodyCapture,
+  getApnsResponseBodyCaptureText,
+} from "./push-apns-http2.js";
 import {
   sendApnsAlert,
   sendApnsBackgroundWake,
@@ -292,11 +296,32 @@ describe("push APNs send semantics", () => {
     appendApnsResponseBodyCapture(capture, "abc", 5);
     appendApnsResponseBodyCapture(capture, "def", 5);
 
-    expect(capture).toEqual({
-      text: "abcde",
-      bytes: 6,
-      truncated: true,
-    });
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
+    expect(capture).toMatchObject({ capturedBytes: 5, bytes: 6, truncated: true });
+  });
+
+  it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {
+    const splitCapture = createApnsResponseBodyCapture();
+    const emoji = Buffer.from("🚀");
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from("before "));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(0, 2));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(2));
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from(" after"));
+    expect(getApnsResponseBodyCaptureText(splitCapture)).toBe("before 🚀 after");
+
+    const cappedCapture = createApnsResponseBodyCapture();
+    const cappedPrefix = "a".repeat(8191);
+    appendApnsResponseBodyCapture(cappedCapture, Buffer.from(`${cappedPrefix}🚀`));
+    expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe(cappedPrefix);
+    expect(cappedCapture).toMatchObject({ capturedBytes: 8192, bytes: 8195, truncated: true });
+  });
+
+  it("preserves replacement decoding for a complete malformed APNs response", () => {
+    const capture = createApnsResponseBodyCapture();
+    appendApnsResponseBodyCapture(capture, Buffer.from([0x61, 0xf0, 0x9f]));
+
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("a�");
+    expect(capture).toMatchObject({ capturedBytes: 3, bytes: 3, truncated: false });
   });
 
   it("sends alert pushes with alert headers and payload", async () => {

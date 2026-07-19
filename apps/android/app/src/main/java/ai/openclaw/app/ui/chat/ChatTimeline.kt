@@ -251,9 +251,15 @@ private fun latestContentVersion(
     questions.forEach { prompt ->
       append(prompt.record.id)
       append(',')
-      append(prompt.record.status)
+      append(prompt.status())
       append(',')
       append(prompt.submitting)
+      append(',')
+      append(prompt.skipping)
+      append(',')
+      append(prompt.errorText?.hashCode() ?: 0)
+      append(',')
+      append(prompt.record.answers.hashCode())
       append(';')
     }
   }

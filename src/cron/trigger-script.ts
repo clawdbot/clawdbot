@@ -32,6 +32,7 @@ import {
 } from "../agents/tool-search.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -40,6 +41,12 @@ import {
   resolveCronActiveRuntimeConfig,
 } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import {
+  DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS,
+  DEFAULT_CRON_SCRIPT_TOOL_BUDGET,
+  MAX_CRON_SCRIPT_TIMEOUT_SECONDS,
+  MAX_CRON_SCRIPT_TOOL_BUDGET,
+} from "./script-payload.js";
 import type { CronTriggerEvaluationResult, CronTriggerFailureCode } from "./types.js";
 
 const MAX_CONCURRENT_TRIGGER_EVALS = 3;
@@ -212,6 +219,21 @@ function triggerResultCandidate(result: Extract<CodeModeHeadlessResult, { status
   return undefined;
 }
 
+function scriptPayloadResultCandidate(
+  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
+) {
+  if (isRecord(result.value)) {
+    return result.value;
+  }
+  for (let index = result.output.length - 1; index >= 0; index -= 1) {
+    const entry = result.output[index];
+    if (isRecord(entry) && entry.type === "json") {
+      return entry.value;
+    }
+  }
+  return undefined;
+}
+
 function parseTriggerResult(
   result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
 ): CronTriggerEvaluationResult {
@@ -230,59 +252,40 @@ function parseTriggerResult(
       error: "cron trigger script message must be a string",
     };
   }
-  const hasState = Object.hasOwn(candidate, "state");
-  if (hasState) {
-    let serialized: string | undefined;
-    try {
-      serialized = JSON.stringify(candidate.state);
-    } catch (error) {
-      return {
-        kind: "error",
-        code: "internal_error",
-        error: `cron trigger state is not JSON-serializable: ${String(error)}`,
-      };
-    }
-    if (serialized === undefined) {
-      return {
-        kind: "error",
-        code: "internal_error",
-        error: "cron trigger state is not JSON-serializable",
-      };
-    }
-    if (Buffer.byteLength(serialized, "utf8") > MAX_TRIGGER_STATE_BYTES) {
-      return {
-        kind: "error",
-        code: "output_limit_exceeded",
-        error: "cron trigger state exceeds the 16KB limit",
-      };
-    }
+  const state = validateCronState(candidate, "cron trigger");
+  if (!state.ok) {
+    return { kind: "error", code: state.code, error: state.error };
   }
   return {
     kind: "evaluated",
     fire: candidate.fire,
     ...(typeof candidate.message === "string" ? { message: candidate.message } : {}),
-    ...(hasState ? { state: candidate.state } : {}),
+    ...(state.stateChanged ? { state: state.state } : {}),
   };
 }
 
-function createTriggerDeadlineScope(externalSignal?: AbortSignal) {
+function createHeadlessDeadlineScope(params: {
+  externalSignal?: AbortSignal;
+  wallClockMs: number;
+  label: string;
+}) {
   const controller = new AbortController();
   const onExternalAbort = () =>
-    controller.abort(new CodeModeHeadlessAbortError("cron trigger evaluation aborted"));
-  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
-  if (externalSignal?.aborted) {
+    controller.abort(new CodeModeHeadlessAbortError(`${params.label} aborted`));
+  params.externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  if (params.externalSignal?.aborted) {
     onExternalAbort();
   }
   const timer = setTimeout(
-    () => controller.abort(new CodeModeHeadlessTimeoutError("cron trigger evaluation timed out")),
-    HEADLESS_TRIGGER_WALL_CLOCK_MS,
+    () => controller.abort(new CodeModeHeadlessTimeoutError(`${params.label} timed out`)),
+    params.wallClockMs,
   );
   return {
-    deadline: Date.now() + HEADLESS_TRIGGER_WALL_CLOCK_MS,
+    deadline: Date.now() + params.wallClockMs,
     signal: controller.signal,
     cleanup: () => {
       clearTimeout(timer);
-      externalSignal?.removeEventListener("abort", onExternalAbort);
+      params.externalSignal?.removeEventListener("abort", onExternalAbort);
     },
   };
 }
@@ -306,7 +309,7 @@ async function awaitTriggerSignal<T>(promise: Promise<T>, signal: AbortSignal): 
   }
 }
 
-export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
+function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   const runHeadless = deps.runHeadless ?? runCodeModeScriptHeadless;
   const prepareRuntime = deps.prepareRuntime ?? prepareTriggerRuntime;
   // Config identity is the reload epoch; caching the preparation promise makes
@@ -382,19 +385,25 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
     return await awaitTriggerSignal(entry.promise, request.signal);
   };
 
-  return async function evaluateCronTrigger(params: {
+  return async function runCronCodeModeScript(params: {
     jobId: string;
     agentId?: string;
     script: string;
-    state: unknown;
     toolsAllow?: string[];
     abortSignal?: AbortSignal;
-  }): Promise<CronTriggerEvaluationResult> {
-    if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
-      return { kind: "busy" };
-    }
-    activeTriggerEvaluations += 1;
-    const evaluationScope = createTriggerDeadlineScope(params.abortSignal);
+    wallClockMs: number;
+    maxToolCalls: number;
+    label: string;
+    namespaces: CodeModeNamespaceDescriptor[];
+  }): Promise<
+    | { kind: "completed"; result: Extract<CodeModeHeadlessResult, { status: "completed" }> }
+    | { kind: "error"; code: CronTriggerFailureCode; error: string }
+  > {
+    const evaluationScope = createHeadlessDeadlineScope({
+      externalSignal: params.abortSignal,
+      wallClockMs: params.wallClockMs,
+      label: params.label,
+    });
     try {
       const runtimeConfig = resolveCronActiveRuntimeConfig(deps.config);
       const agentId = resolveTriggerAgentId(runtimeConfig, params.agentId);
@@ -418,20 +427,20 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
       });
       const remainingWallClockMs = evaluationScope.deadline - Date.now();
       if (remainingWallClockMs <= 0) {
-        throw new CodeModeHeadlessTimeoutError("cron trigger evaluation timed out");
+        throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
       }
       const result = await runHeadless({
         ctx: { ...runtime.ctx, catalogRef, abortSignal: evaluationScope.signal },
         code: params.script,
         wallClockMs: remainingWallClockMs,
-        maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
-        extraNamespaces: [triggerStateNamespace(params.state)],
+        maxToolCalls: params.maxToolCalls,
+        extraNamespaces: params.namespaces,
         signal: evaluationScope.signal,
       });
       if (result.status === "failed") {
         return { kind: "error", code: result.code, error: result.error };
       }
-      return parseTriggerResult(result);
+      return { kind: "completed", result };
     } catch (error) {
       return {
         kind: "error",
@@ -445,7 +454,176 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
       };
     } finally {
       evaluationScope.cleanup();
-      activeTriggerEvaluations -= 1;
     }
+  };
+}
+
+type CronScriptPayloadExecutionResult =
+  | {
+      kind: "completed";
+      notify?: string;
+      wake?: "now" | "next-heartbeat";
+      stateChanged: boolean;
+      state?: unknown;
+      nextCheck?: { delayMs: number };
+    }
+  | { kind: "error"; code: CronTriggerFailureCode; error: string };
+
+function validateCronState(candidate: Record<string, unknown>, label: string) {
+  if (!Object.hasOwn(candidate, "state")) {
+    return { ok: true as const, stateChanged: false as const };
+  }
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(candidate.state);
+  } catch (error) {
+    return {
+      ok: false as const,
+      code: "internal_error" as const,
+      error: `${label} state is not JSON-serializable: ${String(error)}`,
+    };
+  }
+  if (serialized === undefined) {
+    return {
+      ok: false as const,
+      code: "internal_error" as const,
+      error: `${label} state is not JSON-serializable`,
+    };
+  }
+  if (Buffer.byteLength(serialized, "utf8") > MAX_TRIGGER_STATE_BYTES) {
+    return {
+      ok: false as const,
+      code: "output_limit_exceeded" as const,
+      error: `${label} state exceeds the 16KB limit`,
+    };
+  }
+  return {
+    ok: true as const,
+    stateChanged: true as const,
+    state: JSON.parse(serialized) as unknown,
+  };
+}
+
+function parseScriptPayloadResult(
+  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
+): CronScriptPayloadExecutionResult {
+  const candidate = scriptPayloadResultCandidate(result);
+  if (!isRecord(candidate)) {
+    return {
+      kind: "error",
+      code: "internal_error",
+      error: "cron script payload must return an object",
+    };
+  }
+  if (candidate.notify !== undefined && typeof candidate.notify !== "string") {
+    return {
+      kind: "error",
+      code: "internal_error",
+      error: "cron script payload notify must be a string",
+    };
+  }
+  if (
+    candidate.wake !== undefined &&
+    candidate.wake !== "now" &&
+    candidate.wake !== "next-heartbeat"
+  ) {
+    return {
+      kind: "error",
+      code: "internal_error",
+      error: 'cron script payload wake must be "now" or "next-heartbeat"',
+    };
+  }
+  let nextCheck: { delayMs: number } | undefined;
+  if (candidate.nextCheck !== undefined) {
+    if (typeof candidate.nextCheck !== "string") {
+      return {
+        kind: "error",
+        code: "internal_error",
+        error: "cron script payload nextCheck must be a duration string",
+      };
+    }
+    try {
+      const delayMs = parseDurationMs(candidate.nextCheck);
+      if (delayMs <= 0) {
+        throw new Error("duration must be positive");
+      }
+      nextCheck = { delayMs };
+    } catch {
+      return {
+        kind: "error",
+        code: "internal_error",
+        error: "cron script payload nextCheck must be a positive duration",
+      };
+    }
+  }
+  const state = validateCronState(candidate, "cron script payload");
+  if (!state.ok) {
+    return { kind: "error", code: state.code, error: state.error };
+  }
+  return {
+    kind: "completed",
+    ...(candidate.notify !== undefined ? { notify: candidate.notify } : {}),
+    ...(candidate.wake !== undefined ? { wake: candidate.wake } : {}),
+    stateChanged: state.stateChanged,
+    ...(state.stateChanged ? { state: state.state } : {}),
+    ...(nextCheck ? { nextCheck } : {}),
+  };
+}
+
+export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
+  const run = createCronCodeModeRunner(deps);
+  return {
+    evaluateTrigger: async (params: {
+      jobId: string;
+      agentId?: string;
+      script: string;
+      state: unknown;
+      toolsAllow?: string[];
+      abortSignal?: AbortSignal;
+    }): Promise<CronTriggerEvaluationResult> => {
+      if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
+        return { kind: "busy" };
+      }
+      activeTriggerEvaluations += 1;
+      try {
+        const outcome = await run({
+          ...params,
+          wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
+          maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
+          label: "cron trigger evaluation",
+          namespaces: [triggerStateNamespace(params.state)],
+        });
+        return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
+      } finally {
+        activeTriggerEvaluations -= 1;
+      }
+    },
+    executePayload: async (params: {
+      jobId: string;
+      agentId?: string;
+      script: string;
+      state: unknown;
+      toolsAllow?: string[];
+      timeoutSeconds?: number;
+      toolBudget?: number;
+      abortSignal?: AbortSignal;
+    }): Promise<CronScriptPayloadExecutionResult> => {
+      const timeoutSeconds = Math.min(
+        MAX_CRON_SCRIPT_TIMEOUT_SECONDS,
+        Math.max(1, Math.floor(params.timeoutSeconds ?? DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS)),
+      );
+      const toolBudget = Math.min(
+        MAX_CRON_SCRIPT_TOOL_BUDGET,
+        Math.max(1, Math.floor(params.toolBudget ?? DEFAULT_CRON_SCRIPT_TOOL_BUDGET)),
+      );
+      const outcome = await run({
+        ...params,
+        wallClockMs: timeoutSeconds * 1000,
+        maxToolCalls: toolBudget,
+        label: "cron script payload",
+        namespaces: [triggerStateNamespace(params.state)],
+      });
+      return outcome.kind === "completed" ? parseScriptPayloadResult(outcome.result) : outcome;
+    },
   };
 }

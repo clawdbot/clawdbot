@@ -6,6 +6,7 @@ import type {
   GatewaySessionRow,
   GatewaySessionsDefaults,
   ModelCatalogEntry,
+  SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -50,6 +51,7 @@ import {
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
+import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   isLocallyOptimisticHistoryMessage,
   messageDisplaySignature,
@@ -89,6 +91,7 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const chatBranchRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
 type ChatHistoryRequestOwnership = {
@@ -353,6 +356,12 @@ export type ChatState = {
   agentsSelectedId?: string | null;
   hello: GatewayHelloOk | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
+  sessions?: Partial<SessionCapability>;
+  chatBranches?: SessionBranch[];
+  chatBranchesSessionKey?: string | null;
+  chatBranchesConnectionEpoch?: number | null;
+  chatBranchesLoading?: boolean;
+  requestUpdate?: () => void;
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -794,6 +803,17 @@ type ClearChatHistoryState = ChatState &
 
 type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
 
+type RewindChatHistoryState = ChatState &
+  Parameters<typeof scheduleChatScroll>[0] & {
+    handleChatDraftChange: (next: string) => void;
+    sessions: Pick<SessionCapability, "rewind">;
+  };
+
+type SwitchChatHistoryBranchState = ChatState &
+  Parameters<typeof scheduleChatScroll>[0] & {
+    sessions: Pick<SessionCapability, "listBranches" | "switchBranch">;
+  };
+
 function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   if (state.chatRunId) {
     return true;
@@ -900,6 +920,126 @@ export async function clearChatHistory(
   return "completed";
 }
 
+export async function rewindChatHistory(
+  state: RewindChatHistoryState,
+  entryId: string,
+): Promise<{ editorText?: string } | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  try {
+    const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
+    const editorText = result.editorText ?? "";
+    if (state.chatMessagesBySession) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey,
+        agentId: agentParams.agentId,
+      });
+    }
+    persistChatComposerState(state, sessionKey, {
+      agentId: agentParams.agentId,
+      draft: editorText,
+    });
+    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+      return null;
+    }
+    state.chatMessages = [];
+    await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+      return null;
+    }
+    state.handleChatDraftChange(editorText);
+    return result;
+  } catch (error) {
+    setChatError(state, error instanceof Error ? error.message : String(error));
+    scheduleChatScroll(state);
+    return null;
+  }
+}
+
+export async function switchChatHistoryBranch(
+  state: SwitchChatHistoryBranchState,
+  leafEntryId: string,
+): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  try {
+    await state.sessions.switchBranch(sessionKey, leafEntryId, agentParams);
+    if (state.chatMessagesBySession) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey,
+        agentId: agentParams.agentId,
+      });
+    }
+    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+      return false;
+    }
+    state.chatMessages = [];
+    await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+    return visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  } catch (error) {
+    setChatError(state, error instanceof Error ? error.message : String(error));
+    scheduleChatScroll(state);
+    return false;
+  }
+}
+
+export async function loadChatBranches(state: ChatState): Promise<void> {
+  const sessions = state.sessions;
+  const client = state.client;
+  const sessionKey = state.sessionKey;
+  if (!sessions?.listBranches || !client || !state.connected) {
+    return;
+  }
+  if (isGatewayMethodAdvertised(state, "sessions.branches.list") === false) {
+    state.chatBranches = [];
+    state.chatBranchesSessionKey = sessionKey;
+    state.chatBranchesConnectionEpoch = state.connectionEpoch;
+    return;
+  }
+  const version = (chatBranchRequestVersions.get(state as object) ?? 0) + 1;
+  chatBranchRequestVersions.set(state as object, version);
+  const connectionEpoch = state.connectionEpoch;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  state.chatBranchesLoading = true;
+  try {
+    const branches = await sessions.listBranches(sessionKey, agentParams);
+    if (
+      chatBranchRequestVersions.get(state as object) !== version ||
+      state.client !== client ||
+      !state.connected ||
+      state.connectionEpoch !== connectionEpoch ||
+      !visibleSessionMatches(state, sessionKey, agentParams.agentId)
+    ) {
+      return;
+    }
+    state.chatBranches = branches;
+    state.chatBranchesSessionKey = sessionKey;
+    state.chatBranchesConnectionEpoch = connectionEpoch;
+  } catch {
+    if (
+      chatBranchRequestVersions.get(state as object) === version &&
+      state.client === client &&
+      state.connectionEpoch === connectionEpoch &&
+      visibleSessionMatches(state, sessionKey, agentParams.agentId)
+    ) {
+      state.chatBranches = [];
+      state.chatBranchesSessionKey = sessionKey;
+      state.chatBranchesConnectionEpoch = connectionEpoch;
+    }
+  } finally {
+    if (chatBranchRequestVersions.get(state as object) === version) {
+      state.chatBranchesLoading = false;
+      state.requestUpdate?.();
+    }
+  }
+}
+
 export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
@@ -925,6 +1065,12 @@ export async function loadChatHistory(
     inFlight.messages === state.chatMessages
   ) {
     return inFlight.promise;
+  }
+  if (
+    state.chatBranchesSessionKey !== sessionKey ||
+    state.chatBranchesConnectionEpoch !== connectionEpoch
+  ) {
+    void loadChatBranches(state);
   }
   const promise = loadChatHistoryUncached(
     state,

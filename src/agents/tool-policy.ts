@@ -47,6 +47,12 @@ export type DeclaredToolAllowlistContext = {
 /** Synthetic allowlist entry that means "use default plugin tools". */
 export const DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY = "__openclaw_default_plugin_tools__";
 
+const SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS = new Map<string, readonly string[]>([
+  // `canvas` is a shipped operator policy family. Keep promoted `show_widget`
+  // in that family so existing allow/deny configs retain their old surface.
+  ["canvas", ["show_widget"]],
+]);
+
 /** Returns true when an allow policy is narrower than all/default plugin tools. */
 export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
   return (
@@ -171,9 +177,13 @@ function expandPluginGroups(
       }
       continue;
     }
-    const tools = groups.byPlugin.get(normalized);
-    if (tools && tools.length > 0) {
-      expanded.push(...tools);
+    const tools = groups.byPlugin.get(normalized) ?? [];
+    // Discord owns its own show_widget; only alias names absent from plugin ownership metadata.
+    const promotedCoreTools = (
+      SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(normalized) ?? []
+    ).filter((toolName) => !groups.all.includes(toolName));
+    if (tools.length > 0 || promotedCoreTools.length > 0) {
+      expanded.push(...tools, ...promotedCoreTools);
       continue;
     }
     expanded.push(normalized);

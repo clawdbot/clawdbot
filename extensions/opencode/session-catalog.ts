@@ -63,7 +63,7 @@ type OpenCodeReadParams = {
   cursor?: string;
 };
 
-export function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
+function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -85,22 +85,49 @@ function encodeCursor(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: unknown): number {
+function optionalRawCursor(value: unknown): string | undefined {
   if (value === undefined) {
-    return 0;
+    return undefined;
   }
-  const cursor = optionalOpenCodeString(value, MAX_CURSOR_LENGTH);
-  if (!cursor) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
     throw new Error("cursor is invalid");
   }
+  return value;
+}
+
+function decodeCursor(value: unknown): number {
+  const cursor = optionalRawCursor(value);
+  if (cursor === undefined) {
+    return 0;
+  }
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
-    if (!isRecord(parsed) || !Number.isInteger(parsed.offset) || Number(parsed.offset) < 0) {
+    const bytes = Buffer.from(cursor, "base64url");
+    if (bytes.toString("base64url") !== cursor) {
+      throw new Error("non-canonical base64url");
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+    if (!isRecord(parsed) || !Number.isSafeInteger(parsed.offset) || Number(parsed.offset) < 0) {
       throw new Error("invalid offset");
     }
-    return Number(parsed.offset);
+    const offset = Number(parsed.offset);
+    if (encodeCursor(offset) !== cursor) {
+      throw new Error("non-canonical cursor payload");
+    }
+    return offset;
   } catch (error) {
     throw new Error("cursor is invalid", { cause: error });
+  }
+}
+
+export function isExactOpenCodeSessionCursor(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    decodeCursor(value);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -173,10 +200,7 @@ function parseListParams(
   if (value.searchTerm !== undefined && !searchTerm) {
     throw new Error("searchTerm is invalid");
   }
-  const cursor = optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH);
-  if (value.cursor !== undefined && !cursor) {
-    throw new Error("cursor is invalid");
-  }
+  const cursor = optionalRawCursor(value.cursor);
   return {
     limit: boundedLimit(value.limit),
     ...(searchTerm ? { searchTerm } : {}),
@@ -198,10 +222,7 @@ function parseReadParams(
   if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
     throw new Error("threadId is invalid");
   }
-  const cursor = optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH);
-  if (value.cursor !== undefined && !cursor) {
-    throw new Error("cursor is invalid");
-  }
+  const cursor = optionalRawCursor(value.cursor);
   return {
     threadId,
     limit: boundedLimit(value.limit),

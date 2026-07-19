@@ -35,6 +35,14 @@ type HostContext = NonNullable<
 >;
 type ScheduleFrame = (callback: FrameRequestCallback) => number;
 type ScheduleFallback = (callback: () => void, delayMs: number) => number;
+type McpAppResources = {
+  bridge: OpenClawAppBridge | null;
+  cleanups: Set<() => void>;
+  iframe: HTMLIFrameElement;
+  transport: { close(): Promise<void> } | null;
+};
+
+const MCP_APP_TEARDOWN_TIMEOUT_MS = 250;
 
 async function waitForMcpAppHandlerRegistration(
   scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
@@ -127,24 +135,20 @@ export class McpAppView extends LitElement {
 
   protected readonly i18nController = new I18nController(this);
   private readonly mount = createRef<HTMLDivElement>();
-  private bridge: AppBridge | null = null;
-  private iframe: HTMLIFrameElement | null = null;
-  private transport: { close(): Promise<void> } | null = null;
-  private hostContextCleanup: (() => void) | null = null;
-  private hostResizeObserver: ResizeObserver | null = null;
+  private resources: McpAppResources | null = null;
+  private teardownPromise: Promise<void> | null = null;
   private setupKey = "";
   private setupClient: object | null = null;
   private setupGeneration = 0;
 
   override disconnectedCallback() {
-    this.setupGeneration += 1;
     void this.teardown();
     super.disconnectedCallback();
   }
 
   override updated() {
-    if (this.iframe) {
-      this.iframe.title = this.title || t("mcpApp.title");
+    if (this.resources) {
+      this.resources.iframe.title = this.title || t("mcpApp.title");
     }
     const nextKey = `${this.sessionKey}\0${this.viewId}`;
     const nextClient = this.context?.gateway.snapshot.client ?? null;
@@ -167,36 +171,79 @@ export class McpAppView extends LitElement {
     });
   }
 
-  private async teardown() {
-    const bridge = this.bridge;
-    const transport = this.transport;
-    const iframe = this.iframe;
-    const hostContextCleanup = this.hostContextCleanup;
-    const hostResizeObserver = this.hostResizeObserver;
-    this.bridge = null;
-    this.transport = null;
-    this.iframe = null;
-    this.hostContextCleanup = null;
-    this.hostResizeObserver = null;
-    // Clear ownership before awaiting: a stale teardown must never close a
-    // replacement setup that installs its resources during the handshake.
-    hostContextCleanup?.();
-    hostResizeObserver?.disconnect();
-    iframe?.remove();
-    if (bridge) {
-      await Promise.race([
-        bridge.teardownResource({}).catch(() => undefined),
-        new Promise((resolve) => {
-          setTimeout(resolve, 250);
-        }),
-      ]);
+  private addResourceCleanup(resources: McpAppResources, cleanup: () => void): () => void {
+    resources.cleanups.add(cleanup);
+    return () => {
+      if (resources.cleanups.delete(cleanup)) {
+        cleanup();
+      }
+    };
+  }
+
+  private runResourceCleanups(resources: McpAppResources) {
+    for (const cleanup of resources.cleanups) {
+      resources.cleanups.delete(cleanup);
+      cleanup();
     }
-    await transport?.close().catch(() => undefined);
+  }
+
+  private async teardownCurrentResources() {
+    const resources = this.resources;
+    if (!resources) {
+      await this.teardownPromise;
+      return;
+    }
+    // Release ownership before awaiting so this generation can never close a replacement.
+    this.resources = null;
+    this.runResourceCleanups(resources);
+    const teardown = (async () => {
+      if (resources.bridge) {
+        let timeout: number | undefined;
+        try {
+          await Promise.race([
+            resources.bridge.teardownResource({}).catch(() => undefined),
+            new Promise<void>((resolve) => {
+              timeout = window.setTimeout(resolve, MCP_APP_TEARDOWN_TIMEOUT_MS);
+            }),
+          ]);
+        } finally {
+          if (timeout !== undefined) {
+            window.clearTimeout(timeout);
+          }
+        }
+      }
+      await resources.transport?.close().catch(() => undefined);
+      resources.iframe.remove();
+    })();
+    this.teardownPromise = teardown;
+    try {
+      await teardown;
+    } finally {
+      if (this.teardownPromise === teardown) {
+        this.teardownPromise = null;
+      }
+    }
+  }
+
+  /** Parent render owners await this before removing the connected view. */
+  async teardown() {
+    this.setupGeneration += 1;
+    await this.teardownCurrentResources();
+  }
+
+  /** Restarts a torn-down view only when its parent kept the element connected. */
+  restartAfterTeardown() {
+    if (!this.isConnected || this.resources || this.teardownPromise) {
+      return;
+    }
+    this.setupKey = `${this.sessionKey}\0${this.viewId}`;
+    this.setupClient = this.context?.gateway.snapshot.client ?? null;
+    void this.setup();
   }
 
   private async setup() {
     const generation = ++this.setupGeneration;
-    await this.teardown();
+    await this.teardownCurrentResources();
     if (!this.sessionKey || !this.viewId || generation !== this.setupGeneration) {
       return;
     }
@@ -216,11 +263,17 @@ export class McpAppView extends LitElement {
       // so Apps retain their required origin capabilities without reaching Control UI.
       iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
       mount.appendChild(iframe);
-      this.iframe = iframe;
+      const resources: McpAppResources = {
+        bridge: null,
+        cleanups: new Set(),
+        iframe,
+        transport: null,
+      };
+      this.resources = resources;
 
       const proxyReady = new Promise<void>((resolve, reject) => {
         const timeout = window.setTimeout(() => {
-          window.removeEventListener("message", onMessage);
+          cleanupProxyReady();
           reject(new Error("MCP App sandbox timed out"));
         }, 15_000);
         const onMessage = (event: MessageEvent) => {
@@ -228,11 +281,14 @@ export class McpAppView extends LitElement {
             event.source === iframe.contentWindow &&
             event.data?.method === "ui/notifications/sandbox-proxy-ready"
           ) {
-            window.clearTimeout(timeout);
-            window.removeEventListener("message", onMessage);
+            cleanupProxyReady();
             resolve();
           }
         };
+        const cleanupProxyReady = this.addResourceCleanup(resources, () => {
+          window.clearTimeout(timeout);
+          window.removeEventListener("message", onMessage);
+        });
         window.addEventListener("message", onMessage);
       });
       iframe.src = resolveMcpAppSandboxUrl(
@@ -254,6 +310,16 @@ export class McpAppView extends LitElement {
         buildMcpAppHostCapabilities(payload.csp, payload.messageSupported === true),
         { hostContext: hostContext(mount, this.height) },
       );
+      resources.bridge = bridge;
+      const handleRequestTeardown = () => {
+        void this.teardown();
+      };
+      bridge.onrequestteardown = handleRequestTeardown;
+      this.addResourceCleanup(resources, () => {
+        if (bridge.onrequestteardown === handleRequestTeardown) {
+          bridge.onrequestteardown = undefined;
+        }
+      });
       if (payload.messageSupported === true) {
         const promptRateKey = `${this.sessionKey}\0${this.viewId}`;
         bridge.setMessageHandler(async ({ content }) => {
@@ -302,27 +368,43 @@ export class McpAppView extends LitElement {
         bridge.oninitialized = () => resolve();
       });
       const transport = new PostMessageTransport(iframe.contentWindow, iframe.contentWindow);
-      this.bridge = bridge;
-      this.transport = transport;
+      resources.transport = transport;
       await bridge.connect(transport);
       await bridge.sendSandboxResourceReady({
         html: payload.html,
         csp: payload.csp,
       });
-      await Promise.race([
-        initialized,
-        new Promise<never>((_, reject) => {
-          window.setTimeout(() => reject(new Error("MCP App initialization timed out")), 15_000);
-        }),
-      ]);
+      let initializationTimeout: number | undefined;
+      const cleanupInitializationTimeout = this.addResourceCleanup(resources, () => {
+        if (initializationTimeout !== undefined) {
+          window.clearTimeout(initializationTimeout);
+        }
+      });
+      try {
+        await Promise.race([
+          initialized,
+          new Promise<never>((_, reject) => {
+            initializationTimeout = window.setTimeout(
+              () => reject(new Error("MCP App initialization timed out")),
+              15_000,
+            );
+          }),
+        ]);
+      } finally {
+        cleanupInitializationTimeout();
+      }
       if (generation !== this.setupGeneration) {
         return;
       }
       const updateHostContext = () => bridge.setHostContext(hostContext(mount, frameHeight));
-      this.hostContextCleanup = this.context?.theme.subscribe(updateHostContext) ?? null;
+      const hostContextCleanup = this.context?.theme.subscribe(updateHostContext);
+      if (hostContextCleanup) {
+        this.addResourceCleanup(resources, hostContextCleanup);
+      }
       if (typeof ResizeObserver !== "undefined") {
-        this.hostResizeObserver = new ResizeObserver(updateHostContext);
-        this.hostResizeObserver.observe(mount);
+        const hostResizeObserver = new ResizeObserver(updateHostContext);
+        hostResizeObserver.observe(mount);
+        this.addResourceCleanup(resources, () => hostResizeObserver.disconnect());
       }
       await waitForMcpAppHandlerRegistration();
       if (generation !== this.setupGeneration) {
@@ -342,7 +424,7 @@ export class McpAppView extends LitElement {
       }
     } catch (error) {
       if (generation === this.setupGeneration) {
-        await this.teardown();
+        await this.teardownCurrentResources();
         this.error = error instanceof Error ? error.message : String(error);
       }
     }

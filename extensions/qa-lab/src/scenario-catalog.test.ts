@@ -415,18 +415,12 @@ describe("qa scenario catalog", () => {
     expect(config?.unavailableNeedles).toContain("not in my available tool surface");
   });
 
-  it("loads Matrix flow provider overrides", () => {
+  it("loads the Matrix room block streaming provider override", () => {
     expect(readQaScenarioById("matrix-room-block-streaming").execution).toMatchObject({
       kind: "flow",
       providerMode: "mock-openai",
       retryCount: 0,
       timeoutMs: 75_000,
-    });
-    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
-      kind: "flow",
-      providerMode: "live-frontier",
-      retryCount: 0,
-      timeoutMs: 180_000,
     });
   });
 

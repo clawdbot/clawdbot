@@ -69,6 +69,22 @@ export async function runCommandWithTimeout(
   argv: string[],
   optionsOrTimeout: number | CommandOptions,
 ): Promise<SpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false);
+}
+
+/** Run a command whose stdout and stderr are defined to be UTF-8 on every platform. */
+export async function runUtf8CommandWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<SpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true);
+}
+
+async function runCommandWithOutputEncoding(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+  forceUtf8: boolean,
+): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const {
@@ -123,7 +139,7 @@ export async function runCommandWithTimeout(
     MAX_PRESERVED_PENDING_LINE_BYTES,
   );
   const maxPreservedOutputLines = Math.max(0, Math.floor(options.maxPreservedOutputLines ?? 16));
-  const windowsEncoding = resolveWindowsConsoleEncoding();
+  const windowsEncoding = forceUtf8 ? null : resolveWindowsConsoleEncoding();
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -447,16 +463,20 @@ export async function runCommandWithTimeout(
     }
   }
 
+  const decodeCapturedOutput = (
+    capture: CapturedOutputBuffers,
+    captureMode: CommandOutputCaptureMode,
+  ): string => {
+    const buffer = finalizeCapturedOutput(capture, captureMode, forceUtf8);
+    return forceUtf8
+      ? buffer.toString("utf8")
+      : decodeWindowsOutputBuffer({ buffer, windowsEncoding });
+  };
+
   return {
     pid: child.pid,
-    stdout: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stdoutCapture, stdoutCaptureMode),
-      windowsEncoding,
-    }),
-    stderr: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stderrCapture, stderrCaptureMode),
-      windowsEncoding,
-    }),
+    stdout: decodeCapturedOutput(stdoutCapture, stdoutCaptureMode),
+    stderr: decodeCapturedOutput(stderrCapture, stderrCaptureMode),
     stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
     stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
     preservedStdoutLines:

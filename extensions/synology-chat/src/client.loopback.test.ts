@@ -8,6 +8,18 @@ const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 describe("Synology Chat user_list loopback", () => {
   let server: http.Server | undefined;
 
+  async function listenLoopback(handler: http.RequestListener): Promise<number> {
+    server = http.createServer(handler);
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    return address.port;
+  }
+
   afterEach(async () => {
     vi.restoreAllMocks();
     if (server) {
@@ -21,7 +33,7 @@ describe("Synology Chat user_list loopback", () => {
 
   it("aborts a streamed overflow and returns the stale cached identity", async () => {
     let requestCount = 0;
-    server = http.createServer((_req, res) => {
+    const port = await listenLoopback((_req, res) => {
       requestCount += 1;
       res.on("error", () => {});
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -37,16 +49,8 @@ describe("Synology Chat user_list loopback", () => {
       res.write(Buffer.alloc(USER_LIST_RESPONSE_MAX_BYTES, 0x78));
       res.end(Buffer.from("x"));
     });
-    server.on("clientError", (_err, socket) => socket.destroy());
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
     const incomingUrl =
-      `http://127.0.0.1:${address.port}/webapi/entry.cgi?` +
+      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
       "api=SYNO.Chat.External&method=chatbot&version=2";
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(1_700_000_000_000);
@@ -76,7 +80,7 @@ describe("Synology Chat user_list loopback", () => {
 
   it("bounds a dripping user_list body with a wall-clock deadline", async () => {
     let requestCount = 0;
-    server = http.createServer((_req, res) => {
+    const port = await listenLoopback((_req, res) => {
       requestCount += 1;
       res.on("error", () => {});
       res.writeHead(200, {
@@ -102,16 +106,8 @@ describe("Synology Chat user_list loopback", () => {
       res.on("close", () => clearInterval(dripTimer));
       res.write("x");
     });
-    server.on("clientError", (_err, socket) => socket.destroy());
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
     const incomingUrl =
-      `http://127.0.0.1:${address.port}/webapi/entry.cgi?` +
+      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
       "api=SYNO.Chat.External&method=chatbot&version=2";
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(1_700_000_100_000);
@@ -152,7 +148,7 @@ describe("Synology Chat user_list loopback", () => {
 
   it("bounds a dripping chatbot response with a wall-clock deadline", async () => {
     let requestCount = 0;
-    server = http.createServer((_req, res) => {
+    const port = await listenLoopback((_req, res) => {
       requestCount += 1;
       res.on("error", () => {});
       res.writeHead(200, {
@@ -167,15 +163,7 @@ describe("Synology Chat user_list loopback", () => {
       res.on("close", () => clearInterval(dripTimer));
       res.write("x");
     });
-    server.on("clientError", (_err, socket) => socket.destroy());
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
-    const incomingUrl = `http://127.0.0.1:${address.port}/webapi/entry.cgi`;
+    const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
     const timeoutMs = 250;
     const nativeSetTimeout = globalThis.setTimeout;
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");

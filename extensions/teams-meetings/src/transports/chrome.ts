@@ -83,9 +83,12 @@ async function openOrRecoverTeamsMeeting(params: {
   }
   const recovered = await recoverMeetingBrowserTab({
     adapter: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+    allowSessionAdoption: true,
+    autoJoin: params.config.chrome.autoJoin,
     callBrowser: params.callBrowser,
     config: params.config.chrome,
     locationLabel: params.locationLabel,
+    meetingSessionId: params.meetingSessionId,
     mode: params.mode,
     requestedMeetingUrl: params.url,
     trackedMeetingUrl: params.url,
@@ -102,6 +105,7 @@ async function rollbackTeamsBrowserJoin(params: {
   callBrowser: MeetingBrowserRequestCaller;
   config: TeamsMeetingsConfig;
   logger: RuntimeLogger;
+  meetingSessionId: string;
   tab?: TeamsMeetingsBrowserTab;
   url: string;
 }) {
@@ -112,6 +116,7 @@ async function rollbackTeamsBrowserJoin(params: {
     adapter: TEAMS_MEETINGS_PLATFORM_ADAPTER,
     callBrowser: params.callBrowser,
     launch: true,
+    meetingSessionId: params.meetingSessionId,
     meetingUrl: params.url,
     tab: params.tab,
     timeoutMs: params.config.chrome.joinTimeoutMs,
@@ -279,6 +284,7 @@ export async function launchTeamsMeetingInChrome(params: {
       callBrowser,
       config: params.config,
       logger: params.logger,
+      meetingSessionId: params.meetingSessionId,
       tab: result.tab,
       url: params.url,
     });
@@ -488,6 +494,7 @@ export async function launchTeamsMeetingOnNode(params: {
       callBrowser,
       config: params.config,
       logger: params.logger,
+      meetingSessionId: params.meetingSessionId,
       tab: browser.tab,
       url: params.url,
     });
@@ -498,12 +505,14 @@ export async function launchTeamsMeetingOnNode(params: {
 export async function recoverCurrentTeamsMeetingTab(params: {
   runtime: PluginRuntime;
   config: TeamsMeetingsConfig;
+  meetingSessionId?: string;
   mode: TeamsMeetingsMode;
   nodeId?: string;
   readOnly?: boolean;
   trackedMeetingUrl?: string;
   trackedTargetId?: string;
   transport: "chrome" | "chrome-node";
+  timeoutMs?: number;
   url?: string;
 }) {
   const nodeId =
@@ -532,11 +541,13 @@ export async function recoverCurrentTeamsMeetingTab(params: {
         : await resolveLocalMeetingBrowserRequest(params.runtime),
       config: params.config.chrome,
       locationLabel: nodeId ? "on the selected Chrome node" : "in local Chrome",
+      meetingSessionId: params.meetingSessionId,
       mode: params.mode,
       readOnly: params.readOnly,
       requestedMeetingUrl: params.url,
       trackedMeetingUrl: params.trackedMeetingUrl,
       trackedTargetId: params.trackedTargetId,
+      timeoutMs: params.timeoutMs,
     })),
   };
 }
@@ -544,6 +555,7 @@ export async function recoverCurrentTeamsMeetingTab(params: {
 export async function leaveTeamsMeetingInBrowser(params: {
   runtime: PluginRuntime;
   config: TeamsMeetingsConfig;
+  meetingSessionId: string;
   meetingUrl: string;
   nodeId?: string;
   tab: TeamsMeetingsBrowserTab;
@@ -563,6 +575,7 @@ export async function leaveTeamsMeetingInBrowser(params: {
           })
       : await resolveLocalMeetingBrowserRequest(params.runtime),
     launch: params.config.chrome.launch || !params.tab.openedByPlugin,
+    meetingSessionId: params.meetingSessionId,
     meetingUrl: params.meetingUrl,
     tab: params.tab,
     timeoutMs: params.config.chrome.joinTimeoutMs,

@@ -8,7 +8,7 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
-import type { SpawnResult } from "../../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { createDeferred } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -471,6 +471,10 @@ describe("worker turn launcher", () => {
   );
 
   it("launches the active worker with projected history and releases its claim", async () => {
+    const initialized = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {
+      timeoutMs: 10_000,
+    });
+    expect(initialized.code).toBe(0);
     seedActivePlacement();
     const manager = SessionManager.open(sessionFile);
     const earlierRequestId = manager.appendMessage(
@@ -557,6 +561,11 @@ describe("worker turn launcher", () => {
         throw new Error("unexpected workspace sync");
       }),
       reconcileWorkspace: vi.fn(async (request) => {
+        expect(request.stagedResult).toBeDefined();
+        request.stagedResult!.record(request.stagedResult!.ref);
+        expect(placements.listPendingWorkspaceResults()).toMatchObject([
+          { stagedResultRef: request.stagedResult!.ref, workspaceAcceptedAtMs: null },
+        ]);
         request.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,

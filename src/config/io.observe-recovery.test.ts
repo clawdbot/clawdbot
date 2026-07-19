@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
@@ -101,17 +102,11 @@ describe("config observe recovery", () => {
   }
 
   async function readObserveEvents(auditPath: string): Promise<Record<string, unknown>[]> {
-    const events: Record<string, unknown>[] = [];
-    for (const line of (await fsp.readFile(auditPath, "utf-8")).trim().split("\n")) {
-      if (!line) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      if (parsed.event === "config.observe") {
-        events.push(parsed);
-      }
-    }
-    return events;
+    const stateDir = path.dirname(path.dirname(auditPath));
+    return listConfigAuditRecordsForTests({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      homedir: () => stateDir,
+    }).filter((event) => event.event === "config.observe");
   }
 
   async function listClobberFiles(configPath: string): Promise<string[]> {

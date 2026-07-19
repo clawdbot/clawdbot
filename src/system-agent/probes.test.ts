@@ -34,6 +34,7 @@ describe("openclaw probes", () => {
         command: process.execPath,
         error: "timed out after 25ms",
         found: true,
+        timedOut: true,
       });
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     },

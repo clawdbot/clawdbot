@@ -79,7 +79,7 @@ export type GatewayService = {
   stage: (args: GatewayServiceStageArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
-  start: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
+  start: (args: GatewayServiceControlArgs) => Promise<void>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
@@ -222,6 +222,7 @@ export async function startGatewayService(
     return {
       outcome: "already-running",
       state,
+      issues: repairIssues,
     };
   }
 
@@ -234,10 +235,10 @@ export async function startGatewayService(
   }
 
   try {
-    const startResult = await service.start({ ...args, env: state.env });
+    await service.start({ ...args, env: state.env });
     const nextState = await readGatewayServiceState(service, { env: state.env });
     return {
-      outcome: startResult.outcome === "scheduled" ? "scheduled" : "started",
+      outcome: "started",
       state: nextState,
     };
   } catch (err) {

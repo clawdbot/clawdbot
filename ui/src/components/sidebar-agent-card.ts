@@ -12,7 +12,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
   @property({ attribute: false }) avatarText = "";
-  @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) offline = false;
   @property({ attribute: false }) statusLabel = "";
   @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) menuOpen = false;
@@ -33,7 +33,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           class="sidebar-agent-card__main"
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
-          aria-label="${this.agentName} · ${menuLabel}"
+          aria-label="${this.agentName} · ${menuLabel} · ${this.statusLabel}"
           @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           <span class="sidebar-agent-card__avatar">
@@ -48,15 +48,14 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
                   >${this.avatarText}</span
                 >`}
-            <span
-              class="sidebar-agent-card__presence ${this.connected
-                ? "sidebar-connection-status--online"
-                : "sidebar-connection-status--offline"}"
-              role="img"
-              aria-live="polite"
-              aria-label=${this.statusLabel}
-              title=${this.statusLabel}
-            ></span>
+            ${this.offline
+              ? html`<span
+                  class="sidebar-agent-card__presence"
+                  role="img"
+                  aria-label=${this.statusLabel}
+                  title=${this.statusLabel}
+                ></span>`
+              : nothing}
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">

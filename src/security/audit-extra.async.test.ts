@@ -295,6 +295,25 @@ Read the requested file and summarize it.
     ).toBe(false);
   });
 
+  it("surfaces manifest_parse_error finding when plugin package.json exceeds the size limit", async () => {
+    const tmpDir = await makeTmpDir("audit-manifest-oversized");
+    const pluginDir = path.join(tmpDir, "extensions", "oversized-plugin");
+    await fs.mkdir(pluginDir, { recursive: true });
+    // Oversized manifest — simulates a plugin trying to exhaust the audit reader
+    // by declaring a huge package.json, hiding its declared extension entrypoints.
+    await fs.writeFile(path.join(pluginDir, "package.json"), "x".repeat(1024 * 1024 + 1), "utf-8");
+
+    const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+    const finding = requireFinding(
+      findings,
+      (f) => f.checkId === "plugins.code_safety.manifest_parse_error",
+      "oversized manifest parse error",
+    );
+    expect(finding.severity).toBe("warn");
+    expect(finding.detail).toContain("oversized-plugin");
+    expect(finding.detail).toContain("too large");
+  });
+
   it("reports scan_failed when plugin code scanner throws during deep audit", async () => {
     const scanSpy = vi
       .spyOn(skillScanner, "scanDirectoryWithSummary")

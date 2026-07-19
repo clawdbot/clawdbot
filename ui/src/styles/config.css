@@ -43,8 +43,8 @@
 }
 
 .config-mode-toggle__btn.active {
-  background: var(--accent);
-  color: white;
+  background: var(--primary);
+  color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
 
@@ -226,6 +226,17 @@
   scroll-behavior: smooth;
 }
 
+/* The schema form nests a full settings-page inside this scroller; both carry
+   top padding, which stacks into a dead band between the accordion nav and
+   the first section. Keep one spacing owner. */
+.config-lead + .config-content {
+  padding-top: 0;
+}
+
+.config-content > .settings-page {
+  padding-top: 0;
+}
+
 /* ===========================================
    Appearance custom pickers (theme + text scale)
    =========================================== */
@@ -287,7 +298,82 @@
 .settings-theme-card__label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text);
+}
+
+.settings-theme-card--active .settings-theme-card__label {
+  color: var(--text-strong);
+}
+
+/* Real-palette preview chips. Colors mirror the :root[data-theme] blocks in
+   base.css (claw = the default :root palette); keep both in sync when
+   retuning a theme. The custom card reads the live variables instead — it is
+   only rendered with chips while the imported theme is active. */
+.settings-theme-card__palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-theme-card__chip {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.settings-theme-card__chip--bg {
+  background: var(--theme-chip-bg);
+}
+
+.settings-theme-card__chip--accent {
+  background: var(--theme-chip-accent);
+}
+
+.settings-theme-card__chip--accent-2 {
+  background: var(--theme-chip-accent-2);
+}
+
+.settings-theme-card--claw {
+  --theme-chip-bg: #0e1015;
+  --theme-chip-accent: #ff5c5c;
+  --theme-chip-accent-2: #14b8a6;
+}
+
+.settings-theme-card--knot {
+  --theme-chip-bg: #080808;
+  --theme-chip-accent: #e5243b;
+  --theme-chip-accent-2: #8b1a2b;
+}
+
+.settings-theme-card--dash {
+  --theme-chip-bg: #1a1210;
+  --theme-chip-accent: #b47840;
+  --theme-chip-accent-2: #a88050;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--claw {
+  --theme-chip-bg: #faf9f7;
+  --theme-chip-accent: #bd4531;
+  --theme-chip-accent-2: #0d9488;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--knot {
+  --theme-chip-bg: #f9f9fb;
+  --theme-chip-accent: #c41e30;
+  --theme-chip-accent-2: #7a1420;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--dash {
+  --theme-chip-bg: #f7f2ec;
+  --theme-chip-accent: #6e4828;
+  --theme-chip-accent-2: #6a4e30;
+}
+
+.settings-theme-card--custom {
+  --theme-chip-bg: var(--bg);
+  --theme-chip-accent: var(--accent);
+  --theme-chip-accent-2: var(--accent-2);
 }
 
 .settings-theme-import {
@@ -625,9 +711,64 @@
   font-family: var(--mono);
 }
 
+/* Shared inline form stays in config.css because the app-wide stylesheet
+ * serves both the MCP settings page and the Plugins inventory. */
+.mcp-server-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.mcp-server-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mcp-server-form label span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 580;
+}
+
+.mcp-server-form__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mcp-server-message {
+  margin: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--ok-subtle);
+  color: var(--ok);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.mcp-server-message--error {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.mcp-server-loading {
+  padding: var(--space-4);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
 @media (max-width: 820px) {
   .mcp-command-card__grid {
     grid-template-columns: 1fr;
+  }
+
+  .mcp-server-form {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
   }
 }
 

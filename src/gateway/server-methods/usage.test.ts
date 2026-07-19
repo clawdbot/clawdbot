@@ -266,6 +266,13 @@ describe("gateway usage helpers", () => {
     expect(testApi.parseDays("nope")).toBeUndefined();
   });
 
+  it("parseDays caps day counts before Date arithmetic can overflow", () => {
+    expect(testApi.parseDays(1e300)).toBe(36600);
+    expect(testApi.parseDays("1e300")).toBe(36600);
+    expect(testApi.parseDays(Number.MAX_SAFE_INTEGER)).toBe(36600);
+    expect(testApi.parseDays(366 * 100)).toBe(36600);
+  });
+
   it("resolveDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
     const result = testApi.resolveDateRange({
       startDate: "2026-02-01",
@@ -413,12 +420,16 @@ describe("gateway usage helpers", () => {
     });
   });
 
-  it("resolveDateRange clamps days to at least 1 and defaults to 30 days", () => {
+  it("resolveDateRange clamps days to its supported bounds and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
     const oneDay = expectDateRange(testApi.resolveDateRange({ days: 0 }));
     expect(oneDay.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(oneDay.startMs).toBe(Date.UTC(2026, 1, 5));
+
+    const maxDays = expectDateRange(testApi.resolveDateRange({ days: Number.MAX_SAFE_INTEGER }));
+    expect(maxDays.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
+    expect(maxDays.startMs).toBe(Date.UTC(2026, 1, 5) - (36600 - 1) * dayMs);
 
     const def = expectDateRange(testApi.resolveDateRange({}));
     expect(def.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);

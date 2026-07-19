@@ -114,6 +114,7 @@ const requiredPathGroups = [
   "dist/audit/audit-event-writer.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",
+  "dist/system-agent/setup-inference-detection.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",

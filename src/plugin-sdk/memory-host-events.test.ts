@@ -3,13 +3,16 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  listStoredMemoryHostEvents,
+  setMaxMemoryHostEventsForTests,
+} from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
   appendMemoryHostEvent,
   readMemoryHostEventRecords,
   readMemoryHostEvents,
-  resolveMemoryHostEventLogPath,
 } from "./memory-host-events.js";
 import {
   createClaimableDedupe,
@@ -32,45 +35,51 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  setMaxMemoryHostEventsForTests(undefined);
   resetPluginStateStoreForTests();
 });
 
 describe("memory host event journal helpers", () => {
   it("appends and reads typed workspace events", async () => {
     const workspaceDir = await createTempDir("memory-host-events-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
 
-    await appendMemoryHostEvent(workspaceDir, {
-      type: "memory.recall.recorded",
-      timestamp: "2026-04-05T12:00:00.000Z",
-      query: "glacier backup",
-      resultCount: 1,
-      results: [
-        {
-          path: "memory/2026-04-05.md",
-          startLine: 1,
-          endLine: 3,
-          score: 0.9,
-        },
-      ],
-    });
-    await appendMemoryHostEvent(workspaceDir, {
-      type: "memory.dream.completed",
-      timestamp: "2026-04-05T13:00:00.000Z",
-      phase: "light",
-      outcome: "completed",
-      lineCount: 4,
-      storageMode: "both",
-      inlinePath: path.join(workspaceDir, "memory", "2026-04-05.md"),
-      reportPath: path.join(workspaceDir, "memory", "dreaming", "light", "2026-04-05.md"),
-    });
-
-    const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
-    await expect(fs.readFile(eventLogPath, "utf8")).resolves.toContain(
-      '"type":"memory.recall.recorded"',
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-05T12:00:00.000Z",
+        query: "glacier backup",
+        resultCount: 1,
+        results: [
+          {
+            path: "memory/2026-04-05.md",
+            startLine: 1,
+            endLine: 3,
+            score: 0.9,
+          },
+        ],
+      },
+      { env },
+    );
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.dream.completed",
+        timestamp: "2026-04-05T11:00:00.000Z",
+        phase: "light",
+        outcome: "completed",
+        lineCount: 4,
+        storageMode: "both",
+        inlinePath: path.join(workspaceDir, "memory", "2026-04-05.md"),
+        reportPath: path.join(workspaceDir, "memory", "dreaming", "light", "2026-04-05.md"),
+      },
+      { env },
     );
 
-    const events = await readMemoryHostEvents({ workspaceDir });
-    const tail = await readMemoryHostEvents({ workspaceDir, limit: 1 });
+    const events = await readMemoryHostEvents({ workspaceDir, env });
+    const tail = await readMemoryHostEvents({ workspaceDir, limit: 1, env });
 
     expect(events).toHaveLength(2);
     expect(events[0]?.type).toBe("memory.recall.recorded");
@@ -83,62 +92,101 @@ describe("memory host event journal helpers", () => {
     expect(tail[0]?.type).toBe("memory.dream.completed");
   });
 
+  it("keeps journal retention timestamps in the current wall-clock domain", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-created-at-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const now = Date.parse("2026-07-16T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    for (const query of ["first", "second"]) {
+      await appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-07-16T12:00:00.000Z",
+          query,
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    }
+
+    expect(
+      listStoredMemoryHostEvents({ workspaceDir, env }).map((entry) => entry.createdAt),
+    ).toEqual([now, now + 1]);
+  });
+
   it("keeps legacy event readers stable when diagnostic records are present", async () => {
     const workspaceDir = await createTempDir("memory-host-events-diagnostics-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
 
-    await appendMemoryHostEvent(workspaceDir, {
-      type: "memory.recall.skipped",
-      timestamp: "2026-04-05T12:00:00.000Z",
-      query: "durable memory",
-      reason: "non-short-term-memory-path",
-      eligibleResultCount: 0,
-      skippedResultCount: 1,
-      results: [
-        {
-          path: "MEMORY.md",
-          startLine: 3,
-          endLine: 3,
-          score: 0.9,
-          reason: "non-short-term-memory-path",
-        },
-      ],
-    });
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.skipped",
+        timestamp: "2026-04-05T12:00:00.000Z",
+        query: "durable memory",
+        reason: "non-short-term-memory-path",
+        eligibleResultCount: 0,
+        skippedResultCount: 1,
+        results: [
+          {
+            path: "MEMORY.md",
+            startLine: 3,
+            endLine: 3,
+            score: 0.9,
+            reason: "non-short-term-memory-path",
+          },
+        ],
+      },
+      { env },
+    );
 
-    await appendMemoryHostEvent(workspaceDir, {
-      type: "memory.recall.recorded",
-      timestamp: "2026-04-05T12:05:00.000Z",
-      query: "daily memory",
-      resultCount: 1,
-      results: [
-        {
-          path: "memory/2026-04-05.md",
-          startLine: 1,
-          endLine: 3,
-          score: 0.95,
-        },
-      ],
-    });
-    await appendMemoryHostEvent(workspaceDir, {
-      type: "memory.recall.skipped",
-      timestamp: "2026-04-05T12:10:00.000Z",
-      query: "durable memory again",
-      reason: "non-short-term-memory-path",
-      eligibleResultCount: 1,
-      skippedResultCount: 1,
-      results: [
-        {
-          path: "MEMORY.md",
-          startLine: 4,
-          endLine: 4,
-          score: 0.8,
-          reason: "non-short-term-memory-path",
-        },
-      ],
-    });
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-05T12:05:00.000Z",
+        query: "daily memory",
+        resultCount: 1,
+        results: [
+          {
+            path: "memory/2026-04-05.md",
+            startLine: 1,
+            endLine: 3,
+            score: 0.95,
+          },
+        ],
+      },
+      { env },
+    );
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.skipped",
+        timestamp: "2026-04-05T12:10:00.000Z",
+        query: "durable memory again",
+        reason: "non-short-term-memory-path",
+        eligibleResultCount: 1,
+        skippedResultCount: 1,
+        results: [
+          {
+            path: "MEMORY.md",
+            startLine: 4,
+            endLine: 4,
+            score: 0.8,
+            reason: "non-short-term-memory-path",
+          },
+        ],
+      },
+      { env },
+    );
 
-    const legacyEvents = await readMemoryHostEvents({ workspaceDir });
-    const legacyTail = await readMemoryHostEvents({ workspaceDir, limit: 1 });
-    const records = await readMemoryHostEventRecords({ workspaceDir });
+    const legacyEvents = await readMemoryHostEvents({ workspaceDir, env });
+    const legacyTail = await readMemoryHostEvents({ workspaceDir, limit: 1, env });
+    const records = await readMemoryHostEventRecords({ workspaceDir, env });
 
     expect(legacyEvents.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
     expect(legacyTail.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
@@ -147,6 +195,105 @@ describe("memory host event journal helpers", () => {
       "memory.recall.recorded",
       "memory.recall.skipped",
     ]);
+  });
+
+  it("bounds oversized diagnostic detail without failing the parent operation", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-bounded-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const results = Array.from({ length: 100 }, (_, index) => ({
+      path: `memory/${"wide-path-".repeat(100)}${index}.md`,
+      startLine: index + 1,
+      endLine: index + 2,
+      score: 0.9,
+    }));
+
+    await expect(
+      appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-04-05T12:00:00.000Z",
+          query: "🔥".repeat(20_000),
+          resultCount: results.length,
+          results,
+        },
+        { env },
+      ),
+    ).resolves.toBeUndefined();
+
+    const [event] = await readMemoryHostEventRecords({ workspaceDir, env });
+    expect(event).toMatchObject({
+      type: "memory.recall.recorded",
+      resultCount: 100,
+      storageTruncated: true,
+    });
+    if (event?.type !== "memory.recall.recorded") {
+      throw new Error("expected bounded recall event");
+    }
+    expect(event.results).toHaveLength(10);
+    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(8 * 1024);
+  });
+
+  it("rotates old events without evicting the workspace sequence cursor", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-rotation-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    setMaxMemoryHostEventsForTests(3);
+    let clock = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock--);
+
+    for (let index = 1; index <= 5; index += 1) {
+      await appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: `2026-04-05T12:00:0${index}.000Z`,
+          query: `event-${index}`,
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    }
+
+    const events = await readMemoryHostEventRecords({ workspaceDir, env });
+    expect(
+      events.map((event) => (event.type === "memory.recall.recorded" ? event.query : "")),
+    ).toEqual(["event-3", "event-4", "event-5"]);
+  });
+
+  it("rotates events by namespace append order across workspaces", async () => {
+    const stateDir = await createTempDir("memory-host-events-shared-retention-");
+    const workspaceA = path.join(stateDir, "workspace-a");
+    const workspaceB = path.join(stateDir, "workspace-b");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setMaxMemoryHostEventsForTests(3);
+
+    const appendRecall = async (workspaceDir: string, query: string) => {
+      await appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-04-05T12:00:00.000Z",
+          query,
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    };
+    await appendRecall(workspaceA, "a-1");
+    await appendRecall(workspaceA, "a-2");
+    await appendRecall(workspaceA, "a-3");
+    await appendRecall(workspaceB, "b-1");
+    await appendRecall(workspaceA, "a-4");
+
+    const workspaceBEvents = await readMemoryHostEventRecords({
+      workspaceDir: workspaceB,
+      env,
+    });
+    expect(
+      workspaceBEvents.map((event) => (event.type === "memory.recall.recorded" ? event.query : "")),
+    ).toEqual(["b-1"]);
   });
 });
 

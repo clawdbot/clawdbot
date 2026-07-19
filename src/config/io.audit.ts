@@ -1,13 +1,127 @@
 // Audits config paths and values for diagnostics and safety checks.
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
+import { isSensitiveConfigPath } from "./sensitive-paths.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
+const CONFIG_SET_VALUE_OPTIONS = new Set([
+  "--batch-file",
+  "--batch-json",
+  "--container",
+  "--log-level",
+  "--profile",
+  "--provider-allowlist",
+  "--provider-arg",
+  "--provider-command",
+  "--provider-env",
+  "--provider-max-bytes",
+  "--provider-max-output-bytes",
+  "--provider-mode",
+  "--provider-no-output-timeout-ms",
+  "--provider-pass-env",
+  "--provider-path",
+  "--provider-source",
+  "--provider-timeout-ms",
+  "--provider-trusted-dir",
+  "--ref-id",
+  "--ref-provider",
+  "--ref-source",
+  "--section",
+]);
+
+function findConfigSetPositionals(argv: readonly string[], setIndex: number): number[] {
+  const positionals: number[] = [];
+  let optionsEnded = false;
+  for (let index = setIndex + 1; index < argv.length && positionals.length < 2; index += 1) {
+    const arg = argv[index];
+    if (arg === undefined) {
+      break;
+    }
+    if (!optionsEnded && arg === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith("-")) {
+      const equalsIndex = arg.indexOf("=");
+      const optionName = equalsIndex < 0 ? arg : arg.slice(0, equalsIndex);
+      if (equalsIndex < 0 && CONFIG_SET_VALUE_OPTIONS.has(optionName)) {
+        index += 1;
+      }
+      continue;
+    }
+    positionals.push(index);
+  }
+  return positionals;
+}
+
+function findConfigSetCommandIndex(argv: readonly string[], configIndex: number): number {
+  let optionsEnded = false;
+  for (let index = configIndex + 1; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === undefined) {
+      return -1;
+    }
+    if (!optionsEnded && arg === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith("-")) {
+      const equalsIndex = arg.indexOf("=");
+      const optionName = equalsIndex < 0 ? arg : arg.slice(0, equalsIndex);
+      if (equalsIndex < 0 && CONFIG_SET_VALUE_OPTIONS.has(optionName)) {
+        index += 1;
+      }
+      continue;
+    }
+    return arg === "set" ? index : -1;
+  }
+  return -1;
+}
 
 function redactConfigAuditArgv(argv: readonly string[]): string[] {
-  return redactSensitiveArgv(argv);
+  const redacted = redactSensitiveArgv(argv);
+  let setIndex = -1;
+  for (let index = 0; index < redacted.length; index += 1) {
+    if (redacted[index] !== "config") {
+      continue;
+    }
+    setIndex = findConfigSetCommandIndex(redacted, index);
+    if (setIndex >= 0) {
+      break;
+    }
+  }
+  if (setIndex < 0) {
+    return redacted;
+  }
+  for (let index = setIndex + 1; index < redacted.length; index += 1) {
+    const arg = redacted[index];
+    if (arg === undefined) {
+      break;
+    }
+    if (arg === "--batch-json" && index + 1 < redacted.length) {
+      redacted[index + 1] = "***";
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--batch-json=")) {
+      redacted[index] = "--batch-json=***";
+    }
+  }
+  const positionals = findConfigSetPositionals(redacted, setIndex);
+  if (positionals.length < 2) {
+    return redacted;
+  }
+  const pathIndex = positionals[0]!;
+  const valueIndex = positionals[1]!;
+  const configPath = redacted[pathIndex];
+  if (typeof configPath === "string" && isSensitiveConfigPath(configPath)) {
+    redacted[valueIndex] = "***";
+  }
+  return redacted;
 }
 
 function capArgv(argv: readonly string[] | undefined): string[] {
@@ -27,7 +141,11 @@ export function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
   };
 }
 
-const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
+export const CONFIG_AUDIT_SCOPE = "config-audit";
+export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
+export const CONFIG_AUDIT_STORE_LABEL =
+  "SQLite diagnostic_events/config-audit state (latest 50000 rows)";
+const LEGACY_CONFIG_AUDIT_LOG_FILENAME = ["config-audit", "jsonl"].join(".");
 
 export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
@@ -127,7 +245,7 @@ export type ConfigObserveAuditRecord = {
   restoreErrorMessage: string | null;
 };
 
-type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;
+export type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;
 
 type ConfigAuditStatMetadata = {
   dev: string | null;
@@ -162,23 +280,6 @@ type ConfigWriteAuditRecordBase = Omit<
   nextBytes: number;
 };
 
-type ConfigAuditFs = {
-  promises: {
-    mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
-    appendFile(
-      path: string,
-      data: string,
-      options?: { encoding?: BufferEncoding; mode?: number },
-    ): Promise<unknown>;
-  };
-  mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
-  appendFileSync(
-    path: string,
-    data: string,
-    options?: { encoding?: BufferEncoding; mode?: number },
-  ): unknown;
-};
-
 function normalizeAuditLabel(value: string | undefined): string | null {
   if (typeof value !== "string") {
     return null;
@@ -200,8 +301,11 @@ function resolveConfigAuditProcessInfo(
   return snapshotConfigAuditProcessInfo();
 }
 
-export function resolveConfigAuditLogPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
-  return path.join(resolveStateDir(env, homedir), "logs", CONFIG_AUDIT_LOG_FILENAME);
+export function resolveLegacyConfigAuditLogPath(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string {
+  return path.join(resolveStateDir(env, homedir), "logs", LEGACY_CONFIG_AUDIT_LOG_FILENAME);
 }
 
 export function formatConfigOverwriteLogMessage(params: {
@@ -307,13 +411,12 @@ export function finalizeConfigWriteAuditRecord(params: {
     nextNlink: success ? nextMetadata.nlink : null,
     nextUid: success ? nextMetadata.uid : null,
     nextGid: success ? nextMetadata.gid : null,
-    errorCode,
-    errorMessage,
+    ...(errorCode !== undefined ? { errorCode } : {}),
+    ...(errorMessage !== undefined ? { errorMessage } : {}),
   };
 }
 
 type ConfigAuditAppendContext = {
-  fs: ConfigAuditFs;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
 };
@@ -328,10 +431,10 @@ type ConfigAuditAppendParams = ConfigAuditAppendContext &
 
 function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): ConfigAuditRecord {
   if ("record" in params) {
-    return redactSecrets(params.record);
+    return params.record;
   }
-  const { fs: _fs, env: _env, homedir: _homedir, ...record } = params;
-  return redactSecrets(record as ConfigAuditRecord);
+  const { env: _env, homedir: _homedir, ...record } = params;
+  return record as ConfigAuditRecord;
 }
 
 export type ConfigAuditScrubResult = {
@@ -376,7 +479,7 @@ export async function scrubConfigAuditLog(params: {
   homedir: () => string;
   dryRun?: boolean;
 }): Promise<ConfigAuditScrubResult> {
-  const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
+  const auditPath = resolveLegacyConfigAuditLogPath(params.env, params.homedir);
   let raw: string;
   try {
     raw = await params.fs.promises.readFile(auditPath, "utf-8");
@@ -503,15 +606,43 @@ export async function scrubConfigAuditLog(params: {
   return { scanned, rewritten, skipped, aborted: false };
 }
 
+function resolveConfigAuditStoreEnv(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+}): NodeJS.ProcessEnv {
+  return {
+    ...params.env,
+    OPENCLAW_STATE_DIR: resolveStateDir(params.env, params.homedir),
+  };
+}
+
+function openConfigAuditStore(env: NodeJS.ProcessEnv) {
+  return createSqliteAuditRecordStore<ConfigAuditRecord>({
+    scope: CONFIG_AUDIT_SCOPE,
+    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+    env,
+  });
+}
+
+function configAuditEntryKey(record: ConfigAuditRecord): string {
+  return `${record.ts}:${record.event}:${randomUUID()}`;
+}
+
+export function sanitizeConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
+  const sanitized = structuredClone(record);
+  sanitized.argv = redactConfigAuditArgv(capArgv(sanitized.argv));
+  sanitized.execArgv = redactConfigAuditArgv(capArgv(sanitized.execArgv));
+  return redactSecrets(sanitized);
+}
+
 export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): Promise<void> {
   try {
-    const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
-    const record = resolveConfigAuditAppendRecord(params);
-    await params.fs.promises.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    await params.fs.promises.appendFile(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    const record = sanitizeConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    openConfigAuditStore(resolveConfigAuditStoreEnv(params)).register(
+      configAuditEntryKey(record),
+      record,
+      Date.parse(record.ts),
+    );
   } catch {
     // best-effort
   }
@@ -519,13 +650,12 @@ export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): 
 
 export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {
   try {
-    const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
-    const record = resolveConfigAuditAppendRecord(params);
-    params.fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    params.fs.appendFileSync(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    const record = sanitizeConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    openConfigAuditStore(resolveConfigAuditStoreEnv(params)).register(
+      configAuditEntryKey(record),
+      record,
+      Date.parse(record.ts),
+    );
   } catch {
     // best-effort
   }

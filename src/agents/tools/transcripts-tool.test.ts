@@ -110,7 +110,7 @@ describe("transcripts tool", () => {
       startupSignal = request.abortSignal;
       emitAfterStart = async () => {
         await request.onUtterance({
-          text: "captured after the start action completed",
+          text: "captured after the start action completed\nsecond\tcolumn",
           final: true,
         });
       };
@@ -146,13 +146,19 @@ describe("transcripts tool", () => {
         path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "transcript.jsonl"),
         "utf8",
       ),
-    ).resolves.toContain("captured after the start action completed");
+    ).resolves.toContain("captured after the start action completed\\nsecond\\tcolumn");
     await tool.execute(
       "call-2",
       { action: "stop", sessionId: "ongoing-meeting" },
       undefined,
       vi.fn(),
     );
+    await expect(
+      fs.readFile(
+        path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "summary.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("captured after the start action completed\\nsecond\\tcolumn");
   });
 
   it("drops late utterances and keeps repeated abort cleanup failures retryable", async () => {

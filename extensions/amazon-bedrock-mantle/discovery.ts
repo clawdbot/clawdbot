@@ -13,7 +13,10 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("bedrock-mantle-discovery");
 
@@ -116,7 +119,11 @@ const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
-  return env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  return (
+    normalizeOptionalString(env.AWS_REGION) ??
+    normalizeOptionalString(env.AWS_DEFAULT_REGION) ??
+    "us-east-1"
+  );
 }
 
 function getCachedIamTokenEntry(

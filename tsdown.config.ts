@@ -283,6 +283,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
+    "system-agent/setup-inference-detection.worker":
+      "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -341,6 +343,8 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
     "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
+    "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
+    "system-agent/audit": "src/system-agent/audit.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",
     "system-agent/rescue-message": "src/system-agent/rescue-message.ts",
     "system-agent/setup-inference": "src/system-agent/setup-inference.ts",

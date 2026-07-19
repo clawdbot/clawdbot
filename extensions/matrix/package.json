@@ -39,6 +39,7 @@
     },
     "channel": {
       "id": "matrix",
+      "approvalFlags": ["native"],
       "label": "Matrix",
       "selectionLabel": "Matrix (plugin)",
       "docsPath": "/channels/matrix",

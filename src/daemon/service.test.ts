@@ -248,6 +248,28 @@ describe("startGatewayService", () => {
     expect(service.start).not.toHaveBeenCalled();
   });
 
+  it("returns repair drift with an already-running service", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+      })),
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 4242 })),
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("already-running");
+    if (result.outcome === "already-running") {
+      expect(result.issues).toEqual([expect.objectContaining({ code: "version-mismatch" })]);
+    }
+    expect(service.start).not.toHaveBeenCalled();
+  });
+
   it("requests repair before start when the loaded service version is stale", async () => {
     const service = createService({
       readCommand: vi.fn(async () => ({

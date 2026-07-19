@@ -159,7 +159,6 @@ import {
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
-import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
@@ -187,6 +186,7 @@ import {
 } from "./compaction-hooks.js";
 import {
   resolveCompactionHarnessRuntime,
+  resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
@@ -507,22 +507,12 @@ export async function compactEmbeddedAgentSessionDirect(
           provider === primaryProvider ||
           provider === requestedPrimaryProvider;
         const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-        const candidateThinkLevel = resolveCandidateThinkingLevel({
-          cfg: params.config,
-          provider,
-          modelId: model,
-          level: params.thinkLevel,
-          agentId: fallbackAgentId,
-          sessionKey: fallbackSessionKey,
-          agentRuntime: params.agentHarnessId,
-        });
         return await compactEmbeddedAgentSessionDirectOnce({
           ...params,
           provider,
           model,
           authProfileId,
           authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
-          thinkLevel: candidateThinkLevel,
           // The primary attempt retains its already prepared atomic plan. An
           // actual fallback may change route/auth class and must rebuild it.
           runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
@@ -644,7 +634,15 @@ async function compactEmbeddedAgentSessionDirectOnce(
     agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
     workspaceDir: resolvedWorkspace,
   });
-  let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
+  let thinkLevel = resolveEmbeddedCompactionThinkingLevel({
+    config: params.config,
+    provider,
+    modelId,
+    inheritedLevel: params.thinkLevel,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentRuntime: selectedHarnessRuntime,
+  });
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);

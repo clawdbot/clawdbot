@@ -131,7 +131,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.144.5`):
+with the official plugin (currently `@openai/codex` `0.144.6`):
 
 ```bash
 codex app-server --listen stdio://
@@ -255,7 +255,7 @@ networking, so a full-access profile would not protect outbound traffic.
 
 The plugin blocks older, newer-unvalidated, prerelease, build-suffixed, or
 unversioned app-server handshakes. Codex app-server must report a stable version
-from `0.143.0` through the bundled `0.144.5`.
+from `0.143.0` through the bundled `0.144.6`.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -599,7 +599,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
 | `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
 
 <Note>
-The current bundled harness is `@openai/codex` `0.144.5`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.144.6`. A `model/list` probe
 against that bundled app-server returned these public picker rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |

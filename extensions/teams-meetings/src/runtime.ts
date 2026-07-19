@@ -176,7 +176,7 @@ export class TeamsMeetingsRuntime {
         await this.#refreshBrowserHealth(session, options),
       refreshStatus: async (session) =>
         await this.#sessions.refreshBrowserHealth(session, { force: true, readOnly: true }),
-      refreshReusableSession: async () => {},
+      refreshReusableSession: async (_session, _request, _resolved) => {},
       ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
@@ -264,6 +264,8 @@ export class TeamsMeetingsRuntime {
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
+      refreshCaptionHealth: async (session, timeoutMs) =>
+        await this.#refreshBrowserHealth(session, { timeoutMs }),
     };
   }
 
@@ -321,7 +323,7 @@ export class TeamsMeetingsRuntime {
           ? "Teams guest joined in Chrome on the selected node with realtime audio through the node bridge."
           : "Teams guest joined in local Chrome with realtime audio through BlackHole 2ch and SoX."
         : session.mode === "transcribe"
-          ? "Teams guest joined observe-only; caption snapshots remain empty pending live selector validation."
+          ? "Teams guest joined observe-only with live-caption transcript capture."
           : "Teams guest join is waiting for the browser to become ready before starting realtime audio.",
     );
     this.#sessions.refreshSpeechReadiness(session);
@@ -407,18 +409,20 @@ export class TeamsMeetingsRuntime {
 
   async #refreshBrowserHealth(
     session: TeamsMeetingsSession,
-    options: { readOnly?: boolean } = {},
+    options: { readOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<void> {
     try {
       const result = await recoverCurrentTeamsMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
+        meetingSessionId: session.id,
         mode: session.mode,
         nodeId: session.chrome?.nodeId,
         readOnly: options.readOnly,
         trackedMeetingUrl: session.url,
         trackedTargetId: session.chrome?.browserTab?.targetId,
         transport: session.transport,
+        timeoutMs: options.timeoutMs,
         url: session.url,
       });
       if (result.found && session.chrome) {
@@ -443,6 +447,9 @@ export class TeamsMeetingsRuntime {
   }
 
   async #captureTranscript(session: TeamsMeetingsSession, options: { finalize?: boolean } = {}) {
+    // Recovery permits caption setup but atomically refuses a different live
+    // session owner, so stale sessions read their archived page buffer instead.
+    await this.#sessions.refreshCaptionHealth(session);
     const tab = session.chrome?.browserTab;
     if (!tab) {
       return undefined;
@@ -483,6 +490,7 @@ export class TeamsMeetingsRuntime {
       const result = await leaveTeamsMeetingInBrowser({
         runtime: this.params.runtime,
         config: this.params.config,
+        meetingSessionId: session.id,
         meetingUrl: session.url,
         nodeId: session.chrome?.nodeId,
         tab,
@@ -490,6 +498,18 @@ export class TeamsMeetingsRuntime {
       noteSession(session, result.note);
       if (result.left && session.chrome) {
         session.chrome.browserTab = undefined;
+        if (session.chrome.health) {
+          session.chrome.health = {
+            ...session.chrome.health,
+            captioning: false,
+            audioInputRouted: false,
+            audioOutputRouted: false,
+            providerConnected: false,
+            realtimeReady: false,
+            audioInputActive: false,
+            audioOutputActive: false,
+          };
+        }
       }
       session.browserLeft = result.left;
       return result.left;

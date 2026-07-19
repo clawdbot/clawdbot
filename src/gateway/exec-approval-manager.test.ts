@@ -14,6 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   ExecApprovalManager,
+  InvalidApprovalIdError,
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
 import { getOperatorApprovalDetailed, resolveOperatorApproval } from "./operator-approval-store.js";
@@ -584,17 +585,34 @@ describe("ExecApprovalManager", () => {
     await expect(decisionPromise).resolves.toBe("deny");
   });
 
-  it("preserves a protocol-valid provided approval id byte-for-byte", async () => {
-    const { manager, databaseOptions } = createPersistentManager();
-    const id = "\uFEFF";
-    const record = manager.create({ command: "echo exact" }, 60_000, id);
-    const decisionPromise = manager.register(record, 60_000);
+  it.each([
+    ["UUID", "12345678-1234-1234-1234-123456789abc"],
+    ["plugin UUID", "plugin:12345678-1234-1234-1234-123456789abc"],
+    ["system-agent UUID", "system-agent:12345678-1234-1234-1234-123456789abc"],
+    ["node id", "node:mac-studio_1.local"],
+  ])("preserves a safe explicit %s byte-for-byte", (_label, id) => {
+    const manager = new ExecApprovalManager();
 
-    expect(record.id).toBe(id);
-    expect(manager.lookupApprovalId(id)).toEqual({ kind: "exact", id });
-    expect(getOperatorApproval({ id, databaseOptions })).toMatchObject({ id, status: "pending" });
-    manager.resolveDetailed(id, "deny", { kind: "system", id: null });
-    await expect(decisionPromise).resolves.toBe("deny");
+    expect(manager.create({ command: "echo exact" }, 60_000, id).id).toBe(id);
+  });
+
+  it.each([
+    ["empty value", ""],
+    ["URL dot segment", "."],
+    ["URL parent segment", ".."],
+    ["ANSI escape", "approval-\u001b[31mred"],
+    ["Unicode control", "approval-\u202Ehidden"],
+    ["trailing line feed", "approval-safe\n"],
+    ["trailing carriage return", "approval-safe\r"],
+    ["trailing line separator", "approval-safe\u2028"],
+    ["trailing paragraph separator", "approval-safe\u2029"],
+    ["overlong value", "a".repeat(129)],
+  ])("rejects an explicit approval id containing an %s", (_label, id) => {
+    const manager = new ExecApprovalManager();
+
+    expect(() => manager.create({ command: "echo unsafe" }, 60_000, id)).toThrow(
+      InvalidApprovalIdError,
+    );
   });
 
   it("rejects unrenderable persistent plugin requests before creating a row or waiter", () => {

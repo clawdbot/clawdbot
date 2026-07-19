@@ -15,10 +15,12 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { tryDispatchAcpReply } from "./dispatch-acp.js";
+import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import {
   appendRecentHistoryImageContext,
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -338,6 +340,11 @@ async function runDispatch(params: {
   suppressReplyLifecycle?: boolean;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   toolsAllow?: string[];
+  recordProcessed?: (
+    outcome: "completed" | "skipped" | "error",
+    opts?: { reason?: string; error?: string },
+  ) => void;
+  markIdle?: (reason: string) => void;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -369,8 +376,8 @@ async function runDispatch(params: {
     bypassForCommand: false,
     toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
-    recordProcessed: vi.fn(),
-    markIdle: vi.fn(),
+    recordProcessed: params.recordProcessed ?? vi.fn(),
+    markIdle: params.markIdle ?? vi.fn(),
   });
 }
 
@@ -821,29 +828,201 @@ describe("tryDispatchAcpReply", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
-  it("records cancellation only after ACP output flushing", async () => {
+  it("persists delivered ACP output for backend cancellation without a caller abort", async () => {
     setReadyAcpResolution();
-    const abortController = new AbortController();
+    const deliveredPayloads: unknown[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredPayloads.push(payload);
+      },
+    });
+    const recordProcessed = vi.fn();
+    const markIdle = vi.fn();
     managerMocks.runTurn.mockImplementationOnce(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
         await onEvent({ type: "text_delta", text: "partial", tag: "agent_message_chunk" });
-        await onEvent({ type: "done", status: "cancelled" });
-        abortController.abort();
+        await onEvent({ type: "done", status: "cancelled", stopReason: "cancelled" });
       },
     );
 
-    await runDispatch({
+    const result = await runDispatch({
       bodyForAgent: "cancel this turn",
-      abortSignal: abortController.signal,
+      dispatcher,
+      recordProcessed,
+      markIdle,
     });
 
+    expect(result?.queuedFinal).toBe(true);
+    expect(deliveredPayloads).toEqual([{ text: "partial" }]);
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledTimes(1);
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.sessionKey).toBe(sessionKey);
+    expect(transcript.promptText).toBe("cancel this turn");
+    expect(transcript.finalText).toBe("partial");
+    expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_aborted" });
+    expect(markIdle).toHaveBeenCalledWith("message_aborted");
+    expect(transcriptMocks.persistAcpDispatchTranscript.mock.invocationCallOrder[0]).toBeLessThan(
+      recordProcessed.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({
-        abortSignal: abortController.signal,
         resultStatus: "cancelled",
       }),
     );
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
+  });
+
+  it("does not persist final-only output rejected after caller cancellation", async () => {
+    setReadyAcpResolution();
+    const abortController = new AbortController();
+    const base = createDispatcher();
+    const dispatcher = createAbortAwareDispatcher({
+      dispatcher: base.dispatcher,
+      isAborted: () => abortController.signal.aborted,
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "not delivered", tag: "agent_message_chunk" });
+        abortController.abort();
+        await onEvent({ type: "done", status: "cancelled" });
+      },
+    );
+
+    const result = await runDispatch({
+      bodyForAgent: "cancel before delivery",
+      abortSignal: abortController.signal,
+      dispatcher,
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(base.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.promptText).toBe("cancel before delivery");
+    expect(transcript.finalText).toBe("");
+  });
+
+  it("persists live ACP output delivered before caller cancellation", async () => {
+    setReadyAcpResolution();
+    const abortController = new AbortController();
+    const deliveredPayloads: Array<Record<string, unknown>> = [];
+    let markDeliveryStarted!: () => void;
+    let releaseDelivery!: () => void;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const coreDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredPayloads.push(requireRecord(payload, "delivered payload"));
+        markDeliveryStarted();
+        await deliveryGate;
+      },
+    });
+    const dispatcher = createAbortAwareDispatcher({
+      dispatcher: coreDispatcher,
+      isAborted: () => abortController.signal.aborted,
+    });
+    const partial = "Visible before cancellation. ".repeat(4);
+    let markTurnReady!: () => void;
+    let finishTurn!: () => void;
+    let markTurnDone!: () => void;
+    const turnReady = new Promise<void>((resolve) => {
+      markTurnReady = resolve;
+    });
+    const finishTurnGate = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    const turnDone = new Promise<void>((resolve) => {
+      markTurnDone = resolve;
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: partial, tag: "agent_message_chunk" });
+        markTurnReady();
+        await finishTurnGate;
+        await onEvent({ type: "done", status: "cancelled" });
+        markTurnDone();
+      },
+    );
+
+    const dispatchPromise = runDispatch({
+      bodyForAgent: "cancel after delivery",
+      abortSignal: abortController.signal,
+      cfg: createAcpTestConfig({
+        acp: {
+          enabled: true,
+          stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        },
+      }),
+      dispatcher,
+    });
+
+    await turnReady;
+    await deliveryStarted;
+    abortController.abort();
+    finishTurn();
+    await turnDone;
+    const earlyOutcome = await Promise.race([
+      dispatchPromise.then(() => "settled" as const),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 10);
+      }),
+    ]);
+    expect(earlyOutcome).toBe("pending");
+    expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
+
+    releaseDelivery();
+    await dispatchPromise;
+
+    const deliveredText = deliveredPayloads.map((payload) => String(payload.text)).join("\n");
+    expect(deliveredText).not.toBe("");
+    expect(partial).toContain(deliveredText.replaceAll("\n", ""));
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.finalText).toBe(deliveredText);
+  });
+
+  it("keeps caller abort authoritative until completed output settles", async () => {
+    setReadyAcpResolution();
+    const abortController = new AbortController();
+    const { dispatcher } = createDispatcher();
+    const recordProcessed = vi.fn();
+    const markIdle = vi.fn();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "complete", tag: "agent_message_chunk" });
+        await onEvent({ type: "done", status: "completed" });
+        abortController.abort();
+      },
+    );
+
+    const result = await runDispatch({
+      bodyForAgent: "finish first",
+      abortSignal: abortController.signal,
+      dispatcher,
+      recordProcessed,
+      markIdle,
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_aborted" });
+    expect(markIdle).toHaveBeenCalledWith("message_aborted");
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        resultStatus: "completed",
+      }),
+    );
   });
 
   it("records an ACP error when output finalization fails", async () => {

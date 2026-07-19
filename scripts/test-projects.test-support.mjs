@@ -770,6 +770,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  [
+    "scripts/check-native-state-schema-version.mjs",
+    ["test/scripts/check-native-state-schema-version.test.ts"],
+  ],
   ["config/max-lines-baseline.txt", ["test/scripts/check-max-lines-ratchet.test.ts"]],
   [".oxlintrc.json", ["test/scripts/oxlint-config.test.ts"]],
   [
@@ -2175,6 +2179,10 @@ for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
+  [
+    "scripts/check-native-state-schema-version.d.mts",
+    "scripts/check-native-state-schema-version.mjs",
+  ],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
   ["scripts/openclaw-npm-resume-run.d.mts", "scripts/openclaw-npm-resume-run.mjs"],
@@ -2281,8 +2289,14 @@ const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
 ];
 const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-snapshots.test.ts"];
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
+const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
+  "extensions/codex/src/manifest.test.ts",
+  "extensions/openai/openai-provider.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
+  ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
   [
     "src/channels/plugins/contracts/test-helpers/manifest.ts",

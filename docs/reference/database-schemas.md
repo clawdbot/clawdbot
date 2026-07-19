@@ -13,7 +13,7 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 | Scope                | Default path                                               | Contents                                                                                              |
 | -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and verification history             |
+| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
 A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
@@ -60,11 +60,11 @@ Version 3 was an unshipped development step folded into version 4.
 | ------------------------------------------- | --------------------------------------------------------------- |
 | Every open                                  | Validate the `schema_meta` table and primary metadata row       |
 | Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan |
-| Gateway background verifier                 | Run the full scan about once daily and record results           |
+| Gateway background verifier                 | Run the full scan about once daily and log results              |
 | Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database    |
 
 The Gateway preflight reads schema headers only. The background verifier owns the slower full scan for databases that do not need migration.
-Quarantine decisions live in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. The global `database_verifications` table remains verification history.
+Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 
 ## Troubleshooting
 

@@ -121,6 +121,47 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     opacity var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+/* A session dashboard keeps the board primary on narrow shells. Every desktop
+   edge becomes one bounded bottom sheet; the stored tab preference is left
+   untouched and returns when the viewport widens. */
+.shell--mobile-nav .board-session-surface--dock-left,
+.shell--mobile-nav .board-session-surface--dock-right,
+.shell--mobile-nav .board-session-surface--dock-bottom {
+  flex-direction: column;
+}
+
+.shell--mobile-nav .board-session-surface__board {
+  order: 1;
+}
+
+.shell--mobile-nav .board-session-surface__divider {
+  display: none;
+}
+
+.shell--mobile-nav .board-session-surface__chat {
+  order: 2;
+  width: 100% !important;
+  height: min(42dvh, 360px) !important;
+  min-width: 0;
+  min-height: 180px;
+  max-width: none;
+  max-height: 48dvh;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
+}
+
+.shell--mobile-nav .board-session-surface__reopen {
+  top: auto;
+  right: 12px;
+  bottom: 8px;
+  left: auto;
+  transform: none;
+}
+
+.shell--mobile-nav .board-session-surface__reopen span {
+  writing-mode: horizontal-tb;
+}
+
 .shell--mobile-nav .sidebar-resizer {
   display: none;
 }
@@ -194,7 +235,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   padding: 0;
 }
 
-.shell--mobile-nav .sidebar-brand__actions {
+/* Drawer brand row keeps only the new-thread action: search lives in the
+   topbar and the drawer dismisses via backdrop, so their buttons stay hidden. */
+.shell--mobile-nav .sidebar-brand .sidebar-search,
+.shell--mobile-nav .sidebar-brand .sidebar-brand__collapse {
   display: none;
 }
 

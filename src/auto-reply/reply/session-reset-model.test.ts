@@ -67,6 +67,82 @@ describe("applyResetModelOverride", () => {
     expect(sessionCtx.BodyStripped).toBe("summarize");
   });
 
+  it.each([
+    { name: "empty catalog", catalog: [] },
+    {
+      name: "unrelated catalog",
+      catalog: [{ provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" }],
+    },
+  ] satisfies Array<{ name: string; catalog: ModelCatalogEntry[] }>)(
+    "honors a configured primary missing from the $name",
+    async ({ catalog }) => {
+      const fixture = createResetFixture({
+        providerOverride: "openai",
+        modelOverride: "gpt-4o-mini",
+      });
+      fixture.cfg.agents = {
+        defaults: { model: { primary: "custom/private-model" } },
+      };
+      fixture.sessionCtx.BodyStripped = "custom/private-model summarize";
+
+      const result = await applyResetModelOverride({
+        cfg: fixture.cfg,
+        resetTriggered: true,
+        bodyStripped: fixture.sessionCtx.BodyStripped,
+        sessionCtx: fixture.sessionCtx,
+        ctx: fixture.ctx,
+        sessionEntry: fixture.sessionEntry,
+        sessionStore: fixture.sessionStore,
+        sessionKey: "agent:main:dm:1",
+        defaultProvider: "custom",
+        defaultModel: "private-model",
+        aliasIndex: fixture.aliasIndex,
+        modelCatalog: catalog,
+      });
+
+      expect(result.selection).toMatchObject({
+        provider: "custom",
+        model: "private-model",
+        isDefault: true,
+      });
+      expect(result.cleanedBody).toBe("summarize");
+      expect(fixture.sessionCtx.BodyStripped).toBe("summarize");
+      expect(fixture.sessionEntry.providerOverride).toBeUndefined();
+      expect(fixture.sessionEntry.modelOverride).toBeUndefined();
+    },
+  );
+
+  it("does not let the configured primary bypass an explicit model policy", async () => {
+    const fixture = createResetFixture();
+    fixture.cfg.agents = {
+      defaults: {
+        model: { primary: "custom/private-model" },
+        modelPolicy: { allow: ["openai/*"] },
+      },
+    };
+    fixture.sessionCtx.BodyStripped = "custom/private-model summarize";
+
+    const result = await applyResetModelOverride({
+      cfg: fixture.cfg,
+      resetTriggered: true,
+      bodyStripped: fixture.sessionCtx.BodyStripped,
+      sessionCtx: fixture.sessionCtx,
+      ctx: fixture.ctx,
+      sessionEntry: fixture.sessionEntry,
+      sessionStore: fixture.sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "custom",
+      defaultModel: "private-model",
+      aliasIndex: fixture.aliasIndex,
+      modelCatalog,
+    });
+
+    expect(result).toEqual({});
+    expect(fixture.sessionCtx.BodyStripped).toBe("custom/private-model summarize");
+    expect(fixture.sessionEntry.providerOverride).toBeUndefined();
+    expect(fixture.sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("clears auth profile overrides when reset applies a model", async () => {
     const { sessionEntry } = await applyResetFixture({
       resetTriggered: true,

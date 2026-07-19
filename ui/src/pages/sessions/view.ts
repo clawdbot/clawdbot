@@ -110,11 +110,14 @@ export type SessionsProps = {
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
+  onArchivedViewChange: (showArchived: boolean) => void;
+  onDeleteAllArchived: () => void;
   onPatch: (
     key: string,
     patch: {
       label?: string | null;
       category?: string | null;
+      icon?: string | null;
       archived?: boolean;
       pinned?: boolean;
       unread?: boolean;
@@ -1074,6 +1077,7 @@ export function renderSessions(props: SessionsProps) {
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
+  const archivedCount = rawRows.filter((row) => row.archived === true).length;
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -1106,6 +1110,17 @@ export function renderSessions(props: SessionsProps) {
       : nothing}
   `;
   const refreshAction = html`
+    ${props.showArchived
+      ? html`
+          <button
+            class="btn danger"
+            ?disabled=${props.loading || archivedCount === 0}
+            @click=${props.onDeleteAllArchived}
+          >
+            ${icons.trash} ${t("sessionsView.deleteAllArchived")}
+          </button>
+        `
+      : nothing}
     <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
       ${props.loading ? t("common.loading") : t("common.refresh")}
     </button>
@@ -1166,7 +1181,6 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
   const limitTooltip = t("sessionsView.limitTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
   const unknownTooltip = t("sessionsView.unknownTooltip");
-  const showArchivedTooltip = t("sessionsView.archivedOnlyTooltip");
   return html`
     <div
       class="sessions-toolbar sessions-filter-bar"
@@ -1252,21 +1266,33 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               showArchived: props.showArchived,
             }),
         })}
-        ${renderFilterToggle({
-          name: "showArchived",
-          checked: props.showArchived,
-          label: t("sessionsView.archivedOnly"),
-          title: showArchivedTooltip,
-          extraClass: "session-archive-toggle",
-          onChange: (checked) =>
-            props.onFiltersChange({
-              activeMinutes: props.activeMinutes,
-              limit: props.limit,
-              includeGlobal: props.includeGlobal,
-              includeUnknown: props.includeUnknown,
-              showArchived: checked,
-            }),
-        })}
+        <div
+          class="settings-segmented sessions-view-segment"
+          role="group"
+          aria-label=${t("sessionsView.sessionState")}
+        >
+          <button
+            type="button"
+            class="settings-segmented__btn ${props.showArchived
+              ? ""
+              : "settings-segmented__btn--active"}"
+            aria-pressed=${String(!props.showArchived)}
+            @click=${() => props.onArchivedViewChange(false)}
+          >
+            ${t("common.active")}
+          </button>
+          <button
+            type="button"
+            class="settings-segmented__btn ${props.showArchived
+              ? "settings-segmented__btn--active"
+              : ""}"
+            aria-pressed=${String(props.showArchived)}
+            title=${t("sessionsView.archivedOnlyTooltip")}
+            @click=${() => props.onArchivedViewChange(true)}
+          >
+            ${t("sessionsView.archived")}
+          </button>
+        </div>
       </div>
       <span class="sessions-toolbar__divider" aria-hidden="true"></span>
       <label class="session-groupby">

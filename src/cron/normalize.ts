@@ -6,15 +6,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
-import {
-  TimeoutSecondsFieldSchema,
-  TrimmedNonEmptyStringFieldSchema,
-  parseDeliveryInput,
-  parseOptionalField,
-} from "./delivery-field-schemas.js";
+import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
+import { parseDeliveryInput } from "./delivery-field-schemas.js";
+import { normalizeCronPayload } from "./normalize-payload.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { inferCronJobName } from "./service/normalize.js";
@@ -36,59 +32,6 @@ type NormalizeOptions = {
 const DEFAULT_OPTIONS: NormalizeOptions = {
   applyDefaults: false,
 };
-
-function normalizeTrimmedStringArray(
-  value: unknown,
-  options?: { allowNull?: boolean },
-): string[] | null | undefined {
-  if (Array.isArray(value)) {
-    const normalized = normalizeTrimmedStringList(value);
-    if (normalized.length === 0 && value.length > 0) {
-      return undefined;
-    }
-    return normalized;
-  }
-  if (options?.allowNull && value === null) {
-    return null;
-  }
-  return undefined;
-}
-
-function normalizeCommandEnv(value: unknown): Record<string, string> {
-  if (!isRecord(value)) {
-    throw new Error("command env must be an object with non-blank keys and string values");
-  }
-  const entries: Array<[string, string]> = [];
-  for (const [rawKey, rawValue] of Object.entries(value)) {
-    const key = normalizeOptionalString(rawKey);
-    if (!key || typeof rawValue !== "string") {
-      throw new Error("command env must be an object with non-blank keys and string values");
-    }
-    entries.push([key, rawValue]);
-  }
-  return Object.fromEntries(entries);
-}
-
-function normalizeCommandArgv(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) {
-    return undefined;
-  }
-  if (value.some((entry) => typeof entry !== "string" || entry.length === 0)) {
-    return undefined;
-  }
-  return [...value];
-}
-
-function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
-  return (
-    "model" in payload ||
-    "fallbacks" in payload ||
-    "thinking" in payload ||
-    "timeoutSeconds" in payload ||
-    typeof payload.lightContext === "boolean" ||
-    typeof payload.allowUnsafeExternalContent === "boolean"
-  );
-}
 
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
@@ -184,169 +127,6 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.cwd;
   }
 
-  return next;
-}
-
-function coercePayload(payload: UnknownRecord) {
-  const next: UnknownRecord = { ...payload };
-  const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
-  if (kindRaw === "agentturn") {
-    next.kind = "agentTurn";
-  } else if (kindRaw === "systemevent") {
-    next.kind = "systemEvent";
-  } else if (kindRaw === "command") {
-    next.kind = "command";
-  } else if (kindRaw) {
-    next.kind = kindRaw;
-  }
-  if (typeof next.message === "string") {
-    const trimmed = normalizeOptionalString(next.message) ?? "";
-    if (trimmed) {
-      next.message = trimmed;
-    } else {
-      next.message = "";
-    }
-  }
-  if (typeof next.text === "string") {
-    const trimmed = normalizeOptionalString(next.text) ?? "";
-    if (trimmed) {
-      next.text = trimmed;
-    } else {
-      next.text = "";
-    }
-  }
-  if ("model" in next) {
-    if (next.model === null) {
-      next.model = null;
-    } else {
-      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-      if (model !== undefined) {
-        next.model = model;
-      } else {
-        delete next.model;
-      }
-    }
-  }
-  if ("thinking" in next) {
-    // Preserve an explicit null so patches can clear a stored thinking override,
-    // matching the model/fallbacks/toolsAllow clear paths.
-    if (next.thinking === null) {
-      next.thinking = null;
-    } else {
-      const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
-      if (thinking !== undefined) {
-        next.thinking = thinking;
-      } else {
-        delete next.thinking;
-      }
-    }
-  }
-  if ("timeoutSeconds" in next) {
-    const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
-    if (timeoutSeconds !== undefined) {
-      next.timeoutSeconds = timeoutSeconds;
-    } else {
-      delete next.timeoutSeconds;
-    }
-  }
-  if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
-    if (fallbacks !== undefined) {
-      next.fallbacks = fallbacks;
-    } else {
-      delete next.fallbacks;
-    }
-  }
-  if ("toolsAllow" in next) {
-    const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
-    if (toolsAllow !== undefined) {
-      next.toolsAllow = toolsAllow;
-    } else {
-      delete next.toolsAllow;
-    }
-  }
-  if ("argv" in next) {
-    const argv = normalizeCommandArgv(next.argv);
-    if (Array.isArray(argv) && argv.length > 0) {
-      next.argv = argv;
-    } else {
-      delete next.argv;
-    }
-  }
-  if ("cwd" in next) {
-    const cwd = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.cwd);
-    if (cwd !== undefined) {
-      next.cwd = cwd;
-    } else {
-      delete next.cwd;
-    }
-  }
-  if ("env" in next) {
-    next.env = normalizeCommandEnv(next.env);
-  }
-  if ("input" in next && typeof next.input !== "string") {
-    delete next.input;
-  }
-  if ("noOutputTimeoutSeconds" in next) {
-    const noOutputTimeoutSeconds = parseOptionalField(
-      TimeoutSecondsFieldSchema,
-      next.noOutputTimeoutSeconds,
-    );
-    if (noOutputTimeoutSeconds !== undefined) {
-      next.noOutputTimeoutSeconds = noOutputTimeoutSeconds;
-    } else {
-      delete next.noOutputTimeoutSeconds;
-    }
-  }
-  if ("outputMaxBytes" in next) {
-    const outputMaxBytes = parseOptionalField(TimeoutSecondsFieldSchema, next.outputMaxBytes);
-    if (outputMaxBytes !== undefined && outputMaxBytes > 0) {
-      next.outputMaxBytes = Math.floor(outputMaxBytes);
-    } else {
-      delete next.outputMaxBytes;
-    }
-  }
-  if (
-    "allowUnsafeExternalContent" in next &&
-    typeof next.allowUnsafeExternalContent !== "boolean"
-  ) {
-    delete next.allowUnsafeExternalContent;
-  }
-  if (!("kind" in next) && typeof next.text === "string" && hasAgentTurnOnlyPayloadHint(next)) {
-    next.kind = "agentTurn";
-    next.message = next.text;
-  }
-  if (next.kind === "systemEvent") {
-    delete next.message;
-    delete next.model;
-    delete next.fallbacks;
-    delete next.thinking;
-    delete next.timeoutSeconds;
-    delete next.lightContext;
-    delete next.allowUnsafeExternalContent;
-    delete next.argv;
-    delete next.cwd;
-    delete next.env;
-    delete next.input;
-    delete next.noOutputTimeoutSeconds;
-    delete next.outputMaxBytes;
-  } else if (next.kind === "agentTurn") {
-    delete next.text;
-    delete next.argv;
-    delete next.cwd;
-    delete next.env;
-    delete next.input;
-    delete next.noOutputTimeoutSeconds;
-    delete next.outputMaxBytes;
-  } else if (next.kind === "command") {
-    delete next.text;
-    delete next.message;
-    delete next.model;
-    delete next.fallbacks;
-    delete next.thinking;
-    delete next.lightContext;
-    delete next.allowUnsafeExternalContent;
-  }
   return next;
 }
 
@@ -618,7 +398,7 @@ export function normalizeCronJobInput(
   }
 
   if (isRecord(base.payload)) {
-    next.payload = coercePayload(base.payload);
+    next.payload = normalizeCronPayload(base.payload);
   }
 
   if ("trigger" in base) {
@@ -670,7 +450,7 @@ export function normalizeCronJobInput(
       // turns isolate by default to avoid unbounded token accumulation.
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
-      } else if (kind === "agentTurn" || kind === "command") {
+      } else if (kind === "agentTurn" || kind === "command" || kind === "script") {
         next.sessionTarget = "isolated";
       }
     }
@@ -720,19 +500,10 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Resolved "current" and custom session ids still use isolated-agent
-    // delivery semantics, so they get the same default announce behavior.
-    const isDetachedDeliveryJob =
-      sessionTarget === "isolated" ||
-      sessionTarget === "current" ||
-      sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
+    // Omitted output targets were canonicalized to "isolated" above. Resolved
+    // "current" and custom session ids share those announce semantics.
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
-    if (
-      !hasDelivery &&
-      isDetachedDeliveryJob &&
-      (payloadKind === "agentTurn" || payloadKind === "command")
-    ) {
+    if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };
     }
   }
@@ -761,4 +532,3 @@ export function normalizeCronJobPatch(
     ...options,
   }) as CronJobPatch | null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

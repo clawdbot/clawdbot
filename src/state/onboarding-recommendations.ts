@@ -6,9 +6,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -80,31 +81,36 @@ export function readOnboardingRecommendations(
   if (!existsSync(pathname)) {
     return null;
   }
-  const database = openOpenClawStateDatabase(options);
-  const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("onboarding_recommendations")
-      .select([
-        "inventory_hash",
-        "matches_json",
-        "offered_at_ms",
-        "accepted_at_ms",
-        "updated_at_ms",
-      ])
-      .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
-  );
-  if (!row) {
-    return null;
-  }
-  return {
-    inventoryHash: row.inventory_hash,
-    matches: OnboardingRecommendationMatchesSchema.parse(JSON.parse(row.matches_json)),
-    offeredAt: row.offered_at_ms,
-    acceptedAt: row.accepted_at_ms,
-    updatedAt: row.updated_at_ms,
-  };
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  return withOpenClawStateDatabaseReadOnly(({ db: database }) => {
+    if (!tableExists(database, "onboarding_recommendations")) {
+      return null;
+    }
+    const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database);
+    const row = executeSqliteQueryTakeFirstSync(
+      database,
+      db
+        .selectFrom("onboarding_recommendations")
+        .select([
+          "inventory_hash",
+          "matches_json",
+          "offered_at_ms",
+          "accepted_at_ms",
+          "updated_at_ms",
+        ])
+        .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      inventoryHash: row.inventory_hash,
+      matches: OnboardingRecommendationMatchesSchema.parse(JSON.parse(row.matches_json)),
+      offeredAt: row.offered_at_ms,
+      acceptedAt: row.accepted_at_ms,
+      updatedAt: row.updated_at_ms,
+    };
+  }, options);
 }
 
 export function writeOnboardingRecommendationsOffer(params: {

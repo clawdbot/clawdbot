@@ -40,6 +40,8 @@ type AgentsDeleteGatewayResult = {
   ok: true;
   agentId: string;
   removedBindings: number;
+  removed?: Array<{ path: string; method: "trash" | "missing" }>;
+  failed?: Array<{ path: string; reason: string }>;
 };
 
 async function maybeDeleteAgentThroughGateway(params: {
@@ -144,10 +146,17 @@ export async function agentsDeleteCommand(
         sessionsDir,
         removedBindings: gatewayResult.removedBindings,
         removedAllow: result.removedAllow,
+        removed: gatewayResult.removed,
+        failed: gatewayResult.failed,
         transport: "gateway",
       });
     } else {
       runtime.log(`Deleted agent: ${agentId}`);
+      for (const failure of gatewayResult.failed ?? []) {
+        runtime.error(
+          `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
+        );
+      }
     }
     return;
   }

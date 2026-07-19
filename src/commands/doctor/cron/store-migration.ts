@@ -657,7 +657,9 @@ export function normalizeStoredCronJobs(
       }
     } else {
       const inferredSessionTarget =
-        payloadKind === "agentTurn" || payloadKind === "command" ? "isolated" : "main";
+        payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"
+          ? "isolated"
+          : "main";
       if (raw.sessionTarget !== inferredSessionTarget) {
         raw.sessionTarget = inferredSessionTarget;
         mutated = true;
@@ -669,14 +671,18 @@ export function normalizeStoredCronJobs(
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
+      (sessionTarget === "" &&
+        (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"));
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,
       payload: payloadRecord,
     });
 
-    if (isIsolatedRunnablePayload && (payloadKind === "agentTurn" || payloadKind === "command")) {
+    if (
+      isIsolatedRunnablePayload &&
+      (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script")
+    ) {
       if (!hasDelivery && normalizedLegacy.delivery) {
         raw.delivery = normalizedLegacy.delivery;
         mutated = true;

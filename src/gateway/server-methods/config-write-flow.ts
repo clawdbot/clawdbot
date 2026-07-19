@@ -141,7 +141,8 @@ function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>)
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
 
@@ -150,7 +151,7 @@ function resolveConfigRestartRequirement(params: {
   nextConfig: OpenClawConfig;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  const plan = buildGatewayReloadPlan(params.changedPaths);
+  const plan = buildGatewayReloadPlan(params.changedPaths, { candidateConfig: params.nextConfig });
   if (isNoopConfigReloadPlan(plan)) {
     return { requiresRestart: false, scheduleDirectRestart: false };
   }

@@ -72,13 +72,13 @@ function reclaimFocus(tab: PluginsHubTab, element: Element | undefined) {
 /**
  * Every hub page marks its main content container with
  * id="plugins-hub-panel" so aria-controls stays valid on each route.
- * Styled through the settings design language's segmented control
- * (ui/src/styles/settings.css) while keeping tablist semantics.
+ * Styled as page-level navigation (.hub-tabs in ui/src/styles/plugins.css),
+ * deliberately distinct from segmented filter pills, keeping tablist semantics.
  */
 export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
   return html`
     <wa-tab-group
-      class="settings-segmented plugins-hub-tabs plugins-tabs"
+      class="hub-tabs plugins-hub-tabs plugins-tabs"
       aria-label=${t("pluginsPage.hubTablistLabel")}
       .active=${props.active}
       activation="manual"
@@ -94,7 +94,7 @@ export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
             id=${`plugins-tab-${tab}`}
             panel=${tab}
             aria-controls="plugins-hub-panel"
-            class="settings-segmented__btn ${selected ? "settings-segmented__btn--active" : ""}"
+            class="hub-tab"
             ?active=${selected}
             @click=${(event: MouseEvent) => {
               // Trusted pointer clicks carry a click count. Keyboard and AT

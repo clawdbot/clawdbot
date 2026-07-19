@@ -67,21 +67,14 @@ async function buildResetAllowedModelKeys(params: {
   defaultProvider: string;
   defaultModel?: string;
   fallbackModels: readonly string[];
+  agentId?: string;
 }): Promise<Set<string>> {
-  const rawAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {});
-  if (rawAllowlist.length > 0 || params.cfg.models?.providers) {
-    return buildAllowedModelSetWithFallbacks(params).allowedKeys;
-  }
-
-  const allowedKeys = new Set<string>();
-  for (const entry of params.catalog) {
-    allowedKeys.add(modelKey(entry.provider, entry.id));
-  }
+  const allowed = buildAllowedModelSetWithFallbacks(params);
   const defaultModel = params.defaultModel?.trim();
-  if (defaultModel) {
-    allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
+  if (allowed.allowAny && defaultModel) {
+    allowed.allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
   }
-  return allowedKeys;
+  return allowed.allowedKeys;
 }
 
 function buildSelectionFromExplicit(params: {
@@ -205,6 +198,7 @@ export async function applyResetModelOverride(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    agentId: params.agentId,
   });
   if (allowedModelKeys.size === 0) {
     return {};
@@ -226,6 +220,8 @@ export async function applyResetModelOverride(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
+      cfg: params.cfg,
+      agentId: params.agentId,
     });
 
   let selection: ModelDirectiveSelection | undefined;

@@ -1,5 +1,5 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
@@ -102,6 +103,7 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
 );
 
 const OPENAI_CODEX_PROVIDER = "openai";
+const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
@@ -117,13 +119,20 @@ type RunTuiOptions = TuiOptions & {
 };
 
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
-export function resolveCodexCliBin(): string | null {
+export async function resolveCodexCliBin(): Promise<string | null> {
+  const lookupCommand =
+    process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
   try {
-    const lookupCmd =
-      process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
-    // `where` on Windows can return multiple lines; take the first match.
-    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
-    return raw.split(/\r?\n/)[0] || null;
+    const result = await runCommandWithTimeout([lookupCommand, "codex"], {
+      killSignal: "SIGKILL",
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: CODEX_CLI_LOOKUP_TIMEOUT_MS,
+    });
+    if (result.code !== 0 || result.termination !== "exit") {
+      return null;
+    }
+    // `where` on Windows can return multiple matches; use PATH order.
+    return result.stdout.trim().split(/\r?\n/)[0]?.trim() || null;
   } catch {
     return null;
   }
@@ -408,6 +417,60 @@ type TuiProcessExitTimer = {
 };
 
 type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
+
+type TuiShutdownTask = () => void | Promise<void>;
+
+export function beginTuiShutdown(params: {
+  stopClient: TuiShutdownTask;
+  stopTui: TuiShutdownTask;
+  stopStatusTimeout: () => void;
+  requestFinish: () => void;
+  forceExit: () => void;
+  hardExitMs: number;
+  keepHardExitArmed?: boolean;
+  onError: (error: unknown) => void;
+  clearTimeoutFn?: (timer: TuiProcessExitTimer) => void;
+  setTimeoutFn?: TuiProcessExitTimeout;
+}): TuiProcessExitTimer {
+  const setTimeoutFn =
+    params.setTimeoutFn ??
+    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
+  const hardExitTimer = setTimeoutFn(params.forceExit, params.hardExitMs);
+  hardExitTimer.unref?.();
+  void Promise.resolve()
+    .then(params.stopClient)
+    .then(params.stopTui)
+    .finally(() => {
+      if (params.keepHardExitArmed !== true) {
+        const clearTimeoutFn =
+          params.clearTimeoutFn ??
+          ((timer) => clearTimeout(timer as unknown as ReturnType<typeof setTimeout>));
+        clearTimeoutFn(hardExitTimer);
+      }
+      params.stopStatusTimeout();
+    })
+    .catch(params.onError)
+    .finally(params.requestFinish);
+
+  // For the standalone command, settled teardown is not proof that runTui
+  // returned. Its unref keeps clean exits fast while preserving the deadline.
+  return hardExitTimer;
+}
+
+export function createTuiSignalHandlers(params: {
+  handleCtrlC: () => void;
+  requestExit: () => void;
+}): {
+  sigintHandler: () => void;
+  sigtermHandler: () => void;
+  sighupHandler: () => void;
+} {
+  return {
+    sigintHandler: params.handleCtrlC,
+    sigtermHandler: params.requestExit,
+    sighupHandler: params.requestExit,
+  };
+}
 
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
@@ -1183,45 +1246,44 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const runAuthFlow = isLocalMode
     ? async (params: { provider?: string }) =>
-        await withTuiSuspended(
-          async () =>
-            await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
-              (resolve, reject) => {
-                const provider = params.provider?.trim() || undefined;
+        await withTuiSuspended(async () => {
+          const provider = params.provider?.trim() || undefined;
 
-                // Codex owns its auth store; delegate when the CLI is available.
-                const codexBin =
-                  provider === OPENAI_CODEX_PROVIDER ||
-                  (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
-                    ? resolveCodexCliBin()
-                    : null;
+          // Codex owns its auth store; delegate when the CLI is available.
+          const codexBin =
+            provider === OPENAI_CODEX_PROVIDER ||
+            (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
+              ? await resolveCodexCliBin()
+              : null;
 
-                let command: string;
-                let args: string[];
-                if (codexBin) {
-                  command = codexBin;
-                  args = ["login"];
-                } else {
-                  ({ command, args } = resolveLocalAuthCliInvocation());
-                  if (provider) {
-                    args.push("--provider", provider);
-                  }
+          return await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
+            (resolve, reject) => {
+              let command: string;
+              let args: string[];
+              if (codexBin) {
+                command = codexBin;
+                args = ["login"];
+              } else {
+                ({ command, args } = resolveLocalAuthCliInvocation());
+                if (provider) {
+                  args.push("--provider", provider);
                 }
+              }
 
-                const invocation = resolveLocalAuthSpawnInvocation({ command, args });
-                const child = spawn(invocation.command, invocation.args, {
-                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
-                  env: process.env,
-                  stdio: "inherit",
-                  ...invocation.options,
-                });
-                child.once("error", reject);
-                child.once("exit", (exitCode, signal) => {
-                  resolve({ exitCode, signal });
-                });
-              },
-            ),
-        )
+              const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+              const child = spawn(invocation.command, invocation.args, {
+                cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
+                env: process.env,
+                stdio: "inherit",
+                ...invocation.options,
+              });
+              child.once("error", reject);
+              child.once("exit", (exitCode, signal) => {
+                resolve({ exitCode, signal });
+              });
+            },
+          );
+        })
     : undefined;
 
   const updateFooter = () => {
@@ -1367,19 +1429,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     };
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
-    const hardExitTimer = setTimeout(
+    beginTuiShutdown({
+      stopClient: () => client.stop(),
+      stopTui: () => drainAndStopTuiSafely(tui),
+      stopStatusTimeout,
+      requestFinish: deferredFinish.requestFinish,
       forceExit,
-      resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
-    );
-    hardExitTimer.unref?.();
-    void Promise.resolve()
-      .then(() => client.stop())
-      .then(() => drainAndStopTuiSafely(tui))
-      .finally(() => {
-        clearTimeout(hardExitTimer);
-        stopStatusTimeout();
-      })
-      .catch((err: unknown) => {
+      hardExitMs: resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
+      keepHardExitArmed: opts.forceProcessExitOnReturn === true,
+      onError: (err) => {
         if (!isTuiTerminalLossError(err)) {
           try {
             process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
@@ -1387,10 +1445,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
             // Best effort only; exit must still complete.
           }
         }
-      })
-      .finally(() => {
-        deferredFinish.requestFinish();
-      });
+      },
+    });
   };
   const exitAwareClient = client as TuiBackend & {
     setRequestExitHandler?: (handler: () => void) => void;
@@ -1682,15 +1738,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateHeader();
   setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
   updateFooter();
-  const sigintHandler = () => {
-    handleCtrlC();
-  };
-  const sigtermHandler = () => {
-    requestExit();
-  };
-  const sighupHandler = () => {
-    requestExit();
-  };
+  const { sigintHandler, sigtermHandler, sighupHandler } = createTuiSignalHandlers({
+    handleCtrlC,
+    requestExit,
+  });
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
   process.on("SIGHUP", sighupHandler);

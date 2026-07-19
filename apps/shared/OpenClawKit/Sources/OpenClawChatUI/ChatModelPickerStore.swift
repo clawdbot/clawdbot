@@ -53,7 +53,7 @@ public final class ChatModelPickerStore {
         self.defaults.set(self.recents, forKey: Self.recentsKey)
     }
 
-    static func sections(
+    public static func sections(
         choices: [OpenClawChatModelChoice],
         favorites: [String],
         recents: [String],

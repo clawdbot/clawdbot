@@ -412,7 +412,7 @@ describe("memory index", () => {
             extraPaths: params.extraPaths,
             multimodal: params.multimodal,
             sources: params.sources,
-            rememberAcrossConversations: params.rememberAcrossConversations,
+            rememberAcrossConversations: params.rememberAcrossConversations ?? false,
             experimental: { sessionMemory: params.sessionMemory ?? false },
           },
         },

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -153,10 +154,6 @@ function isSetupMigrationAttempt(value: unknown): value is SetupMigrationAttempt
   );
 }
 
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-}
-
 export function createSetupMigrationAttempt(
   params: SetupMigrationIdentity & {
     plan: MigrationPlan;
@@ -285,7 +282,7 @@ async function findLatestSetupMigrationAttempt(params: {
   try {
     entries = await fs.readdir(providerReportRoot, { withFileTypes: true });
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (isNotFoundPathError(error)) {
       return undefined;
     }
     throw error;

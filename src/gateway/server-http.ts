@@ -9,6 +9,8 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -93,6 +95,8 @@ type ResolvePluginNodeCapabilityRoute = (
 ) => PluginNodeCapabilitySurface | undefined;
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
+
+const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
 
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
 
@@ -562,9 +566,8 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedNodeCapability.rewrittenUrl;
       }
       const scopedRequestPath = scopedNodeCapability.pathname;
-      const pluginPathContext = handlePluginRequest
-        ? resolvePluginRoutePathContext(scopedRequestPath)
-        : null;
+      const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
+      const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
       const resolvedAuthValue = getResolvedAuth();
       const handleControlUiRequest = async () =>
         (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
@@ -735,14 +738,9 @@ export function createGatewayHttpServer(opts: {
           },
         });
       }
-      if (
-        handlePluginRequest &&
-        pluginPathContext &&
-        resolvePluginNodeCapabilityRoute?.(pluginPathContext)
-      ) {
-        const nodeCapability = resolvePluginNodeCapabilityRoute(pluginPathContext);
+      if (nodeCapability) {
         requestStages.push({
-          name: "plugin-node-capability-auth",
+          name: "node-capability-auth",
           run: async () => {
             if (!nodeCapability) {
               return false;
@@ -766,6 +764,17 @@ export function createGatewayHttpServer(opts: {
             }
             return false;
           },
+        });
+      }
+      if (
+        nodeCapability &&
+        isCoreCanvasHostEnabled(configSnapshot) &&
+        isCanvasDocumentHttpPath(scopedRequestPath)
+      ) {
+        requestStages.push({
+          name: "canvas-documents",
+          run: async () =>
+            await (await getCanvasServeModule()).handleCanvasDocumentHttpRequest(req, res),
         });
       }
       if (
@@ -798,11 +807,13 @@ export function createGatewayHttpServer(opts: {
       if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
         requestStages.push({
           name: "mcp-app-standalone",
-          run: async () =>
-            (await getMcpAppStandaloneModule()).handleMcpAppStandaloneHttpRequest(req, res, {
+          run: async () => {
+            const standalone = await getMcpAppStandaloneModule();
+            return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
               sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
               sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-            }),
+            });
+          },
         });
       }
       // Plugin routes run before the general Control UI SPA catch-all so

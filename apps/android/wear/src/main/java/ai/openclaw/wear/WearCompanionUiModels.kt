@@ -36,6 +36,12 @@ internal data class WearSessionSummary(
   val selected: Boolean,
 )
 
+internal data class WearModelSummary(
+  val ref: String,
+  val name: String,
+  val selected: Boolean,
+)
+
 internal data class WearConversationSnapshot(
   val gatewayState: WearGatewayState,
   val activeAgentId: String? = null,
@@ -44,6 +50,8 @@ internal data class WearConversationSnapshot(
   val gatewayControlsSupported: Boolean = false,
   val activeSessionId: String? = null,
   val sessions: List<WearSessionSummary> = emptyList(),
+  val models: List<WearModelSummary> = emptyList(),
+  val modelControlsSupported: Boolean = false,
   val messages: List<WearChatMessage> = emptyList(),
   val streamingAssistantText: String? = null,
   val pendingRunCount: Int = 0,
@@ -97,6 +105,15 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
           selected = session.key == selectedSession?.key,
         )
       },
+    models =
+      models.map { model ->
+        WearModelSummary(
+          ref = model.ref,
+          name = model.name,
+          selected = model.ref == selectedModelRef,
+        )
+      },
+    modelControlsSupported = WearProxyCapability.ModelControls in proxyCapabilities,
     messages = messages,
     streamingAssistantText = streamText,
     pendingRunCount = if (activeRunId != null) 1 else 0,

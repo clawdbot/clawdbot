@@ -53,6 +53,7 @@ type ChatDisplayProjectionResult = {
 type PendingMessageToolVisibleReply = {
   toolCallId?: string;
   text: string;
+  requiresSourceRouteConfirmation: boolean;
   anchor: Record<string, unknown>;
   completionAnchor?: Record<string, unknown>;
   deliveryMirrorAnchor?: Record<string, unknown>;
@@ -996,15 +997,17 @@ function extractMessageToolVisibleReplies(
     if (isDryRunMessageToolRecord(args)) {
       continue;
     }
-    if (hasExplicitMessageToolRoute(args)) {
-      continue;
-    }
+    const requiresSourceRouteConfirmation = hasExplicitMessageToolRoute(args);
     const text = readMessageToolVisibleText(args);
     if (!text?.trim()) {
       continue;
     }
     const toolCallId = readToolBlockCallId(record);
-    replies.push({ ...(toolCallId ? { toolCallId } : {}), text });
+    replies.push({
+      ...(toolCallId ? { toolCallId } : {}),
+      text,
+      requiresSourceRouteConfirmation,
+    });
   }
   return replies;
 }
@@ -1099,6 +1102,40 @@ function hasDryRunToolResultValue(value: unknown): boolean {
   });
 }
 
+function hasSuppressedToolResultValue(value: unknown): boolean {
+  const record = readMaybeJsonRecord(value);
+  if (record) {
+    const messageId = normalizeOptionalString(record.messageId)?.toLowerCase();
+    const status = (
+      normalizeOptionalString(record.deliveryStatus) ??
+      normalizeOptionalString(record.delivery_status) ??
+      normalizeOptionalString(record.status)
+    )?.toLowerCase();
+    if (
+      record.delivered === false ||
+      messageId === "skipped" ||
+      messageId === "suppressed" ||
+      status === "skipped" ||
+      status === "suppressed"
+    ) {
+      return true;
+    }
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((block) => {
+    if (hasSuppressedToolResultValue(block)) {
+      return true;
+    }
+    const blockRecord = readRecord(block);
+    return (
+      hasSuppressedToolResultValue(blockRecord?.text) ||
+      hasSuppressedToolResultValue(blockRecord?.content)
+    );
+  });
+}
+
 function isSuccessfulMessageToolResult(
   message: Record<string, unknown>,
   pending: PendingMessageToolVisibleReply,
@@ -1112,10 +1149,17 @@ function isSuccessfulMessageToolResult(
     return false;
   }
   const resultCallId = readMessageToolResultCallId(message);
+  const hasConfirmedSourceRoute =
+    !pending.requiresSourceRouteConfirmation ||
+    readRecord(message.details)?.sourceReplyRoute === "current-source";
   if (pending.toolCallId) {
-    return resultCallId === pending.toolCallId && isSuccessfulMessageToolResultPayload(message);
+    return (
+      resultCallId === pending.toolCallId &&
+      isSuccessfulMessageToolResultPayload(message) &&
+      hasConfirmedSourceRoute
+    );
   }
-  return isSuccessfulMessageToolResultPayload(message);
+  return isSuccessfulMessageToolResultPayload(message) && hasConfirmedSourceRoute;
 }
 
 function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>): boolean {
@@ -1127,6 +1171,15 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
     hasDryRunToolResultValue(message.output) ||
     hasDryRunToolResultValue(message.content) ||
     hasDryRunToolResultValue(message.text)
+  ) {
+    return false;
+  }
+  if (
+    hasSuppressedToolResultValue(message.details) ||
+    hasSuppressedToolResultValue(message.result) ||
+    hasSuppressedToolResultValue(message.output) ||
+    hasSuppressedToolResultValue(message.content) ||
+    hasSuppressedToolResultValue(message.text)
   ) {
     return false;
   }

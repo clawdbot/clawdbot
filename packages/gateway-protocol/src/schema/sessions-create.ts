@@ -16,6 +16,12 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
+  succeedsParent: Type.Optional(
+    Type.Boolean({
+      description:
+        "When sessions.create creates a distinct child, whether that child succeeds its parent and emits the parent's terminal session_end. Requires parentSessionKey and emitCommandHooks. False keeps the parent active; omission preserves legacy behavior.",
+    }),
+  ),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),

@@ -16,6 +16,7 @@ vi.mock("node:fs", async (importOriginal) => {
 import { listOpenFileDescriptorsForPath } from "../../src/infra/open-file-descriptors.test-support.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { TranscriptsStore } from "./store.js";
+import { summarizeTranscripts } from "./summary.js";
 
 const tempRoots: string[] = [];
 
@@ -136,5 +137,36 @@ describe("TranscriptsStore.readUtterancesFromSessionDir", () => {
     await expect(
       store.readUtterancesFromSessionDir(sessionDir, { maxUtterances: 10 }),
     ).rejects.toThrow("read failed");
+  });
+});
+
+describe("TranscriptsStore.writeSummary", () => {
+  afterEach(() => {
+    cleanupTempDirs(tempRoots);
+  });
+
+  it("stores the summary in the existing session directory without a session descriptor", async () => {
+    const tmpDir = makeTempDir(tempRoots, "openclaw-transcript-test-");
+    const store = new TranscriptsStore(tmpDir);
+    const session = {
+      sessionId: "ansi-\u001b[31mprovider\u001b[0m",
+      title: "ANSI import",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-05-22T10:00:00.000Z",
+    };
+    await store.writeSession(session);
+    const summary = summarizeTranscripts({
+      session,
+      utterances: [{ text: "We decided to ship the CLI.", speaker: { label: "Sam" } }],
+    });
+
+    const markdownPath = await store.writeSummary(summary);
+
+    const sessionDir = store.sessionDir(session);
+    expect(markdownPath).toBe(path.join(sessionDir, "summary.md"));
+    const stored = JSON.parse(fs.readFileSync(path.join(sessionDir, "summary.json"), "utf8")) as {
+      sessionId: string;
+    };
+    expect(stored.sessionId).toBe(session.sessionId);
   });
 });

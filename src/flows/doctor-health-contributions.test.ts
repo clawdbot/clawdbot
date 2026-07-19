@@ -576,8 +576,10 @@ describe("doctor health contributions", () => {
       ready: true,
       skipped: false,
     });
-    mocks.runDoctorHealthRepairs.mockResolvedValue({
-      config: {},
+    // Real repairs echo the input config unless they change it; mirror that so
+    // config-identity assertions downstream of a repair stay realistic.
+    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
+      config: input.cfg ?? {},
       findings: [],
       remainingFindings: [],
       changes: [],
@@ -587,7 +589,7 @@ describe("doctor health contributions", () => {
       checksRun: 0,
       checksRepaired: 0,
       checksValidated: 0,
-    });
+    }));
     mocks.listHealthChecks.mockReset();
     mocks.listHealthChecks.mockReturnValue([
       { id: "core/example/internal", kind: "core" },
@@ -1471,6 +1473,107 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({ cfg });
+    expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
+      detected,
+      config: cfg,
+      recoverCorruptTargetStore: false,
+    });
+  });
+
+  it("reports removed Workspaces state during non-fix doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
+      config: input.cfg ?? {},
+      findings: [
+        {
+          checkId: "core/doctor/removed-workspaces-state",
+          severity: "warning",
+          message: "Retired Workspaces plugin state remains at /tmp/workspaces.",
+          path: "/tmp/workspaces",
+          fixHint: "Run openclaw doctor --fix.",
+        },
+      ],
+      remainingFindings: [],
+      changes: [],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 0,
+      checksValidated: 1,
+    }));
+    const ctx = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "fix", dryRun: true }),
+      expect.objectContaining({ dryRun: true }),
+    );
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("core/doctor/removed-workspaces-state"),
+    );
+  });
+
+  it("does not report a removed Workspaces finding after a successful fix", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
+      config: input.cfg ?? {},
+      findings: [
+        {
+          checkId: "core/doctor/removed-workspaces-state",
+          severity: "warning",
+          message: "Retired Workspaces plugin state remains at /tmp/workspaces.",
+        },
+      ],
+      remainingFindings: [],
+      changes: ["Removed retired Workspaces plugin state at /tmp/workspaces."],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 1,
+      checksValidated: 1,
+    }));
+    const ctx = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("core/doctor/removed-workspaces-state"),
+    );
+  });
+
+  it("grants Doctor-only state migration authority only in repair mode", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    const cfg = { session: { store: "/tmp/shared-sessions.json" } };
+    const detected = { preview: ["legacy sessions"], warnings: [], notices: [] };
+    mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
+    const ctx = {
+      cfg,
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true, repair: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
       doctorOnlyStateMigrations: true,
@@ -1478,7 +1581,8 @@ describe("doctor health contributions", () => {
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
-      recoverCorruptTargetStore: false,
+      doctorOnlyStateMigrations: true,
+      recoverCorruptTargetStore: true,
     });
   });
 

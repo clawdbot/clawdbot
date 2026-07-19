@@ -466,7 +466,7 @@
 .usage-pin-btn.active,
 .chart-toggle .toggle-btn.active {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   font-weight: 600;
   box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 20%, transparent);
@@ -888,17 +888,53 @@ details.usage-filter-select summary::-webkit-details-marker,
   width: 16px;
   height: 16px;
   margin-left: 4px;
+  padding: 0;
   border-radius: var(--radius-full);
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: transparent;
   color: var(--muted);
+  font-family: inherit;
   font-size: 12px; /* was 9px */
-  cursor: help;
+  line-height: 1;
+  cursor: pointer;
   opacity: 0.7;
-  transition: opacity 0.15s var(--ease-out);
+  transition:
+    border-color 0.15s var(--ease-out),
+    color 0.15s var(--ease-out),
+    opacity 0.15s var(--ease-out);
 }
 
-.usage-summary-hint:hover {
+.usage-summary-hint:hover,
+.usage-summary-hint:focus-visible {
+  border-color: var(--border-strong);
+  color: var(--text);
   opacity: 1;
+}
+
+.usage-summary-hint:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+wa-tooltip.usage-summary-tooltip {
+  --max-width: min(280px, calc(100vw - 16px));
+  font-family: var(--font-body);
+  letter-spacing: normal;
+  text-align: center;
+  text-transform: none;
+}
+
+wa-tooltip.usage-summary-tooltip::part(body) {
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 94%, black 6%);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .usage-insights-grid {

@@ -1,6 +1,7 @@
 // Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
 // and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import "../../styles/channels.css";
 import type {
   ChannelAccountSnapshot,
@@ -16,6 +17,7 @@ import type {
   WhatsAppStatus,
 } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import { highlightJsonHtml } from "../../components/markdown.ts";
 import "../../components/openclaw-mascot.ts";
 import {
   renderSettingsEmpty,
@@ -108,8 +110,9 @@ export function renderChannels(props: ChannelsProps) {
         html`
           <div class="settings-row settings-row--stacked">
             <pre class="code-block">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
-            </pre>
+${props.snapshot
+                ? unsafeHTML(highlightJsonHtml(JSON.stringify(props.snapshot, null, 2)))
+                : t("channels.health.noSnapshotYet")}</pre>
           </div>
         `,
       )}

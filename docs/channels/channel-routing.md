@@ -9,7 +9,8 @@ title: "Channel routing"
 
 OpenClaw routes replies **back to the channel where a message came from**. The
 model does not choose a channel; routing is deterministic and controlled by the
-host configuration.
+host configuration. Under the default DM scope, direct messages from every
+channel converge on the agent's [main session](/concepts/main-session).
 
 ## Key terms
 

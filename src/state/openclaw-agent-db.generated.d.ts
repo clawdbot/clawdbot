@@ -10,6 +10,14 @@ export type Generated<T> =
     ? ColumnType<S, I | undefined, U>
     : ColumnType<T, T | undefined, T>;
 
+export interface AcpParentStreamEvents {
+  created_at: number;
+  event_json: string;
+  run_id: string;
+  seq: number;
+  session_id: string;
+}
+
 export interface AuthProfileState {
   state_json: string;
   state_key: string;
@@ -204,6 +212,12 @@ export interface SessionTranscriptFtsIdx {
   term: string;
 }
 
+export interface SessionTranscriptGenerations {
+  generation: string;
+  session_id: string;
+  updated_at: number;
+}
+
 export interface SessionTranscriptIndexState {
   active_event_count: Generated<number>;
   active_message_count: Generated<number>;
@@ -278,6 +292,7 @@ export interface TranscriptEvents {
 }
 
 export interface DB {
+  acp_parent_stream_events: AcpParentStreamEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
   cache_entries: CacheEntries;
@@ -300,6 +315,7 @@ export interface DB {
   session_transcript_fts_data: SessionTranscriptFtsData;
   session_transcript_fts_docsize: SessionTranscriptFtsDocsize;
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
+  session_transcript_generations: SessionTranscriptGenerations;
   session_transcript_index_state: SessionTranscriptIndexState;
   sessions: Sessions;
   state_leases: StateLeases;

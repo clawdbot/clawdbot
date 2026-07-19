@@ -2,9 +2,9 @@ package ai.openclaw.app.voice
 
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -1043,7 +1043,7 @@ class TalkModeManagerTest {
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
-        identityStore = DeviceIdentityStore(app),
+        identityStore = testDeviceIdentityStore(app),
         deviceAuthStore = InMemoryDeviceAuthStore(),
         onConnected = {},
         onDisconnected = {},

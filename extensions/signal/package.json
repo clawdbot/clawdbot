@@ -16,6 +16,7 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "signal",
+      "approvalFlags": ["native"],
       "label": "Signal",
       "selectionLabel": "Signal (signal-cli)",
       "detailLabel": "Signal REST",

@@ -237,7 +237,7 @@ export async function detectInferenceBackends(
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];
-  if (claudeProbe.found) {
+  if (claudeProbe.found && !claudeProbe.timedOut) {
     const credentials = detectCliCredentialState({
       probe: claudeProbe,
       hasStoredCredentials: readClaude() !== null,
@@ -251,7 +251,7 @@ export async function detectInferenceBackends(
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  if (codexProbe.found) {
+  if (codexProbe.found && !codexProbe.timedOut) {
     const credentials = options.deps?.readCodexCliCredentials
       ? detectCliCredentialState({
           probe: codexProbe,
@@ -267,7 +267,7 @@ export async function detectInferenceBackends(
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  if (geminiProbe.found) {
+  if (geminiProbe.found && !geminiProbe.timedOut) {
     // Gemini CLI stores its OAuth login in a plain file on every platform (no
     // keychain), so a missing credential file is a definitive logout signal.
     const credentials = readGemini() !== null;

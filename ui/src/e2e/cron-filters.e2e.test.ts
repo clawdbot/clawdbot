@@ -293,6 +293,61 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("defaults recurring jobs converted to one-time cleanup", async () => {
+    const existingJob = {
+      ...cronJob("recurring-to-once", "Recurring retention", { kind: "every", everyMs: 60_000 }),
+      deleteAfterRun: false,
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([existingJob]),
+        "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+        "cron.update": { id: existingJob.id },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await jobTitle(page, existingJob.name).click();
+      await page.locator("details.cron-advanced > summary").click();
+      expect(
+        await page
+          .locator("wa-switch.settings-toggle")
+          .filter({ hasText: "Delete after run" })
+          .count(),
+      ).toBe(0);
+
+      await page.locator('[data-test-id="cron-schedule-kind-at"]').click();
+      await page.locator("#cron-schedule-at").fill("2026-07-19T09:00");
+      const expectedAt = await page.evaluate(() => new Date("2026-07-19T09:00").toISOString());
+      const deleteToggle = page.locator("wa-switch.settings-toggle").filter({
+        hasText: "Delete after run",
+      });
+      await expect
+        .poll(() => deleteToggle.evaluate((element) => Reflect.get(element, "checked")))
+        .toBe(true);
+
+      await page.locator('[data-test-id="cron-submit"]').click();
+      const request = await gateway.waitForRequest("cron.update");
+      const params = requestParams(request);
+      expect(params.id).toBe(existingJob.id);
+      expect(requireRecord(params.patch)).toMatchObject({
+        deleteAfterRun: true,
+        schedule: { kind: "at", at: expectedAt },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows why a requested run was not started", async () => {
     const existingJob = cronJob(
       "already-running-job",

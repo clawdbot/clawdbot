@@ -378,6 +378,9 @@ describe("enforceSessionDiskBudget", () => {
           highWaterBytes: 1,
         },
         warnOnly: false,
+        commitEvictedIndex: async () => {
+          await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+        },
       });
 
       expectBudgetResult(result);
@@ -639,6 +642,117 @@ describe("enforceSessionDiskBudget", () => {
       expect(store).toHaveProperty(activeKey);
       expectBudgetResult(result);
       expect(result.removedEntries).toBe(1);
+    });
+  });
+
+  it("commits the reduced session index before deleting an evicted transcript", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-commit-order-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const oldTranscript = path.join(dir, "old.jsonl");
+      const activeTranscript = path.join(dir, "active.jsonl");
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [activeKey]: { sessionId: "active", updatedAt: 2 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(oldTranscript, "t".repeat(10 * 1024), "utf-8");
+      await fs.writeFile(activeTranscript, "a".repeat(64), "utf-8");
+
+      let commitCalls = 0;
+      let transcriptPresentAtCommit: boolean | null = null;
+      let indexPresentActiveOnlyAtCommit: boolean | null = null;
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
+        warnOnly: false,
+        commitEvictedIndex: async () => {
+          commitCalls += 1;
+          transcriptPresentAtCommit = nodeFs.existsSync(oldTranscript);
+          await fs.writeFile(storePath, JSON.stringify({ [activeKey]: store[activeKey] }, null, 2));
+          const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+            string,
+            SessionEntry
+          >;
+          indexPresentActiveOnlyAtCommit =
+            persisted[activeKey] !== undefined && persisted[oldKey] === undefined;
+        },
+      });
+
+      expectBudgetResult(result);
+      expect(commitCalls).toBe(1);
+      expect(transcriptPresentAtCommit).toBe(true);
+      expect(indexPresentActiveOnlyAtCommit).toBe(true);
+      expect(result.removedEntries).toBe(1);
+      expect(result.removedFiles).toBeGreaterThanOrEqual(1);
+      expect(store[oldKey]).toBeUndefined();
+      expect(store).toHaveProperty(activeKey);
+      await expectPathMissing(oldTranscript);
+      await expectPathExists(activeTranscript);
+    });
+  });
+
+  it("retains the evicted transcript when the index commit fails", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-commit-fail-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const oldTranscript = path.join(dir, "old.jsonl");
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [activeKey]: { sessionId: "active", updatedAt: 2 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(oldTranscript, "t".repeat(10 * 1024), "utf-8");
+
+      const commitFailure = new Error("simulated store-write failure");
+      await expect(
+        enforceSessionDiskBudget({
+          store,
+          storePath,
+          activeSessionKey: activeKey,
+          maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
+          warnOnly: false,
+          commitEvictedIndex: async () => {
+            throw commitFailure;
+          },
+        }),
+      ).rejects.toBe(commitFailure);
+
+      await expectPathExists(oldTranscript);
+    });
+  });
+
+  it("retains evicted artifacts when no durable index commit is available", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-missing-commit-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const oldTranscript = path.join(dir, "old.jsonl");
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [activeKey]: { sessionId: "active", updatedAt: 2 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(oldTranscript, "t".repeat(10 * 1024), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(result.removedFiles).toBe(0);
+      expect(result.totalBytesAfter).toBeGreaterThan(result.highWaterBytes);
+      expect(store[oldKey]).toBeUndefined();
+      await expectPathExists(oldTranscript);
     });
   });
 });

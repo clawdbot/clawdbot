@@ -118,6 +118,25 @@ describe("route preload gateway provenance", () => {
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
   });
 
+  it("preloads a bounded session roster without an implicit recency filter", async () => {
+    const list = vi.fn(async (_options: unknown) => null);
+    await loadRoute<SessionsRouteData>(sessionsPage, {
+      gateway: mutableGateway(snapshot(null, false)).gateway,
+      sessions: { list },
+      runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
+    } as unknown as ApplicationContext);
+
+    expect(list).toHaveBeenCalledWith({
+      limit: 50,
+      search: undefined,
+      includeGlobal: true,
+      includeUnknown: false,
+      showArchived: false,
+    });
+    expect(list.mock.calls[0]?.[0]).not.toHaveProperty("activeMinutes");
+  });
+
   it("keeps usage provenance from before its async preload", async () => {
     const client = {
       request: vi.fn(async () => ({})),

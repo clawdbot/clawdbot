@@ -24,6 +24,7 @@ import {
   resolveTelegramQaSenderId,
 } from "./crabline-provider-targets.js";
 import { QaSuiteInfraError } from "./errors.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -209,6 +210,7 @@ async function postCrablineInbound(params: {
   });
   try {
     if (!response.ok) {
+      await discardIgnoredResponseBody(response);
       throw new Error(
         `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
       );

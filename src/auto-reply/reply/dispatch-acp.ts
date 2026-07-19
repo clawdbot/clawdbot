@@ -548,6 +548,7 @@ export async function tryDispatchAcpReply(params: {
   let auditTerminalOutcome: "blocked" | undefined;
   let auditStopReason: string | undefined;
   let auditResultStatus: "completed" | "cancelled" | undefined;
+  let runtimeTurnWasCancelled = false;
   const emitAuditStart = () => {
     if (auditStarted) {
       return;
@@ -771,13 +772,18 @@ export async function tryDispatchAcpReply(params: {
         if (event.type === "done") {
           auditStopReason = event.stopReason;
           auditResultStatus = event.status;
+          runtimeTurnWasCancelled = event.status === "cancelled";
         }
         await projector.onEvent(event);
       },
     });
 
     await projector.flush(true);
-    if (params.abortSignal?.aborted) {
+    if (runtimeTurnWasCancelled || params.abortSignal?.aborted) {
+      // A cancelled runtime can return normally after the projector has already
+      // delivered partial output. Keep the bound transcript aligned with it.
+      await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
+      queuedFinal = delivery.hasDeliveredFinalReply() || queuedFinal;
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_aborted" });
@@ -800,9 +806,7 @@ export async function tryDispatchAcpReply(params: {
 
     // Persist once the turn's outcome is settled. Writing before finalization
     // would leave a finalizer failure recorded as a clean success.
-    await persistTranscript(
-      delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
-    );
+    await persistTranscript(delivery.getAccumulatedTranscriptText());
 
     const result = finishAttempt({
       queuedFinal,
@@ -825,7 +829,7 @@ export async function tryDispatchAcpReply(params: {
     const errorText = formatAcpRuntimeErrorText(acpError);
     // Snapshot streamed output before delivering the error: delivery accumulates
     // what it sends, so reading after would fold the error text in twice.
-    const partialText = delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText();
+    const partialText = delivery.getAccumulatedTranscriptText();
     const delivered = await delivery.deliver("final", {
       text: errorText,
       isError: true,

@@ -38,6 +38,7 @@ enum class WearProxyCapability(
 ) {
   AgentControls(wireValue = "agent-controls"),
   GatewayControls(wireValue = "gateway-controls"),
+  ModelControls(wireValue = "model-controls"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
   ;
 
@@ -59,6 +60,12 @@ enum class WearRpcMethod {
 
   @SerialName("agents.select")
   AgentsSelect,
+
+  @SerialName("models.list")
+  ModelsList,
+
+  @SerialName("models.select")
+  ModelsSelect,
 
   @SerialName("gateway.connect")
   GatewayConnect,

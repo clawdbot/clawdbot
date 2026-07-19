@@ -3,8 +3,6 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.gateway.QuestionRecord
 
-internal const val QUESTION_TERMINAL_RETENTION_MS = 15_000L
-
 enum class ChatQuestionStatus {
   Pending,
   Submitting,
@@ -12,29 +10,34 @@ enum class ChatQuestionStatus {
   AnsweredElsewhere,
   Expired,
   Cancelled,
+  Unavailable,
 }
 
 data class ChatQuestionPrompt(
   val record: QuestionRecord,
   val submitting: Boolean = false,
+  val skipping: Boolean = false,
   val answeredLocally: Boolean = false,
   val errorText: String? = null,
   val terminalObservedAtMs: Long? = null,
+  val recoveryUnavailable: Boolean = false,
 ) {
   fun status(nowMs: Long = System.currentTimeMillis()): ChatQuestionStatus =
-    when (record.status) {
-      "answered" -> if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
-      "cancelled" -> ChatQuestionStatus.Cancelled
-      "expired" -> ChatQuestionStatus.Expired
-      else ->
-        when {
-          nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
-          submitting -> ChatQuestionStatus.Submitting
-          else -> ChatQuestionStatus.Pending
-        }
+    if (recoveryUnavailable) {
+      ChatQuestionStatus.Unavailable
+    } else {
+      when (record.status) {
+        "answered" -> if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
+        "cancelled" -> ChatQuestionStatus.Cancelled
+        "expired" -> ChatQuestionStatus.Expired
+        else ->
+          when {
+            nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
+            submitting -> ChatQuestionStatus.Submitting
+            else -> ChatQuestionStatus.Pending
+          }
+      }
     }
-
-  fun shouldRetainAfterList(nowMs: Long): Boolean = terminalObservedAtMs?.let { nowMs - it < QUESTION_TERMINAL_RETENTION_MS } == true
 }
 
 data class ChatQuestionDraft(

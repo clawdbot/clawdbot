@@ -72,13 +72,6 @@ const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "workspaces/workspaces": async () => {
-    const [{ renderWorkspace }, { stopWorkspace }] = await Promise.all([
-      import("./workspace-view.ts"),
-      import("./workspace-controller.ts"),
-    ]);
-    return { render: renderWorkspace, stop: stopWorkspace };
-  },
   "logbook/logbook": async () => {
     const [{ renderLogbook }, { stopLogbookPolling }] = await Promise.all([
       import("./logbook-view.ts"),
@@ -552,8 +545,6 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
-      // Config may be absent in unit harnesses; the Workspaces view defaults the
-      // embed policy to strict when `embed` is omitted.
       const config = context.config?.current;
       return this.bundledView.render({
         host: this.bundledViewHost,

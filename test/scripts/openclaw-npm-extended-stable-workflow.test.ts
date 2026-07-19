@@ -40,6 +40,15 @@ function step(job: Job | undefined, name: string): Step {
 }
 
 describe("minimal npm extended-stable workflow", () => {
+  it("bounds every git fetch operation", () => {
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+    expect(gitFetchLines).toHaveLength(6);
+    expect(
+      gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
+    ).toBe(true);
+  });
+
   it("adds extended-stable without adding policy or verifier contracts", () => {
     const raw = readFileSync(workflowPath, "utf8");
     const parsed = workflow();

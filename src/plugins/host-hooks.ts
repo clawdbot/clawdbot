@@ -222,6 +222,12 @@ type PluginSessionAttachmentFile = {
 };
 
 export type PluginAttachmentChannelHints = {
+  parseMode?: "HTML";
+  silent?: boolean;
+  /** Require host detection to match this MIME before forcing document delivery. */
+  forceDocumentMime?: string;
+  threadId?: string | number;
+  /** @deprecated Put portable attachment hints directly on `channelHints`. */
   telegram?: {
     parseMode?: "HTML";
     disableNotification?: boolean;
@@ -231,6 +237,7 @@ export type PluginAttachmentChannelHints = {
      */
     forceDocumentMime?: string;
   };
+  /** @deprecated Use `channelHints.threadId`. */
   slack?: {
     threadTs?: string;
   };

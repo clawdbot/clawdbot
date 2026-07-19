@@ -109,7 +109,7 @@ export async function exerciseManagedGatewayLifecycle(
   logLanePhase(params.lane, "gateway-stop");
   await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["gateway", "stop"],
+    args: ["gateway", "stop", "--force"],
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-stop.log`,

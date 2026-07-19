@@ -377,13 +377,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       // Keyboard focus on a header action marks the pane active.
       await headers.first().getByRole("button", { name: "Split down" }).focus();
-      await expect.poll(() => headers.first().getAttribute("class")).toContain("--active");
-
       const cells = page.locator(".chat-split-view__cell");
+      await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
+
       const lastPane = page.locator(".chat-split-view__pane").last();
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
-      await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
       const targetHeader = headers.first();
       await expect
         .poll(() =>
@@ -722,6 +721,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const sessionKey = "main";
     const gateway = await installMockGateway(page, {
       historyMessages: [
         {
@@ -734,28 +734,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         "sessions.list": chatSessionListResponse([
           {
             hasActiveRun: true,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             label: "Main",
             updatedAt: Date.now(),
           },
         ]),
       },
+      sessionKey,
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Active run is waiting for steering.").waitFor({ timeout: 10_000 });
       await gateway.waitForRequest("sessions.list");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       await page
         .locator(".agent-chat__composer-combobox textarea")
         .fill("/steer use the smaller fix");
-      await page.getByRole("button", { name: "Steer into the active run" }).click();
+      await page.getByRole("button", { name: "Send message" }).click();
 
       const steerRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(steerRequest.params);
-      expect(params.sessionKey).toBe("main");
+      expect(params.sessionKey).toBe(sessionKey);
       expect(params.message).toBe("use the smaller fix");
       expect(params.deliver).toBe(false);
 
@@ -1307,7 +1309,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await trigger.waitFor({ timeout: 10_000 });
       expect((await trigger.textContent())?.trim()).toBe("~95%");
       expect(await trigger.getAttribute("aria-label")).toBe(
-        "Session context usage: ~190k of 200k (~95%)",
+        "Thread context usage: ~190k of 200k (~95%)",
       );
       expect(
         await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
@@ -1864,16 +1866,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await composer.fill("");
 
       // The background hydrate must not take the shared sessions loading
-      // flag, which would disable New Session for the whole request.
-      expect(await page.getByRole("button", { name: "New session" }).first().isEnabled()).toBe(
-        true,
-      );
+      // flag, which would disable New thread for the whole request.
+      const newThread = page.getByRole("button", { name: "New thread" }).first();
+      expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
-      await page
-        .locator(".sidebar-recent-session", { hasText: "Main" })
-        .first()
-        .waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => newThread.isEnabled()).toBe(true);
     } finally {
       await closeBrowserContext(context);
     }
@@ -1890,7 +1888,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-new-session");
+      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
 
@@ -2386,6 +2384,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const sessionKey = "main";
     const runtimeConfig = {
       messages: { queue: { byChannel: { webchat: "steer" }, mode: "steer" } },
     };
@@ -2402,7 +2401,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         "sessions.list": chatSessionListResponse([
           {
             effectiveQueueMode: "interrupt",
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             label: "Main",
             queueMode: "interrupt",
@@ -2410,6 +2409,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           },
         ]),
       },
+      sessionInfo: {
+        effectiveQueueMode: "interrupt",
+        hasActiveRun: false,
+        key: "agent:main:main",
+        queueMode: "interrupt",
+        status: "done",
+      },
+      sessionKey,
     });
 
     try {
@@ -2428,7 +2435,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(requireRecord(sends[1]?.params)).toMatchObject({
         message: followUp,
         queueMode: "interrupt",
-        sessionKey: "main",
+        sessionKey,
       });
     } finally {
       await closeBrowserContext(context);
@@ -3452,7 +3459,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .waitFor({
           timeout: 10_000,
         });
-      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
       await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
@@ -3476,15 +3483,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      const sortThreads = page.getByRole("button", { name: "Sort threads" });
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {
@@ -3566,15 +3577,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await row.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-current")).toBe("page");
-      const descriptionId = await link.getAttribute("aria-describedby");
-      expect(descriptionId).toBeTruthy();
-      expect(await page.locator(`[id="${descriptionId}"]`).textContent()).toBeTruthy();
+      expect(await link.getAttribute("aria-describedby")).toBeNull();
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
       await captureSessionAccessibilityProof(page, "after-derived-title");
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
       await row.hover();
-      await row.getByRole("button", { name: "Pin session" }).click();
+      await row.getByRole("button", { name: "Pin thread" }).click();
 
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({

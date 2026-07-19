@@ -305,6 +305,8 @@ import type { ElevatedLevel } from "../thinking.js";
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
 let cliBackendsTesting: typeof import("../../agents/cli-backends.test-support.js").testing;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
+let createModelVisibilityPolicy: typeof import("../../agents/model-visibility-policy.js").createModelVisibilityPolicy;
+let buildModelAliasIndex: typeof import("../../agents/model-selection.js").buildModelAliasIndex;
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
 let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
 let persistInlineDirectives: typeof import("./directive-handling.persist.js").persistInlineDirectives;
@@ -313,6 +315,8 @@ beforeAll(async () => {
   ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
   ({ maybeHandleModelDirectiveInfo } = await import("./directive-handling.model.js"));
+  ({ createModelVisibilityPolicy } = await import("../../agents/model-visibility-policy.js"));
+  ({ buildModelAliasIndex } = await import("../../agents/model-selection.js"));
   ({ resolveModelSelectionFromDirective } =
     await import("./directive-handling.model-selection.js"));
   ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
@@ -523,10 +527,13 @@ function resolveModelSelectionForCommand(params: {
   command: string;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Array<{ provider: string; id: string }>;
+  cfg?: OpenClawConfig;
+  agentId?: string;
 }) {
   return resolveModelSelectionFromDirective({
     directives: parseInlineDirectives(params.command),
-    cfg: { commands: { text: true } } as unknown as OpenClawConfig,
+    cfg: params.cfg ?? ({ commands: { text: true } } as unknown as OpenClawConfig),
+    agentId: params.agentId,
     agentDir: TEST_AGENT_DIR,
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
@@ -628,6 +635,7 @@ async function resolveModelInfoReply(
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
+    allowedModelKeys: new Set(),
     allowedModelCatalog: [],
     resetModelOverride: false,
     ...overrides,
@@ -767,6 +775,126 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("claude-sonnet-4-1");
     expect(reply?.text).toContain("auth:");
     expect(reply?.text).not.toContain("missing (missing)");
+  });
+
+  it("expands provider wildcard models without retaining a rejected default", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            modelPolicy: { allow: ["anthropic/*"] },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      allowedModelKeys: new Set(["anthropic/*"]),
+      allowedModelCatalog: [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+        { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      ],
+    });
+
+    expect(reply?.text).toContain("anthropic/claude-sonnet-4-6");
+    expect(reply?.text).toContain("anthropic/claude-opus-4-6");
+    expect(reply?.text).not.toContain("  • openai/gpt-5.5");
+  });
+
+  it("resolves config-dependent policy refs identically in enforcement and picker", async () => {
+    const cfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
+          },
+          modelPolicy: { allow: ["openrouter:free"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "anthropic",
+      defaultModel: "claude-sonnet-4-6",
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
+    });
+
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      cfg,
+      allowedModelKeys: policy.allowedKeys,
+      allowedModelCatalog: policy.allowedCatalog,
+    });
+
+    expect(policy.allowsKey("openrouter/meta-llama/llama-3.3-70b-instruct:free")).toBe(true);
+    expect(reply?.text).toContain("openrouter/meta-llama/llama-3.3-70b-instruct:free");
+    expect(reply?.text).not.toContain("anthropic/openrouter:free");
+  });
+
+  it("resolves inherited policy aliases with the default-scoped index in the picker", async () => {
+    const cfg = {
+      commands: { text: true },
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      agents: {
+        defaults: {
+          model: { primary: "provider-a/model-a" },
+          models: {
+            "provider-a/model-a": { alias: "approved" },
+          },
+          modelPolicy: { allow: ["approved"] },
+        },
+        list: [
+          {
+            id: "main",
+            models: {
+              "provider-b/model-b": { alias: "approved" },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "provider-a",
+      defaultModel: "model-a",
+      agentId: "main",
+    });
+    const agentAliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider: "provider-a",
+      agentId: "main",
+    });
+
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      cfg,
+      activeAgentId: "main",
+      defaultProvider: "provider-a",
+      defaultModel: "model-a",
+      aliasIndex: agentAliasIndex,
+      policyAliasIndex: policy.policyAliasIndex,
+      allowedModelKeys: policy.allowedKeys,
+      allowedModelCatalog: policy.allowedCatalog,
+    });
+
+    expect(agentAliasIndex.byAlias.get("approved")?.ref).toEqual({
+      provider: "provider-b",
+      model: "model-b",
+    });
+    expect(policy.allows({ provider: "provider-a", model: "model-a" })).toBe(true);
+    expect(policy.allows({ provider: "provider-b", model: "model-b" })).toBe(false);
+    expect(reply?.text).toContain("provider-a/model-a");
+    expect(reply?.text).not.toContain("provider-b/model-b");
   });
 
   it("hides missing-auth direct provider rows covered by OpenRouter nested model ids", async () => {
@@ -1164,10 +1292,28 @@ describe("/model chat UX", () => {
     expect(resolved.modelSelection).toBeUndefined();
     expect(resolved.errorText).toContain('Model "openai/gpt-5.5" is not allowed.');
     expect(resolved.errorText).toContain(
-      `openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge`,
+      'Add "openai/gpt-5.5" or its provider wildcard to agents.defaults.modelPolicy.allow.',
     );
     expect(resolved.errorText).toContain("Then retry: /model openai/gpt-5.5 --runtime codex");
     expect(resolved.errorText).toContain("openclaw plugins enable codex");
+  });
+
+  it("names the active per-agent allowlist in repair guidance", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai/gpt-5.5",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+      allowedModelCatalog: [],
+      cfg: {
+        agents: {
+          list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
+        },
+      },
+      agentId: "ops",
+    });
+
+    expect(resolved.errorText).toContain(
+      'Add "openai/gpt-5.5" or its provider wildcard to agents.list[].modelPolicy.allow.',
+    );
   });
 
   it("treats explicit default /model selection as resettable default", () => {

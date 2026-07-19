@@ -1,5 +1,5 @@
 /**
- * Builds model visibility policies with configured fallbacks included.
+ * Builds model visibility policies while retaining configured automatic fallbacks.
  */
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -42,6 +42,7 @@ export function createModelVisibilityPolicy(
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,

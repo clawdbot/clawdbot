@@ -332,7 +332,8 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
     | `models.providers.minimax.api` | Prefer `anthropic-messages`; `openai-completions` is optional for OpenAI-compatible payloads |
     | `models.providers.minimax.apiKey` | MiniMax API key (`MINIMAX_API_KEY`) |
     | `models.providers.minimax.models` | Define `id`, `name`, `reasoning`, `contextWindow`, `maxTokens`, `cost` |
-    | `agents.defaults.models` | Alias models you want in the allowlist |
+    | `agents.defaults.models` | Per-model aliases, parameters, and metadata |
+    | `agents.defaults.modelPolicy.allow` | Optional explicit model allowlist |
     | `models.mode` | Keep `merge` if you want to add MiniMax alongside built-ins |
   </Accordion>
 

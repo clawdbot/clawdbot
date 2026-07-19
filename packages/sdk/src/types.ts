@@ -343,6 +343,10 @@ export type SessionCreateParams = {
   model?: string;
   thinkingLevel?: string;
   parentSessionKey?: string;
+  /** Emit command and lifecycle hooks for parent-linked creation. */
+  emitCommandHooks?: boolean;
+  /** Whether a distinct child terminates its parent; requires command hooks. */
+  succeedsParent?: boolean;
   task?: string;
   message?: string;
   attachments?: unknown[];

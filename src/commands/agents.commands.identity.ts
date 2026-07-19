@@ -1,10 +1,9 @@
 // Implements identity metadata updates for configured agents.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
+import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -34,19 +33,6 @@ type AgentsSetIdentityOptions = {
 };
 
 const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
-
-async function loadIdentityFromFile(filePath: string): Promise<AgentIdentity | null> {
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    const parsed = parseIdentityMarkdown(content);
-    if (!identityHasValues(parsed)) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 function resolveAgentIdByWorkspace(
   cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
@@ -128,7 +114,13 @@ export async function agentsSetIdentityCommand(
   let identityFromFile: AgentIdentity | null = null;
   if (wantsIdentityFile) {
     if (identityFilePath) {
-      identityFromFile = await loadIdentityFromFile(identityFilePath);
+      try {
+        identityFromFile = await loadAgentIdentityFromFile(identityFilePath);
+      } catch (error) {
+        runtime.error(String(error instanceof Error ? error.message : error));
+        runtime.exit(1);
+        return;
+      }
     } else if (workspaceDir) {
       identityFromFile = loadAgentIdentity(workspaceDir);
     }

@@ -1,17 +1,16 @@
-use crate::{notify, tray, DesktopState};
-use serde::{Deserialize, Serialize};
+use crate::gateway_ws::{AgentsListResult, ChatSendResult, GatewayClient};
+use crate::{tray, DesktopState};
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use uuid::Uuid;
 
 pub const QUICKCHAT_LABEL: &str = "quickchat";
 // Alt+Space is GNOME's window-menu grab; a second X11 grab for it always fails.
@@ -21,7 +20,6 @@ const QUICKCHAT_SHORTCUT_DISABLED_MARKER: &str = "quickchat-shortcut-disabled";
 const QUICKCHAT_WIDTH: f64 = 640.0;
 const QUICKCHAT_HEIGHT: f64 = 92.0;
 const QUICKCHAT_EXPANDED_HEIGHT: f64 = 360.0;
-const AGENTS_CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,30 +39,20 @@ pub struct QuickChatShortcutStatus {
     accelerator: String,
 }
 
-#[derive(Deserialize)]
-struct AgentSummary {
-    id: String,
-    name: Option<String>,
-    #[serde(rename = "identityName")]
-    identity_name: Option<String>,
-    #[serde(rename = "identityEmoji")]
-    identity_emoji: Option<String>,
-    #[serde(rename = "identityAvatarUrl")]
-    identity_avatar_url: Option<String>,
-    #[serde(rename = "isDefault")]
-    is_default: bool,
-}
-
-struct CachedAgents {
-    fetched_at: Instant,
-    agents: Vec<QuickChatAgent>,
-}
-
 #[derive(Clone)]
 struct ActiveShortcut {
     accelerator: String,
     shortcut: Shortcut,
     registered: bool,
+}
+
+#[derive(Clone)]
+struct QuickChatRetryIdentity {
+    message: String,
+    agent_id: String,
+    scope: String,
+    main_key: String,
+    idempotency_key: String,
 }
 
 pub(crate) struct QuickChatShortcutPreference {
@@ -74,11 +62,11 @@ pub(crate) struct QuickChatShortcutPreference {
 
 #[derive(Clone)]
 pub struct QuickChatState {
-    agents_cache: Arc<Mutex<Option<CachedAgents>>>,
     selected_agent_id: Arc<Mutex<Option<String>>>,
     active_shortcut: Arc<Mutex<ActiveShortcut>>,
     shortcuts_supported: bool,
     hide_requested: Arc<AtomicBool>,
+    retry_identity: Arc<Mutex<Option<QuickChatRetryIdentity>>>,
 }
 
 impl QuickChatState {
@@ -86,7 +74,6 @@ impl QuickChatState {
         let shortcut = parse_shortcut(QUICKCHAT_SHORTCUT)
             .expect("the built-in Quick Chat shortcut must be valid");
         Self {
-            agents_cache: Arc::new(Mutex::new(None)),
             selected_agent_id: Arc::new(Mutex::new(None)),
             active_shortcut: Arc::new(Mutex::new(ActiveShortcut {
                 accelerator: QUICKCHAT_SHORTCUT.to_string(),
@@ -95,30 +82,58 @@ impl QuickChatState {
             })),
             shortcuts_supported,
             hide_requested: Arc::new(AtomicBool::new(true)),
+            retry_identity: Arc::new(Mutex::new(None)),
         }
     }
 
-    fn agents(&self, desktop: &DesktopState) -> Result<Vec<QuickChatAgent>, String> {
-        if let Some(agents) = self
-            .agents_cache
+    fn send_idempotency_key(
+        &self,
+        message: &str,
+        agent_id: &str,
+        scope: &str,
+        main_key: &str,
+    ) -> Result<String, String> {
+        let mut retry = self
+            .retry_identity
             .lock()
-            .map_err(|_| "Quick Chat agent cache is unavailable.".to_string())?
-            .as_ref()
-            .filter(|cached| cached.fetched_at.elapsed() < AGENTS_CACHE_TTL)
-            .map(|cached| cached.agents.clone())
-        {
-            return Ok(agents);
+            .map_err(|_| "Quick Chat retry state is unavailable.".to_string())?;
+        if let Some(current) = retry.as_ref() {
+            if current.message == message
+                && current.agent_id == agent_id
+                && current.scope == scope
+                && current.main_key == main_key
+            {
+                return Ok(current.idempotency_key.clone());
+            }
         }
+        let idempotency_key = Uuid::new_v4().to_string();
+        *retry = Some(QuickChatRetryIdentity {
+            message: message.to_string(),
+            agent_id: agent_id.to_string(),
+            scope: scope.to_string(),
+            main_key: main_key.to_string(),
+            idempotency_key: idempotency_key.clone(),
+        });
+        Ok(idempotency_key)
+    }
 
-        let cli = desktop.resolve_cli().map_err(|error| error.to_string())?;
-        let (summaries, output) = cli
-            .json::<Vec<AgentSummary>, _, _>(["agents", "list", "--json"])
-            .map_err(|error| error.to_string())?;
-        if !output.status.success() {
-            return Err(first_stderr_line(&output.stderr)
-                .unwrap_or_else(|| "Could not load Quick Chat agents.".to_string()));
+    fn clear_send_retry(&self, idempotency_key: &str) {
+        if let Ok(mut retry) = self.retry_identity.lock() {
+            if retry
+                .as_ref()
+                .is_some_and(|current| current.idempotency_key == idempotency_key)
+            {
+                *retry = None;
+            }
         }
-        let agents = build_agents(summaries)?;
+    }
+
+    async fn agent_catalog(
+        &self,
+        gateway: &GatewayClient,
+    ) -> Result<(AgentsListResult, Vec<QuickChatAgent>), String> {
+        let catalog = gateway.agents_list().await?;
+        let agents = build_agents(&catalog)?;
         {
             let mut selection = self
                 .selected_agent_id
@@ -131,22 +146,18 @@ impl QuickChatState {
                 *selection = None;
             }
         }
-        *self
-            .agents_cache
-            .lock()
-            .map_err(|_| "Quick Chat agent cache is unavailable.".to_string())? =
-            Some(CachedAgents {
-                fetched_at: Instant::now(),
-                agents: agents.clone(),
-            });
-        Ok(agents)
+        Ok((catalog, agents))
     }
 
-    fn selected_agent(
+    async fn agents(&self, gateway: &GatewayClient) -> Result<Vec<QuickChatAgent>, String> {
+        self.agent_catalog(gateway).await.map(|(_, agents)| agents)
+    }
+
+    async fn selected_agent(
         &self,
-        desktop: &DesktopState,
+        gateway: &GatewayClient,
         on_missing: MissingSelection,
-    ) -> Result<QuickChatAgent, String> {
+    ) -> Result<(QuickChatAgent, AgentsListResult), String> {
         // Snapshot the pin before agents() refreshes the cache: a refresh clears a
         // stale pin, and the send path must see that the pin existed so it can fail
         // instead of silently rerouting the message to the default agent.
@@ -155,17 +166,17 @@ impl QuickChatState {
             .lock()
             .map_err(|_| "Quick Chat agent selection is unavailable.".to_string())?
             .clone();
-        let agents = self.agents(desktop)?;
-        resolve_selected_agent(pinned.as_deref(), &agents, on_missing)
+        let (catalog, agents) = self.agent_catalog(gateway).await?;
+        resolve_selected_agent(pinned.as_deref(), &agents, on_missing).map(|agent| (agent, catalog))
     }
 
-    fn select_agent(
+    async fn select_agent(
         &self,
-        desktop: &DesktopState,
+        gateway: &GatewayClient,
         agent_id: &str,
     ) -> Result<QuickChatAgent, String> {
         let agent_id = agent_id.trim();
-        let agents = self.agents(desktop)?;
+        let agents = self.agents(gateway).await?;
         let selected = agents
             .iter()
             .find(|agent| agent.id == agent_id)
@@ -269,20 +280,22 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn build_agents(summaries: Vec<AgentSummary>) -> Result<Vec<QuickChatAgent>, String> {
-    let agents = summaries
-        .into_iter()
+fn build_agents(catalog: &AgentsListResult) -> Result<Vec<QuickChatAgent>, String> {
+    let agents = catalog
+        .agents
+        .iter()
         .map(|summary| {
-            let id = summary.id;
-            let name = non_empty(summary.identity_name)
-                .or_else(|| non_empty(summary.name))
+            let id = summary.id.clone();
+            let identity = summary.identity.as_ref();
+            let name = non_empty(identity.and_then(|identity| identity.name.clone()))
+                .or_else(|| non_empty(summary.name.clone()))
                 .unwrap_or_else(|| id.clone());
             QuickChatAgent {
                 id,
                 name,
-                emoji: non_empty(summary.identity_emoji),
-                avatar_url: non_empty(summary.identity_avatar_url),
-                is_default: summary.is_default,
+                emoji: non_empty(identity.and_then(|identity| identity.emoji.clone())),
+                avatar_url: non_empty(identity.and_then(|identity| identity.avatar_url.clone())),
+                is_default: summary.id == catalog.default_id,
             }
         })
         .collect::<Vec<_>>();
@@ -291,14 +304,6 @@ fn build_agents(summaries: Vec<AgentSummary>) -> Result<Vec<QuickChatAgent>, Str
     } else {
         Err("OpenClaw did not report a default agent.".to_string())
     }
-}
-
-fn first_stderr_line(stderr: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(stderr)
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn parse_shortcut(accelerator: &str) -> Result<Shortcut, String> {
@@ -429,91 +434,6 @@ pub(crate) fn persist_quickchat_shortcut_state(app: &AppHandle, registered: bool
     }
 }
 
-/// Stages the message in an owner-only file: argv is world-readable via procfs, and the
-/// agent turn can keep running for minutes, so the text must never appear in `--message`.
-fn write_message_file(message: &str) -> Result<PathBuf, String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| format!("Could not stage the message: {error}"))?
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "openclaw-quickchat-{}-{nanos}.txt",
-        std::process::id()
-    ));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(|error| format!("Could not stage the message: {error}"))?;
-    if let Err(error) = file.write_all(message.as_bytes()) {
-        // A partial write must not strand prompt text in the temp directory.
-        let _ = fs::remove_file(&path);
-        return Err(format!("Could not stage the message: {error}"));
-    }
-    Ok(path)
-}
-
-fn build_agent_turn_args(message_file: &str, agent: &QuickChatAgent) -> Vec<String> {
-    let mut args = vec![
-        "agent".to_string(),
-        "--message-file".to_string(),
-        message_file.to_string(),
-    ];
-    if agent.is_default {
-        args.extend(["--session-key".to_string(), "main".to_string()]);
-    } else {
-        args.extend(["--agent".to_string(), agent.id.clone()]);
-    }
-    args.push("--json".to_string());
-    args
-}
-
-fn spawn_agent_turn(
-    app: AppHandle,
-    desktop: DesktopState,
-    message: String,
-    agent: QuickChatAgent,
-) -> Result<(), String> {
-    let cli = desktop.resolve_cli().map_err(|error| error.to_string())?;
-    let message_file = write_message_file(&message)?;
-    let message_file_arg = message_file.to_string_lossy().into_owned();
-    let mut command = cli
-        .command(build_agent_turn_args(&message_file_arg, &agent))
-        .map_err(|error| {
-            let _ = fs::remove_file(&message_file);
-            error.to_string()
-        })?;
-    command.stdout(Stdio::null()).stderr(Stdio::piped());
-    let child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            let _ = fs::remove_file(&message_file);
-            return Err(format!("Failed to run OpenClaw CLI: {error}"));
-        }
-    };
-    thread::spawn(move || {
-        let outcome = child.wait_with_output();
-        let _ = fs::remove_file(&message_file);
-        match outcome {
-            Ok(output) if !output.status.success() => {
-                let body = first_stderr_line(&output.stderr)
-                    .unwrap_or_else(|| format!("OpenClaw agent exited with {}.", output.status));
-                notify::notify(&app, "Quick Chat message failed", &body);
-            }
-            Err(error) => notify::notify(
-                &app,
-                "Quick Chat message failed",
-                &format!("Could not monitor OpenClaw agent: {error}"),
-            ),
-            _ => {}
-        }
-    });
-    Ok(())
-}
-
 pub fn quickchat_position(
     monitor_pos: (f64, f64),
     monitor_size: (f64, f64),
@@ -528,9 +448,10 @@ pub fn quickchat_position(
 
 fn ensure_quickchat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(QUICKCHAT_LABEL) {
+        app.state::<GatewayClient>().activate(app.clone());
         return Ok(window);
     }
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         QUICKCHAT_LABEL,
         WebviewUrl::App("quickchat.html".into()),
@@ -544,7 +465,9 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     .resizable(false)
     .visible(false)
     .build()
-    .map_err(|error| format!("Could not create Quick Chat window: {error}"))
+    .map_err(|error| format!("Could not create Quick Chat window: {error}"))?;
+    app.state::<GatewayClient>().activate(app.clone());
+    Ok(window)
 }
 
 fn position_quickchat(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
@@ -590,6 +513,7 @@ pub fn toggle_quickchat(app: &AppHandle) {
 
 fn show_quickchat(app: &AppHandle) -> Result<(), String> {
     let window = ensure_quickchat_window(app)?;
+    app.state::<GatewayClient>().resume_reconnect();
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT))
         .map_err(|error| format!("Could not reset Quick Chat size: {error}"))?;
@@ -628,75 +552,68 @@ fn require_quickchat_window(window: &WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 pub async fn quickchat_agents(
     window: WebviewWindow,
-    desktop: State<'_, DesktopState>,
+    gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
 ) -> Result<Vec<QuickChatAgent>, String> {
     require_quickchat_window(&window)?;
-    let desktop = desktop.inner().clone();
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || state.agents(&desktop))
-        .await
-        .map_err(|error| format!("Quick Chat agents task failed: {error}"))?
+    state.agents(gateway.inner()).await
 }
 
 #[tauri::command]
 pub async fn quickchat_identity(
     window: WebviewWindow,
-    desktop: State<'_, DesktopState>,
+    gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
 ) -> Result<QuickChatAgent, String> {
     require_quickchat_window(&window)?;
-    let desktop = desktop.inner().clone();
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        state.selected_agent(&desktop, MissingSelection::FallBackToDefault)
-    })
-    .await
-    .map_err(|error| format!("Quick Chat identity task failed: {error}"))?
+    state
+        .selected_agent(gateway.inner(), MissingSelection::FallBackToDefault)
+        .await
+        .map(|(agent, _)| agent)
 }
 
 #[tauri::command]
 pub async fn quickchat_select_agent(
     window: WebviewWindow,
-    desktop: State<'_, DesktopState>,
+    gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
     agent_id: String,
 ) -> Result<QuickChatAgent, String> {
     require_quickchat_window(&window)?;
-    let desktop = desktop.inner().clone();
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || state.select_agent(&desktop, &agent_id))
-        .await
-        .map_err(|error| format!("Quick Chat agent selection task failed: {error}"))?
+    state.select_agent(gateway.inner(), &agent_id).await
 }
 
 #[tauri::command]
 pub async fn quickchat_send(
     window: WebviewWindow,
-    app: AppHandle,
-    desktop: State<'_, DesktopState>,
+    gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
     message: String,
-) -> Result<(), String> {
+) -> Result<ChatSendResult, String> {
     require_quickchat_window(&window)?;
     let message = message.trim().to_string();
     if message.is_empty() {
         return Err("Message cannot be empty.".to_string());
     }
-    let desktop = desktop.inner().clone();
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        // Strict resolution: a pinned agent that vanished must fail the send loudly
-        // rather than reroute the message to the default agent behind a stale chip.
-        // Validation is deliberately cache-fresh only (60s TTL): the CLI is the
-        // authoritative rejector of unknown agents and its failure surfaces as a
-        // notification, so a per-send `agents list` exec would add hot-path latency
-        // without closing the removal race.
-        let agent = state.selected_agent(&desktop, MissingSelection::Fail)?;
-        spawn_agent_turn(app, desktop, message, agent)
-    })
-    .await
-    .map_err(|error| format!("Quick Chat send task failed: {error}"))?
+    // Strict resolution: a vanished pin fails instead of silently rerouting to default.
+    let (agent, catalog) = state
+        .selected_agent(gateway.inner(), MissingSelection::Fail)
+        .await?;
+    let idempotency_key =
+        state.send_idempotency_key(&message, &agent.id, &catalog.scope, &catalog.main_key)?;
+    let result = gateway
+        .chat_send(
+            message,
+            &agent.id,
+            &catalog.scope,
+            &catalog.main_key,
+            &idempotency_key,
+        )
+        .await;
+    if result.is_ok() {
+        state.clear_send_retry(&idempotency_key);
+    }
+    result
 }
 
 #[tauri::command]
@@ -806,9 +723,11 @@ pub fn quickchat_hide(window: WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 pub fn quickchat_ready(
     window: WebviewWindow,
+    gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
 ) -> Result<bool, String> {
     require_quickchat_window(&window)?;
+    gateway.emit_current_state(&window)?;
     Ok(!state.hide_requested.load(Ordering::SeqCst))
 }
 
@@ -855,6 +774,30 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_failed_draft_reuses_idempotency_key() {
+        let state = QuickChatState::new(true);
+        let first = state
+            .send_idempotency_key("hello", "main", "per-sender", "main")
+            .expect("first key");
+        let retry = state
+            .send_idempotency_key("hello", "main", "per-sender", "main")
+            .expect("retry key");
+        let edited = state
+            .send_idempotency_key("hello again", "main", "per-sender", "main")
+            .expect("edited key");
+
+        assert_eq!(first, retry);
+        assert_ne!(first, edited);
+        state.clear_send_retry(&edited);
+        assert_ne!(
+            state
+                .send_idempotency_key("hello again", "main", "per-sender", "main")
+                .expect("post-ack key"),
+            edited
+        );
+    }
+
+    #[test]
     fn position_centers_window_at_twenty_two_percent_of_work_area() {
         assert_position(
             quickchat_position((0.0, 0.0), (1920.0, 1080.0), (640.0, 92.0)),
@@ -876,25 +819,28 @@ mod tests {
 
     #[test]
     fn agents_use_identity_precedence_and_render_fields() {
-        let agents = build_agents(vec![
-            AgentSummary {
-                id: "main".to_string(),
-                name: Some("Configured".to_string()),
-                identity_name: Some("Molty".to_string()),
-                identity_emoji: Some("🦞".to_string()),
-                identity_avatar_url: Some("data:image/png;base64,AA==".to_string()),
-                is_default: true,
-            },
-            AgentSummary {
-                id: "other".to_string(),
-                name: None,
-                identity_name: None,
-                identity_emoji: None,
-                identity_avatar_url: None,
-                is_default: false,
-            },
-        ])
-        .expect("agent list");
+        let catalog = AgentsListResult {
+            default_id: "main".to_string(),
+            main_key: "main".to_string(),
+            scope: "per-sender".to_string(),
+            agents: vec![
+                crate::gateway_ws::GatewayAgentSummary {
+                    id: "main".to_string(),
+                    name: Some("Configured".to_string()),
+                    identity: Some(crate::gateway_ws::GatewayAgentIdentity {
+                        name: Some("Molty".to_string()),
+                        emoji: Some("🦞".to_string()),
+                        avatar_url: Some("data:image/png;base64,AA==".to_string()),
+                    }),
+                },
+                crate::gateway_ws::GatewayAgentSummary {
+                    id: "other".to_string(),
+                    name: None,
+                    identity: None,
+                },
+            ],
+        };
+        let agents = build_agents(&catalog).expect("agent list");
 
         assert_eq!(agents[0].name, "Molty");
         assert_eq!(agents[0].emoji.as_deref(), Some("🦞"));
@@ -903,50 +849,6 @@ mod tests {
             Some("data:image/png;base64,AA==")
         );
         assert_eq!(agents[1].name, "other");
-    }
-
-    #[test]
-    fn agent_summary_deserializes_agents_list_json() {
-        let summaries = serde_json::from_str::<Vec<AgentSummary>>(
-            r#"[{"id":"work","identityName":"Work","identityEmoji":"🧰","identityAvatarUrl":"data:image/png;base64,AA==","isDefault":false}]"#,
-        )
-        .expect("deserialize agents list JSON");
-
-        assert_eq!(summaries[0].identity_name.as_deref(), Some("Work"));
-        assert_eq!(summaries[0].identity_emoji.as_deref(), Some("🧰"));
-        assert_eq!(
-            summaries[0].identity_avatar_url.as_deref(),
-            Some("data:image/png;base64,AA==")
-        );
-        assert!(!summaries[0].is_default);
-    }
-
-    #[test]
-    fn agent_turn_args_route_default_and_selected_agents() {
-        let default_args = build_agent_turn_args("/tmp/message.txt", &test_agent("main", true));
-        assert_eq!(
-            default_args.iter().map(String::as_str).collect::<Vec<_>>(),
-            vec![
-                "agent",
-                "--message-file",
-                "/tmp/message.txt",
-                "--session-key",
-                "main",
-                "--json",
-            ]
-        );
-        let selected_args = build_agent_turn_args("/tmp/message.txt", &test_agent("work", false));
-        assert_eq!(
-            selected_args.iter().map(String::as_str).collect::<Vec<_>>(),
-            vec![
-                "agent",
-                "--message-file",
-                "/tmp/message.txt",
-                "--agent",
-                "work",
-                "--json",
-            ]
-        );
     }
 
     #[test]

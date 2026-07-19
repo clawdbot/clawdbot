@@ -168,6 +168,12 @@ function resolveVerifiedGatewayListenerPids(port: number): number[] {
 }
 
 async function handleSystemScopeSystemdGateway(
+  action: "stop",
+): Promise<{ result: "stopped"; message: string } | null>;
+async function handleSystemScopeSystemdGateway(
+  action: "restart",
+): Promise<{ result: "restarted"; message: string } | null>;
+async function handleSystemScopeSystemdGateway(
   action: "stop" | "restart",
 ): Promise<{ result: "stopped" | "restarted"; message: string } | null> {
   if (process.platform !== "linux") {

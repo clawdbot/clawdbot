@@ -1216,7 +1216,22 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.gateway).toBeUndefined();
   });
 
-  it("rechecks the exact provider model and activates it without storing credentials", async () => {
+  it.each([
+    {
+      name: "auto-enables the lean surface for a verified local model",
+      initialConfig: {} satisfies OpenClawConfig,
+      expectedLean: true,
+      expectedAnnouncement: true,
+    },
+    {
+      name: "preserves an explicit localModelLean=false",
+      initialConfig: {
+        agents: { defaults: { experimental: { localModelLean: false } } },
+      } satisfies OpenClawConfig,
+      expectedLean: false,
+      expectedAnnouncement: false,
+    },
+  ])("$name", async ({ initialConfig, expectedLean, expectedAnnouncement }) => {
     const modelRef = "lmstudio/qwen-local";
     const detect = vi.fn(async () => ({ modelRef, detail: "qwen-local at localhost" }));
     const prepare = vi.fn(async () => ({
@@ -1259,7 +1274,7 @@ describe("activateSetupInference", () => {
         },
       ],
     };
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createConfigTransformHarness(initialConfig);
     const updateAuthStore = vi.fn();
 
     const result = await activateSetupInference({
@@ -1268,6 +1283,15 @@ describe("activateSetupInference", () => {
       surface: "gateway",
       runtime,
       deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        })) as never,
         resolveManifestProviderAuthChoice: () => ({
           pluginId: "lmstudio",
           providerId: "lmstudio",
@@ -1285,11 +1309,23 @@ describe("activateSetupInference", () => {
     });
 
     expect(result).toMatchObject({ ok: true, modelRef });
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.lines).toEqual([
+      `Inference verified: ${modelRef}`,
+      ...(expectedAnnouncement
+        ? [
+            "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.",
+          ]
+        : []),
+    ]);
     expect(detect).not.toHaveBeenCalled();
     expect(prepare).toHaveBeenCalledOnce();
     expect(updateAuthStore).not.toHaveBeenCalled();
     expect(configHarness.current()).toMatchObject({
-      agents: { defaults: { model: modelRef } },
+      ...(expectedAnnouncement ? { wizard: { localModelLeanAutoModel: modelRef } } : {}),
+      agents: { defaults: { model: modelRef, experimental: { localModelLean: expectedLean } } },
       models: {
         providers: {
           lmstudio: {
@@ -1482,8 +1518,15 @@ describe("activateSetupInference", () => {
     expect(configHarness.current()).toEqual(concurrentConfig);
   });
 
-  it("preserves authored provider rows instead of runtime-materialized metadata", async () => {
+  it("preserves authored provider rows and lifts an onboarding-owned lean setting", async () => {
     const sourceConfig = {
+      wizard: { localModelLeanAutoModel: "lmstudio/qwen-local" },
+      agents: {
+        defaults: {
+          model: "lmstudio/qwen-local",
+          experimental: { localModelLean: true },
+        },
+      },
       models: {
         providers: {
           openai: {
@@ -1539,6 +1582,8 @@ describe("activateSetupInference", () => {
     expect(configHarness.current().models?.providers?.openai?.models).toEqual(
       sourceConfig.models.providers.openai.models,
     );
+    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+    expect(configHarness.current().wizard?.localModelLeanAutoModel).toBeUndefined();
   });
 
   it("rejects an existing route that changes after its live probe", async () => {

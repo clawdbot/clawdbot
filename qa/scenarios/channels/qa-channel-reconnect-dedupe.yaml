@@ -9,10 +9,10 @@ scenario:
     secondary:
       - channels.dedup
       - runtime.delivery
-  objective: Verify qa-channel readiness polling keeps prior delivery stable and does not replay the last outbound message.
+  objective: Verify qa-channel resumes after a Gateway restart without replaying consumed inbound events or completed delivery.
   successCriteria:
     - Agent replies once before a reconnect-style readiness cycle.
-    - qa-channel reports ready again without replaying prior outbound delivery.
+    - qa-channel reports ready again without replaying prior inbound or outbound delivery.
     - Follow-up delivery produces one new reply without duplicating the first reply.
   docsRefs:
     - docs/channels/qa-channel.md
@@ -23,7 +23,7 @@ scenario:
     - extensions/qa-lab/src/suite-runtime-gateway.ts
   execution:
     kind: flow
-    summary: Verify qa-channel readiness recovery does not duplicate old outbound delivery.
+    summary: Verify qa-channel Gateway restart recovery does not replay consumed messages.
     channel: qa-channel
     config:
       firstPrompt: "@openclaw Reconnect dedupe setup marker. Reply exactly: RECONNECT-FIRST-OK"
@@ -44,78 +44,91 @@ flow:
             - ref: env
             - 60000
         - call: reset
-        - set: sessionKey
-          value:
-            expr: "`agent:qa:channel-reconnect:${randomUUID().slice(0, 8)}`"
-        - call: runAgentPrompt
-          args:
-            - ref: env
-            - sessionKey:
-                ref: sessionKey
-              to: channel:qa-room
-              message:
-                expr: config.firstPrompt
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 45000)
-        - call: waitForOutboundMessage
-          saveAs: firstOutbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-room' && candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.firstMarker)"
-            - expr: liveTurnTimeoutMs(env, 60000)
-        - set: beforeRestartCursor
+        - sendInbound:
+            conversation:
+              id: qa-room
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: config.firstPrompt
+        - waitForOutbound:
+            textIncludes:
+              ref: config.firstMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - set: beforeRestartMessageIndex
           value:
             expr: state.getSnapshot().messages.length
-        - call: sleep
+        - set: beforeRestartOutboundCount
+          value:
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length"
+        - set: beforeRestartCursor
+          value:
+            expr: state.getSnapshot().cursor
+        - call: waitForCondition
           args:
-            - 1000
+            - lambda:
+                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= beforeRestartCursor ? true : undefined"
+            - 10000
+            - 25
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: qa gateway child does not expose restartAfterStateMutation
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: Promise.resolve()
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
         - call: waitForQaChannelReady
           args:
             - ref: env
             - 60000
+        - waitForNoOutbound:
+            quietMs: 3000
+            sinceIndex:
+              ref: beforeRestartOutboundCount
         - set: firstMatchesBeforeFollowup
           value:
             expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room')"
         - assert:
             expr: "firstMatchesBeforeFollowup.length === 1 && String(firstMatchesBeforeFollowup[0]?.text ?? '').includes(config.firstMarker)"
             message:
-              expr: "`readiness cycle should preserve exactly one marked first reply, saw ${firstMatchesBeforeFollowup.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
-        - call: runAgentPrompt
-          args:
-            - ref: env
-            - sessionKey:
-                ref: sessionKey
-              to: channel:qa-room
-              message:
-                expr: config.secondPrompt
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 45000)
-        - call: waitForOutboundMessage
-          saveAs: secondOutbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-room' && candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.secondMarker)"
-            - expr: liveTurnTimeoutMs(env, 60000)
-            - sinceIndex:
-                ref: beforeRestartCursor
+              expr: "`restart should preserve exactly one marked first reply, saw ${firstMatchesBeforeFollowup.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
+        - sendInbound:
+            conversation:
+              id: qa-room
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: config.secondPrompt
+        - waitForOutbound:
+            textIncludes:
+              ref: config.secondMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+            sinceIndex:
+              ref: beforeRestartOutboundCount
         - set: snapshot
           value:
             expr: state.getSnapshot()
         - set: firstMatches
           value:
-            expr: "snapshot.messages.slice(0, beforeRestartCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && String(candidate.text ?? '').includes(config.firstMarker))"
+            expr: "snapshot.messages.slice(0, beforeRestartMessageIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && String(candidate.text ?? '').includes(config.firstMarker))"
         - set: secondMatches
           value:
-            expr: "snapshot.messages.slice(beforeRestartCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && String(candidate.text ?? '').includes(config.secondMarker))"
+            expr: "snapshot.messages.slice(beforeRestartMessageIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && String(candidate.text ?? '').includes(config.secondMarker))"
         - set: postRestartOutbounds
           value:
-            expr: "snapshot.messages.slice(beforeRestartCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room')"
+            expr: "snapshot.messages.slice(beforeRestartMessageIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room')"
         - assert:
             expr: "firstMatches.length === 1 && secondMatches.length === 1 && postRestartOutbounds.length === 1 && !postRestartOutbounds.some((candidate) => String(candidate.text ?? '').includes(config.firstMarker))"
             message:
               expr: "`expected one marked pre-restart reply and exactly one marked post-restart reply without replaying the first marker; first=${firstMatches.length} second=${secondMatches.length} post=${postRestartOutbounds.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
-      detailsExpr: "`before=${firstOutbound.text}\\nafter=${secondOutbound.text}`"
+      detailsExpr: "`before=${config.firstMarker}\\nafter=${config.secondMarker}`"

@@ -74,7 +74,7 @@ describeControlUiE2e("Control UI agent picker avatar timeout", () => {
       avatarAuthorization = route.request().headers().authorization;
       // Leave the route unanswered. The page-owned deadline must cancel it.
     });
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       methodResponses: {
         "agent.identity.get": {
           agentId: "main",
@@ -88,11 +88,12 @@ describeControlUiE2e("Control UI agent picker avatar timeout", () => {
     try {
       const response = await page.goto(`${server.baseUrl}agents`);
       expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("agent.identity.get");
+      await expect.poll(() => avatarRequestCount).toBe(1);
       const picker = page.locator("openclaw-agent-select");
       await expect
         .poll(() => picker.locator(".agent-select__avatar--text").first().textContent())
         .toBe("O");
-      expect(avatarRequestCount).toBe(1);
       expect(avatarAuthorization).toBe("Bearer e2e-device-token");
       await screenshot(page, "01-request-stalled.png");
 

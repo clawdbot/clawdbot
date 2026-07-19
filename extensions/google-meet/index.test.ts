@@ -703,6 +703,7 @@ async function captureMeetLeaveScript() {
       throw new Error(`unexpected browser request path ${String(request.path)}`);
     }),
     config,
+    meetingSessionId: "session-1",
     meetingUrl: "https://meet.google.com/abc-defg-hij",
     tab: { targetId: "local-meet-tab", openedByPlugin: false },
   });
@@ -6250,6 +6251,7 @@ describe("google-meet plugin", () => {
         runtime: expect.any(Object),
         nodeId: "meet-node",
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/drf-ihtb-pad",
         tab: { targetId: "created-meet-tab-a", openedByPlugin: true },
       });
@@ -6257,6 +6259,7 @@ describe("google-meet plugin", () => {
         runtime: expect.any(Object),
         nodeId: "meet-node",
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/qwe-rtyu-iop",
         tab: { targetId: "created-meet-tab-b", openedByPlugin: true },
       });
@@ -6484,6 +6487,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "shared-meet-tab", openedByPlugin: true },
       });
@@ -6547,6 +6551,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "old-meet-tab", openedByPlugin: true },
       });
@@ -6608,6 +6613,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "retained-meet-tab", openedByPlugin: true },
       });
@@ -6677,12 +6683,14 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenNthCalledWith(2, {
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "replacement-meet-tab", openedByPlugin: true },
       });
       expect(leaveChromeMeet).toHaveBeenLastCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "retained-meet-tab", openedByPlugin: true },
       });
@@ -6866,6 +6874,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "meet-tab", openedByPlugin: true },
       });

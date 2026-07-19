@@ -743,11 +743,20 @@ describe("worker session placement store", () => {
         gatewayInstanceId: store.workspaceResultInstanceId(),
         recoveryRequestedAtMs: null,
         workspaceAcceptedAtMs: null,
+        stagedResultRef: null,
       },
     ]);
     expect(() => store.releaseTurn(claim)).toThrow("pending cloud workspace result");
 
     const manifestRef = `sha256:${"f".repeat(64)}`;
+    const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
+    expect(() =>
+      store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/unsafe.claim"),
+    ).toThrow("Worker workspace staged result reference is invalid");
+    store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: active.sessionId, stagedResultRef },
+    ]);
     store.updateWorkspaceBaseManifest({ claim, manifestRef });
     expect(store.listPendingWorkspaceResults()).toMatchObject([
       { sessionId: active.sessionId, workspaceAcceptedAtMs: null },

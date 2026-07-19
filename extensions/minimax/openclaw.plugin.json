@@ -7,6 +7,12 @@
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "minimax-native",
+      "hosts": ["api.minimax.io", "api.minimaxi.com"]
+    }
+  ],
   "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
   "nonSecretAuthMarkers": ["minimax-oauth"],

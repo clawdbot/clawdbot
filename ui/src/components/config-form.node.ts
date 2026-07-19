@@ -129,8 +129,7 @@ function renderSensitiveToggleButton(params: {
     <openclaw-tooltip .content=${label}>
       <button
         type="button"
-        class="btn btn--icon ${state.isRevealed ? "active" : ""}"
-        style="width:28px;height:28px;padding:0;"
+        class="settings-secret__toggle"
         aria-label=${label}
         aria-pressed=${state.isRevealed}
         ?disabled=${params.disabled || !state.canReveal}
@@ -140,6 +139,18 @@ function renderSensitiveToggleButton(params: {
       </button>
     </openclaw-tooltip>
   `;
+}
+
+/* Sensitive fields inset the reveal eye inside the field (settings-secret
+ * pattern); non-sensitive fields render the bare control unchanged. */
+function wrapSensitiveControl(
+  control: TemplateResult,
+  toggle: TemplateResult | typeof nothing,
+): TemplateResult {
+  if (toggle === nothing) {
+    return control;
+  }
+  return html`<span class="settings-secret">${control}${toggle}</span>`;
 }
 
 function renderTags(tags: string[]): TemplateResult | typeof nothing {
@@ -484,7 +495,7 @@ function renderTextInput(params: {
       : (value ?? "");
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
 
-  const control = html`
+  const inputControl = html`
     <input
       type=${effectiveInputType}
       class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
@@ -521,14 +532,17 @@ function renderTextInput(params: {
         onPatch(path, raw.trim());
       }}
     />
-    ${isStructuredSecretRef
-      ? nothing
-      : renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        })}
+  `;
+  const revealToggle = isStructuredSecretRef
+    ? nothing
+    : renderSensitiveToggleButton({
+        path,
+        state: sensitiveState,
+        disabled,
+        onToggleSensitivePath: params.onToggleSensitivePath,
+      });
+  const control = html`
+    ${wrapSensitiveControl(inputControl, revealToggle)}
     ${schema.default !== undefined
       ? html`
           <openclaw-tooltip .content=${t("configForm.resetToDefault")}>
@@ -664,7 +678,7 @@ function renderJsonTextareaControl(params: {
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { path, fallback, sensitiveState, disabled, onPatch } = params;
-  return html`
+  const textareaControl = html`
     <textarea
       class="settings-input${sensitiveState.isRedacted ? " cfg-redacted" : ""}"
       placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : t("configForm.jsonValue")}
@@ -694,13 +708,16 @@ function renderJsonTextareaControl(params: {
         }
       }}
     ></textarea>
-    ${renderSensitiveToggleButton({
+  `;
+  return wrapSensitiveControl(
+    textareaControl,
+    renderSensitiveToggleButton({
       path,
       state: sensitiveState,
       disabled,
       onToggleSensitivePath: params.onToggleSensitivePath,
-    })}
-  `;
+    }),
+  );
 }
 
 function renderJsonTextarea(params: {

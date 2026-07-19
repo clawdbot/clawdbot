@@ -123,3 +123,50 @@ describe("loadConfig env restoration", () => {
     });
   });
 });
+
+describe("readConfigFileSnapshot env restoration", () => {
+  it("removes a newly injected env var after invalid snapshot validation", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        env: { vars: { TEST_VAR: "injected-value" } },
+        gateway: { port: "invalid" },
+      });
+
+      const env = { HOME: home } as NodeJS.ProcessEnv;
+      const io = createConfigIO({
+        env,
+        homedir: () => home,
+        logger: { warn: () => {}, error: () => {} },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+
+      expect(snapshot.valid).toBe(false);
+      expect(env.TEST_VAR).toBeUndefined();
+    });
+  });
+
+  it("restores an overwritten env var after invalid snapshot validation", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        env: { vars: { PRE_EXISTING: "new-value" } },
+        gateway: { port: "invalid" },
+      });
+
+      const env = {
+        HOME: home,
+        PRE_EXISTING: "original-value",
+      } as NodeJS.ProcessEnv;
+      const io = createConfigIO({
+        env,
+        homedir: () => home,
+        logger: { warn: () => {}, error: () => {} },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+
+      expect(snapshot.valid).toBe(false);
+      expect(env.PRE_EXISTING).toBe("original-value");
+    });
+  });
+});

@@ -842,6 +842,8 @@ extension OnboardingWizardView {
             }
         }
         .font(OpenClawType.subheadSemiBold)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .disabled(!self.canConnectManual || self.connectingGateway != nil)
     }
 

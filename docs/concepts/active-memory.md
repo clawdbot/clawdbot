@@ -35,11 +35,13 @@ private conversations with one per-agent setting:
 }
 ```
 
-The setting is off by default. When enabled, OpenClaw indexes that agent's
-session transcripts and runs an Active Memory retrieval pass before eligible
-private replies. The pass can read relevant transcript excerpts from the same
-agent's other private conversations. It excludes the conversation already
-being answered.
+The setting defaults on for personal installs: global `session.dmScope` must be
+unset or `"main"`, and no binding may override `session.dmScope`. Any configured
+DM isolation defaults it off. An explicit `true` or `false` always wins. When
+enabled, OpenClaw indexes that agent's session transcripts and runs an Active
+Memory retrieval pass before eligible private replies. The pass can read
+relevant transcript excerpts from the same agent's other private conversations.
+It excludes the conversation already being answered.
 
 The privacy boundary is fixed:
 
@@ -156,8 +158,8 @@ personalization would be surprising.
 Active Memory has two activation paths:
 
 1. **Remember across conversations** automatically targets agents whose
-   `memorySearch.rememberAcrossConversations` setting is enabled, but only for
-   private direct or persistent explicit UI conversations.
+   effective `memorySearch.rememberAcrossConversations` setting is enabled, but
+   only for private direct or persistent explicit UI conversations.
 2. **Advanced Active Memory** targets agent IDs listed in
    `plugins.entries.active-memory.config.agents` and applies the plugin's chat
    type and chat ID controls.
@@ -727,8 +729,8 @@ while warm-up finishes.
 If active memory is not showing up where you expect:
 
 1. Confirm the plugin is enabled under `plugins.entries.active-memory.enabled`.
-2. For Remember across conversations, confirm the agent's
-   `memorySearch.rememberAcrossConversations` setting is `true`, run
+2. For Remember across conversations, confirm the agent's effective
+   `memorySearch.rememberAcrossConversations` setting is enabled, run
    `openclaw doctor` to verify the current memory provider supports protected
    transcript recall, and confirm `config.toolsAllow` includes `memory_search`
    when explicitly configured. For advanced Active Memory, confirm the agent ID

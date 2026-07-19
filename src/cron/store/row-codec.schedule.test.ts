@@ -11,6 +11,14 @@ function roundTrip(schedule: CronSchedule): CronSchedule | null {
 }
 
 describe("schedule column codec round-trip", () => {
+  it("round-trips pacing through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({ pacing: { min: "15m", max: "4h" } }),
+    );
+
+    expect(job.pacing).toEqual({ min: "15m", max: "4h" });
+  });
+
   it("round-trips an on-exit schedule with command + cwd", () => {
     expect(roundTrip({ kind: "on-exit", command: "make build", cwd: "/repo" })).toEqual({
       kind: "on-exit",

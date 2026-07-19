@@ -110,6 +110,9 @@ export const ChatSendParamsSchema = closedObject({
   originatingTo: Type.Optional(Type.String()),
   originatingAccountId: Type.Optional(Type.String()),
   originatingThreadId: Type.Optional(Type.String()),
+  // Transcript id of the message this send replies to; the Gateway hydrates
+  // channel-agnostic reply context metadata from session history.
+  replyToId: Type.Optional(NonEmptyString),
   attachments: Type.Optional(ChatAttachmentsSchema),
   toolBindings: Type.Optional(RunToolBindingsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -4,8 +4,11 @@
 export {
   createPluginStateKeyedStore as createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
+  getPluginStateCapacity as getPluginStateCapacityForTests,
+  importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+export { setMaxMemoryHostEventsForTests } from "../memory-host-sdk/event-store.js";
 export {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,

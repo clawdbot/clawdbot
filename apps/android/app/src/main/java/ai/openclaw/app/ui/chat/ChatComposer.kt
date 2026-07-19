@@ -474,15 +474,26 @@ internal fun canCommitStagedChatShare(
   currentHead?.id == stagedId &&
     ownerSnapshot == currentOwner
 
+internal fun appendChatDictationTranscript(
+  currentInput: String,
+  transcript: String,
+): String {
+  val normalized = transcript.trim()
+  if (normalized.isEmpty()) return currentInput
+  return if (currentInput.isEmpty() || currentInput.last().isWhitespace()) currentInput + normalized else "$currentInput $normalized"
+}
+
 internal fun chatComposerSendEnabled(
   voiceNoteState: VoiceNoteRecorderState,
   pendingRunCount: Int,
   hasContent: Boolean,
   shareStaging: Boolean,
   sendInFlight: Boolean = false,
+  dictationActive: Boolean = false,
 ): Boolean =
   !shareStaging &&
     !sendInFlight &&
+    !dictationActive &&
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
     voiceNoteState !is VoiceNoteRecorderState.Preparing &&
     pendingRunCount == 0 &&

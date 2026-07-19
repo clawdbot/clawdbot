@@ -31,6 +31,7 @@ import {
 import {
   assertCodexBindingMayBeReplaced,
   bindingStoreKey,
+  createCodexSessionGenerationSupersededError,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
@@ -1028,7 +1029,7 @@ async function resumeThread(
       config: ctx.config,
     });
     if (!reclaimed) {
-      throw new Error(`Codex session generation is no longer current: ${identity.sessionId}`);
+      throw createCodexSessionGenerationSupersededError(identity.sessionId);
     }
     const currentBinding = await deps.bindingStore.read(identity);
     assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");

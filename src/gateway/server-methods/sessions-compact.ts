@@ -43,7 +43,6 @@ import {
 import {
   emitSessionOperation,
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
 } from "./sessions-shared.js";
@@ -137,7 +136,7 @@ async function releaseManualPostCompactionDelegatesIfNeeded(params: {
 }
 
 export const sessionCompactHandlers: GatewayRequestHandlers = {
-  "sessions.compact": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.compact": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
@@ -146,10 +145,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "compact", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const maxLines =
       typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
         ? Math.max(1, Math.floor(p.maxLines))

@@ -923,7 +923,11 @@ use `openclaw/plugin-sdk/meeting-runtime` for session, browser, audio, node-host
 agent-consult, and voice-call mechanics, then implement `MeetingPlatformAdapter`
 for URL rules, DOM scripts, manual-action mapping, captions, creation, and dial-in
 plans. Platform REST APIs, OAuth, artifacts, selectors, and wire names remain in
-the plugin.
+the plugin. Browser permission plans receive the requested meeting URL so each
+platform can grant only its exact supported origins. Session runtimes must also
+normalize platform-specific live health after confirmed browser departure;
+historical transcript fields may remain, but caption and audio readiness must
+not stay active after leave.
 
 All bundled surfaces run on the shared controller: browser relay,
 managed-room handoff, voice-call realtime, voice-call streaming STT, Google

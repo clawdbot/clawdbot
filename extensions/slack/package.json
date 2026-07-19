@@ -35,6 +35,7 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "slack",
+      "approvalFlags": ["native"],
       "label": "Slack",
       "selectionLabel": "Slack (Socket Mode)",
       "detailLabel": "Slack Bot",

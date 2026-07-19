@@ -409,6 +409,9 @@ function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionP
     if (typeof entry.record.model === "string" && entry.record.model.trim()) {
       ignored.add(`${entry.path}.compaction.model`);
     }
+    if (typeof entry.record.thinkingLevel === "string" && entry.record.thinkingLevel.trim()) {
+      ignored.add(`${entry.path}.compaction.thinkingLevel`);
+    }
     if (providerPath) {
       ignored.add(providerPath);
     }

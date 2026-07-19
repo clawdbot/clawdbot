@@ -2844,6 +2844,50 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(!talkMode.isListening)
     }
 
+    @Test @MainActor func `enabling unified voice requests a missing Talk scope upgrade`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let config = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: "manual|gateway.example.com|443",
+            tls: nil,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil))
+        appModel._test_setActiveGatewayConnectConfig(config)
+        talkMode.gatewayTalkPermissionState = .missingScope("operator.talk.secrets")
+        defer {
+            appModel.setTalkEnabled(false)
+            appModel.disconnectGateway()
+        }
+
+        appModel.setTalkEnabled(true)
+        await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
+
+        #expect(appModel._test_forceTalkPermissionUpgradeRequest())
+        appModel.gatewayAutoReconnectEnabled = false
+        appModel.gatewayPairingPaused = true
+        appModel.setTalkEnabled(false)
+        #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
+        #expect(appModel.gatewayAutoReconnectEnabled)
+        #expect(!appModel.gatewayPairingPaused)
+
+        appModel.gatewayAutoReconnectEnabled = false
+        appModel.gatewayPairingPaused = true
+        appModel.setTalkEnabled(false)
+        #expect(!appModel.gatewayAutoReconnectEnabled)
+        #expect(appModel.gatewayPairingPaused)
+    }
+
     @Test @MainActor func `stale PTT recognition callback cannot mutate a newer capture`() async throws {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         talkMode.updateGatewayConnected(true)
@@ -2865,6 +2909,261 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         _ = talkMode.cancelPushToTalk(captureId: secondCaptureId)
         _ = await talkMode.awaitPushToTalkOnce(second)
+    }
+
+    @Test @MainActor func `chat dictation returns transcript and releases audio ownership`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [captureId])
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft from speech",
+            isFinal: false,
+            captureId: captureId)
+
+        appModel.finishChatDictation()
+        let transcript = try await transcription.value
+        #expect(transcript == "draft from speech")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `cancelling chat dictation clears capture and voice wake lease`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "discard this partial draft",
+            isFinal: false,
+            captureId: captureId)
+
+        appModel.cancelChatDictation()
+
+        let transcript = try await transcription.value
+        #expect(transcript == nil)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `remote PTT cannot adopt or interrupt chat dictation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        talkMode.updateGatewayConnected(true)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+
+        let remoteStart = await appModel._test_handleInvoke(
+            talkRequest(id: "remote-start-during-dictation", command: .pttStart))
+        #expect(!remoteStart.ok)
+        #expect(remoteStart.error?.message.contains("PTT_BUSY") == true)
+
+        for command in [OpenClawTalkCommand.pttStop, .pttCancel] {
+            let response = await appModel._test_handleInvoke(
+                talkRequest(id: "remote-\(command.rawValue)-during-dictation", command: command))
+            let payload = try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: response)
+            #expect(payload.status == "idle")
+            #expect(payload.captureId != captureId)
+            #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+            #expect(appModel.isChatDictationActive)
+            #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [captureId])
+        }
+
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft remains local",
+            isFinal: false,
+            captureId: captureId)
+        appModel.finishChatDictation()
+
+        #expect(try await transcription.value == "draft remains local")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `chat dictation refuses a capture it did not reserve`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let existing = try await talkMode.beginPushToTalkOnce(
+            maxDurationSeconds: 30,
+            transcriptionOnly: true)
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+
+        let transcript = try await appModel.transcribeChatDraft()
+
+        #expect(transcript == nil)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+        _ = talkMode.cancelPushToTalk(captureId: captureId)
+        _ = await talkMode.awaitPushToTalkOnce(existing)
+    }
+
+    @Test @MainActor func `gateway disconnect preserves local chat dictation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        talkMode.updateGatewayConnected(true)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft survives disconnect",
+            isFinal: false,
+            captureId: captureId)
+
+        talkMode.updateGatewayConnected(false)
+
+        #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+        appModel.finishChatDictation()
+        #expect(try await transcription.value == "draft survives disconnect")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `gateway replacement preserves local chat dictation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let initialGateway = GatewayNodeSession()
+        let replacementGateway = GatewayNodeSession()
+        talkMode.attachGateway(initialGateway)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft survives replacement",
+            isFinal: false,
+            captureId: captureId)
+
+        talkMode.attachGateway(replacementGateway)
+
+        #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+        appModel.finishChatDictation()
+        #expect(try await transcription.value == "draft survives replacement")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `route and remote PTT invalidation preserve dictation preparation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            barrier.release()
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await barrier.waitUntilEntered()
+
+        #expect(await appModel._test_handleInvoke(talkRequest(id: "remote-cancel", command: .pttCancel)).ok)
+        appModel._test_invalidateOperatorTalkRoute()
+        barrier.release()
+
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft survives preparation invalidation",
+            isFinal: false,
+            captureId: captureId)
+        appModel.finishChatDictation()
+
+        #expect(try await transcription.value == "draft survives preparation invalidation")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `backgrounding invalidates dictation preparation`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            barrier.release()
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.setScenePhase(.active)
+            appModel.voiceWake.stop()
+        }
+
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await barrier.waitUntilEntered()
+
+        appModel.setScenePhase(.background)
+        barrier.release()
+
+        await #expect(throws: Error.self) {
+            try await transcription.value
+        }
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `cancelling invalidates dictation preparation before capture reservation`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            barrier.release()
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await barrier.waitUntilEntered()
+        #expect(appModel.isChatDictationPending)
+        #expect(!appModel.isChatDictationActive)
+
+        appModel.cancelChatDictation()
+        #expect(appModel.isChatDictationPending)
+        barrier.release()
+
+        await #expect(throws: Error.self) {
+            try await transcription.value
+        }
+        #expect(!appModel.isChatDictationPending)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `backgrounding cancels chat dictation and preserves audio admission`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        defer { appModel.setScenePhase(.active) }
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+
+        appModel.setScenePhase(.background)
+
+        let transcript = try await transcription.value
+        #expect(transcript == nil)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
     @Test @MainActor func `stale continuous recognition callback cannot stop newer PTT`() async throws {

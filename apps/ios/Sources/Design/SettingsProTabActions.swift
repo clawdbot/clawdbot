@@ -362,6 +362,7 @@ extension SettingsProTab {
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return false }
         self.stagedGatewaySetupLink = nil
+        self.setupCode = ""
         await self.applyGatewayLink(link)
         return true
     }

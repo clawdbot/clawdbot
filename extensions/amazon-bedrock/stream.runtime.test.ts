@@ -239,6 +239,20 @@ describe("Bedrock profile endpoint resolution", () => {
       expectedRegion: "eu-west-1",
     },
     {
+      name: "blank primary region with a fallback env",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: "   ",
+      fallbackRegion: "eu-west-1",
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "blank region env vars",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: " ",
+      fallbackRegion: "\t",
+      expectedRegion: "us-east-1",
+    },
+    {
       name: "application inference-profile ARN",
       modelId: "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/profile-abc",
       ambientRegion: "us-east-1",
@@ -260,8 +274,11 @@ describe("Bedrock profile endpoint resolution", () => {
     },
   ])(
     "resolves $name to $expectedRegion",
-    async ({ modelId, ambientRegion, explicitRegion, expectedRegion }) => {
+    async ({ modelId, ambientRegion, fallbackRegion, explicitRegion, expectedRegion }) => {
       vi.stubEnv("AWS_REGION", ambientRegion);
+      if (fallbackRegion !== undefined) {
+        vi.stubEnv("AWS_DEFAULT_REGION", fallbackRegion);
+      }
 
       await expect(
         captureClientRegion(

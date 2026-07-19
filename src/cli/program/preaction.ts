@@ -144,6 +144,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
     let skipPristineStartupStateMigrations = false;
     let skipPristineCoreStateMigrations = false;
+    let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     if (isGatewayRunAction(actionCommand)) {
       const {
         prepareGatewayRunBootstrap,
@@ -153,6 +154,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       } = await import("../gateway-cli/pre-bootstrap.js");
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
+      allowInvalid ||= resolvedOptions.allowUnconfigured === true;
       const opts = {
         force: resolvedOptions.force === true,
         reset: resolvedOptions.reset === true,
@@ -174,7 +176,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       runtime: defaultRuntime,
       commandPath,
       startupPolicy,
-      allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      allowInvalid,
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),

@@ -4,7 +4,6 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { PollController } from "../lit/poll-controller.ts";
 import { formatBuildChipText } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
 
@@ -25,11 +24,8 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) onNavigate?: (routeId: "about") => void;
 
-  // Relative age must advance without sidebar renders; controller teardown keeps reconnects clean.
-  readonly polling = new PollController(this, 60_000, () => this.requestUpdate());
-
   override render() {
-    const text = formatBuildChipText(CONTROL_UI_BUILD_INFO, Date.now());
+    const text = formatBuildChipText(CONTROL_UI_BUILD_INFO);
     if (!text) {
       return nothing;
     }

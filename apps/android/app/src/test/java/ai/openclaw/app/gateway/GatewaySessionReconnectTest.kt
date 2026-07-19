@@ -658,7 +658,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -685,7 +685,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = null,
@@ -711,7 +711,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -748,7 +748,7 @@ class GatewaySessionReconnectTest {
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = code,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -785,7 +785,7 @@ class GatewaySessionReconnectTest {
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = "AUTH_UNAUTHORIZED",
               canRetryWithDeviceToken = nextStep == "retry_with_device_token",
               recommendedNextStep = nextStep,
@@ -811,7 +811,7 @@ class GatewaySessionReconnectTest {
         code = "INVALID_REQUEST",
         message = "authentication rate limited",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "AUTH_RATE_LIMITED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -836,7 +836,7 @@ class GatewaySessionReconnectTest {
         code = "INVALID_REQUEST",
         message = "protocol mismatch",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PROTOCOL_MISMATCH",
             canRetryWithDeviceToken = false,
             recommendedNextStep = null,
@@ -865,7 +865,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = null,
@@ -985,6 +985,41 @@ class GatewaySessionReconnectTest {
       }
     }
 
+  @Test
+  fun methodFailurePreservesMissingScopeDetails() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "question.list" ->
+              webSocket.send(
+                """
+                {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.questions"]}}}
+                """.trimIndent(),
+              )
+          }
+        }
+      val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+
+        val result = harness.session.requestDetailed("question.list", "{}")
+
+        assertFalse(result.ok)
+        assertEquals("MISSING_SCOPE", result.error?.details?.code)
+        assertEquals("operator.questions", result.error?.details?.missingScope)
+        assertEquals(listOf("operator.questions"), result.error?.details?.requiredScopes)
+        assertEquals("operator.questions", result.error?.missingScope())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
   private fun createReconnectHarness(
     onConnected: () -> Unit = {},
     onHello: (GatewayHelloSummary) -> Unit = {},
@@ -1001,7 +1036,7 @@ class GatewaySessionReconnectTest {
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
-        identityStore = DeviceIdentityStore(app),
+        identityStore = testDeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
         onConnected = { summary ->
           onConnected()

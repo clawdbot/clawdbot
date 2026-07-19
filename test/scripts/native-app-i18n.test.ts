@@ -471,13 +471,6 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source ===
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
       ),
     ).toBe(true);
@@ -493,7 +486,6 @@ describe("native app i18n inventory", () => {
         [
           "Your AI-powered setup helper. It can check status, fix config, ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
-          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from ",
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
           "Paste the token configured on the gateway host. ",
         ].includes(entry.source),

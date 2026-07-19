@@ -309,6 +309,28 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(11);
   });
 
+  it("aborts the crashed task's signal before starting its replacement", async () => {
+    const signals: AbortSignal[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      signals.push(ctx.abortSignal);
+      throw new Error("crash");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 2,
+      "expected a crash-loop restart",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    // A crashed startAccount can leave background work racing on its signal
+    // (e.g. a reconnect loop). The replacement must never overlap that lifetime.
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+  });
+
   it.each(["resolve", "reject"] as const)(
     "resets the restart counter after a stable run that ends with %s",
     async (outcome) => {

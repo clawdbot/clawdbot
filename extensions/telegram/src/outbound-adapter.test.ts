@@ -488,7 +488,7 @@ describe("telegramOutbound", () => {
     const rendered = await telegramOutbound.renderPresentation?.({
       payload: { text: "Open app:" },
       presentation,
-      ctx: {} as never,
+      ctx: { to: "12345" } as never,
     });
     if (!rendered) {
       throw new Error("expected rendered Telegram presentation");

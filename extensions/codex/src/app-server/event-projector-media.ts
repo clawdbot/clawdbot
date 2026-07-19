@@ -97,6 +97,14 @@ export class CodexGeneratedMediaProjection {
     return mediaUrls.size > 0 ? [...mediaUrls] : params.toolMediaUrls;
   }
 
+  buildHostOwnedMediaUrls(params: { messagingToolSentMediaUrls?: string[] }): string[] | undefined {
+    if ((params.messagingToolSentMediaUrls?.length ?? 0) > 0) {
+      return undefined;
+    }
+    const mediaUrls = [...this.urlsByItemId.values()];
+    return mediaUrls.length > 0 ? mediaUrls : undefined;
+  }
+
   private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
     if (this.urlsByItemId.has(params.itemId) && params.replaceExisting !== true) {
       this.itemIds.add(params.itemId);

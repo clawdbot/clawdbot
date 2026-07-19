@@ -48,7 +48,6 @@ extensions/codex/src/app-server/dynamic-tools.test.ts
 extensions/codex/src/app-server/dynamic-tools.ts
 extensions/codex/src/app-server/elicitation-bridge.test.ts
 extensions/codex/src/app-server/elicitation-bridge.ts
-extensions/codex/src/app-server/event-projector.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
@@ -93,8 +92,6 @@ extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
-extensions/discord/src/monitor/message-handler.process.test.ts
-extensions/discord/src/monitor/message-handler.process.ts
 extensions/discord/src/monitor/message-utils.test.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
@@ -339,8 +336,6 @@ extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
 extensions/workboard/src/tools.ts
-extensions/workspaces/src/gateway.ts
-extensions/workspaces/src/tools.ts
 extensions/xai/realtime-voice-provider.test.ts
 extensions/xai/web-search.test.ts
 extensions/zalo/src/monitor.ts
@@ -672,7 +667,6 @@ src/cli/skills-cli.commands.test.ts
 src/cli/skills-cli.ts
 src/cli/update-cli.test.ts
 src/cli/update-cli/update-command-service.ts
-src/cli/update-cli/update-command.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
@@ -763,7 +757,6 @@ src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/cron/isolated-agent/run.ts
-src/cron/normalize.ts
 src/cron/service.jobs.test.ts
 src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
@@ -837,7 +830,6 @@ src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/approval.test.ts
 src/gateway/server-methods/chat.abort-persistence.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
-src/gateway/server-methods/chat.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
@@ -947,7 +939,6 @@ src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
 src/infra/update-runner.test.ts
-src/infra/update-runner.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/infra/windows-gateway-firewall-diagnostics.ts
@@ -1067,9 +1058,7 @@ src/skills/workshop/service.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
-src/state/openclaw-agent-db.ts
 src/state/openclaw-state-db.test.ts
-src/state/openclaw-state-db.ts
 src/status/status-message.ts
 src/system-agent/agent-turn.test.ts
 src/system-agent/chat-engine.test.ts
@@ -1105,10 +1094,8 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/components/app-sidebar.test.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
-ui/src/components/lobster-pet.ts
 ui/src/components/markdown.ts
 ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
@@ -1157,7 +1144,6 @@ ui/src/pages/config/view.browser.test.ts
 ui/src/pages/config/view.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/new-session/new-session-page.ts
-ui/src/pages/plugin/workspace-view.ts
 ui/src/pages/plugins/plugins-page.ts
 ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts

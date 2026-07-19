@@ -32,7 +32,6 @@ import {
   loadAccessorSessionEntryForGatewayTarget,
   loadSessionsRuntimeModule,
   rejectPluginRuntimeDeleteMismatch,
-  rejectWebchatSessionMutation,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementMutationError,
@@ -52,10 +51,6 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "delete", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {

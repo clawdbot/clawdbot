@@ -47,7 +47,7 @@ import {
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
 
-type TerminalDock = DockPanelSide;
+type TerminalDock = Exclude<DockPanelSide, "left">;
 type TerminalTabState = TerminalPanelTab &
   TerminalTabReadinessState & {
     gatewaySessionId: string;
@@ -77,6 +77,7 @@ const panelLayout = createDockPanelLayout({
   minHeight: 140,
   minWidth: 320,
   defaultDock: "bottom",
+  supportedDocks: ["bottom", "right"],
   defaultHeight: 320,
   defaultWidth: 520,
 });

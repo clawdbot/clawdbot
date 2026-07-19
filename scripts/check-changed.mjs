@@ -634,6 +634,14 @@ export function createChangedCheckPlan(result, options = {}) {
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);
   }
+  if (lanes.apps || lanes.core) {
+    addCommand(
+      "native state schema version guard",
+      "node",
+      ["scripts/check-native-state-schema-version.mjs"],
+      baseEnv,
+    );
+  }
 
   if (lanes.core || lanes.extensions) {
     add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);

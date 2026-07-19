@@ -64,17 +64,18 @@
           - "extensions/teams-meetings/**"
           - "docs/plugins/teams-meetings.md"
           - "docs/plugins/reference/teams-meetings.md"
+"plugin: zoom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zoom-meetings/**"
+          - "docs/plugins/zoom-meetings.md"
+          - "docs/plugins/reference/zoom-meetings.md"
 "plugin: workboard":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
-"plugin: workspaces":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/workspaces/**"
-          - "docs/web/workspaces.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:

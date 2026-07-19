@@ -7,31 +7,108 @@
 // failed push degrades to device-local behavior instead of flip-flopping.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
   loadSettings,
+  normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   normalizeTextScale,
   patchSettings,
   TEXT_SCALE_STOPS,
+  type ChatFollowUpMode,
   type ChatSendShortcut,
   type TextScaleStop,
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 
-type ServerUiPrefs = {
-  theme?: ThemeName;
-  themeMode?: ThemeMode;
-  textScale?: TextScaleStop;
-  locale?: string;
-  chatShowThinking?: boolean;
-  chatShowToolCalls?: boolean;
-  chatSendShortcut?: ChatSendShortcut;
-};
-
 const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "custom"]);
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
+
+/**
+ * One descriptor per synced pref — the single source of truth for what syncs
+ * through config ui.prefs. Each key defines how to validate the server value,
+ * read the normalized local value, and (optionally) whether a server value is
+ * applicable on this device. `clearable` keys push an explicit JSON null when
+ * unset locally so the merge patch removes them server-side.
+ */
+type SyncedPrefSpec<T> = {
+  extract: (value: unknown) => T | undefined;
+  local: (settings: UiSettings) => T | undefined;
+  canApply?: (value: T, settings: UiSettings) => boolean;
+  clearable?: boolean;
+};
+
+const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
+
+function prefValuesEqual(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+  }
+  return left === right;
+}
+
+const SYNCED_PREFS = {
+  theme: prefSpec<ThemeName>({
+    extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
+    local: (settings) => settings.theme,
+    // A server "custom" theme is only honorable once this browser imported
+    // one; the imported palette itself is too large to live in config.
+    canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
+  }),
+  themeMode: prefSpec<ThemeMode>({
+    extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
+    local: (settings) => settings.themeMode,
+  }),
+  textScale: prefSpec<TextScaleStop>({
+    extract: (value) =>
+      TEXT_SCALE_STOPS.includes(value as TextScaleStop) ? normalizeTextScale(value) : undefined,
+    local: (settings) => normalizeTextScale(settings.textScale),
+  }),
+  locale: prefSpec<string>({
+    extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
+    local: (settings) => settings.locale,
+  }),
+  chatShowThinking: prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local: (settings) => settings.chatShowThinking,
+  }),
+  chatShowToolCalls: prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local: (settings) => settings.chatShowToolCalls,
+  }),
+  chatPersistCommentary: prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local: (settings) => settings.chatPersistCommentary ?? false,
+  }),
+  chatSendShortcut: prefSpec<ChatSendShortcut>({
+    extract: (value) =>
+      value === "enter" || value === "modifier-enter"
+        ? normalizeChatSendShortcut(value)
+        : undefined,
+    local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
+  }),
+  chatFollowUpMode: prefSpec<ChatFollowUpMode>({
+    extract: (value) => normalizeChatFollowUpModeOverride(value),
+    local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
+    // Unset means "use the server-configured queue mode"; clearing must
+    // propagate, so the push serializes an explicit null removal.
+    clearable: true,
+  }),
+  sidebarEntries: prefSpec<string[]>({
+    extract: (value) => normalizeSidebarEntries(value) ?? undefined,
+    local: (settings) => settings.sidebarEntries,
+  }),
+} as const;
+
+type SyncedPrefKey = keyof typeof SYNCED_PREFS;
+type SyncedPrefValue<K extends SyncedPrefKey> =
+  ReturnType<(typeof SYNCED_PREFS)[K]["extract"]> extends (infer T) | undefined ? T : never;
+
+type ServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
+
+const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
 
 function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
@@ -39,26 +116,11 @@ function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
     return {};
   }
   const result: ServerUiPrefs = {};
-  if (THEMES.has(prefs.theme as ThemeName)) {
-    result.theme = prefs.theme as ThemeName;
-  }
-  if (THEME_MODES.has(prefs.themeMode as ThemeMode)) {
-    result.themeMode = prefs.themeMode as ThemeMode;
-  }
-  if (TEXT_SCALE_STOPS.includes(prefs.textScale as TextScaleStop)) {
-    result.textScale = normalizeTextScale(prefs.textScale);
-  }
-  if (typeof prefs.locale === "string" && isSupportedLocale(prefs.locale)) {
-    result.locale = prefs.locale;
-  }
-  if (typeof prefs.chatShowThinking === "boolean") {
-    result.chatShowThinking = prefs.chatShowThinking;
-  }
-  if (typeof prefs.chatShowToolCalls === "boolean") {
-    result.chatShowToolCalls = prefs.chatShowToolCalls;
-  }
-  if (prefs.chatSendShortcut === "enter" || prefs.chatSendShortcut === "modifier-enter") {
-    result.chatSendShortcut = normalizeChatSendShortcut(prefs.chatSendShortcut);
+  for (const key of SYNCED_PREF_KEYS) {
+    const value = SYNCED_PREFS[key].extract(prefs[key]);
+    if (value !== undefined) {
+      (result as Record<string, unknown>)[key] = value;
+    }
   }
   return result;
 }
@@ -69,39 +131,33 @@ function serverPrefsLocalPatch(
   settings: UiSettings,
 ): Partial<UiSettings> | null {
   const patch: Partial<UiSettings> = {};
-  // A server "custom" theme is only honorable once this browser imported one;
-  // the imported palette itself is too large to live in config.
-  if (prefs.theme !== undefined && prefs.theme !== settings.theme) {
-    if (prefs.theme !== "custom" || settings.customTheme) {
-      patch.theme = prefs.theme;
+  for (const key of SYNCED_PREF_KEYS) {
+    const specification = SYNCED_PREFS[key];
+    const serverValue = prefs[key];
+    if (serverValue === undefined) {
+      continue;
     }
-  }
-  if (prefs.themeMode !== undefined && prefs.themeMode !== settings.themeMode) {
-    patch.themeMode = prefs.themeMode;
-  }
-  if (prefs.textScale !== undefined && prefs.textScale !== normalizeTextScale(settings.textScale)) {
-    patch.textScale = prefs.textScale;
-  }
-  if (prefs.locale !== undefined && prefs.locale !== settings.locale) {
-    patch.locale = prefs.locale;
-  }
-  if (
-    prefs.chatShowThinking !== undefined &&
-    prefs.chatShowThinking !== settings.chatShowThinking
-  ) {
-    patch.chatShowThinking = prefs.chatShowThinking;
-  }
-  if (
-    prefs.chatShowToolCalls !== undefined &&
-    prefs.chatShowToolCalls !== settings.chatShowToolCalls
-  ) {
-    patch.chatShowToolCalls = prefs.chatShowToolCalls;
-  }
-  if (
-    prefs.chatSendShortcut !== undefined &&
-    prefs.chatSendShortcut !== normalizeChatSendShortcut(settings.chatSendShortcut)
-  ) {
-    patch.chatSendShortcut = prefs.chatSendShortcut;
+    // Null marks a server-side removal of a clearable key: drop the local
+    // override so this device falls back to the server-configured behavior.
+    if (serverValue === null) {
+      if (specification.clearable && specification.local(settings) !== undefined) {
+        (patch as Record<string, unknown>)[key] = undefined;
+      }
+      continue;
+    }
+    if (prefValuesEqual(serverValue, specification.local(settings))) {
+      continue;
+    }
+    if (
+      specification.canApply &&
+      !(specification.canApply as (value: unknown, settings: UiSettings) => boolean)(
+        serverValue,
+        settings,
+      )
+    ) {
+      continue;
+    }
+    (patch as Record<string, unknown>)[key] = serverValue;
   }
   return Object.keys(patch).length > 0 ? patch : null;
 }
@@ -109,29 +165,21 @@ function serverPrefsLocalPatch(
 /** Synced-key delta between two local settings snapshots, for the push path. */
 export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): ServerUiPrefs | null {
   const prefs: ServerUiPrefs = {};
-  if (next.theme !== previous.theme) {
-    prefs.theme = next.theme;
-  }
-  if (next.themeMode !== previous.themeMode) {
-    prefs.themeMode = next.themeMode;
-  }
-  if (normalizeTextScale(next.textScale) !== normalizeTextScale(previous.textScale)) {
-    prefs.textScale = normalizeTextScale(next.textScale);
-  }
-  if (next.locale !== previous.locale && next.locale) {
-    prefs.locale = next.locale;
-  }
-  if (next.chatShowThinking !== previous.chatShowThinking) {
-    prefs.chatShowThinking = next.chatShowThinking;
-  }
-  if (next.chatShowToolCalls !== previous.chatShowToolCalls) {
-    prefs.chatShowToolCalls = next.chatShowToolCalls;
-  }
-  if (
-    normalizeChatSendShortcut(next.chatSendShortcut) !==
-    normalizeChatSendShortcut(previous.chatSendShortcut)
-  ) {
-    prefs.chatSendShortcut = normalizeChatSendShortcut(next.chatSendShortcut);
+  for (const key of SYNCED_PREF_KEYS) {
+    const specification = SYNCED_PREFS[key];
+    const previousValue = specification.local(previous);
+    const nextValue = specification.local(next);
+    if (prefValuesEqual(previousValue, nextValue)) {
+      continue;
+    }
+    if (nextValue === undefined) {
+      // JSON merge patch removes keys via explicit null.
+      if (specification.clearable) {
+        (prefs as Record<string, unknown>)[key] = null;
+      }
+      continue;
+    }
+    (prefs as Record<string, unknown>)[key] = nextValue;
   }
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
@@ -223,6 +271,14 @@ export function applyServerUiPrefs(
   for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
     if (lastSeenRaw === null || prefs[prefKey] !== lastSeen[prefKey]) {
       (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
+    }
+  }
+  // A clearable key that disappeared from the server was removed by another
+  // writer; surface the removal as an explicit null so the local override
+  // clears too (non-clearable keys keep their device-local value).
+  for (const prefKey of Object.keys(lastSeen) as Array<keyof ServerUiPrefs>) {
+    if (!(prefKey in prefs) && SYNCED_PREFS[prefKey]?.clearable) {
+      (changed as Record<string, unknown>)[prefKey] = null;
     }
   }
   storeLastSeenKey(scope, key);

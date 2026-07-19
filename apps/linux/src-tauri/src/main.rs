@@ -3,6 +3,8 @@ mod canvas;
 mod cli;
 mod discovery;
 mod gateway;
+mod gateway_device_identity;
+mod gateway_ws;
 mod installer;
 mod notify;
 mod pending_approvals;
@@ -198,6 +200,8 @@ impl DesktopState {
         let cli = match self.resolve_cli() {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
+                app.state::<gateway_ws::GatewayClient>()
+                    .clear_configuration(app);
                 let snapshot = GatewaySnapshot::missing_cli();
                 self.update_tray(&snapshot);
                 return Ok(snapshot);
@@ -205,6 +209,8 @@ impl DesktopState {
             Err(error) => return Err(error.to_string()),
         };
         let ready = gateway::ensure_ready(&cli)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -232,6 +238,8 @@ impl DesktopState {
         let cli = OpenClawCli::discover().map_err(|error| error.to_string())?;
         *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
         let ready = gateway::ensure_ready(&cli)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -256,12 +264,16 @@ impl DesktopState {
         let cli = self.resolve_cli().map_err(|error| error.to_string())?;
         let snapshot = gateway::act(&cli, action)?;
         if matches!(action, GatewayAction::Stop) {
+            app.state::<gateway_ws::GatewayClient>()
+                .clear_configuration(app);
             self.show_local(app, "stopped", false, None)?;
             self.update_tray(&snapshot);
             return Ok(snapshot);
         }
 
         let ready = gateway::dashboard(&cli, snapshot)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -492,6 +504,8 @@ impl DesktopState {
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
+                            app.state::<gateway_ws::GatewayClient>()
+                                .configure(&app, ready.gateway_ws.clone());
                             match state.navigate_local(
                                 &app,
                                 &ready.dashboard_url,
@@ -726,6 +740,7 @@ fn main() {
             .expect("tauri.conf.json must define the main window");
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
+        app.manage(gateway_ws::GatewayClient::new());
         let deep_link_app = app.handle().clone();
         app.deep_link().on_open_url(move |event| {
             handle_deep_links(&deep_link_app, event.urls());

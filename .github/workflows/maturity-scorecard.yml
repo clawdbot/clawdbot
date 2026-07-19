@@ -50,9 +50,6 @@ on:
       CLAWSWEEPER_APP_PRIVATE_KEY:
         description: Optional contents-write App key used only by canonical direct dispatches
         required: false
-      MANTIS_GITHUB_APP_ID:
-        description: Optional pull-request-write App id used only by canonical direct dispatches
-        required: false
       MANTIS_GITHUB_APP_PRIVATE_KEY:
         description: Optional pull-request-write App key used only by canonical direct dispatches
         required: false
@@ -292,7 +289,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
 
   generate_qa_evidence:
@@ -682,7 +679,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ needs.validate_selected_ref.outputs.publication_base }}
           head-branch: ${{ needs.validate_selected_ref.outputs.publication_head }}

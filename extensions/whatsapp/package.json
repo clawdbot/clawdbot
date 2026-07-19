@@ -35,6 +35,7 @@
     },
     "channel": {
       "id": "whatsapp",
+      "approvalFlags": ["native"],
       "label": "WhatsApp",
       "selectionLabel": "WhatsApp (QR link)",
       "detailLabel": "WhatsApp Web",

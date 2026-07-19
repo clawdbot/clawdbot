@@ -75,6 +75,9 @@
       "@openclaw/gateway-protocol/connect-error-details": [
         "./packages/gateway-protocol/src/connect-error-details.ts"
       ],
+      "@openclaw/gateway-protocol/gateway-error-details": [
+        "./packages/gateway-protocol/src/gateway-error-details.ts"
+      ],
       "@openclaw/gateway-protocol/frame-guards": [
         "./packages/gateway-protocol/src/frame-guards.ts"
       ],

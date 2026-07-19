@@ -1959,6 +1959,8 @@ export function loadPluginManifest(
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)
+type PluginPackageChannelApprovalFlag = "native";
+
 export type PluginPackageChannel = {
   id?: string;
   label?: string;
@@ -1975,6 +1977,8 @@ export type PluginPackageChannel = {
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
+  /** Closed manifest flags for approval behavior available before the channel runtime loads. */
+  approvalFlags?: readonly PluginPackageChannelApprovalFlag[];
   exposure?: {
     configured?: boolean;
     setup?: boolean;

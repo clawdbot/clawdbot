@@ -5,6 +5,7 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -258,7 +259,7 @@ export async function sendMessageNextcloudTalk(
       timestamp,
     };
   } finally {
-    await release();
+    await releaseNextcloudTalkGuardedResponse({ response, release });
   }
 }
 
@@ -305,6 +306,6 @@ export async function sendReactionNextcloudTalk(
 
     return { ok: true };
   } finally {
-    await release();
+    await releaseNextcloudTalkGuardedResponse({ response, release });
   }
 }

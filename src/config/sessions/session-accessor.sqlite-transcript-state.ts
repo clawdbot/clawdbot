@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -6,6 +7,61 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+
+function createTranscriptGeneration(): string {
+  return randomUUID().replaceAll("-", "");
+}
+
+/** Read the current raw transcript generation inside the caller's transaction. */
+export function readTranscriptGenerationInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string | undefined {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_generations")
+      .select("generation")
+      .where("session_id", "=", sessionId),
+  )?.generation;
+}
+
+/** Materialize a generation once; pure appends must preserve an existing token. */
+export function ensureTranscriptGenerationInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string {
+  const db = getSessionKysely(database.db);
+  const generation = createTranscriptGeneration();
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_transcript_generations")
+      .values({ session_id: sessionId, generation, updated_at: Date.now() })
+      .onConflict((conflict) => conflict.column("session_id").doNothing()),
+  );
+  return readTranscriptGenerationInTransaction(database, sessionId) ?? generation;
+}
+
+/** Rotate the watermark in the same transaction as destructive transcript replacement. */
+export function rotateTranscriptGenerationInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string {
+  const db = getSessionKysely(database.db);
+  const generation = createTranscriptGeneration();
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_transcript_generations")
+      .values({ session_id: sessionId, generation, updated_at: Date.now() })
+      .onConflict((conflict) =>
+        conflict.column("session_id").doUpdateSet({ generation, updated_at: Date.now() }),
+      ),
+  );
+  return generation;
+}
 
 export function ensureTranscriptSessionRoot(
   database: OpenClawAgentDatabase,

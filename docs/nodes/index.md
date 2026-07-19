@@ -234,7 +234,7 @@ operators can ignore skills from every paired node with
 The headless node keeps three separate state records:
 
 - `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
-- `~/.openclaw/identity/device.json`: the signed device keypair and derived cryptographic device ID.
+- `~/.openclaw/state/openclaw.sqlite` (`device_identities`, key `primary`): the signed device keypair and derived cryptographic device ID.
 - `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
 
 For a signed node, the Gateway uses the cryptographic device ID for pairing and
@@ -242,6 +242,11 @@ node routing. The client instance ID is only connection metadata. Changing
 `--node-id` or migrating a retired `node.json` therefore does not reset pairing. See
 [Identity and pairing state](/cli/node#identity-and-pairing-state) for the
 supported revoke-and-re-pair flow and upgrade notes.
+
+A retired `identity/device.json` file or interrupted Doctor claim blocks normal
+identity use. Stop the node host and run `openclaw doctor --fix`; Doctor imports
+the validated keypair into SQLite before removing the old file. The identity
+migration leaves `identity/device-auth.json` untouched.
 
 ### Allowlist the commands
 
@@ -747,7 +752,7 @@ openclaw node run --host <gateway-host> --port 18789
 Notes:
 
 - Pairing is still required (the Gateway will show a device pairing prompt).
-- Client instance metadata, signed device identity, and pairing auth use separate files; see [Headless identity state](#headless-identity-state).
+- Client instance metadata, signed device identity, and pairing auth use separate state records; see [Headless identity state](#headless-identity-state).
 - Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json` (see [Exec approvals](/tools/exec-approvals)).
 - On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.

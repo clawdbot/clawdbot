@@ -17,6 +17,7 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CODE_HEAVY_SPOKEN_FALLBACK } from "./speech-text.js";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
@@ -123,6 +124,7 @@ const {
   setSummarizationEnabled,
   setTtsMaxLength,
   synthesizeSpeech,
+  textToSpeech,
   textToSpeechTelephony,
 } = await import("../runtime-api.js");
 
@@ -512,6 +514,38 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
     expect(request.timeoutMs).toBe(600_000);
+  });
+
+  it("normalizes non-streaming synthesis text before calling the provider", async () => {
+    const result = await synthesizeSpeech({
+      text: "## Update\n\nRead the [guide](https://example.com/guide)!!!!!",
+      cfg: createTtsConfig("openclaw-speech-core-talk-markdown-test"),
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("normalized talk synthesis request");
+    expect(request.text).toBe("Update\n\nRead the guide!");
+  });
+
+  it("speaks stripped code through the explicit textToSpeech conversion path", async () => {
+    let mediaDir: string | undefined;
+    try {
+      const result = await textToSpeech({
+        text: "```ts\nconst answer = 42;\n```",
+        cfg: createTtsConfig("openclaw-speech-core-code-convert-test"),
+      });
+
+      expect(result.success).toBe(true);
+      const request = requireFirstSynthesisRequest("explicit code conversion request");
+      expect(request.text).toBe("const answer = 42;");
+      expect(request.text).not.toBe(CODE_HEAVY_SPOKEN_FALLBACK);
+      mediaDir = result.audioPath ? path.dirname(result.audioPath) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
   });
 
   it("resolves the configured timeout for voice listing", async () => {
@@ -1026,6 +1060,70 @@ describe("speech-core native voice-note routing", () => {
       target: "audio-file",
       audioAsVoice: undefined,
     });
+  });
+
+  it("normalizes voice-note Markdown once before synthesis", async () => {
+    const text =
+      'This short explanation keeps the fenced literal below from becoming code-heavy.\n\n```md\nconst literal = "[x](y)";\n```';
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: { text },
+        cfg: createTtsConfig("openclaw-speech-core-once-normalized-markdown-test"),
+        channel: "telegram",
+        kind: "final",
+      });
+
+      const request = requireFirstSynthesisRequest("once-normalized voice-note synthesis request");
+      expect(request.text).toBe(
+        'This short explanation keeps the fenced literal below from becoming code-heavy.\n\nconst literal = "[x](y)";',
+      );
+      expect(result.text).toBe(text);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("skips channel auto-TTS audio for code-heavy replies", async () => {
+    const text = "```ts\nexport function answer() {\n  return 42;\n}\n```";
+    const result = await maybeApplyTtsToPayload({
+      payload: { text },
+      cfg: createTtsConfig("openclaw-speech-core-code-heavy-voice-note-test"),
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ text });
+  });
+
+  it("synthesizes code-heavy explicitly tagged hidden TTS text", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-code-heavy-hidden-tts-test");
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: {
+          text: '[[tts:text]]```ts\nconst detailedAnswer = "this code should still be spoken";\n```[[/tts:text]]',
+          audioAsVoice: true,
+        },
+        cfg,
+        channel: "telegram",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireFirstSynthesisRequest("code-heavy hidden TTS request");
+      expect(request.text).toBe('const detailedAnswer = "this code should still be spoken";');
+      expect(result.text).toBeUndefined();
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
   });
 
   it("synthesizes explicitly tagged short hidden TTS text", async () => {

@@ -41,31 +41,6 @@ openclaw-logs-page {
   max-height: none;
 }
 
-/* Persistent Simple/Advanced switch in the page header; keeps the way back
-   from advanced settings visible at all times. */
-.config-view-toggle {
-  flex: 0 0 auto;
-  align-self: center;
-}
-
-/* Mobile fallback: layout.mobile.css hides .content-header at small widths,
-   which would strand users in advanced mode with no way back. Mirror the
-   switch in an in-body row that only shows when the header is hidden. */
-.config-view-toggle-row {
-  display: none;
-}
-
-@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .config-view-toggle-row {
-    display: flex;
-    justify-content: flex-end;
-    width: 100%;
-    max-width: 760px;
-    margin: 0 auto;
-    padding: var(--space-3) var(--space-4) 0;
-  }
-}
-
 /* ── Config Accordion Nav (Advanced Settings, rendered by view.ts) ── */
 
 .config-accordion-nav {

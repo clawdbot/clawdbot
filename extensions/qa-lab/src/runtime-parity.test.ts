@@ -8,7 +8,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
@@ -23,6 +23,7 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   await tempDirs.cleanup();
 });
 
@@ -127,6 +128,38 @@ function makeRuntimeParityCell(
 }
 
 describe("runtime parity", () => {
+  it("cancels a failed mock-request response before falling back to transcript calls", async () => {
+    const parentPrompt = "Delegate one bounded QA task to a subagent.";
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "mock-runtime-parity-failure",
+      sessionKey: "agent:qa:mock-runtime-parity-failure",
+      messages: [{ role: "user", content: parentPrompt }],
+    });
+    const cancel = vi.fn(() => {
+      throw new Error("cancel failed");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new ReadableStream<Uint8Array>({ cancel }), {
+            status: 503,
+          }),
+      ),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "openclaw",
+      gateway: { tempRoot },
+      mockBaseUrl: "http://127.0.0.1:43123",
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(cell.toolCalls).toEqual([]);
+  });
+
   it("captures tool results from the canonical SQLite session transcript", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
       sessionId: "capability-flip",

@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
@@ -373,7 +373,7 @@ class InvokeDispatcherTest {
           canvas = canvas,
           json = Json { ignoreUnknownKeys = true },
         ),
-      debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
+      debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
       isForeground = { isForeground },
       cameraEnabled = { cameraEnabled },

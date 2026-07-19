@@ -28,6 +28,18 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class ChatComposerDraftTest {
   @Test
+  fun dictationAppendsToTheCurrentDraftWithoutEatingSpacing() {
+    assertEquals("hello world", appendChatDictationTranscript("hello", " world "))
+    assertEquals("hello world", appendChatDictationTranscript("hello ", " world "))
+    assertEquals("hello", appendChatDictationTranscript("hello", "   "))
+  }
+
+  @Test
+  fun dictationFillsAnEmptyDraft() {
+    assertEquals("hello world", appendChatDictationTranscript("", " hello world "))
+  }
+
+  @Test
   fun textDraftsRemainKeyedToTheirComposerOwner() {
     val store = ChatComposerTextDraftStore()
     val first = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
@@ -913,6 +925,19 @@ class ChatComposerDraftTest {
         hasContent = true,
         shareStaging = false,
         sendInFlight = true,
+      ),
+    )
+  }
+
+  @Test
+  fun sendIsDisabledWhileDictationIsActive() {
+    assertFalse(
+      chatComposerSendEnabled(
+        voiceNoteState = VoiceNoteRecorderState.Idle,
+        pendingRunCount = 0,
+        hasContent = true,
+        shareStaging = false,
+        dictationActive = true,
       ),
     )
   }

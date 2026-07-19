@@ -23,10 +23,11 @@ function parseAuditCursor(cursor: string | undefined): number | undefined | null
   if (cursor === undefined) {
     return undefined;
   }
-  if (!/^\d+$/.test(cursor)) {
+  const trimmed = cursor.trim();
+  if (!/^\d+$/.test(trimmed)) {
     return null;
   }
-  const parsed = Number(cursor);
+  const parsed = Number(trimmed);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 

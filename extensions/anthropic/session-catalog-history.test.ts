@@ -20,6 +20,38 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
+  it("falls back for invalid timestamps while preserving valid pre-epoch dates", async () => {
+    appended.length = 0;
+    const fallbackTimestamp = new Date("2026-07-18T12:00:00.000Z").getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(fallbackTimestamp);
+    try {
+      await importClaudeHistory({
+        items: [
+          { type: "userMessage", text: "invalid", timestamp: "not-a-date", uuid: "u-1" },
+          {
+            type: "userMessage",
+            text: "pre-epoch",
+            timestamp: "1969-12-31T23:59:59.000Z",
+            uuid: "u-2",
+          },
+        ],
+        threadId: "thread-1",
+        sessionFile: "/tmp/unused.jsonl",
+        sessionId: "session-1",
+        sessionKey: "agent:main:catalog-adopt",
+        agentId: "main",
+        config: {} as OpenClawConfig,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(appended).toHaveLength(2);
+    expect(appended.map((message) => message.timestamp)).toEqual([-1_000, fallbackTimestamp + 1]);
+    expect(JSON.stringify(appended)).not.toContain('"timestamp":null');
+  });
+
   it("tags imported native user rows so self-echo provenance excludes them", async () => {
     appended.length = 0;
     await importClaudeHistory({

@@ -20,6 +20,9 @@ type ConfigFormProps = {
   activeSubsection?: string | null;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
+  /** Composite pages render custom rows above the form; an empty schema
+   *  section must stay silent there instead of claiming the page is empty. */
+  embedded?: boolean;
   revealSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
@@ -108,6 +111,9 @@ export function renderConfigForm(props: ConfigFormProps) {
   }
 
   if (filteredEntries.length === 0) {
+    if (props.embedded && !searchQuery) {
+      return nothing;
+    }
     return renderSettingsPage(
       renderSettingsEmpty(
         searchQuery

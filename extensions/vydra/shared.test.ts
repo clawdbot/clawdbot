@@ -172,31 +172,12 @@ describe("downloadVydraAsset", () => {
 
   it("does not bound a dripping body when only chunk idle timeout is used", async () => {
     // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
-    server = http.createServer((_req, res) => {
-      res.on("error", () => {});
-      res.writeHead(200, {
-        "Content-Type": "image/png",
-        "Transfer-Encoding": "chunked",
-      });
-      const drip = () => {
-        if (res.writableEnded || res.destroyed) {
-          return;
-        }
-        res.write(Buffer.from([0x00]));
-        const timer = setTimeout(drip, 20);
-        dripTimers.add(timer);
-      };
-      drip();
+    const port = await listenDripServer({
+      statusCode: 200,
+      contentType: "image/png",
+      chunk: Buffer.from([0x00]),
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
-
-    const response = await fetch(`http://127.0.0.1:${address.port}/`);
+    const response = await fetch(`http://127.0.0.1:${port}/`);
     let settled = false;
     void readResponseWithLimit(response, 1024 * 1024, {
       chunkTimeoutMs: 100,

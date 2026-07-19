@@ -254,6 +254,79 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toStrictEqual(["fixture-provider:oauth", "fixture-provider:key"]);
   });
 
+  it.each([
+    ["expired first", ["openai:expired", "openai:valid"]],
+    ["valid first", ["openai:valid", "openai:expired"]],
+  ])("prefers live OAuth before expired OAuth when %s", (_caseName, profileIds) => {
+    const now = Date.now();
+    const profiles: AuthProfileStore["profiles"] = {
+      "openai:expired": {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: now - 60_000,
+      },
+      "openai:valid": {
+        type: "oauth",
+        provider: "openai",
+        access: "valid-access",
+        refresh: "valid-refresh",
+        expires: now + 60_000,
+      },
+    };
+    const orderedProfiles: AuthProfileStore["profiles"] = {};
+    for (const profileId of profileIds) {
+      const profile = profiles[profileId];
+      if (profile) {
+        orderedProfiles[profileId] = profile;
+      }
+    }
+
+    expect(
+      resolveAuthProfileOrder({
+        store: {
+          version: 1,
+          profiles: orderedProfiles,
+          usageStats: {
+            "openai:expired": { lastUsed: 0 },
+            "openai:valid": { lastUsed: 10_000 },
+          },
+        },
+        provider: "openai",
+      }),
+    ).toStrictEqual(["openai:valid", "openai:expired"]);
+  });
+
+  it("keeps an explicit order authoritative across OAuth expiry state", () => {
+    const now = Date.now();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "expired-access",
+          refresh: "expired-refresh",
+          expires: now - 60_000,
+        },
+        "openai:valid": {
+          type: "oauth",
+          provider: "openai",
+          access: "valid-access",
+          refresh: "valid-refresh",
+          expires: now + 60_000,
+        },
+      },
+      order: { openai: ["openai:expired", "openai:valid"] },
+    };
+
+    expect(resolveAuthProfileOrder({ store, provider: "openai" })).toStrictEqual([
+      "openai:expired",
+      "openai:valid",
+    ]);
+  });
+
   it("does not fall back past an explicit configured auth order", async () => {
     const store: AuthProfileStore = {
       version: 1,

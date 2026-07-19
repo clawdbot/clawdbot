@@ -27,6 +27,9 @@ const COPILOT_RELAY_LABEL = {
   on: "Browser relay connected",
   error: "Browser relay reconnecting",
 };
+const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
+const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
+const RELAY_OPENING_TIMEOUT_MS = 30_000;
 
 /** @type {WebSocket|null} */
 let relayWs = null;
@@ -34,6 +37,7 @@ let relayState = "off"; // off | connecting | on | error
 let copilot = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
+let relayOpeningDeadlineAt = 0;
 /** Tab ids with an active chrome.debugger attachment. */
 const attachedTabs = new Set();
 /** Tabs denied to every relay attach while copilot run cleanup is pending. */
@@ -305,6 +309,16 @@ function send(message) {
   }
 }
 
+function clearRelayOpeningDeadline() {
+  relayOpeningDeadlineAt = 0;
+  void chrome.alarms.clear(RELAY_OPENING_DEADLINE_ALARM);
+}
+
+function armRelayOpeningDeadline() {
+  relayOpeningDeadlineAt = Date.now() + RELAY_OPENING_TIMEOUT_MS;
+  chrome.alarms.create(RELAY_OPENING_DEADLINE_ALARM, { when: relayOpeningDeadlineAt });
+}
+
 async function handleRelayCommand(msg) {
   const { seq } = msg;
   try {
@@ -379,6 +393,7 @@ async function sendHello() {
 async function connectRelay() {
   const { relayUrl, token } = await getConfig();
   if (!relayUrl || !token) {
+    clearRelayOpeningDeadline();
     setBadge("off");
     return;
   }
@@ -398,7 +413,13 @@ async function connectRelay() {
     return;
   }
   relayWs = ws;
+  armRelayOpeningDeadline();
   ws.addEventListener("open", () => {
+    if (relayWs !== ws) {
+      ws.close();
+      return;
+    }
+    clearRelayOpeningDeadline();
     reconnectAttempt = 0;
     setBadge("on");
     void sendHello();
@@ -414,6 +435,7 @@ async function connectRelay() {
   });
   ws.addEventListener("close", () => {
     if (relayWs === ws) {
+      clearRelayOpeningDeadline();
       relayWs = null;
       setBadge("error");
       scheduleReconnect();
@@ -434,6 +456,38 @@ copilot = createCopilotController({
 });
 const copilotCustodyReady = copilot.initializeCustody();
 const copilotReady = copilot.initialize();
+
+function handleRelayOpeningDeadline() {
+  const ws = relayWs;
+  if (!ws) {
+    clearRelayOpeningDeadline();
+    void connectRelay();
+    return;
+  }
+  if (ws.readyState === WebSocket.OPEN) {
+    clearRelayOpeningDeadline();
+    return;
+  }
+  if (
+    ws.readyState !== WebSocket.CONNECTING ||
+    relayOpeningDeadlineAt === 0 ||
+    Date.now() < relayOpeningDeadlineAt
+  ) {
+    return;
+  }
+
+  // Clear ownership before close so a delayed close/open event from this
+  // socket cannot mutate the replacement connection's badge or deadline.
+  relayWs = null;
+  clearRelayOpeningDeadline();
+  try {
+    ws.close();
+  } catch {
+    // The socket may have changed state while the alarm event was queued.
+  }
+  setBadge("error");
+  scheduleReconnect();
+}
 
 function scheduleReconnect() {
   if (reconnectTimer) {
@@ -476,6 +530,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           groupColor: nearestGroupColor(msg.groupColor),
         });
         reconnectAttempt = 0;
+        clearRelayOpeningDeadline();
         relayWs?.close();
         relayWs = null;
         await chrome.storage.local.set({ gatewayUrl: parsed.gatewayUrl ?? "" });
@@ -486,6 +541,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       case "unpair": {
         await chrome.storage.local.remove(["relayUrl", "gatewayUrl", "token"]);
+        clearRelayOpeningDeadline();
         relayWs?.close();
         relayWs = null;
         setBadge("off");
@@ -557,13 +613,15 @@ chrome.tabGroups.onRemoved.addListener(() => {
 });
 
 // Watchdog: MV3 can stop this worker; the alarm revives it and re-connects.
-chrome.alarms.create("openclaw-relay-watchdog", { periodInMinutes: 0.5 });
+chrome.alarms.create(RELAY_WATCHDOG_ALARM, { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "openclaw-relay-watchdog") {
+  if (alarm.name === RELAY_WATCHDOG_ALARM) {
     void connectRelay();
     void copilot.drainAborts();
     void copilot.drainArchives();
     void copilot.drainStaleScopes();
+  } else if (alarm.name === RELAY_OPENING_DEADLINE_ALARM) {
+    handleRelayOpeningDeadline();
   }
 });
 chrome.runtime.onStartup.addListener(() => void connectRelay());

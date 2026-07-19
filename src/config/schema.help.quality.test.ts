@@ -440,6 +440,13 @@ describe("config help copy quality", () => {
     expect(mode.includes('"default"')).toBe(true);
     expect(mode.includes('"safeguard"')).toBe(true);
 
+    const thinkingLevel = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.thinkingLevel"],
+      'FIELD_HELP["agents.defaults.compaction.thinkingLevel"] test invariant',
+    );
+    expect(/session level|inherit/i.test(thinkingLevel)).toBe(true);
+    expect(/Codex app-server|no per-operation thinking override/i.test(thinkingLevel)).toBe(true);
+
     const historyShare = expectDefined(
       FIELD_HELP["agents.defaults.compaction.maxHistoryShare"],
       'FIELD_HELP["agents.defaults.compaction.maxHistoryShare"] test invariant',

@@ -39,6 +39,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "listWorkspaceReconciliationOwners"
   | "listPendingWorkspaceResults"
   | "workspaceResultInstanceId"
+  | "recordStagedWorkspaceResult"
   | "acceptWorkspaceResult"
   | "completeWorkspaceResultAndReleaseTurn"
   | "abandonWorkspaceResult"

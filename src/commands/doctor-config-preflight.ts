@@ -387,6 +387,8 @@ export async function runDoctorConfigPreflight(
     skipPristineCoreStateMigrations?: boolean;
     /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
     skipPristineStartupStateMigrations?: boolean;
+    /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
+    doctorOnlyStateMigrations?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -590,6 +592,7 @@ export async function runDoctorConfigPreflight(
                 : {}),
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+              doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {

@@ -4,6 +4,7 @@ import { createDedupeCache } from "../infra/dedupe.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
+  isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
   throwInvalidConfig,
 } from "./io.invalid-config.js";
@@ -38,6 +39,14 @@ describe("config io invalid config formatting", () => {
     expect(err.code).toBe("INVALID_CONFIG");
     expect(err.details).toBe("- gateway.port: bad");
     expect(isInvalidConfigError(err)).toBe(true);
+    expect(isDoctorRecoverableInvalidConfigError(err)).toBe(true);
+    expect(
+      isDoctorRecoverableInvalidConfigError(
+        createInvalidConfigError("/tmp/openclaw.json", "manual repair", {
+          recovery: "manual",
+        }),
+      ),
+    ).toBe(false);
     expect(
       isInvalidConfigError(Object.assign(new Error(err.message), { code: "INVALID_CONFIG" })),
     ).toBe(true);

@@ -13,6 +13,7 @@ import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
+  CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
@@ -167,6 +168,7 @@ export type CronServiceDeps = {
        */
       deliveryAttempted?: boolean;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome &
       CronRunTelemetry
   >;
@@ -176,6 +178,19 @@ export type CronServiceDeps = {
       deliveryAttempted?: boolean;
       deliveryError?: string;
       delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
+  >;
+  runScriptJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      deliveryError?: string;
+      delivery?: CronDeliveryTrace;
+      notify?: string;
+      wake?: "now" | "next-heartbeat";
+      stateChanged?: boolean;
+      state?: unknown;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome
   >;
   cleanupTimedOutAgentRun?: (params: {

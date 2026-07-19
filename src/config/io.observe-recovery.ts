@@ -240,7 +240,6 @@ function createConfigObserveAuditAppendParams(
   params: ConfigObserveAuditRecordParams,
 ) {
   return {
-    fs: deps.fs,
     env: deps.env,
     homedir: deps.homedir,
     record: createConfigObserveAuditRecord(params),

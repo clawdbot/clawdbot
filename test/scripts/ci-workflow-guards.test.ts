@@ -27,6 +27,7 @@ const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const CREATE_GITHUB_APP_TOKEN_V3 =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
+const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
@@ -1105,7 +1106,7 @@ describe("ci workflow guards", () => {
       expect(preflight.needs).toBe("resolve-base");
       expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
       expect(preflight.strategy).toBeUndefined();
-      expect(preflight.steps).toHaveLength(2);
+      expect(preflight.steps).toHaveLength(preflight === controlUiPreflight ? 3 : 2);
       const checkoutStep = preflight.steps.find(
         (step: { uses?: string }) => step.uses === CHECKOUT_V6,
       );
@@ -1120,10 +1121,25 @@ describe("ci workflow guards", () => {
       expect(tokensStep.with).toEqual({
         "contents-client-id": "Iv23liOECG0slfuhz093",
         "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
-        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
+        ...(preflight === controlUiPreflight
+          ? { "pull-request-contents-permission": "write" }
+          : {}),
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
       });
     }
+    const controlUiTokensStep = controlUiPreflight.steps.find(
+      (step: { name?: string }) => step.name === "Create generated PR tokens",
+    );
+    const autoMergeSettingStep = controlUiPreflight.steps.find(
+      (step: { name?: string }) => step.name === "Verify repository auto-merge setting",
+    );
+    expect(controlUiTokensStep.id).toBe("tokens");
+    expect(autoMergeSettingStep.env.GH_TOKEN).toBe(
+      "${{ steps.tokens.outputs.pull-request-token }}",
+    );
+    expect(autoMergeSettingStep.run).toContain("autoMergeAllowed");
+    expect(autoMergeSettingStep.run).toContain("Repository auto-merge must be enabled");
 
     const tokenAction = parse(readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8"));
     const tokenActionSource = readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8");
@@ -1146,7 +1162,7 @@ describe("ci workflow guards", () => {
     for (const input of [
       "contents-client-id",
       "contents-private-key",
-      "pull-request-app-id",
+      "pull-request-client-id",
       "pull-request-private-key",
     ]) {
       expect(tokenAction.inputs[input].required).toBe(true);
@@ -1172,13 +1188,15 @@ describe("ci workflow guards", () => {
       id: "pull-request-token",
       uses: CREATE_GITHUB_APP_TOKEN_V3,
       with: {
-        "app-id": "${{ inputs.pull-request-app-id }}",
+        "client-id": "${{ inputs.pull-request-client-id }}",
         "private-key": "${{ inputs.pull-request-private-key }}",
         owner: "${{ github.repository_owner }}",
         repositories: "${{ github.event.repository.name }}",
+        "permission-contents": "${{ inputs.pull-request-contents-permission }}",
         "permission-pull-requests": "write",
       },
     });
+    expect(tokenAction.inputs["pull-request-contents-permission"].required).toBe(false);
     expect(tokenAction.outputs["contents-token"].value).toBe(
       "${{ steps.contents-token.outputs.token }}",
     );
@@ -1191,7 +1209,8 @@ describe("ci workflow guards", () => {
       with: {
         "contents-client-id": "${{ inputs.contents-client-id }}",
         "contents-private-key": "${{ inputs.contents-private-key }}",
-        "pull-request-app-id": "${{ inputs.pull-request-app-id }}",
+        "pull-request-client-id": "${{ inputs.pull-request-client-id }}",
+        "pull-request-contents-permission": "${{ inputs.auto-merge == 'true' && 'write' || '' }}",
         "pull-request-private-key": "${{ inputs.pull-request-private-key }}",
       },
     });
@@ -1360,7 +1379,7 @@ describe("ci workflow guards", () => {
       expect(publishStep.with).toMatchObject({
         "contents-client-id": "Iv23liOECG0slfuhz093",
         "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
-        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
         "base-branch": "${{ github.event.repository.default_branch }}",
         "head-branch": automationBranch,
@@ -2527,6 +2546,9 @@ describe("ci workflow guards", () => {
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
     expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
+    expect(warmerSource).toContain('"agentic-agents-embedded"');
+    expect(warmerSource).toContain('"agentic-gateway-methods"');
+    expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-actions-cache": "true",
@@ -3146,6 +3168,16 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("checks native and Node state schema versions in the macOS lane", () => {
+    const workflow = readCiWorkflow();
+    const schemaVersionStep = workflow.jobs["macos-swift"].steps.find(
+      (step: WorkflowStep) => step.name === "Native state schema version contract",
+    );
+
+    expect(schemaVersionStep.run).toContain("node scripts/check-native-state-schema-version.mjs");
+    expect(schemaVersionStep.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
   });
 
   it("resets SwiftPM state between macOS release build retries", () => {
@@ -4084,7 +4116,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
-  it("runs gateway watch after parallel built artifact checks", () => {
+  it("parallelizes gateway watch only on the large self-hosted build runner", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const builtArtifactChecks = buildArtifactSteps.find(
@@ -4092,15 +4124,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const run = builtArtifactChecks.run;
 
+    expect(builtArtifactChecks.env.PARALLEL_GATEWAY_WATCH).toBe(
+      "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
+    );
     expect(run).toContain('start_check "channels"');
     expect(run).toContain('start_check "core-support-boundary"');
-    expect(run).not.toContain('start_check "gateway-watch"');
-    expect(run.indexOf('for index in "${!pids[@]}"')).toBeLessThan(
-      run.indexOf('if [ "$RUN_GATEWAY_WATCH" = "true" ]; then'),
+    expect(run).toContain('start_check "gateway-watch"');
+    expect(run).toContain(
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then',
     );
     expect(run).toContain(
-      'node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1',
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
+    expect(run).toContain("wait_checks()");
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(2);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
@@ -4381,16 +4418,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(false);
     expect(Object.keys(maturityWorkflow.on.workflow_call.secrets).toSorted()).toEqual([
       "CLAWSWEEPER_APP_PRIVATE_KEY",
-      "MANTIS_GITHUB_APP_ID",
       "MANTIS_GITHUB_APP_PRIVATE_KEY",
       "OPENAI_API_KEY",
       "OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY",
     ]);
-    for (const secret of [
-      "CLAWSWEEPER_APP_PRIVATE_KEY",
-      "MANTIS_GITHUB_APP_ID",
-      "MANTIS_GITHUB_APP_PRIVATE_KEY",
-    ]) {
+    for (const secret of ["CLAWSWEEPER_APP_PRIVATE_KEY", "MANTIS_GITHUB_APP_PRIVATE_KEY"]) {
       expect(maturityWorkflow.on.workflow_call.secrets[secret].required).toBe(false);
     }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
@@ -4511,7 +4543,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       with: {
         "contents-client-id": "Iv23liOECG0slfuhz093",
         "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
-        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
       },
     });
@@ -4643,7 +4675,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(openDocsPrStep.with).toMatchObject({
       "contents-client-id": "Iv23liOECG0slfuhz093",
       "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
-      "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+      "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
       "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
       "base-branch": "${{ needs.validate_selected_ref.outputs.publication_base }}",
       "head-branch": "${{ needs.validate_selected_ref.outputs.publication_head }}",
@@ -4989,6 +5021,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow).toContain("Network runtime boundary-sensitive added lines");
     expect(workflow).toContain(
       'codex_transport="extensions/codex/src/app-server/transport-websocket.ts"',
+    );
+    expect(workflow).toContain(
+      "network_codeql_contract_pattern='^\\.github/codeql/(codeql-network-runtime-boundary-critical-quality\\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\\.ql)$'",
+    );
+    expect(workflow).toContain(
+      'if grep -Eq "$network_codeql_contract_pattern" "$changed_files" ||',
     );
     expect(workflow).toContain(
       '| select(.filename != "extensions/codex/src/app-server/transport-websocket.ts")',

@@ -353,7 +353,7 @@ export function registerDefaultAuthTokenSuite(): void {
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.json`),
+        identityPath: path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.sqlite`),
         nonce,
       });
 

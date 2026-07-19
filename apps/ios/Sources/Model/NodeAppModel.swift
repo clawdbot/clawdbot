@@ -88,6 +88,11 @@ private enum IOSDeepLinkAgentPolicy {
     static let maxUnkeyedConfirmChars = 240
 }
 
+private enum TalkCapturePreparationOwner {
+    case remotePushToTalk(epoch: UInt64)
+    case chatDictation(epoch: UInt64)
+}
+
 @MainActor
 @Observable
 // swiftlint:disable type_body_length file_length
@@ -514,9 +519,13 @@ final class NodeAppModel {
     @ObservationIgnored private var gatewaySessionResetGeneration: UInt64 = 0
     @ObservationIgnored private var gatewayRouteGeneration: UInt64 = 0
     @ObservationIgnored private var operatorTalkConnectionGeneration: UInt64 = 0
+    @ObservationIgnored private var operatorTalkHydrationGeneration: UInt64?
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
     @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
     private var forceOperatorTalkPermissionUpgradeRequest = false
+    @ObservationIgnored private var talkPermissionUpgradeTask: Task<Void, Never>?
+    @ObservationIgnored private var talkPermissionUpgradeReconnectTask: Task<Void, Never>?
+    private var talkPermissionUpgradeReconnectGeneration: UInt64 = 0
     private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
@@ -549,7 +558,10 @@ final class NodeAppModel {
     @ObservationIgnored private var testExecApprovalResolutionReconcilesUnknownAck = false
     #endif
     private var pttVoiceWakeLeaseCaptureId: String?
+    private var chatDictationCaptureId: String?
     private var talkPttCommandEpoch: UInt64 = 0
+    private var chatDictationCommandEpoch: UInt64 = 0
+    private(set) var isChatDictationPending = false
     private var talkPreparationInFlight = false
     private var auxiliaryAudioCapture: AuxiliaryAudioCapture?
     private var foregroundCaptureCancellations: [UUID: @MainActor () -> Void] = [:]
@@ -610,6 +622,10 @@ final class NodeAppModel {
             self.talkMode.isEnabled ||
             self.talkMode.isPushToTalkActive ||
             self.pttVoiceWakeLeaseCaptureId != nil
+    }
+
+    var isChatDictationActive: Bool {
+        self.chatDictationCaptureId != nil
     }
 
     var localChatFixture: LocalChatFixture? {
@@ -843,6 +859,8 @@ final class NodeAppModel {
             self.voiceWake.setSuppressedForBackground(true)
             self.talkMode.suspendForBackground()
         }
+        // Every TalkMode terminal path reports the exact capture after audio
+        // teardown; this callback is the single owner of Voice Wake lease release.
         self.talkMode.setPushToTalkAudioOwnershipEndHandler { [weak self] captureId in
             self?.releasePttVoiceWakeLease(for: captureId)
         }
@@ -1046,10 +1064,11 @@ final class NodeAppModel {
                 // schedule Voice Wake, which the background suspension must catch.
                 self.voiceNoteRecorder.cancel()
             }
-            // Invalidate queued or permission-suspended PTT starts before releasing
-            // Talk. Its capture-end callback can otherwise restart Voice Wake after
-            // the background suspension has already run.
+            // Backgrounding invalidates both remote PTT and local dictation preparation.
+            // Route and PTT events only advance the remote epoch so they cannot cancel
+            // transcription-only permission prompts.
             self.talkPttCommandEpoch &+= 1
+            self.chatDictationCommandEpoch &+= 1
             let shouldKeepTalkActive = keepTalkActive && self.talkMode.canKeepContinuousTalkActiveInBackground
             self.backgroundTalkKeptActive = shouldKeepTalkActive
             self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
@@ -1241,8 +1260,17 @@ final class NodeAppModel {
             self.voiceWake.setSuppressedByTalk(true)
         } else {
             self.voiceWake.setSuppressedByTalk(false)
+            self.cancelTalkPermissionUpgrade(
+                resumeOperatorGateway: self.forceOperatorTalkPermissionUpgradeRequest)
         }
         self.talkMode.setEnabled(enabled)
+        if enabled {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.talkMode.reloadConfig()
+                self.requestTalkPermissionUpgradeIfNeeded()
+            }
+        }
         Task { [weak self] in
             await self?.pushTalkModeToGateway(
                 enabled: enabled,
@@ -1262,7 +1290,11 @@ final class NodeAppModel {
         self.talkMode.applyProviderSelectionChanged()
     }
 
-    func requestTalkPermissionUpgrade() {
+    private func requestTalkPermissionUpgrade() {
+        if self.forceOperatorTalkPermissionUpgradeRequest {
+            guard case .requestFailed = self.talkMode.gatewayTalkPermissionState else { return }
+            self.cancelTalkPermissionUpgrade()
+        }
         guard let config = activeGatewayConnectConfig else {
             self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
             self.talkMode.statusText = "Gateway not connected"
@@ -1278,33 +1310,122 @@ final class NodeAppModel {
         self.lastGatewayProblem = nil
         self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
+        self.lastTalkPermissionReconnectAttemptAt = Date()
+        self.restartOperatorGatewayForTalkPermissionUpgrade(config)
+        self.startTalkPermissionUpgradePolling()
+    }
+
+    private func restartOperatorGatewayForTalkPermissionUpgrade(_ config: GatewayConnectConfig) {
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
         let sessionBox = config.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
-        Task { [weak self] in
+        let routeGeneration = self.gatewayRouteGeneration
+        self.talkPermissionUpgradeReconnectGeneration &+= 1
+        let reconnectGeneration = self.talkPermissionUpgradeReconnectGeneration
+        self.talkPermissionUpgradeReconnectTask?.cancel()
+        self.talkPermissionUpgradeReconnectTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.finishTalkPermissionUpgradeReconnect(generation: reconnectGeneration) }
             await self.operatorGateway.disconnect()
-            await MainActor.run {
-                self.startOperatorGatewayLoop(
-                    url: config.url,
-                    stableID: config.effectiveStableID,
-                    token: config.token,
-                    bootstrapToken: config.bootstrapToken,
-                    password: config.password,
-                    nodeOptions: config.nodeOptions,
-                    sessionBox: sessionBox)
+            guard !Task.isCancelled,
+                  self.talkMode.isEnabled,
+                  self.forceOperatorTalkPermissionUpgradeRequest,
+                  self.isCurrentGatewayRoute(
+                      generation: routeGeneration,
+                      stableID: config.effectiveStableID)
+            else { return }
+            self.startOperatorGatewayLoop(
+                url: config.url,
+                stableID: config.effectiveStableID,
+                token: config.token,
+                bootstrapToken: config.bootstrapToken,
+                password: config.password,
+                nodeOptions: config.nodeOptions,
+                sessionBox: sessionBox)
+        }
+    }
+
+    private func requestTalkPermissionUpgradeIfNeeded() {
+        guard Self.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: self.talkMode.isEnabled,
+            state: self.talkMode.gatewayTalkPermissionState)
+        else { return }
+        self.requestTalkPermissionUpgrade()
+    }
+
+    nonisolated static func shouldRequestTalkPermissionUpgrade(
+        isTalkEnabled: Bool,
+        state: TalkGatewayPermissionState) -> Bool
+    {
+        guard isTalkEnabled else { return false }
+        return switch state {
+        case .missingScope, .requestFailed:
+            true
+        default:
+            false
+        }
+    }
+
+    private func startTalkPermissionUpgradePolling() {
+        self.talkPermissionUpgradeTask?.cancel()
+        self.talkPermissionUpgradeTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                await self.pollTalkPermissionUpgrade()
+                guard self.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress else { return }
             }
         }
     }
 
-    func pollTalkPermissionUpgrade() async {
-        guard self.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress else {
-            await self.talkMode.reloadConfig()
-            await self.talkMode.prefetchRealtimeSessionIfReady(reason: "talk_permission_poll")
-            return
-        }
+    private func cancelTalkPermissionUpgrade(resumeOperatorGateway: Bool = false) {
+        self.forceOperatorTalkPermissionUpgradeRequest = false
+        self.talkPermissionUpgradeTask?.cancel()
+        self.talkPermissionUpgradeTask = nil
+        self.talkPermissionUpgradeReconnectGeneration &+= 1
+        self.talkPermissionUpgradeReconnectTask?.cancel()
+        self.talkPermissionUpgradeReconnectTask = nil
+        self.lastTalkPermissionReconnectAttemptAt = nil
+        guard resumeOperatorGateway, let config = self.activeGatewayConnectConfig else { return }
 
-        guard let cfg = activeGatewayConnectConfig else {
+        // A scope-upgrade attempt can pause the shared operator reconnect loop for approval.
+        // Cancelling Talk must replace that attempt with the normal stored-auth connection.
+        self.gatewayAutoReconnectEnabled = true
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.clearOperatorGatewayConnectionProblemIfCurrent()
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        let sessionBox = config.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let routeGeneration = self.gatewayRouteGeneration
+        self.talkPermissionUpgradeReconnectGeneration &+= 1
+        let reconnectGeneration = self.talkPermissionUpgradeReconnectGeneration
+        self.talkPermissionUpgradeReconnectTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.finishTalkPermissionUpgradeReconnect(generation: reconnectGeneration) }
+            await self.operatorGateway.disconnect()
+            guard !Task.isCancelled,
+                  self.isCurrentGatewayRoute(
+                      generation: routeGeneration,
+                      stableID: config.effectiveStableID)
+            else { return }
+            self.startOperatorGatewayLoop(
+                url: config.url,
+                stableID: config.effectiveStableID,
+                token: config.token,
+                bootstrapToken: config.bootstrapToken,
+                password: config.password,
+                nodeOptions: config.nodeOptions,
+                sessionBox: sessionBox)
+        }
+    }
+
+    private func pollTalkPermissionUpgrade() async {
+        guard self.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress,
+              self.operatorTalkHydrationGeneration == nil
+        else { return }
+        guard let config = activeGatewayConnectConfig else {
+            self.forceOperatorTalkPermissionUpgradeRequest = false
             self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
             self.talkMode.statusText = "Gateway not connected"
             return
@@ -1316,31 +1437,30 @@ final class NodeAppModel {
         {
             return
         }
-        lastTalkPermissionReconnectAttemptAt = now
-
+        // The operator loop owns handshake retries. Polling only revives a loop
+        // that paused for approval; it must never impose a timeout on an active attempt.
+        guard Self.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: self.operatorGatewayTask != nil,
+            hasReconnectTask: self.talkPermissionUpgradeReconnectTask != nil)
+        else { return }
         GatewayDiagnostics.log("talk permission approval poll reconnect")
+        self.lastTalkPermissionReconnectAttemptAt = now
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
-        ensureOperatorReconnectLoopIfNeeded()
+        self.restartOperatorGatewayForTalkPermissionUpgrade(config)
+    }
 
-        if self.operatorGatewayTask == nil {
-            let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
-            startOperatorGatewayLoop(
-                url: cfg.url,
-                stableID: cfg.effectiveStableID,
-                token: cfg.token,
-                bootstrapToken: cfg.bootstrapToken,
-                password: cfg.password,
-                nodeOptions: cfg.nodeOptions,
-                sessionBox: sessionBox)
-        }
+    nonisolated static func shouldRestartTalkPermissionUpgradePoll(
+        hasOperatorGatewayTask: Bool,
+        hasReconnectTask: Bool) -> Bool
+    {
+        !hasOperatorGatewayTask && !hasReconnectTask
+    }
 
-        guard await waitForOperatorConnection(timeoutMs: 2500, pollMs: 250) else {
-            return
-        }
-        await self.talkMode.reloadConfig()
-        await self.talkMode.prefetchRealtimeSessionIfReady(reason: "talk_permission_poll_connected")
+    private func finishTalkPermissionUpgradeReconnect(generation: UInt64) {
+        guard self.talkPermissionUpgradeReconnectGeneration == generation else { return }
+        self.talkPermissionUpgradeReconnectTask = nil
     }
 
     func setTalkSpeakerphoneEnabled(_ enabled: Bool) {
@@ -1957,12 +2077,11 @@ final class NodeAppModel {
                     }
                     return decoded.ok ?? false
                 } catch {
-                    if let gatewayError = error as? GatewayResponseError {
-                        let lower = gatewayError.message.lowercased()
-                        if lower.contains("unauthorized role") || lower.contains("missing scope") {
-                            await self.setGatewayHealthMonitorDisabled(true)
-                            return true
-                        }
+                    if let gatewayError = error as? GatewayResponseError,
+                       gatewayError.isAuthorizationFailure
+                    {
+                        await self.setGatewayHealthMonitorDisabled(true)
+                        return true
                     }
                     return false
                 }
@@ -2699,7 +2818,9 @@ final class NodeAppModel {
             let commandEpoch = self.talkPttCommandEpoch
             var reservedCaptureId: String?
             do {
-                let payload = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
+                let payload = try await self.withTalkCapturePreparation(
+                    owner: .remotePushToTalk(epoch: commandEpoch))
+                {
                     try self.rejectTalkCaptureWhileOtherAudioActive()
                     return try await self.talkMode.beginPushToTalk(
                         canStartCapture: {
@@ -2730,7 +2851,9 @@ final class NodeAppModel {
             var reservedCaptureId: String?
             let start: TalkPushToTalkOnceStart
             do {
-                start = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
+                start = try await self.withTalkCapturePreparation(
+                    owner: .remotePushToTalk(epoch: commandEpoch))
+                {
                     try self.rejectTalkCaptureWhileOtherAudioActive()
                     return try await self.talkMode.beginPushToTalkOnce(
                         canStartCapture: {
@@ -2759,12 +2882,12 @@ final class NodeAppModel {
             // Interrupt commands invalidate suspended preparation before touching
             // capture state, then bypass the preparation queue entirely.
             self.talkPttCommandEpoch &+= 1
-            let payload = self.talkMode.endPushToTalk()
+            let payload = self.talkMode.endPushToTalk(expectedTranscriptionOnly: false)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttCancel.rawValue:
             self.talkPttCommandEpoch &+= 1
-            let payload = self.talkMode.cancelPushToTalk()
+            let payload = self.talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:
@@ -2773,6 +2896,90 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    /// Captures one locally recognized utterance for the chat draft. Unlike
+    /// remote PTT, this returns text without starting an agent turn or TTS.
+    func transcribeChatDraft() async throws -> String? {
+        guard !self.isChatDictationPending, self.chatDictationCaptureId == nil else { return nil }
+        self.isChatDictationPending = true
+        defer { self.isChatDictationPending = false }
+
+        let commandEpoch = self.chatDictationCommandEpoch
+        var reservedCaptureId: String?
+        let start: TalkPushToTalkOnceStart
+        do {
+            start = try await self.withTalkCapturePreparation(
+                owner: .chatDictation(epoch: commandEpoch))
+            {
+                try self.rejectTalkCaptureWhileOtherAudioActive()
+                return try await self.talkMode.beginPushToTalkOnce(
+                    maxDurationSeconds: 30,
+                    transcriptionOnly: true,
+                    canStartCapture: {
+                        self.chatDictationCommandEpoch == commandEpoch && !self.isBackgrounded
+                    },
+                    onCaptureReserved: { captureId in
+                        self.isChatDictationPending = false
+                        reservedCaptureId = captureId
+                        self.chatDictationCaptureId = captureId
+                        self.acquirePttVoiceWakeLease(for: captureId)
+                    })
+            }
+        } catch {
+            self.cancelChatDictationReservation(reservedCaptureId)
+            throw error
+        }
+
+        guard case let .started(captureId) = start else {
+            self.cancelChatDictationReservation(reservedCaptureId)
+            return nil
+        }
+        guard reservedCaptureId == captureId else {
+            self.cancelChatDictationReservation(reservedCaptureId)
+            if reservedCaptureId != captureId {
+                _ = self.talkMode.cancelPushToTalk(captureId: captureId)
+            }
+            return nil
+        }
+
+        let payload = await self.talkMode.awaitPushToTalkOnce(start)
+        // Dictation may be cancelled while recognition is suspended. Only the
+        // invocation that still owns this capture may publish its transcript.
+        guard payload.captureId == captureId,
+              self.chatDictationCaptureId == captureId
+        else {
+            if self.chatDictationCaptureId == captureId {
+                self.chatDictationCaptureId = nil
+            }
+            return nil
+        }
+        self.chatDictationCaptureId = nil
+        return payload.transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func cancelChatDictationReservation(_ captureId: String?) {
+        guard let captureId else { return }
+        _ = self.talkMode.cancelPushToTalk(captureId: captureId)
+        if self.chatDictationCaptureId == captureId {
+            self.chatDictationCaptureId = nil
+        }
+    }
+
+    func finishChatDictation() {
+        guard let captureId = self.chatDictationCaptureId else { return }
+        _ = self.talkMode.endPushToTalk(captureId: captureId)
+    }
+
+    func cancelChatDictation() {
+        // Cancellation must also invalidate permission/preparation work before a
+        // capture ID exists, or a dismissed dictation can start recording later.
+        self.chatDictationCommandEpoch &+= 1
+        // The suspended starter owns the pending flag. Keep it set until that task
+        // unwinds so another start cannot overlap the cancelled preparation.
+        guard let captureId = self.chatDictationCaptureId else { return }
+        _ = self.talkMode.cancelPushToTalk(captureId: captureId)
+        self.chatDictationCaptureId = nil
     }
 
     private func rejectTalkCaptureWhileOtherAudioActive() throws {
@@ -2866,19 +3073,33 @@ final class NodeAppModel {
     }
 
     private func withTalkCapturePreparation<T>(
-        commandEpoch: UInt64,
+        owner: TalkCapturePreparationOwner,
         operation: () async throws -> T) async throws -> T
     {
         try await self.acquireTalkPreparation()
         defer { self.releaseTalkPreparation() }
-        try self.ensureTalkPttCommandCurrent(commandEpoch)
+        try self.ensureTalkCapturePreparationCurrent(owner)
         #if DEBUG
         if let testTalkCapturePreparationHandler {
             await testTalkCapturePreparationHandler()
         }
         #endif
-        try self.ensureTalkPttCommandCurrent(commandEpoch)
+        try self.ensureTalkCapturePreparationCurrent(owner)
         return try await operation()
+    }
+
+    private func ensureTalkCapturePreparationCurrent(_ owner: TalkCapturePreparationOwner) throws {
+        switch owner {
+        case let .remotePushToTalk(epoch):
+            try self.ensureTalkPttCommandCurrent(epoch)
+        case let .chatDictation(epoch):
+            try Task.checkCancellation()
+            guard self.chatDictationCommandEpoch == epoch, !self.isBackgrounded else {
+                throw NSError(domain: "TalkMode", code: 9, userInfo: [
+                    NSLocalizedDescriptionKey: "DICTATION_CANCELLED: chat dictation start was cancelled",
+                ])
+            }
+        }
     }
 
     private func ensureTalkPttCommandCurrent(_ commandEpoch: UInt64) throws {
@@ -3693,6 +3914,7 @@ extension NodeAppModel {
         self.lastGatewayProblem = nil
         self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
+        self.cancelTalkPermissionUpgrade()
         // Publish teardown through the shared barrier before returning. A replacement connect
         // must await old loop cleanup instead of racing this synchronous UI action.
         _ = self.beginGatewaySessionReset(chainingAfterExisting: true)
@@ -3744,6 +3966,7 @@ extension NodeAppModel {
     {
         self.invalidateNodePushToTalkRoute()
         self.operatorTalkConnectionGeneration &+= 1
+        self.operatorTalkHydrationGeneration = nil
         self.chatSessionRoutingRestoreTask?.cancel()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
@@ -3918,7 +4141,7 @@ extension NodeAppModel {
     }
 
     private func hasStoredGatewayRoleToken(_ role: String, gatewayID: String) -> Bool {
-        let identity = DeviceIdentityStore.loadOrCreate()
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return false }
         return DeviceAuthStore.loadToken(
             deviceId: identity.deviceId,
             role: role,
@@ -4172,9 +4395,14 @@ extension NodeAppModel {
         else { return }
         self.operatorTalkConnectionGeneration &+= 1
         let talkConnectionGeneration = self.operatorTalkConnectionGeneration
+        self.operatorTalkHydrationGeneration = talkConnectionGeneration
+        defer {
+            if self.operatorTalkHydrationGeneration == talkConnectionGeneration {
+                self.operatorTalkHydrationGeneration = nil
+            }
+        }
         self.setOperatorConnected(true)
         self.clearOperatorGatewayConnectionProblemIfCurrent()
-        self.forceOperatorTalkPermissionUpgradeRequest = false
         GatewayDiagnostics.log(
             "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
@@ -4196,6 +4424,16 @@ extension NodeAppModel {
         guard shouldContinue() else { return }
         await self.talkMode.reloadConfig(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
+        self.requestTalkPermissionUpgradeIfNeeded()
+        if self.forceOperatorTalkPermissionUpgradeRequest {
+            guard !self.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction else { return }
+            // Completing the forced handshake must also release any approval pause so the
+            // shared operator route keeps reconnecting after this successful connection.
+            self.gatewayAutoReconnectEnabled = true
+            self.gatewayPairingPaused = false
+            self.gatewayPairingRequestId = nil
+            self.cancelTalkPermissionUpgrade()
+        }
         self.admitTalkAfterSessionHydration()
         await self.talkMode.prefetchRealtimeSessionIfReady(
             reason: "operator_connected",
@@ -4432,7 +4670,7 @@ extension NodeAppModel {
                                 self.applyOperatorGatewayConnectionProblem(nextProblem)
                             }
                             if talkPermissionUpgradeRequest, nextProblem.kind == .pairingScopeUpgradeRequired {
-                                self.talkMode.markTalkPermissionUpgradeRequested(requestId: nextProblem.requestId)
+                                self.talkMode.markTalkPermissionUpgradeRequested()
                             }
                         }
                         return nextProblem
@@ -4463,6 +4701,7 @@ extension NodeAppModel {
 
     private func invalidateOperatorTalkRoute() {
         self.operatorTalkConnectionGeneration &+= 1
+        self.operatorTalkHydrationGeneration = nil
         // A socket replacement invalidates Talk, not gateway identity hydration. The
         // replacement connection must await the same restore before admitting capture.
         self.setOperatorConnected(false)
@@ -4478,7 +4717,7 @@ extension NodeAppModel {
     private func invalidateNodePushToTalkRoute() {
         self.talkPttCommandEpoch &+= 1
         self.voiceWake.invalidatePendingCommand()
-        _ = self.talkMode.cancelPushToTalk()
+        _ = self.talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
     }
 
     private func startNodeGatewayLoop(
@@ -4788,9 +5027,13 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedOperatorScopes = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes ?? []
         return Self.shouldRequestOperatorApprovalScope(
             token: token,
@@ -4825,9 +5068,13 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedOperatorScopes = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes ?? []
         return Self.shouldRequestOperatorAdminScope(
             token: token,
@@ -4943,9 +5190,13 @@ extension NodeAppModel {
             return
         }
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        let identity = DeviceIdentityStore.loadOrCreate()
-        self.hasOperatorAdminScope = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        self.hasOperatorAdminScope = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes
             .contains("operator.admin") == true
     }
@@ -9908,12 +10159,11 @@ extension NodeAppModel {
             VoiceWakePreferences.saveTriggerWords(triggers)
         } catch {
             guard shouldApply() else { return }
-            if let gatewayError = error as? GatewayResponseError {
-                let lower = gatewayError.message.lowercased()
-                if lower.contains("unauthorized role") || lower.contains("missing scope") {
-                    self.setGatewayHealthMonitorDisabled(true)
-                    return
-                }
+            if let gatewayError = error as? GatewayResponseError,
+               gatewayError.isAuthorizationFailure
+            {
+                self.setGatewayHealthMonitorDisabled(true)
+                return
             }
             // Best-effort only.
         }
@@ -10240,6 +10490,14 @@ extension NodeAppModel {
 
 #if DEBUG
 extension NodeAppModel {
+    func _test_setActiveGatewayConnectConfig(_ config: GatewayConnectConfig?) {
+        self.activeGatewayConnectConfig = config
+    }
+
+    func _test_forceTalkPermissionUpgradeRequest() -> Bool {
+        self.forceOperatorTalkPermissionUpgradeRequest
+    }
+
     func _test_handleInvoke(
         _ req: BridgeInvokeRequest,
         gatewayStableID: String? = nil) async -> BridgeInvokeResponse
