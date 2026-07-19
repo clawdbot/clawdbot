@@ -74,6 +74,42 @@ jobs:
       bootstrap_candidate_count: ${{ steps.plan.outputs.bootstrap_candidate_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
+      - name: Write continuation identity
+        if: inputs.continuation_id != ''
+        env:
+          CONTINUATION_ID: ${{ inputs.continuation_id }}
+          WORKFLOW_INPUTS: ${{ toJson(inputs) }}
+        run: |
+          identity_dir="${RUNNER_TEMP}/clawhub-continuation-identity"
+          mkdir -p "${identity_dir}"
+          jq -n \
+            --arg continuation_id "${CONTINUATION_ID}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg workflow "plugin-clawhub-new.yml" \
+            --arg workflow_sha "${GITHUB_SHA}" \
+            --argjson inputs "${WORKFLOW_INPUTS}" '{
+              schemaVersion: 1,
+              kind: "openclaw-clawhub-continuation-identity",
+              repository: $repository,
+              workflow: $workflow,
+              workflowSha: $workflow_sha,
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              continuationId: $continuation_id,
+              inputs: $inputs
+            }' > "${identity_dir}/identity.json"
+
+      - name: Upload continuation identity
+        if: inputs.continuation_id != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-continuation-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-continuation-identity/identity.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
