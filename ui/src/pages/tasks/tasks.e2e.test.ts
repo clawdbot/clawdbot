@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -32,8 +32,8 @@ const runningTask = {
 };
 
 const queuedTask = {
-  id: "task-queued",
-  taskId: "task-queued",
+  id: "task-queued-row",
+  taskId: "task-queued-cancel",
   kind: "cron",
   runtime: "cron",
   status: "queued",
@@ -102,6 +102,7 @@ describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
     const video = page.video();
     try {
       const gateway = await installMockGateway(page, {
+        deferredMethods: ["tasks.cancel"],
         methodResponses: {
           "tasks.list": {
             tasks: [runningTask, queuedTask, completedTask, failedTask],
@@ -119,7 +120,7 @@ describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
       const active = page.locator('[data-task-section="active"]');
       const recent = page.locator('[data-task-section="recent"]');
       await active.locator('[data-task-id="task-running"]').waitFor({ state: "visible" });
-      await active.locator('[data-task-id="task-queued"]').waitFor({ state: "visible" });
+      await active.locator('[data-task-id="task-queued-row"]').waitFor({ state: "visible" });
       await recent.locator('[data-task-id="task-completed"]').waitFor({ state: "visible" });
       await recent.locator('[data-task-id="task-failed"]').waitFor({ state: "visible" });
       expect(await active.textContent()).toContain("Reading subscription paths");
@@ -146,12 +147,40 @@ describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
         fullPage: true,
       });
 
-      await active
-        .locator('[data-task-id="task-queued"]')
-        .getByRole("button", { name: "Cancel Nightly cleanup" })
-        .click();
+      const queuedCancel = active
+        .locator('[data-task-id="task-queued-row"]')
+        .getByRole("button", { name: "Cancel Nightly cleanup" });
+      await queuedCancel.click();
       const cancelRequest = await gateway.waitForRequest("tasks.cancel");
-      expect(cancelRequest.params).toEqual({ taskId: "task-queued" });
+      expect(cancelRequest.params).toEqual({ taskId: "task-queued-cancel" });
+      await expect
+        .poll(async () => ({
+          disabled: await queuedCancel.isDisabled(),
+          text: (await queuedCancel.textContent())?.trim(),
+        }))
+        .toEqual({ disabled: true, text: "Cancelling…" });
+      await writeFile(
+        path.join(artifactDir, "03-cancelling-id-taskid-mismatch.json"),
+        `${JSON.stringify(
+          {
+            cancellationRequest: cancelRequest.params,
+            observedButton: {
+              disabled: await queuedCancel.isDisabled(),
+              text: (await queuedCancel.textContent())?.trim(),
+            },
+            rowId: queuedTask.id,
+            taskId: queuedTask.taskId,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      await page.screenshot({
+        path: path.join(artifactDir, "03-cancelling-id-taskid-mismatch.png"),
+        fullPage: true,
+      });
+      await gateway.resolveDeferred("tasks.cancel");
+      await recent.locator('[data-task-id="task-queued-row"]').waitFor({ state: "visible" });
     } finally {
       await context.close();
       if (video) {
