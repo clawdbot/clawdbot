@@ -696,8 +696,34 @@ describe("package acceptance workflow", () => {
     expect(orchestration).toContain(
       'verify_args+=(--clawhub-workflow-ref "${clawhub_workflow_ref}")',
     );
-    expect(orchestration).toMatch(
-      /upload_release_evidence_assets\n\s+publish_github_release\n\s+mark_release_completion\n\s+upload_release_evidence_assets/,
+    const orchestrationLines = orchestration.split("\n").map((line) => line.trim());
+    const publicReleaseGuard = orchestrationLines.indexOf(
+      'if [[ "${github_release_already_public}" != "true" ]]; then',
+    );
+    const uploadPrepublicationEvidence = orchestrationLines.indexOf(
+      "upload_release_evidence_assets",
+      publicReleaseGuard,
+    );
+    const publishGitHubRelease = orchestrationLines.indexOf(
+      "publish_github_release",
+      uploadPrepublicationEvidence,
+    );
+    const markCompletion = orchestrationLines.indexOf(
+      "mark_release_completion",
+      publishGitHubRelease,
+    );
+    const uploadFinalEvidence = orchestrationLines.indexOf(
+      "upload_release_evidence_assets",
+      markCompletion,
+    );
+    expect(publicReleaseGuard).toBeGreaterThan(-1);
+    expect(uploadPrepublicationEvidence).toBeGreaterThan(publicReleaseGuard);
+    expect(publishGitHubRelease).toBeGreaterThan(uploadPrepublicationEvidence);
+    expect(markCompletion).toBeGreaterThan(publishGitHubRelease);
+    expect(uploadFinalEvidence).toBeGreaterThan(markCompletion);
+    expect(orchestration).toContain('github_release_already_public="true"');
+    expect(orchestration).toContain(
+      "Exact-bound public releases are resumable. A prior attempt may",
     );
     expect(orchestration).toContain('.releaseState = "verification-passed"');
     expect(orchestration).toContain(".pluginPublishScope = $plugin_publish_scope");
@@ -757,6 +783,10 @@ describe("package acceptance workflow", () => {
     expect(continuationRun).toContain("display_title == $expected_title");
     expect(continuationRun).toContain(
       'echo "$(target_base_correlation "${target}")-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+    );
+    expect(continuationRun).toContain('if [[ "${target}" == "bootstrap" ]]; then');
+    expect(continuationRun).toContain(
+      'echo "${RELEASE_PUBLISH_RUN_ID}-${RELEASE_PUBLISH_RUN_ATTEMPT}-${RELEASE_SHA}-${target}"',
     );
     expect(continuationRun).toContain('reconcile_latest_target "${target}" 12');
     expect(continuationRun).toContain("lookup was indeterminate");
