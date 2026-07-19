@@ -85,6 +85,31 @@ describe("nostr-profile-import", () => {
         vi.restoreAllMocks();
       }
     });
+
+    it("rejects profile content with invalid known fields", async () => {
+      mockState.subscribeMany.mockImplementation((_relays, _filter, handlers) => {
+        handlers.onevent({
+          id: "1".repeat(64),
+          pubkey: "a".repeat(64),
+          created_at: 1,
+          kind: 0,
+          tags: [],
+          content: JSON.stringify({ name: 123, about: "valid" }),
+          sig: "b".repeat(128),
+        });
+      });
+
+      await expect(
+        importProfileFromRelays({
+          pubkey: "a".repeat(64),
+          relays: ["wss://relay.example"],
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "Profile event content has invalid fields",
+        sourceRelay: "wss://relay.example",
+      });
+    });
   });
 
   describe("mergeProfiles", () => {
