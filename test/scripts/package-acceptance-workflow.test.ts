@@ -730,6 +730,14 @@ describe("package acceptance workflow", () => {
     expect(wait.run).toContain(
       'gh run watch --repo "${GITHUB_REPOSITORY}" "${PLUGIN_NPM_RUN_ID}" --exit-status',
     );
+    expect(wait["continue-on-error"]).toBe(true);
+    expect(workflowStep(job, "Initialize continuation evidence").run).toContain(
+      'status: "awaiting-plugin-npm"',
+    );
+    const resolvePluginNpm = workflowStep(job, "Resolve plugin npm wait outcome");
+    expect(resolvePluginNpm.run).toContain('.conclusion == "success"');
+    expect(resolvePluginNpm.run).toContain('evidence_status="plugin-npm-failed"');
+    expect(resolvePluginNpm.run).toContain('evidence_status="plugin-npm-observation-failed"');
     expect(handoff.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     expect(handoff.with?.name).toContain("plugin-npm-release-handoff-");
     expect(handoff.with?.["run-id"]).toBe("${{ inputs.plugin_npm_run_id }}");
@@ -747,6 +755,10 @@ describe("package acceptance workflow", () => {
     expect(continuationRun).toContain("did not reach a terminal state during cleanup");
     expect(continuationRun).toContain("continuation_id");
     expect(continuationRun).toContain("display_title == $expected_title");
+    expect(continuationRun).toContain('echo "${RELEASE_PUBLISH_RUN_ID}-${RELEASE_SHA}-${target}"');
+    expect(continuationRun).toContain('reconcile_target "${target}" 12');
+    expect(continuationRun).toContain("lookup was indeterminate");
+    expect(continuationRun).toContain("Reusing ClawHub");
     expect(continuationRun).not.toContain(".head_sha == $expected_sha");
     expect(continuationRun).toContain("Unable to reconcile ClawHub");
     expect(continuationRun).toContain('echo "UNRESOLVED:${target}"');
@@ -760,6 +772,10 @@ describe("package acceptance workflow", () => {
     expect(continuationRun).toContain('watch_run "${run_id}" "${watch_log}" &');
     expect(continuationRun).toContain('for index in "${!watch_pids[@]}"; do');
     expect(continuationRun).toContain("all dispatched child outcomes were collected");
+    expect(continuationRun).toContain("cleanup_on_exit");
+    expect(continuationRun).toContain("trap 'exit 143' TERM");
+    expect(continuationRun).toContain("trap '' INT TERM");
+    expect(continuationRun).toContain('continuation_status="ecosystem-interrupted"');
     expect(continuationRun).toContain('continuation_status="ecosystem-converged"');
     expect(workflowStep(job, "Upload continuation evidence").if).toBe("${{ always() }}");
   });
