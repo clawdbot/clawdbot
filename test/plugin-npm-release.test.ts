@@ -459,6 +459,12 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
     ).toEqual([]);
   });
 
+  it("accepts npm 12 single-value JSON arrays for the latest dist-tag", () => {
+    childProcessMock.execFileSyncOverride = (() => '["0.139.0"]\n') as unknown as ExecFileSync;
+
+    expect(collectPluginReleaseDependencyFreshnessErrors([plugin])).toEqual([]);
+  });
+
   it("fails closed when npm latest cannot be resolved", () => {
     expect(
       collectPluginReleaseDependencyFreshnessErrors([plugin], () => {
