@@ -16,6 +16,7 @@ const DEFAULT_INPUTS = {
   rerun_group: "all",
   reuse_evidence: "true",
 };
+const MAX_CONSECUTIVE_STATUS_ERRORS = 12;
 
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
@@ -285,7 +286,7 @@ function waitForWorkflowRun(parentRunId, workflowSha) {
       consecutiveErrors = 0;
     } catch (error) {
       consecutiveErrors += 1;
-      if (consecutiveErrors >= 3) {
+      if (consecutiveErrors >= MAX_CONSECUTIVE_STATUS_ERRORS) {
         throw error;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -298,18 +299,17 @@ function waitForWorkflowRun(parentRunId, workflowSha) {
       lastSummary = summary;
     }
     if (suite?.status === "completed") {
-      if (suite.conclusion === "success") {
-        return;
-      }
-      throw new Error(
-        `Full Release Validation concluded ${String(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
-      );
+      return suite;
     }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 45_000);
   }
   throw new Error(
     `Timed out waiting for Full Release Validation: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
   );
+}
+
+export function shouldDeleteTemporaryWorkflowRef(params) {
+  return !params.keepBranch && (params.dryRun || params.parentRunCompleted);
 }
 
 export function releaseEvidenceVerificationArgs(parentRunId) {
@@ -388,6 +388,7 @@ function main() {
   });
 
   let parentRunId;
+  let parentRunCompleted = false;
   try {
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {
@@ -416,16 +417,32 @@ function main() {
     }
 
     console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-    waitForWorkflowRun(parentRunId, workflowSha);
+    const completedRun = waitForWorkflowRun(parentRunId, workflowSha);
+    parentRunCompleted = true;
+    if (completedRun.conclusion !== "success") {
+      throw new Error(
+        `Full Release Validation concluded ${String(completedRun.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+      );
+    }
     verifyReleaseEvidence(parentRunId, workflowSha);
   } finally {
-    if (!args.keepBranch) {
+    if (
+      shouldDeleteTemporaryWorkflowRef({
+        keepBranch: args.keepBranch,
+        dryRun: args.dryRun,
+        parentRunCompleted,
+      })
+    ) {
       run("git", ["push", "origin", `:${remoteBranchRef}`], {
         dryRun: args.dryRun,
         stdio: "inherit",
       });
-    } else {
+    } else if (args.keepBranch) {
       console.log(`Kept ${remoteBranchRef}`);
+    } else {
+      console.warn(
+        `Kept ${remoteBranchRef}: parent completion was not confirmed. Delete it only after the run finishes.`,
+      );
     }
   }
 }
