@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -121,6 +122,77 @@ async function request(params: {
   return { handled, res, end, setHeader };
 }
 
+async function launchStandaloneHostWithStalledFetch(stallPhase: "fetch" | "body" = "fetch") {
+  const shell = await request({ url: "/__openclaw__/mcp-app" });
+  const body = String(shell.end.mock.calls[0]?.[0]);
+  const script = body.match(/<script>([\s\S]*)<\/script>/u)?.[1];
+  if (!script) {
+    throw new Error("standalone host script missing");
+  }
+  const listeners = new Map<string, Array<() => void>>();
+  const replaceChildren = vi.fn();
+  let requestSignal: AbortSignal | undefined;
+  const requestAbortError = () =>
+    requestSignal?.reason instanceof Error ? requestSignal.reason : new Error("request aborted");
+  const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    requestSignal = init?.signal ?? undefined;
+    if (stallPhase === "body") {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise<unknown>((_resolve, reject) => {
+            requestSignal?.addEventListener("abort", () => reject(requestAbortError()), {
+              once: true,
+            });
+          }),
+      } as Response);
+    }
+    return new Promise<Response>((_resolve, reject) => {
+      requestSignal?.addEventListener("abort", () => reject(requestAbortError()), { once: true });
+    });
+  });
+  runInNewContext(script, {
+    AbortController,
+    AbortSignal,
+    URL,
+    addEventListener: (type: string, listener: () => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+    clearTimeout,
+    document: {
+      createElement: () => ({
+        className: "",
+        contentWindow: undefined,
+        referrerPolicy: "",
+        remove: vi.fn(),
+        setAttribute: vi.fn(),
+        src: "",
+        style: { height: "" },
+        textContent: "",
+        title: "",
+      }),
+      getElementById: () => ({ replaceChildren }),
+    },
+    fetch,
+    innerWidth: 1024,
+    location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
+    matchMedia: () => ({ matches: false }),
+    navigator: { language: "en-US" },
+    setTimeout,
+  });
+  return {
+    emit: (type: string) => {
+      for (const listener of listeners.get(type) ?? []) {
+        listener();
+      }
+    },
+    fetch,
+    getRequestSignal: () => requestSignal,
+    replaceChildren,
+  };
+}
+
 describe("MCP App standalone host", () => {
   beforeEach(() => {
     mcpAppStandaloneTesting.clearTickets();
@@ -226,12 +298,19 @@ describe("MCP App standalone host", () => {
 
     let renderedError = "";
     const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
-    const initialSignal = AbortSignal.abort(timeoutError);
-    const initialTimeout = vi.fn(() => initialSignal);
-    const initialFetch = vi.fn(() => Promise.reject(timeoutError));
+    const initialTimeout = vi.fn((callback: () => void) => {
+      queueMicrotask(callback);
+      return 1;
+    });
+    const initialFetch = vi.fn((_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal;
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
 
     runInNewContext(source!, {
-      AbortSignal: { timeout: initialTimeout },
+      AbortController,
       URL,
       addEventListener: vi.fn(),
       document: {
@@ -247,15 +326,16 @@ describe("MCP App standalone host", () => {
       location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
       matchMedia: () => ({ matches: false }),
       navigator: { language: "en" },
-      setTimeout,
+      clearTimeout: vi.fn(),
+      setTimeout: initialTimeout,
     });
     await vi.waitFor(() =>
       expect(renderedError).toBe("MCP App view timed out; reload to try again"),
     );
-    expect(initialTimeout).toHaveBeenCalledWith(30_000);
+    expect(initialTimeout).toHaveBeenCalledWith(expect.any(Function), 30_000);
     expect(initialFetch).toHaveBeenCalledWith(
       "/__openclaw__/mcp-app/view",
-      expect.objectContaining({ signal: initialSignal }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
 
     const sandboxOrigin = "http://127.0.0.1:18790";
@@ -267,13 +347,11 @@ describe("MCP App standalone host", () => {
     };
     const replaceChildren = vi.fn();
     let onMessage: ((event: unknown) => void) | undefined;
-    const operationController = new AbortController();
-    const timeout = vi.fn((delay: number) => {
+    const timeout = vi.fn((callback: () => void, delay: number) => {
       if (delay === 65_000) {
-        queueMicrotask(() => operationController.abort(timeoutError));
-        return operationController.signal;
+        queueMicrotask(callback);
       }
-      return new AbortController().signal;
+      return delay;
     });
     const fetch = vi
       .fn()
@@ -297,7 +375,7 @@ describe("MCP App standalone host", () => {
       });
 
     runInNewContext(source!, {
-      AbortSignal: { timeout },
+      AbortController,
       URL,
       addEventListener: (type: string, listener: (event: unknown) => void) => {
         if (type === "message") {
@@ -313,7 +391,8 @@ describe("MCP App standalone host", () => {
       location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
       matchMedia: () => ({ matches: false }),
       navigator: { language: "en" },
-      setTimeout,
+      clearTimeout: vi.fn(),
+      setTimeout: timeout,
     });
     await vi.waitFor(() => expect(replaceChildren).toHaveBeenCalledWith(frame));
 
@@ -342,13 +421,59 @@ describe("MCP App standalone host", () => {
         sandboxOrigin,
       ),
     );
-    expect(timeout).toHaveBeenNthCalledWith(1, 30_000);
-    expect(timeout).toHaveBeenNthCalledWith(2, 65_000);
+    expect(timeout).toHaveBeenNthCalledWith(1, expect.any(Function), 30_000);
+    expect(timeout).toHaveBeenNthCalledWith(2, expect.any(Function), 65_000);
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/__openclaw__/mcp-app/view",
-      expect.objectContaining({ signal: operationController.signal }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it("bounds a stalled standalone view fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await launchStandaloneHostWithStalledFetch();
+      expect(host.fetch).toHaveBeenCalledOnce();
+      expect(host.getRequestSignal()).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(true);
+      expect(host.replaceChildren).toHaveBeenCalledWith(
+        expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a pending standalone view fetch when the page is hidden", async () => {
+    const host = await launchStandaloneHostWithStalledFetch();
+    expect(host.getRequestSignal()).toBeDefined();
+    host.emit("pagehide");
+    expect(host.getRequestSignal()?.aborted).toBe(true);
+  });
+
+  it("bounds a stalled standalone view response body", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await launchStandaloneHostWithStalledFetch("body");
+      expect(host.fetch).toHaveBeenCalledOnce();
+      expect(host.getRequestSignal()).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(true);
+      expect(host.replaceChildren).toHaveBeenCalledWith(
+        expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a pending standalone view response body when the page is hidden", async () => {
+    const host = await launchStandaloneHostWithStalledFetch("body");
+    expect(host.getRequestSignal()).toBeDefined();
+    host.emit("pagehide");
+    expect(host.getRequestSignal()?.aborted).toBe(true);
   });
 
   it("returns capabilities only for handlers installed on the live view", async () => {

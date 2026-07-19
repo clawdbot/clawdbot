@@ -275,6 +275,7 @@ function runStandaloneMcpAppHost(config: {
   let requestId = 0;
   let sandboxOrigin: string | undefined;
   let teardownId: JsonRpcId | undefined;
+  const pendingRequests = new Set<AbortController>();
 
   const asStandaloneRecord = (value: unknown): Record<string, unknown> | undefined =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -333,24 +334,66 @@ function runStandaloneMcpAppHost(config: {
     }
     return resolved;
   };
+  const withViewResponse = async <T>(
+    init: RequestInit,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    timeoutMs?: number,
+  ): Promise<T> => {
+    // Keep one signal across fetch and body consumption. The watchdog owns the
+    // request budget while pagehide can still abort every in-flight request.
+    const controller = new AbortController();
+    const timeout =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(
+            () =>
+              controller.abort(
+                Object.assign(new Error("MCP App request timed out"), { name: "TimeoutError" }),
+              ),
+            timeoutMs,
+          );
+    pendingRequests.add(controller);
+    try {
+      const response = await fetch(config.viewPath, { ...init, signal: controller.signal });
+      return await consume(response, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason;
+      }
+      throw error;
+    } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+      pendingRequests.delete(controller);
+    }
+  };
   const request = async (method: string, params: unknown): Promise<unknown> => {
-    const response = await fetch(config.viewPath, {
-      method: "POST",
-      headers: {
-        Authorization: `MCP-App ${ticket}`,
-        "Content-Type": "application/json",
+    if (!payload?.operationTimeoutMs) {
+      throw new Error("MCP App operation deadline is unavailable");
+    }
+    const { response, body } = await withViewResponse(
+      {
+        method: "POST",
+        headers: {
+          Authorization: `MCP-App ${ticket}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ method, params }),
+        cache: "no-store",
+        credentials: "omit",
       },
-      body: JSON.stringify({ method, params }),
-      cache: "no-store",
-      credentials: "omit",
-      signal:
-        payload?.operationTimeoutMs != null
-          ? AbortSignal.timeout(payload.operationTimeoutMs)
-          : undefined,
-    });
-    const body = (await response.json().catch(() => undefined)) as
-      | { ok?: boolean; result?: unknown; error?: string }
-      | undefined;
+      async (viewResponse, signal) => ({
+        response: viewResponse,
+        body: (await viewResponse.json().catch((error: unknown) => {
+          if (signal.aborted) {
+            throw error;
+          }
+          return undefined;
+        })) as { ok?: boolean; result?: unknown; error?: string } | undefined,
+      }),
+      payload.operationTimeoutMs,
+    );
     if (response.status === 401) {
       fail("MCP App ticket was rejected");
       throw new Error("MCP App ticket was rejected");
@@ -500,24 +543,33 @@ function runStandaloneMcpAppHost(config: {
     if (frame?.contentWindow) {
       post({ jsonrpc: "2.0", id: ++requestId, method: "ui/resource-teardown", params: {} });
     }
+    for (const controller of pendingRequests) {
+      controller.abort(new Error("MCP App page closed"));
+    }
+    pendingRequests.clear();
   });
   if (!ticket) {
     fail("MCP App ticket is missing");
     return;
   }
-  void fetch(config.viewPath, {
-    headers: { Authorization: `MCP-App ${ticket}` },
-    cache: "no-store",
-    credentials: "omit",
-    signal: AbortSignal.timeout(config.initialLoadTimeoutMs),
-  })
-    .then(async (response) => {
+  void withViewResponse(
+    {
+      headers: { Authorization: `MCP-App ${ticket}` },
+      cache: "no-store",
+      credentials: "omit",
+    },
+    async (response) => {
       if (!response.ok) {
         throw new Error("MCP App ticket was rejected");
       }
-      payload = (await response.json()) as ViewPayload;
-      installOperationHandlers(payload);
-      const sandboxUrl = resolveSandboxUrl(payload);
+      return (await response.json()) as ViewPayload;
+    },
+    config.initialLoadTimeoutMs,
+  )
+    .then((view) => {
+      payload = view;
+      installOperationHandlers(view);
+      const sandboxUrl = resolveSandboxUrl(view);
       sandboxOrigin = sandboxUrl.origin;
       frame = browser.document.createElement("iframe");
       frame.title = "MCP App";
