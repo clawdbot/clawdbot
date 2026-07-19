@@ -70,15 +70,20 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           ...params.adapter,
           resolveTurn: async (input, eventClass, preflight) => {
             const resolved = await resolveTurn(input, eventClass, preflight);
-            if (!("route" in resolved) || !("runDispatch" in resolved)) {
+            if (!("route" in resolved) || !("delivery" in resolved)) {
               return resolved;
             }
-            const { route, ...turn } = resolved;
+            const { cfg: _cfg, delivery: _delivery, route, ...turn } = resolved;
             return {
               ...turn,
               routeSessionKey: route.sessionKey,
               storePath: "/tmp/openclaw/signal-sessions.json",
               recordInboundSession: recordInboundSessionMock,
+              runDispatch: async () =>
+                await dispatchInboundMessageMock({
+                  ctx: resolved.ctxPayload,
+                  replyOptions: resolved.replyOptions,
+                }),
             };
           },
         },

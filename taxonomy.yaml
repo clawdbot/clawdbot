@@ -1618,6 +1618,7 @@ surfaces:
           - name: Tool-call handling
             coverageIds:
               [
+                agents.tool-use,
                 models.switching,
                 personal.no-fake-progress,
                 personal.task-followthrough,
@@ -2812,6 +2813,9 @@ surfaces:
           - name: Isolated cron execution
             coverageIds: [scheduling.cron, scheduling.dedup]
             description: Covers Isolated cron execution across scheduler dispatch, timer arming, manual/due runs, isolated agent execution, and related cron runs and diagnostics behavior.
+          - name: Cron persistence
+            coverageIds: [scheduling.persistence]
+            description: Covers durable cron job storage, recurring next-run advancement, and one-shot cleanup after successful execution.
           - name: Model/provider preflight
             coverageIds: [automation.model-provider-preflight]
             description: Covers Model/provider preflight across scheduler dispatch, timer arming, manual/due runs, isolated agent execution, and related cron runs and diagnostics behavior.

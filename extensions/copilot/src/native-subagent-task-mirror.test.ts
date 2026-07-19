@@ -36,11 +36,24 @@ function makeEvent<T extends NativeSubagentEventType>(
 }
 
 function createRuntime() {
-  const task = {} as AgentHarnessTaskRecord;
+  const task: AgentHarnessTaskRecord = {
+    taskId: "task-native-subagent",
+    runtime: "subagent",
+    requesterSessionKey: "agent:main:main",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    task: "native subagent",
+    status: "running",
+    deliveryStatus: "not_applicable",
+    notifyPolicy: "silent",
+    createdAt: 0,
+  };
   return {
-    tryCreateRunningTaskRun: vi.fn(() => task),
-    recordTaskRunProgressByRunId: vi.fn(() => []),
-    finalizeTaskRunByRunId: vi.fn(() => []),
+    tryCreateRunningTaskRun: vi.fn<AgentHarnessTaskRuntime["tryCreateRunningTaskRun"]>(() => task),
+    recordTaskRunProgressByRunId: vi.fn<AgentHarnessTaskRuntime["recordTaskRunProgressByRunId"]>(
+      () => [],
+    ),
+    finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>(() => []),
   } satisfies Pick<
     AgentHarnessTaskRuntime,
     "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
@@ -54,7 +67,9 @@ function createMirror(
   taskRuntimeMocks.runtime = runtime;
   const mirror = createCopilotNativeSubagentTaskMirror({
     ...params,
-    scope: {} as AgentHarnessTaskRuntimeScope,
+    scope: {
+      requesterSessionKey: "agent:main:main",
+    } satisfies AgentHarnessTaskRuntimeScope,
   });
   if (!mirror) {
     throw new Error("expected Copilot native subagent task mirror");

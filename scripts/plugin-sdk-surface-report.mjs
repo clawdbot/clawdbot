@@ -126,7 +126,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 595,
+  "infra-runtime": 600,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -267,7 +267,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: async memory prompt preparation registration.
       // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
       // Harvest: internal question runtime exports -2.
-      8155,
+      // +10: diagnostic-runtime publishes unique diagnostic and trace helpers.
+      // +7: absorbed deprecated runtime compatibility exports.
+      8172,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -305,7 +307,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: async memory prompt preparation registration.
       // +3: gateway-backed harness question runner and claim/cancel helpers.
       // Harvest: internal question runtime callable -1.
-      4537,
+      // +3: diagnostic-runtime publishes continuation-tracer callables.
+      // +2: deprecated infra-runtime exposes generateChainId and removeSystemEvents.
+      4542,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -324,14 +328,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
-      3005,
+      // +7: absorbed deprecated runtime compatibility exports.
+      3012,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
       // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      104,
+      103,
       env,
     ),
   };

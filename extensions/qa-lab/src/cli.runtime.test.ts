@@ -1673,8 +1673,6 @@ describe("qa cli runtime", () => {
       scenarioIds: [
         "channel-chat-baseline",
         "runtime-tool-bash",
-        "auth-profile-codex-mixed-profiles",
-        "auth-profile-doctor-migration-safety",
         "codex-plugin-cold-install",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",

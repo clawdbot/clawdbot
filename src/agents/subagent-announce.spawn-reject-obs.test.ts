@@ -26,6 +26,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { dispatchToolDelegates } from "../auto-reply/continuation/delegate-dispatch.js";
+
+type DispatchToolDelegatesParams = Parameters<typeof dispatchToolDelegates>[0];
+type DispatchToolDelegatesResult = Awaited<ReturnType<typeof dispatchToolDelegates>>;
 
 // --- Mocks that DO intercept the SUT (non-barrel modules) ---
 
@@ -81,8 +85,27 @@ vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   hasRecoverablePendingDelegate: vi.fn(() => false),
   markPendingDelegateFailed: vi.fn(),
   markPendingDelegateSpawnAccepted: vi.fn(),
+  peekSoonestUnmaturedDelegateDueAt: vi.fn(() => undefined),
   stagePostCompactionDelegate: vi.fn(),
 }));
+
+const { dispatchToolDelegatesMock } = vi.hoisted(() => ({
+  dispatchToolDelegatesMock: vi.fn(
+    async (params: DispatchToolDelegatesParams): Promise<DispatchToolDelegatesResult> => ({
+      dispatched: 0,
+      rejected: 0,
+      chainState: params.chainState,
+    }),
+  ),
+}));
+
+vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
+  dispatchToolDelegates: (params: DispatchToolDelegatesParams) => dispatchToolDelegatesMock(params),
+}));
+
+function failSharedDelegateDispatchOnce(): void {
+  dispatchToolDelegatesMock.mockRejectedValueOnce(new Error("shared delegate dispatch failed"));
+}
 
 import {
   consumePendingDelegates,
@@ -223,6 +246,11 @@ describe("subagent-announce tool-delegate rejection observability", () => {
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect");
     logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     mockedConsumePendingDelegates.mockReset().mockReturnValue([]);
+    dispatchToolDelegatesMock.mockReset().mockImplementation(async (params) => ({
+      dispatched: 0,
+      rejected: 0,
+      chainState: params.chainState,
+    }));
     mockedMarkPendingDelegateFailed.mockClear();
   });
 
@@ -230,13 +258,19 @@ describe("subagent-announce tool-delegate rejection observability", () => {
     spawnSpy.mockRestore();
     logSpy.mockRestore();
     mockedConsumePendingDelegates.mockReturnValue([]);
+    dispatchToolDelegatesMock.mockReset().mockImplementation(async (params) => ({
+      dispatched: 0,
+      rejected: 0,
+      chainState: params.chainState,
+    }));
     mockedMarkPendingDelegateFailed.mockClear();
     clearRuntimeConfigSnapshot();
   });
 
   it("surfaces spawnResult.error in `reason=...` log + markPendingDelegateFailed summary when present", async () => {
     const REASON = "tool-delegate depth cap exceeded";
-    mockedConsumePendingDelegates.mockReturnValue([{ task: "tool task to reject" }]);
+    mockedConsumePendingDelegates.mockReturnValueOnce([{ task: "tool task to reject" }]);
+    failSharedDelegateDispatchOnce();
     spawnSpy.mockResolvedValue({ status: "forbidden", error: REASON });
 
     await runSubagentAnnounceFlow(buildToolDelegateParams());
@@ -245,6 +279,7 @@ describe("subagent-announce tool-delegate rejection observability", () => {
     });
 
     expect(spawnSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
 
     const rejectionLogs = logSpy.mock.calls
       .map((c: unknown[]) => String(c[0]))
@@ -271,7 +306,8 @@ describe("subagent-announce tool-delegate rejection observability", () => {
   });
 
   it("falls back to `delegation was not accepted.` when spawnResult.error is absent", async () => {
-    mockedConsumePendingDelegates.mockReturnValue([{ task: "tool task no reason" }]);
+    mockedConsumePendingDelegates.mockReturnValueOnce([{ task: "tool task no reason" }]);
+    failSharedDelegateDispatchOnce();
     spawnSpy.mockResolvedValue({ status: "forbidden" });
 
     await runSubagentAnnounceFlow(buildToolDelegateParams());

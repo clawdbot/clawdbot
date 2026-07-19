@@ -571,7 +571,7 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("passes inbound Signal quote metadata to media replies", async () => {
-    replyMock.mockResolvedValue({ text: "caption", mediaUrl: "file:///tmp/reply.png" });
+    replyMock.mockResolvedValue({ text: "caption", mediaUrl: "https://example.com/reply.png" });
 
     await receiveSignalPayloads({
       payloads: [
@@ -592,7 +592,7 @@ describe("monitorSignalProvider tool results", () => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
-      mediaUrl: "file:///tmp/reply.png",
+      mediaUrl: "https://example.com/reply.png",
       replyToId: "1700000000001",
       replyToAuthor: "+15550001111",
       replyToBody: "quote me",

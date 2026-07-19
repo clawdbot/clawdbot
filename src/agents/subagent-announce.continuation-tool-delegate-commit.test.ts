@@ -7,6 +7,10 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { dispatchToolDelegates } from "../auto-reply/continuation/delegate-dispatch.js";
+
+type DispatchToolDelegatesParams = Parameters<typeof dispatchToolDelegates>[0];
+type DispatchToolDelegatesResult = Awaited<ReturnType<typeof dispatchToolDelegates>>;
 
 vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -60,8 +64,31 @@ vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   hasRecoverablePendingDelegate: vi.fn(() => false),
   markPendingDelegateFailed: vi.fn(),
   markPendingDelegateSpawnAccepted: vi.fn(),
+  peekSoonestUnmaturedDelegateDueAt: vi.fn(() => undefined),
   stagePostCompactionDelegate: vi.fn(),
 }));
+
+const { dispatchToolDelegatesMock } = vi.hoisted(() => ({
+  dispatchToolDelegatesMock: vi.fn(
+    async (params: DispatchToolDelegatesParams): Promise<DispatchToolDelegatesResult> => ({
+      dispatched: 0,
+      rejected: 0,
+      chainState: params.chainState,
+    }),
+  ),
+}));
+
+vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
+  dispatchToolDelegates: (params: DispatchToolDelegatesParams) => dispatchToolDelegatesMock(params),
+}));
+
+/*
+ * These non-bracket tests reach the direct path by failing the initial shared
+ * drain before it claims the queued row.
+ */
+function failSharedDelegateDispatchOnce(): void {
+  dispatchToolDelegatesMock.mockRejectedValueOnce(new Error("shared delegate dispatch failed"));
+}
 
 import {
   consumePendingDelegates,
@@ -137,6 +164,7 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
       runId: "run-continuation-child",
     });
     mockedConsumePendingDelegates.mockReturnValue([]);
+    dispatchToolDelegatesMock.mockClear();
     mockedMarkPendingDelegateFailed.mockClear();
     mockedMarkPendingDelegateSpawnAccepted.mockClear();
   });
@@ -144,14 +172,20 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
   afterEach(() => {
     spawnSpy.mockRestore();
     mockedConsumePendingDelegates.mockReturnValue([]);
+    dispatchToolDelegatesMock.mockReset().mockImplementation(async (params) => ({
+      dispatched: 0,
+      rejected: 0,
+      chainState: params.chainState,
+    }));
     clearRuntimeConfigSnapshot();
     clearSessionStoreCacheForTest();
   });
 
   it("threads continuationDelegateFlowId and commits the flow via markPendingDelegateSpawnAccepted", async () => {
-    mockedConsumePendingDelegates.mockReturnValue([
+    mockedConsumePendingDelegates.mockReturnValueOnce([
       { task: "continue next step", flowId: "flow-tool-c2", expectedRevision: 3 },
     ]);
+    failSharedDelegateDispatchOnce();
 
     await runSubagentAnnounceFlow(buildToolDelegateParams());
     await new Promise((resolve) => {
@@ -159,6 +193,7 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     });
 
     expect(spawnSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
     const spawnArgs = spawnSpy.mock.calls[0][0] as Record<string, unknown>;
     expect(spawnArgs.continuationDelegateFlowId).toBe("flow-tool-c2");
     expect(spawnArgs.drainsContinuationDelegateQueue).toBe(true);
@@ -175,9 +210,10 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
   });
 
   it("does not commit the flow when the spawn is rejected", async () => {
-    mockedConsumePendingDelegates.mockReturnValue([
+    mockedConsumePendingDelegates.mockReturnValueOnce([
       { task: "continue next step", flowId: "flow-tool-c2-reject", expectedRevision: 1 },
     ]);
+    failSharedDelegateDispatchOnce();
     spawnSpy.mockResolvedValue({ status: "forbidden", error: "depth exceeded" });
 
     await runSubagentAnnounceFlow(buildToolDelegateParams());

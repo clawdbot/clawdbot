@@ -1,4 +1,7 @@
 // Matrix plugin module implements test runtime behavior.
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
@@ -8,7 +11,7 @@ import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
 
@@ -28,6 +31,17 @@ type MatrixRuntimeStub = {
     "openKeyedStore" | "openSyncKeyedStore" | "resolveStateDir"
   >;
 };
+
+const autoStateDirs = new Set<string>();
+
+export function cleanupMatrixTestStateDirs(): void {
+  for (const stateDir of autoStateDirs) {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+  autoStateDirs.clear();
+}
+
+afterEach(cleanupMatrixTestStateDirs);
 
 function createMatrixRuntimeMediaMock(
   overrides: Partial<NonNullable<PluginRuntime["channel"]>["media"]> = {},
@@ -54,12 +68,17 @@ function createMatrixRuntimeMediaMock(
   };
 }
 
-export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
-  const osHomedirForTest = () => "/tmp";
+export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): string {
+  const isolatedStateDir =
+    options.stateDir ?? mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-test-"));
+  if (!options.stateDir) {
+    autoStateDirs.add(isolatedStateDir);
+  }
+  const osHomedirForTest = () => isolatedStateDir;
   const defaultStateDirResolver: NonNullable<PluginRuntime["state"]>["resolveStateDir"] = (
     _env,
-    homeDir,
-  ) => options.stateDir ?? (homeDir ?? (() => "/tmp"))();
+    _homeDir,
+  ) => isolatedStateDir;
   const resolvePluginStateEnv = (storeOptions: OpenKeyedStoreOptions): NodeJS.ProcessEnv => ({
     ...(storeOptions.env ?? process.env),
     OPENCLAW_STATE_DIR:
@@ -103,6 +122,7 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
   };
 
   setMatrixRuntime(runtime as unknown as PluginRuntime);
+  return isolatedStateDir;
 }
 
 type MatrixMonitorTestRuntimeOptions = Pick<MatrixTestRuntimeOptions, "cfg" | "stateDir"> & {

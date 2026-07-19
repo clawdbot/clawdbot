@@ -1,5 +1,5 @@
 // Signal plugin module implements event handler behavior.
-import { setTimeout as sleep } from "node:timers/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -48,12 +48,7 @@ import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import {
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleep as delay,
-} from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -189,11 +184,45 @@ async function finalizeSignalStatusReaction(params: {
   hasFinalResponse: boolean;
   removeAckAfterReply: boolean;
   timing: typeof DEFAULT_TIMING;
+  signal?: AbortSignal;
 }): Promise<void> {
+  const waitForHold = async (holdMs: number): Promise<boolean> => {
+    if (params.signal?.aborted) {
+      return false;
+    }
+    try {
+      await delay(holdMs, undefined, { signal: params.signal });
+      return true;
+    } catch (error) {
+      if (
+        params.signal?.aborted &&
+        collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).includes(
+          params.signal.reason,
+        )
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  };
+  const restoreIfAborted = async (): Promise<boolean> => {
+    if (!params.signal?.aborted) {
+      return false;
+    }
+    await params.controller.restoreInitial();
+    return true;
+  };
+
   if (params.outcome === "done") {
     await params.controller.setDone();
+    if (await restoreIfAborted()) {
+      return;
+    }
     if (params.removeAckAfterReply) {
-      await delay(params.timing.doneHoldMs);
+      if (!(await waitForHold(params.timing.doneHoldMs))) {
+        await params.controller.restoreInitial();
+        return;
+      }
       await params.controller.clear();
     } else {
       await params.controller.restoreInitial();
@@ -202,9 +231,15 @@ async function finalizeSignalStatusReaction(params: {
   }
 
   await params.controller.setError();
+  if (await restoreIfAborted()) {
+    return;
+  }
   if (params.hasFinalResponse) {
     if (params.removeAckAfterReply) {
-      await delay(params.timing.errorHoldMs);
+      if (!(await waitForHold(params.timing.errorHoldMs))) {
+        await params.controller.restoreInitial();
+        return;
+      }
       await params.controller.clear();
     } else {
       await params.controller.restoreInitial();
@@ -212,7 +247,7 @@ async function finalizeSignalStatusReaction(params: {
     return;
   }
   if (params.removeAckAfterReply) {
-    await delay(params.timing.errorHoldMs);
+    await waitForHold(params.timing.errorHoldMs);
   }
   await params.controller.restoreInitial();
 }
@@ -530,6 +565,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       route,
       sessionKey: route.sessionKey,
     });
+    const sessionInitRetrySignal =
+      deps.abortSignal && entry.turnAdoptionLifecycle?.abortSignal
+        ? AbortSignal.any([deps.abortSignal, entry.turnAdoptionLifecycle.abortSignal])
+        : (deps.abortSignal ?? entry.turnAdoptionLifecycle?.abortSignal);
 
     await runChannelInboundEvent({
       channel: "signal",
@@ -623,21 +662,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               : {}),
             onModelSelected,
           },
+          sessionInitRetry: {
+            delaysMs: RETRYABLE_FLUSH_RETRY_DELAYS_MS,
+            signal: sessionInitRetrySignal,
+          },
         }),
-        onFinalize: (result) => {
+        onFinalize: async (result) => {
           if (!statusReactionController) {
+            return;
+          }
+          if (sessionInitRetrySignal?.aborted) {
+            await statusReactionController.restoreInitial();
             return;
           }
           const hasFinalResponse =
             result.dispatched && hasVisibleInboundReplyDispatch(result.dispatchResult);
           const hasDeliveryFailure =
             result.dispatched && hasSignalStatusReplyDeliveryFailure(result.dispatchResult);
-          void finalizeSignalStatusReaction({
+          await finalizeSignalStatusReaction({
             controller: statusReactionController,
             outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
             hasFinalResponse,
             removeAckAfterReply: deps.cfg.messages?.removeAckAfterReply ?? false,
             timing: statusReactionTiming,
+            signal: sessionInitRetrySignal,
           }).catch((err: unknown) => {
             logVerbose(`signal: status reaction finalize failed: ${String(err)}`);
           });
@@ -746,43 +794,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     await settle();
   }
 
-  async function retrySignalInboundFlush(
-    entries: SignalInboundEntry[],
-    initialError: unknown,
-  ): Promise<void> {
-    let lastError = initialError;
-    for (const [attemptIndex, delayMs] of RETRYABLE_FLUSH_RETRY_DELAYS_MS.entries()) {
-      const attempt = attemptIndex + 1;
-      logVerbose(
-        `signal: reply session init conflict, retrying ${entries.length} inbound message(s) in ${delayMs}ms (attempt ${attempt}/${RETRYABLE_FLUSH_RETRY_DELAYS_MS.length})`,
-      );
-      try {
-        await sleep(delayMs, undefined, { ref: false, signal: deps.abortSignal });
-      } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        throw err;
-      }
-      if (deps.abortSignal?.aborted) {
-        return;
-      }
-      try {
-        await flushSignalInboundEntries(entries);
-        return;
-      } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        lastError = err;
-        if (!isSignalReplySessionInitConflictError(err)) {
-          throw err;
-        }
-      }
-    }
-    throw lastError;
-  }
-
   const flushDebouncedSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
     // enqueue() awaits inline and overflow flushes, but not timer-backed work.
     // Drain tracked inline work on shutdown; stop delayed work with no owner.
@@ -790,30 +801,35 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
       return;
     }
-    try {
-      await flushSignalInboundEntries(entries);
-    } catch (err) {
-      if (!isSignalReplySessionInitConflictError(err)) {
-        throw err;
-      }
-      if (deps.abortSignal?.aborted) {
-        return;
-      }
-      // Keep the current keyed debounce task reserved through backoff so a
-      // newer same-conversation flush cannot overtake this failed batch.
-      const retryTask = retrySignalInboundFlush(entries, err).catch(
-        async (terminalError: unknown) => {
-          // Exhausted retries: release the drain claims so queue retry policy
-          // owns redelivery instead of the stall watchdog dead-lettering them.
+    const flushTask = (async () => {
+      try {
+        await flushSignalInboundEntries(entries);
+      } catch (err) {
+        const errorGraph = collectErrorGraphCandidates(err, (current) => [
+          current.cause,
+          current.error,
+        ]);
+        const abortSignals = [
+          deps.abortSignal,
+          ...entries.map((entry) => entry.turnAdoptionLifecycle?.abortSignal),
+        ].filter((signal): signal is AbortSignal => signal?.aborted === true);
+        if (abortSignals.some((signal) => errorGraph.includes(signal.reason))) {
+          return;
+        }
+        if (isSignalReplySessionInitConflictError(err)) {
+          // Only exhausted session-init conflicts surrender durable claims;
+          // unrelated failures remain owned by the normal queue error path.
           await Promise.all(
             entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
           );
-          throw terminalError;
-        },
-      );
-      deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
-      await retryTask;
-    }
+        }
+        throw err;
+      }
+    })();
+    // The debouncer remains the error-reporting owner; task tracking owns only
+    // shutdown lifetime, including asynchronous claim abandonment.
+    deps.runTrackedTask?.(() => flushTask.catch(() => undefined));
+    await flushTask;
   };
   const reportSignalInboundFlushError = (err: unknown) => {
     deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);

@@ -36,6 +36,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
   readSessionEntry: vi.fn(() => undefined),
   resolveAgentIdFromSessionKey: vi.fn(() => "main"),
+  resolveContinuationRuntimeConfig: vi.fn(() => ({ maxChainLength: 16 })),
   resolveMainSessionKey: vi.fn(() => "agent:main:main"),
   resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
   waitForEmbeddedAgentRunEnd: vi.fn(async () => true),

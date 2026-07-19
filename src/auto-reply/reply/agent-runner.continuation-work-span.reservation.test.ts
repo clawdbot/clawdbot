@@ -71,6 +71,14 @@ vi.mock("../../agents/model-auth.js", () => ({
   resolveModelAuthMode: () => "api-key",
 }));
 
+vi.mock("../../agents/live-model-switch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/live-model-switch.js")>();
+  return {
+    ...actual,
+    consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
+  };
+});
+
 vi.mock("../../agents/embedded-agent.js", () => {
   return {
     compactEmbeddedAgentSession: (params: unknown) =>

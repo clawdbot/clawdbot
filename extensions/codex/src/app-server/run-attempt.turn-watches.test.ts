@@ -1260,7 +1260,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
-  it("counts pending user input requests as turn attempt progress", async () => {
+  it("counts pending secret user input requests as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -1301,7 +1301,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
             header: "Mode",
             question: "Pick a mode",
             isOther: false,
-            isSecret: false,
+            isSecret: true,
             options: [
               { label: "Fast", description: "Use less reasoning" },
               { label: "Deep", description: "Use more reasoning" },
@@ -1311,6 +1311,15 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "request:item/tool/requestUserInput:start",
+          }),
+        ),
+      fastWait,
+    );
     await new Promise((resolve) => {
       setTimeout(resolve, 125);
     });

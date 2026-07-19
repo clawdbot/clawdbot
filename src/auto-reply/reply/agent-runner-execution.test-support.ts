@@ -514,7 +514,6 @@ export function createMinimalRunAgentTurnParams(overrides?: {
     pendingToolTasks: new Set<Promise<void>>(),
     resetSessionAfterRoleOrderingConflict: async () => false,
     isHeartbeat: false,
-    hookTrigger: "user" as const,
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off" as const,

@@ -171,7 +171,7 @@ describe("plugin SDK surface report", () => {
     }
   });
 
-  it("rejects deprecated export budget mismatches by public entrypoint", () => {
+  it("rejects deprecated export budget overages by public entrypoint", () => {
     const lowBudgetConfig = readPluginSdkSurfaceBudgets({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),
     });
@@ -180,21 +180,23 @@ describe("plugin SDK surface report", () => {
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, lowBudgetConfig)).toContain(
-      "public deprecated exports in core 2 != 1",
+      "public deprecated exports in core 2 > 1",
     );
-    expect(evaluatePluginSdkSurfaceReport(surfaceReport, highBudgetConfig)).toContain(
-      "public deprecated exports in core 2 != 3",
-    );
+    expect(
+      evaluatePluginSdkSurfaceReport(surfaceReport, highBudgetConfig).some((error) =>
+        error.startsWith("public deprecated exports in core"),
+      ),
+    ).toBe(false);
   });
 
-  it("rejects wildcard reexport budget mismatches", () => {
+  it("rejects wildcard reexport budget overages", () => {
     const wildcardReexports = readCurrentPublicSurfaceCounts().wildcardReexports;
     const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS: String(wildcardReexports + 1),
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS: String(wildcardReexports - 1),
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      `public wildcard reexports ${wildcardReexports} != ${wildcardReexports + 1}`,
+      `public wildcard reexports ${wildcardReexports} > ${wildcardReexports - 1}`,
     );
   });
 });

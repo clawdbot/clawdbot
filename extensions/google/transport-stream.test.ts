@@ -2695,7 +2695,7 @@ describe("google transport stream", () => {
     ],
     ["models-prefixed Gemini 2.5 image last", "models/gemini-2.5-pro", ["weather", "screenshot"]],
   ] as const)(
-    "keeps parallel function responses immediate and retains the deferred result for %s",
+    "keeps parallel function responses in call order and retains the deferred result for %s",
     (_label, modelId, resultOrder) => {
       const params = buildGoogleGenerativeAiParams(
         buildGeminiModel({ id: modelId, input: ["text", "image"] }),
@@ -2716,7 +2716,7 @@ describe("google transport stream", () => {
       ]);
       expect(params.contents[2]).toEqual({
         role: "user",
-        parts: resultOrder.map((name) => ({
+        parts: (["screenshot", "weather"] as const).map((name) => ({
           functionResponse: {
             name,
             response:

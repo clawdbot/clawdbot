@@ -57,6 +57,7 @@ vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   hasRecoverablePendingDelegate: vi.fn(() => false),
   markPendingDelegateFailed: vi.fn(),
   markPendingDelegateSpawnAccepted: vi.fn(),
+  peekSoonestUnmaturedDelegateDueAt: vi.fn(() => undefined),
   stagePostCompactionDelegate: vi.fn(),
 }));
 
