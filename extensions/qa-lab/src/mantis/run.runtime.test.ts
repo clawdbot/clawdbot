@@ -260,9 +260,9 @@ describe("mantis before/after runtime", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "times out a stuck lane command and kills its process tree",
+    "stops a silent lane command and kills its process tree",
     async () => {
-      const commandTimeoutMs = 1_500;
+      const commandNoOutputTimeoutMs = 1_500;
       const binDir = path.join(repoRoot, "bin");
       const parentPidPath = path.join(repoRoot, "parent.pid");
       const descendantPidPath = path.join(repoRoot, "descendant.pid");
@@ -295,7 +295,7 @@ describe("mantis before/after runtime", () => {
         const run = runMantisBeforeAfter({
           baseline: "baseline-ref",
           candidate: "candidate-ref",
-          commandTimeoutMs,
+          commandNoOutputTimeoutMs,
           outputDir: ".artifacts/qa-e2e/mantis/timeout-run",
           repoRoot,
           skipBuild: true,
@@ -307,7 +307,10 @@ describe("mantis before/after runtime", () => {
         ]);
 
         await expect(run).rejects.toThrow(
-          new RegExp(`git worktree add .* timed out after ${commandTimeoutMs}ms`, "u"),
+          new RegExp(
+            `git worktree add .* produced no output for ${commandNoOutputTimeoutMs}ms`,
+            "u",
+          ),
         );
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
       } finally {

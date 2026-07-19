@@ -12,7 +12,7 @@ export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
   baseline?: string;
   candidate?: string;
-  commandTimeoutMs?: number;
+  commandNoOutputTimeoutMs?: number;
   commandRunner?: CommandRunner;
   credentialRole?: string;
   credentialSource?: string;
@@ -41,8 +41,8 @@ type CommandRunner = (
   options: {
     cwd: string;
     env: NodeJS.ProcessEnv;
+    noOutputTimeoutMs: number;
     stdio: "inherit";
-    timeoutMs: number;
   },
 ) => Promise<void>;
 
@@ -116,9 +116,9 @@ const DEFAULT_PROVIDER_MODE = "live-frontier";
 const DEFAULT_MODEL = "openai/gpt-5.4";
 const DEFAULT_CREDENTIAL_SOURCE = "convex";
 const DEFAULT_CREDENTIAL_ROLE = "ci";
-// A lane may install, build, and run live QA. Match the existing QA test-file
-// command budget while still guaranteeing eventual process-tree cleanup.
-const DEFAULT_COMMAND_TIMEOUT_MS = 30 * 60_000;
+// Mantis commands stream progress, and the longest Discord scenario budget is 75s.
+// Ten minutes of silence leaves 8x headroom without capping active install/build commands.
+const DEFAULT_COMMAND_NO_OUTPUT_TIMEOUT_MS = 10 * 60_000;
 
 const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
   [DEFAULT_SCENARIO]: {
@@ -175,8 +175,8 @@ async function defaultCommandRunner(
       cwd: options.cwd,
       env: options.env,
       killProcessTree: true,
+      noOutputTimeoutMs: options.noOutputTimeoutMs,
       outputCapture: "discard",
-      timeoutMs: options.timeoutMs,
       onOutputChunk(chunk, stream) {
         (stream === "stdout" ? process.stdout : process.stderr).write(chunk);
       },
@@ -186,8 +186,8 @@ async function defaultCommandRunner(
       cause: error,
     });
   }
-  if (result.termination === "timeout") {
-    throw new Error(`${commandLabel} timed out after ${options.timeoutMs}ms`);
+  if (result.termination === "no-output-timeout") {
+    throw new Error(`${commandLabel} produced no output for ${options.noOutputTimeoutMs}ms`);
   }
   if (result.code === 0) {
     return;
@@ -202,14 +202,14 @@ async function runCommand(params: {
   args: readonly string[];
   command: string;
   cwd: string;
+  noOutputTimeoutMs: number;
   runner: CommandRunner;
-  timeoutMs: number;
 }) {
   await params.runner(params.command, params.args, {
     cwd: params.cwd,
     env: process.env,
+    noOutputTimeoutMs: params.noOutputTimeoutMs,
     stdio: "inherit",
-    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -461,7 +461,7 @@ async function runLane(params: {
   repoRoot: string;
   runner: CommandRunner;
   scenario: string;
-  timeoutMs: number;
+  noOutputTimeoutMs: number;
   worktreeRoot: string;
   opts: Required<
     Pick<
@@ -481,16 +481,16 @@ async function runLane(params: {
     command: "git",
     args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
     cwd: params.repoRoot,
+    noOutputTimeoutMs: params.noOutputTimeoutMs,
     runner: params.runner,
-    timeoutMs: params.timeoutMs,
   });
   if (!params.opts.skipInstall) {
     await runCommand({
       command: "pnpm",
       args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
       cwd: params.repoRoot,
+      noOutputTimeoutMs: params.noOutputTimeoutMs,
       runner: params.runner,
-      timeoutMs: params.timeoutMs,
     });
   }
   if (!params.opts.skipBuild) {
@@ -498,8 +498,8 @@ async function runLane(params: {
       command: "pnpm",
       args: ["--dir", worktreeDir, "build"],
       cwd: params.repoRoot,
+      noOutputTimeoutMs: params.noOutputTimeoutMs,
       runner: params.runner,
-      timeoutMs: params.timeoutMs,
     });
   }
   await runCommand({
@@ -530,8 +530,8 @@ async function runLane(params: {
       "--allow-failures",
     ],
     cwd: params.repoRoot,
+    noOutputTimeoutMs: params.noOutputTimeoutMs,
     runner: params.runner,
-    timeoutMs: params.timeoutMs,
   });
   const publishedLaneDir = path.join(params.outputDir, params.lane);
   await copyDirContents(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
@@ -578,9 +578,9 @@ export async function runMantisBeforeAfter(
   }
   const baseline = trimToValue(opts.baseline) ?? scenarioConfig.defaultBaselineRef;
   const candidate = trimToValue(opts.candidate) ?? DEFAULT_CANDIDATE_REF;
-  const commandTimeoutMs = resolvePositiveTimerTimeoutMs(
-    opts.commandTimeoutMs,
-    DEFAULT_COMMAND_TIMEOUT_MS,
+  const commandNoOutputTimeoutMs = resolvePositiveTimerTimeoutMs(
+    opts.commandNoOutputTimeoutMs,
+    DEFAULT_COMMAND_NO_OUTPUT_TIMEOUT_MS,
   );
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const worktreeRoot = path.join(outputDir, "worktrees");
@@ -605,7 +605,7 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
-      timeoutMs: commandTimeoutMs,
+      noOutputTimeoutMs: commandNoOutputTimeoutMs,
       worktreeRoot,
       opts: commonOpts,
     });
@@ -616,7 +616,7 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
-      timeoutMs: commandTimeoutMs,
+      noOutputTimeoutMs: commandNoOutputTimeoutMs,
       worktreeRoot,
       opts: commonOpts,
     });
