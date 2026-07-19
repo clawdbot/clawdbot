@@ -2220,6 +2220,9 @@ jobs:
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-plugin-sdk-api-baseline
+            group: plugin-sdk-api-baseline
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-flip-proof
             group: sqlite-session-flip-proof
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -2438,6 +2441,9 @@ jobs:
               else
                 run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
               fi
+              ;;
+            plugin-sdk-api-baseline)
+              run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check
               ;;
             sqlite-session-flip-proof)
               if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then

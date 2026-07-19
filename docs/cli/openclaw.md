@@ -127,7 +127,20 @@ refused for the same reason; exit OpenClaw and run
 
 Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
 
-Applied writes are recorded in `~/.openclaw/audit/system-agent.jsonl`. Discovery is not audited; only applied operations and writes are.
+### Change history
+
+The Ask OpenClaw page can show recent applied system-agent operations, Doctor
+migrations, Settings and CLI config writes, and manual edits to
+`openclaw.json`. The config journal detects external edits while the Gateway
+is watching, during an OpenClaw-owned write, or at the next startup after an
+offline edit.
+
+History is stored in the `diagnostic_events` table of the shared
+`~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
+and `config-audit` scopes. Each scope retains its latest 50,000 records.
+Discovery and read-only operations are not included. Secrets never appear in
+change history; config journal records contain changed paths rather than config
+values, and value comparison uses protected fingerprints.
 
 Channel setup can run as a hosted conversation until it reaches a secret. The
 local OpenClaw TUI does not accept sensitive wizard answers because terminal

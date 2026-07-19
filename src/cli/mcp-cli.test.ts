@@ -59,6 +59,64 @@ async function createWorkspace(): Promise<string> {
   return dir;
 }
 
+async function writeProbeMcpServer(filePath: string): Promise<void> {
+  await fs.writeFile(
+    filePath,
+    `let buffer = "";
+const mode = process.env.MCP_MODE ?? "normal";
+if (mode === "crash") {
+  process.exit(1);
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (message.method === "initialize") {
+    if (mode === "hang-start") {
+      return;
+    }
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "cli-probe-test", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { tools: [{ name: "ping", inputSchema: { type: "object" } }] },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
+`,
+    "utf8",
+  );
+}
+
 let sharedProgram: Command;
 
 async function runMcpCommand(args: string[]) {
@@ -206,6 +264,114 @@ describe("mcp cli", () => {
       });
     });
   });
+
+  it(
+    "requires initialize to finish within the configured probe timeout before saving",
+    { timeout: 10_000 },
+    async () => {
+      await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+        const workspaceDir = await createWorkspace();
+        const serverPath = path.join(workspaceDir, "probe-server.mjs");
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await writeProbeMcpServer(serverPath);
+        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+        const startedAt = performance.now();
+        await expect(
+          runMcpCommand([
+            "mcp",
+            "add",
+            "hung",
+            "--command",
+            process.execPath,
+            "--arg",
+            serverPath,
+            "--env",
+            "MCP_MODE=hang-start",
+            "--connect-timeout",
+            "0.2",
+          ]),
+        ).rejects.toThrow("__exit__:1");
+        const elapsedMs = performance.now() - startedAt;
+
+        expect(elapsedMs).toBeGreaterThanOrEqual(100);
+        expect(elapsedMs).toBeLessThan(1_500);
+        expect(lastErrorLine()).toContain(
+          'MCP server "hung" timed out: did not complete initialize within 0.2s',
+        );
+        await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        await runMcpCommand([
+          "mcp",
+          "add",
+          "ok",
+          "--command",
+          process.execPath,
+          "--arg",
+          serverPath,
+          "--env",
+          "MCP_MODE=normal",
+        ]);
+        expect(lastLogLine()).toBe(`Saved MCP server "ok" to ${configPath}.`);
+
+        await expect(
+          runMcpCommand([
+            "mcp",
+            "add",
+            "crash",
+            "--command",
+            process.execPath,
+            "--arg",
+            serverPath,
+            "--env",
+            "MCP_MODE=crash",
+          ]),
+        ).rejects.toThrow("__exit__:1");
+
+        mockLog.mockClear();
+        await runMcpCommand(["mcp", "list", "--json"]);
+        const saved = JSON.parse(lastLogLine()) as Record<string, unknown>;
+        expect(Object.keys(saved)).toEqual(["ok"]);
+      });
+    },
+  );
+
+  it(
+    "bounds initialize with a five-second probe timeout when no flag is supplied",
+    { timeout: 8_000 },
+    async () => {
+      await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+        const workspaceDir = await createWorkspace();
+        const serverPath = path.join(workspaceDir, "probe-server.mjs");
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await writeProbeMcpServer(serverPath);
+        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+        const startedAt = performance.now();
+        await expect(
+          runMcpCommand([
+            "mcp",
+            "add",
+            "hung-default",
+            "--command",
+            process.execPath,
+            "--arg",
+            serverPath,
+            "--env",
+            "MCP_MODE=hang-start",
+          ]),
+        ).rejects.toThrow("__exit__:1");
+        const elapsedMs = performance.now() - startedAt;
+
+        expect(elapsedMs).toBeGreaterThanOrEqual(4_500);
+        expect(elapsedMs).toBeLessThan(6_500);
+        expect(lastErrorLine()).toContain(
+          'MCP server "hung-default" timed out: did not complete initialize within 5s',
+        );
+        await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
 
   it("labels listed MCP servers as OpenClaw-managed", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {

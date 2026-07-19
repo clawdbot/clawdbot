@@ -648,11 +648,14 @@ export function buildGatewayCronService(params: {
         };
       } catch (err) {
         const error = formatErrorMessage(err);
+        const requiredDeliveryFailed = job.delivery?.bestEffort === false && result.status === "ok";
         cronLogger.warn({ jobId: job.id, err: error }, "cron: command delivery failed");
         return {
           ...result,
-          status: job.delivery?.bestEffort ? result.status : "error",
-          error: job.delivery?.bestEffort ? result.error : error,
+          // Default announce delivery is best-effort, but an explicit
+          // bestEffort:false keeps delivery inside the job's success contract.
+          status: requiredDeliveryFailed ? ("error" as const) : result.status,
+          ...(requiredDeliveryFailed ? { error } : { deliveryError: error }),
           deliveryAttempted: true,
           delivered: false,
           delivery: {

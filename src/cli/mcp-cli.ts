@@ -547,15 +547,37 @@ function buildMcpProbeConfig(params: {
   };
 }
 
+const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
+
+function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
+  if (
+    typeof server.connectionTimeoutMs === "number" &&
+    Number.isFinite(server.connectionTimeoutMs) &&
+    server.connectionTimeoutMs > 0
+  ) {
+    return server;
+  }
+  return {
+    ...server,
+    connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS,
+  };
+}
+
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
 }): Promise<ReturnType<typeof formatMcpProbeResult>> {
+  const probeServers = Object.fromEntries(
+    Object.entries(params.servers).map(([name, server]) => [
+      name,
+      applyMcpProbeInitializeTimeout(server),
+    ]),
+  );
   const runtime = createSessionMcpRuntime({
     sessionId: "openclaw-cli-mcp-probe",
     workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({ config: params.config, servers: params.servers }),
+    cfg: buildMcpProbeConfig({ config: params.config, servers: probeServers }),
     manifestRegistry: { plugins: [] },
   });
   try {

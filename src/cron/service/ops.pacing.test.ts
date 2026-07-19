@@ -7,6 +7,7 @@ import { add, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pacing-ops" });
+const NOW = Date.parse("2026-07-18T12:00:00.000Z");
 
 function makeInput(pacing: CronPacing): CronJobCreate {
   return {
@@ -28,7 +29,7 @@ async function withState(run: (state: ReturnType<typeof createCronServiceState>)
         storePath,
         cronEnabled: true,
         log: logger,
-        nowMs: () => Date.parse("2026-07-18T12:00:00.000Z"),
+        nowMs: () => NOW,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -84,19 +85,21 @@ describe("cron pacing validation", () => {
   it("accepts a nullable pacing patch and clears pacing and its pending slot", async () => {
     await withState(async (state) => {
       const job = await add(state, makeInput({ min: "15m" }));
+      job.state.nextRunAtMs = NOW + 4 * 60 * 60_000;
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
       const patch = { pacing: null } satisfies CronJobPatch;
 
       const updated = await update(state, job.id, patch);
 
       expect(updated.pacing).toBeUndefined();
+      expect(updated.state.nextRunAtMs).toBe(NOW + 60_000);
       expect(updated.state.pacedNextRunAtMs).toBeUndefined();
       expect(state.store?.jobs[0]?.pacing).toBeUndefined();
       expect(state.store?.jobs[0]?.state.pacedNextRunAtMs).toBeUndefined();
     });
   });
 
-  it("clears a pending paced slot on an unrelated edit", async () => {
+  it("preserves a pending paced slot on an unrelated edit", async () => {
     await withState(async (state) => {
       const job = await add(state, makeInput({ max: "4h" }));
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
@@ -104,7 +107,47 @@ describe("cron pacing validation", () => {
       const updated = await update(state, job.id, { description: "edited" });
 
       expect(updated.pacing).toEqual({ max: "4h" });
+      expect(updated.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
+      expect(updated.state.pacedNextRunAtMs).toBe(job.state.pacedNextRunAtMs);
+    });
+  });
+
+  it("recomputes the natural slot when pacing bounds change", async () => {
+    await withState(async (state) => {
+      const job = await add(state, makeInput({ max: "4h" }));
+      job.state.nextRunAtMs = NOW + 4 * 60 * 60_000;
+      job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
+
+      const updated = await update(state, job.id, { pacing: { max: "2h" } });
+
+      expect(updated.state.nextRunAtMs).toBe(NOW + 60_000);
       expect(updated.state.pacedNextRunAtMs).toBeUndefined();
+    });
+  });
+
+  it.each([
+    { kind: "at" as const, at: "2026-07-19T12:00:00.000Z" },
+    { kind: "on-exit" as const, command: "true" },
+  ])("rejects pacing on a $kind one-shot", async (schedule) => {
+    await withState(async (state) => {
+      await expect(
+        add(state, {
+          ...makeInput({ min: "15m" }),
+          schedule,
+        }),
+      ).rejects.toThrow("cron pacing requires an every or cron schedule");
+    });
+  });
+
+  it("rejects converting a paced recurring job to a one-shot", async () => {
+    await withState(async (state) => {
+      const job = await add(state, makeInput({ min: "15m" }));
+
+      await expect(
+        update(state, job.id, {
+          schedule: { kind: "at", at: "2026-07-19T12:00:00.000Z" },
+        }),
+      ).rejects.toThrow("cron pacing requires an every or cron schedule");
     });
   });
 });

@@ -122,6 +122,58 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await store.loadTranscript(sessionKey: "unknown").isEmpty)
     }
 
+    @Test func `transcript JSON keeps only bounded diff details`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let oversizedDiff = "+1 " + String(repeating: "x", count: 64100)
+        let message = OpenClawChatMessage(
+            role: "toolResult",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "tool_result",
+                    text: "done",
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil,
+                    arguments: AnyCodable(["oldText": AnyCodable("large proposal")]),
+                    details: AnyCodable([
+                        "diff": AnyCodable("+1 block diff"),
+                        "ignored": AnyCodable("drop me"),
+                    ]),
+                    isError: true),
+                OpenClawChatMessageContent(
+                    type: "tool_result",
+                    text: "no diff",
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil,
+                    details: AnyCodable(["ignored": AnyCodable("drop me")])),
+            ],
+            timestamp: 1,
+            details: AnyCodable([
+                "diff": AnyCodable(oversizedDiff),
+                "ignored": AnyCodable("drop me"),
+            ]),
+            isError: true)
+
+        let cacheable = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        #expect(cacheable.content.allSatisfy { $0.arguments == nil })
+        #expect(Set(cacheable.details?.dictionaryValue?.keys.map(\.self) ?? []) == ["diff"])
+        #expect(cacheable.details?.dictionaryValue?["diff"]?.stringValue?.utf16.count == 64000)
+        #expect(cacheable.details?.dictionaryValue?["diff"]?.stringValue?.hasSuffix("\n...(truncated)...") == true)
+        #expect(Set(cacheable.content[0].details?.dictionaryValue?.keys.map(\.self) ?? []) == ["diff"])
+        #expect(cacheable.content[1].details == nil)
+        #expect(cacheable.isError == true)
+        #expect(cacheable.content[0].isError == true)
+
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        await store.storeTranscript(sessionKey: "main", messages: [message])
+        let decoded = try #require(await store.loadTranscript(sessionKey: "main").first)
+        #expect(decoded.details == cacheable.details)
+        #expect(decoded.content[0].details == cacheable.content[0].details)
+        #expect(ChatToolDiff.resolveDiff(name: "edit", arguments: nil, details: decoded.details)?.stat == nil)
+    }
+
     @Test func `transcript keeps only most recent messages within bound`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

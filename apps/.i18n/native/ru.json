@@ -1486,7 +1486,7 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "Попробуйте чат, голосовой режим, ветки, провайдеров или настройки."
+      "translated": "Попробуйте Чат, Голос, Ветки, Провайдеры или Настройки."
     },
     {
       "id": "native.android.670121e54dbe286f",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "Ветки в группе \"$group\" будут сохранены и перемещены обратно в раздел «Без группы»."
+      "translated": "Ветки в группе \"$group\" сохранятся и вернутся в раздел «Без группы»."
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -4181,7 +4181,7 @@
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "Ожидающие вызовы инструментов чата в активной ветке остаются видимыми здесь."
+      "translated": "Здесь отображаются ожидающие вызовы инструментов чата в активной ветке."
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4351,17 +4351,17 @@
     {
       "id": "native.android.c1626a6700a570f6",
       "source": "Preferred microphone unavailable; using automatic routing.",
-      "translated": "Предпочтительный микрофон недоступен; используется автоматическая маршрутизация."
+      "translated": "Предпочитаемый микрофон недоступен; используется автоматическая маршрутизация."
     },
     {
       "id": "native.android.820bc5d0ce571d8b",
       "source": "Prioritizes connected Bluetooth microphones.",
-      "translated": "Приоритет отдается подключенным Bluetooth-микрофонам."
+      "translated": "Приоритет отдаётся подключённым Bluetooth-микрофонам."
     },
     {
       "id": "native.android.11e48038d5e8bff6",
       "source": "Preferred microphone",
-      "translated": "Предпочтительный микрофон"
+      "translated": "Предпочитаемый микрофон"
     },
     {
       "id": "native.android.eaa4d7563a46d307",
@@ -4386,7 +4386,7 @@
     {
       "id": "native.android.c885247b2d7ce271",
       "source": "Bluetooth LE microphone",
-      "translated": "Микрофон Bluetooth LE"
+      "translated": "Bluetooth LE-микрофон"
     },
     {
       "id": "native.android.b6a4e674c5fb441a",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClaw превращает этот телефон в удобный мобильный интерфейс управления ветками, голосом, провайдерами и Gateway."
+      "translated": "OpenClaw превращает этот телефон в удобный мобильный интерфейс для управления ветками, голосом, провайдерами и Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -6946,7 +6946,7 @@
     {
       "id": "native.android.cb608d82c5b3352a",
       "source": "Back camera",
-      "translated": "Основная камера"
+      "translated": "Задняя камера"
     },
     {
       "id": "native.android.e89a0e780eed2e1e",
@@ -7806,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "Сводка недавних веток и дальнейших действий."
+      "translated": "Подведите итоги недавних веток и предложите дальнейшие шаги."
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "Расскажи о последних обсуждениях в OpenClaw и предложи следующие шаги."
+      "translated": "Расскажите о последних событиях в моих недавних ветках OpenClaw и предложите дальнейшие шаги."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -8151,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "Обсуждения"
+      "translated": "Ветки"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -10794,6 +10794,61 @@
       "translated": "Сведения о задаче"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Закреплённые"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Недавние"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Модель"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Рассуждение"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Быстро"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "По умолчанию (унаследовано)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Выкл."
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Вкл."
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Полное"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Подробность"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "По умолчанию"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Не удалось экспортировать стенограмму"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "Обсуждение будет подключено, когда Gateway будет готов."
+      "translated": "Ветка подключится, когда Gateway будет готов."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10859,9 +10914,14 @@
       "translated": "Новый чат в Worktree"
     },
     {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Параметры нового сеанса…"
+    },
+    {
       "id": "native.apple.003b25ddafeb18e9",
       "source": "Threads…",
-      "translated": "Обсуждения…"
+      "translated": "Ветки…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11026,12 +11086,12 @@
     {
       "id": "native.apple.31d5c7287cfb3abe",
       "source": "Delete Thread?",
-      "translated": "Удалить обсуждение?"
+      "translated": "Удалить ветку?"
     },
     {
       "id": "native.apple.d3395564809f1120",
       "source": "Delete Thread",
-      "translated": "Удалить обсуждение"
+      "translated": "Удалить ветку"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -11041,7 +11101,7 @@
     {
       "id": "native.apple.092659256d26cb03",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Обсуждение и его расшифровка будут удалены без возможности восстановления."
+      "translated": "Это действие безвозвратно удалит ветку и её расшифровку."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11071,7 +11131,7 @@
     {
       "id": "native.apple.683032464c497bbd",
       "source": "Rename Thread",
-      "translated": "Переименовать обсуждение"
+      "translated": "Переименовать ветку"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -11081,7 +11141,7 @@
     {
       "id": "native.apple.f887aa956588f237",
       "source": "Thread name",
-      "translated": "Название обсуждения"
+      "translated": "Название ветки"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
@@ -11121,12 +11181,12 @@
     {
       "id": "native.apple.7c8231b7b1ca480f",
       "source": "Agent thread",
-      "translated": "Обсуждение агента"
+      "translated": "Ветка агента"
     },
     {
       "id": "native.apple.b3c553614f762a58",
       "source": "Recent threads",
-      "translated": "Недавние обсуждения"
+      "translated": "Недавние ветки"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -11136,7 +11196,7 @@
     {
       "id": "native.apple.5aa32afda85064ea",
       "source": "No recent threads",
-      "translated": "Нет недавних обсуждений"
+      "translated": "Нет недавних веток"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11236,12 +11296,12 @@
     {
       "id": "native.apple.b6855cf19a50f477",
       "source": "Threads",
-      "translated": "Обсуждения"
+      "translated": "Ветки"
     },
     {
       "id": "native.apple.9b1d0ef27a1333b0",
       "source": "Archived threads",
-      "translated": "Архивные обсуждения"
+      "translated": "Архивные ветки"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11251,32 +11311,32 @@
     {
       "id": "native.apple.98167401c7267735",
       "source": "Threads unavailable",
-      "translated": "Обсуждения недоступны"
+      "translated": "Ветки недоступны"
     },
     {
       "id": "native.apple.4d28a7def2337b9f",
       "source": "Loading archived threads",
-      "translated": "Загрузка архивных обсуждений"
+      "translated": "Загрузка архивных веток"
     },
     {
       "id": "native.apple.777d7b706933bd7b",
       "source": "Loading recent threads",
-      "translated": "Загрузка недавних обсуждений"
+      "translated": "Загрузка недавних веток"
     },
     {
       "id": "native.apple.22f81ea94bef8410",
       "source": "^[\\(count) thread](inflect: true)",
-      "translated": "^[\\(count) обсуждение](inflect: true)"
+      "translated": "^[\\(count) ветка](inflect: true)"
     },
     {
       "id": "native.apple.1cad51e14db59bf9",
       "source": "No archived threads",
-      "translated": "Нет архивных обсуждений"
+      "translated": "Нет архивных веток"
     },
     {
       "id": "native.apple.18ef832d3a7ddcf8",
       "source": "Archived threads will appear here.",
-      "translated": "Архивные обсуждения появятся здесь."
+      "translated": "Архивные ветки появятся здесь."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11381,7 +11441,7 @@
     {
       "id": "native.apple.7396d205574d279f",
       "source": "Thread activity offline",
-      "translated": "Активность веток недоступна"
+      "translated": "Активность ветки недоступна офлайн"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "Подведи итог того, что произошло в моих ветках со вчерашнего дня."
+      "translated": "Подведи итог событий в моих ветках со вчерашнего дня."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23396,7 +23456,7 @@
     {
       "id": "native.apple.9e611e3a80e71408",
       "source": "The widget image could not be encoded as PNG.",
-      "translated": "Не удалось преобразовать изображение виджета в формат PNG."
+      "translated": "Не удалось закодировать изображение виджета в формате PNG."
     },
     {
       "id": "native.apple.9a6e8afbe24a262b",
@@ -23556,7 +23616,7 @@
     {
       "id": "native.apple.90d0ccf80ca28717",
       "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
-      "translated": "Удалите вложения или дождитесь доставки, прежде чем архивировать или удалять эту ветку."
+      "translated": "Удалите вложения или дождитесь их доставки, прежде чем архивировать или удалять эту ветку."
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23696,7 +23756,7 @@
     {
       "id": "native.apple.bbccb4c8db5cac12",
       "source": "Thread Info",
-      "translated": "Сведения о ветке"
+      "translated": "Информация о ветке"
     },
     {
       "id": "native.apple.e308b012d84b3b3e",
@@ -23776,7 +23836,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "Ветки в этой группе будут исключены из неё."
+      "translated": "Ветки в этой группе будут разгруппированы."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "Ветка и её история удаляются из Gateway."
+      "translated": "Ветка и её расшифровка будут удалены из Gateway."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23896,7 +23956,7 @@
     {
       "id": "native.apple.c775e87f997278b2",
       "source": "Thread failed",
-      "translated": "Сбой ветки"
+      "translated": "Ошибка выполнения ветки"
     },
     {
       "id": "native.apple.ac85292b16a7465f",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "Все выбранные ветки и их стенограммы будут удалены из Gateway."
+      "translated": "Все выбранные ветки и их расшифровки будут удалены из Gateway."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24231,7 +24291,7 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "Перемотать сюда"
+      "translated": "Вернуться сюда"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "Создать ответвление"
+      "translated": "Ответвить"
     },
     {
       "id": "native.apple.8768f9ed198edc54",

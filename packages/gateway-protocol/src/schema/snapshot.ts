@@ -37,6 +37,8 @@ export const PresenceEntrySchema = closedObject({
       avatarUrl: Type.Optional(NonEmptyString),
     }),
   ),
+  /** Session keys this connection is actively subscribed to (watching). Sorted lexicographically for deterministic snapshots. */
+  watchedSessions: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 /** Health snapshot is intentionally opaque because providers contribute nested shapes. */

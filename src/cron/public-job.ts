@@ -6,5 +6,6 @@ export function toPublicCronJob(job: CronJob): CronJob {
   delete state.queuedAtMs;
   delete state.startupCatchupAtMs;
   delete state.pacedNextRunAtMs;
+  delete state.forcePreservedNextRunAtMs;
   return { ...job, state };
 }

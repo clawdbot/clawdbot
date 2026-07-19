@@ -7,6 +7,7 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
+  ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
@@ -59,6 +60,10 @@ import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-co
 import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
+
+type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
+  NonNullable<ProviderAuthMethod["validateNonInteractive"]>
+>[0];
 
 const PROVIDER_ID = "anthropic";
 
@@ -194,9 +199,16 @@ async function runAnthropicSetupTokenAuth(ctx: ProviderAuthContext): Promise<Pro
   };
 }
 
-async function runAnthropicSetupTokenNonInteractive(
-  ctx: ProviderAuthMethodNonInteractiveContext,
-): Promise<ProviderAuthConfig | null> {
+function validateAnthropicSetupTokenNonInteractive(
+  ctx: ProviderAuthMethodNonInteractiveValidationContext,
+): string | null {
+  if (ctx.opts.secretInputMode === "ref") {
+    ctx.runtime.error(
+      "Anthropic setup-token input cannot be stored with --secret-input-mode ref. Use --secret-input-mode plaintext.",
+    );
+    ctx.runtime.exit(1);
+    return null;
+  }
   const rawToken =
     typeof ctx.opts.token === "string" ? normalizeAnthropicSetupTokenInput(ctx.opts.token) : "";
   const tokenError = validateAnthropicSetupToken(rawToken);
@@ -207,6 +219,25 @@ async function runAnthropicSetupTokenNonInteractive(
       ),
     );
     ctx.runtime.exit(1);
+    return null;
+  }
+  try {
+    resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
+  } catch (error) {
+    ctx.runtime.error(
+      `Invalid --token-expires-in: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    ctx.runtime.exit(1);
+    return null;
+  }
+  return rawToken;
+}
+
+async function runAnthropicSetupTokenNonInteractive(
+  ctx: ProviderAuthMethodNonInteractiveContext,
+): Promise<ProviderAuthConfig | null> {
+  const rawToken = validateAnthropicSetupTokenNonInteractive(ctx);
+  if (!rawToken) {
     return null;
   }
 
@@ -836,6 +867,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
           groupHint: "Claude CLI + API key + token",
         },
         run: async (ctx: ProviderAuthContext) => await runAnthropicSetupTokenAuth(ctx),
+        validateNonInteractive: async (ctx) =>
+          Boolean(validateAnthropicSetupTokenNonInteractive(ctx)),
         runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
           await runAnthropicSetupTokenNonInteractive(ctx),
       },

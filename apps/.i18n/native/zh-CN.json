@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "浏览对话"
+      "translated": "浏览会话"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -1486,22 +1486,22 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "试试聊天、语音、对话、提供商或设置。"
+      "translated": "试试聊天、语音、会话、提供商或设置。"
     },
     {
       "id": "native.android.670121e54dbe286f",
       "source": "Threads",
-      "translated": "对话"
+      "translated": "会话"
     },
     {
       "id": "native.android.d38be650b1bce4a0",
       "source": "Connect the Gateway to search threads.",
-      "translated": "连接 Gateway 以搜索对话。"
+      "translated": "连接 Gateway 以搜索会话。"
     },
     {
       "id": "native.android.3d7754721f776ef8",
       "source": "No matching threads yet.",
-      "translated": "暂无匹配的对话。"
+      "translated": "暂无匹配的会话。"
     },
     {
       "id": "native.android.1d009aa9b54d689d",
@@ -1511,12 +1511,12 @@
     {
       "id": "native.android.9a839f6e3e05a744",
       "source": "OpenClaw thread",
-      "translated": "OpenClaw 对话"
+      "translated": "OpenClaw 会话"
     },
     {
       "id": "native.android.d83f82a1e4a5ed99",
       "source": "Open thread",
-      "translated": "打开对话"
+      "translated": "打开会话"
     },
     {
       "id": "native.android.42fd88c3d0418a4a",
@@ -1541,7 +1541,7 @@
     {
       "id": "native.android.8a1c5365c0538908",
       "source": "Main thread",
-      "translated": "主对话"
+      "translated": "主会话"
     },
     {
       "id": "native.android.5f06e4d6a59f7a59",
@@ -3681,12 +3681,12 @@
     {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
-      "translated": "对话"
+      "translated": "会话"
     },
     {
       "id": "native.android.439b324280869527",
       "source": "Focus thread search",
-      "translated": "聚焦对话搜索"
+      "translated": "聚焦会话搜索"
     },
     {
       "id": "native.android.e0f10db479f627eb",
@@ -3701,12 +3701,12 @@
     {
       "id": "native.android.03981341841b04ac",
       "source": "Search threads",
-      "translated": "搜索对话"
+      "translated": "搜索会话"
     },
     {
       "id": "native.android.99570c528a41fa72",
       "source": "Clear thread search",
-      "translated": "清除对话搜索"
+      "translated": "清除会话搜索"
     },
     {
       "id": "native.android.784ecdd6ea2ec5f0",
@@ -3726,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "切换对话布局"
+      "translated": "切换会话布局"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3741,12 +3741,12 @@
     {
       "id": "native.android.ebd17565e0ffd8eb",
       "source": "Searching threads",
-      "translated": "正在搜索对话"
+      "translated": "正在搜索会话"
     },
     {
       "id": "native.android.472d46ae8669f860",
       "source": "No matching threads",
-      "translated": "没有匹配的对话"
+      "translated": "没有匹配的会话"
     },
     {
       "id": "native.android.11c1a8c944bea0ae",
@@ -3766,17 +3766,17 @@
     {
       "id": "native.android.ff81ad1bee00d384",
       "source": "Current thread",
-      "translated": "当前对话"
+      "translated": "当前会话"
     },
     {
       "id": "native.android.fc145645b9620e57",
       "source": "OpenClaw thread",
-      "translated": "OpenClaw 对话"
+      "translated": "OpenClaw 会话"
     },
     {
       "id": "native.android.71cbb8dde8bf138b",
       "source": "Rename thread",
-      "translated": "重命名对话"
+      "translated": "重命名会话"
     },
     {
       "id": "native.android.fa420bc51ff675a1",
@@ -3806,17 +3806,17 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "“$group”中的对话将被保留并移回未分组。"
+      "translated": "“$group”中的会话将被保留并移回“未分组”。"
     },
     {
       "id": "native.android.d87a8217ab56999b",
       "source": "Delete thread?",
-      "translated": "删除对话？"
+      "translated": "删除会话？"
     },
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "这将永久删除该对话及其记录。"
+      "translated": "这将永久删除该对话线程及其记录。"
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3941,17 +3941,17 @@
     {
       "id": "native.android.8e21a70428def6e0",
       "source": "No threads yet",
-      "translated": "暂无对话"
+      "translated": "暂无对话线程"
     },
     {
       "id": "native.android.cda4c5ad8b17e394",
       "source": "No current thread",
-      "translated": "当前无对话"
+      "translated": "暂无当前对话线程"
     },
     {
       "id": "native.android.be84f061047aa2da",
       "source": "No archived threads",
-      "translated": "暂无已归档的对话"
+      "translated": "暂无已归档的对话线程"
     },
     {
       "id": "native.android.0a38a1167c6b6941",
@@ -3961,12 +3961,12 @@
     {
       "id": "native.android.f289d03e1d3eee98",
       "source": "Open Chat to start or resume the current thread.",
-      "translated": "打开聊天以开始或继续当前对话。"
+      "translated": "打开聊天以开始或继续当前对话线程。"
     },
     {
       "id": "native.android.504b71386e76c6ae",
       "source": "Archived threads will show up here.",
-      "translated": "已归档的对话将显示在此处。"
+      "translated": "已归档的对话线程将显示在此处。"
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -3991,7 +3991,7 @@
     {
       "id": "native.android.ee4c727cdafbe963",
       "source": "Main thread",
-      "translated": "主对话"
+      "translated": "主对话线程"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -4131,7 +4131,7 @@
     {
       "id": "native.android.da78209effb11cfd",
       "source": "Thread Activity",
-      "translated": "对话活动"
+      "translated": "对话线程活动"
     },
     {
       "id": "native.android.5d53e328e4deb444",
@@ -4176,12 +4176,12 @@
     {
       "id": "native.android.f615712dfb56319a",
       "source": "Thread activity",
-      "translated": "对话活动"
+      "translated": "对话线程活动"
     },
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "活动对话中等待处理的聊天工具调用仍会显示在此处。"
+      "translated": "当前对话线程中等待处理的聊天工具调用仍会显示在此处。"
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4386,7 +4386,7 @@
     {
       "id": "native.android.c885247b2d7ce271",
       "source": "Bluetooth LE microphone",
-      "translated": "低功耗蓝牙麦克风"
+      "translated": "Bluetooth LE 麦克风"
     },
     {
       "id": "native.android.b6a4e674c5fb441a",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClaw 将这部手机变成简洁的移动命令界面，用于管理对话、语音、提供商和 Gateway。"
+      "translated": "OpenClaw 将此手机变成简洁的移动命令界面，用于管理会话、语音、提供商和 Gateway。"
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5691,7 +5691,7 @@
     {
       "id": "native.android.36f78c8c85dc283f",
       "source": "Recent Threads",
-      "translated": "最近的对话"
+      "translated": "最近的会话"
     },
     {
       "id": "native.android.e7e2862bffbd0706",
@@ -5751,12 +5751,12 @@
     {
       "id": "native.android.57177017a6a93826",
       "source": "Threads",
-      "translated": "对话"
+      "translated": "会话"
     },
     {
       "id": "native.android.43320b54a68b00a1",
       "source": "No recent threads",
-      "translated": "暂无最近的对话"
+      "translated": "没有最近的会话"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -5796,12 +5796,12 @@
     {
       "id": "native.android.e24db059480f1e6a",
       "source": "Monitoring · 1 thread",
-      "translated": "正在监控 · 1 个对话"
+      "translated": "正在监控 · 1 个会话"
     },
     {
       "id": "native.android.5a475f37d80e02bc",
       "source": "Monitoring · $sessionCount threads",
-      "translated": "正在监控 · $sessionCount 个对话"
+      "translated": "正在监控 · $sessionCount 个会话"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -5836,7 +5836,7 @@
     {
       "id": "native.android.358c5e0e838d5423",
       "source": "Open thread",
-      "translated": "打开对话"
+      "translated": "打开会话"
     },
     {
       "id": "native.android.ede6f2717ca8e267",
@@ -6261,7 +6261,7 @@
     {
       "id": "native.android.28a1a1acc5a0959f",
       "source": "Main thread",
-      "translated": "主对话"
+      "translated": "主会话"
     },
     {
       "id": "native.android.b1f9c790e2dbac1b",
@@ -7761,7 +7761,7 @@
     {
       "id": "native.android.0c74bc30a994dd33",
       "source": "Loading thread",
-      "translated": "正在加载对话"
+      "translated": "正在加载会话"
     },
     {
       "id": "native.android.2c1106e1687ab258",
@@ -7806,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "总结最近的对话和后续步骤。"
+      "translated": "总结最近的会话和后续步骤。"
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "帮我了解最近的 OpenClaw 对话，并建议后续步骤。"
+      "translated": "帮我了解最近的 OpenClaw 会话，并建议后续步骤。"
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -8151,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "对话"
+      "translated": "会话"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -10794,6 +10794,61 @@
       "translated": "任务详情"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "已固定"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "最近"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "模型"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "思考"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "快速"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "默认（继承）"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "开启"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "完整"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "详细程度"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "默认"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "无法导出转录"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "Gateway 准备就绪后将连接对话。"
+      "translated": "Gateway 准备就绪后将连接该会话。"
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10859,9 +10914,14 @@
       "translated": "在 Worktree 中新建聊天"
     },
     {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "新会话选项…"
+    },
+    {
       "id": "native.apple.003b25ddafeb18e9",
       "source": "Threads…",
-      "translated": "对话…"
+      "translated": "会话…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11026,7 +11086,7 @@
     {
       "id": "native.apple.31d5c7287cfb3abe",
       "source": "Delete Thread?",
-      "translated": "删除对话？"
+      "translated": "删除会话？"
     },
     {
       "id": "native.apple.d3395564809f1120",
@@ -11041,7 +11101,7 @@
     {
       "id": "native.apple.092659256d26cb03",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "这将永久删除该对话及其记录。"
+      "translated": "这将永久删除该对话及其对话记录。"
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11381,7 +11441,7 @@
     {
       "id": "native.apple.7396d205574d279f",
       "source": "Thread activity offline",
-      "translated": "对话活动处于离线状态"
+      "translated": "对话活动已离线"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "用于新的聊天对话和通话会话。"
+      "translated": "用于新的聊天话题串和通话会话。"
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15736,7 +15796,7 @@
     {
       "id": "native.apple.11fe8b9941954dfb",
       "source": "Threads",
-      "translated": "对话"
+      "translated": "话题串"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -19046,7 +19106,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "用于打开主对话悬浮聊天栏的全局快捷键。"
+      "translated": "用于打开主话题串浮动聊天栏的全局快捷键。"
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -19626,7 +19686,7 @@
     {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
-      "translated": "新建对话"
+      "translated": "新建话题串"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21916,7 +21976,7 @@
     {
       "id": "native.apple.3ec2afcbc298c673",
       "source": "Threads",
-      "translated": "对话"
+      "translated": "话题串"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "暂无对话。首次收到消息或心跳后，对话将显示在此处。"
+      "translated": "暂无话题串。收到第一条传入消息或心跳后，话题串将显示在此处。"
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -22011,7 +22071,7 @@
     {
       "id": "native.apple.52e37e3a44ae516c",
       "source": "Threads",
-      "translated": "对话"
+      "translated": "话题串"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "总结一下从昨天到现在我的对话中发生了什么。"
+      "translated": "总结自昨天以来我的话题串中发生的事情。"
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23196,7 +23256,7 @@
     {
       "id": "native.apple.4edb66657f5aca1f",
       "source": "Thread",
-      "translated": "对话"
+      "translated": "话题串"
     },
     {
       "id": "native.apple.284b2b94c272591d",
@@ -23371,7 +23431,7 @@
     {
       "id": "native.apple.e1fb28a2a9756402",
       "source": "Copy image",
-      "translated": "拷贝图像"
+      "translated": "复制图像"
     },
     {
       "id": "native.apple.ebd7bc92e1b12235",
@@ -23386,12 +23446,12 @@
     {
       "id": "native.apple.0589cce608418f90",
       "source": "The widget image could not be captured.",
-      "translated": "无法捕捉小组件图像。"
+      "translated": "无法截取小组件图像。"
     },
     {
       "id": "native.apple.dfe24e827fdbe9c5",
       "source": "The widget image could not be copied.",
-      "translated": "无法拷贝小组件图像。"
+      "translated": "无法复制小组件图像。"
     },
     {
       "id": "native.apple.9e611e3a80e71408",
@@ -23546,17 +23606,17 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "此对话处于活跃或运行状态时无法归档。"
+      "translated": "此话题串处于活动或运行状态时无法归档。"
     },
     {
       "id": "native.apple.8952a111a1075051",
       "source": "The main thread cannot be deleted.",
-      "translated": "无法删除主对话。"
+      "translated": "无法删除主话题串。"
     },
     {
       "id": "native.apple.90d0ccf80ca28717",
       "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
-      "translated": "请移除附件或等待传送完成后，再归档或删除此对话。"
+      "translated": "请移除附件或等待附件发送完毕，然后再归档或删除此话题。"
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23696,7 +23756,7 @@
     {
       "id": "native.apple.bbccb4c8db5cac12",
       "source": "Thread Info",
-      "translated": "对话信息"
+      "translated": "话题信息"
     },
     {
       "id": "native.apple.e308b012d84b3b3e",
@@ -23731,7 +23791,7 @@
     {
       "id": "native.apple.7b641fed5bace855",
       "source": "Thread Groups",
-      "translated": "对话分组"
+      "translated": "话题组"
     },
     {
       "id": "native.apple.7777b2d2ec43ed59",
@@ -23776,7 +23836,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "此分组中的对话将被取消分组。"
+      "translated": "此组中的话题将变为未分组状态。"
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23791,7 +23851,7 @@
     {
       "id": "native.apple.2d96aa7d3d12f85b",
       "source": "New Thread Options",
-      "translated": "新建对话选项"
+      "translated": "新建话题选项"
     },
     {
       "id": "native.apple.5b0cde807ccb4241",
@@ -23821,17 +23881,17 @@
     {
       "id": "native.apple.87ef57319d1ddc85",
       "source": "The thread could not be created.",
-      "translated": "无法创建对话。"
+      "translated": "无法创建话题。"
     },
     {
       "id": "native.apple.6bd91c435b69d638",
       "source": "Search threads",
-      "translated": "搜索对话"
+      "translated": "搜索话题"
     },
     {
       "id": "native.apple.6fde4bdf9d5b9191",
       "source": "No Threads",
-      "translated": "无对话"
+      "translated": "没有话题"
     },
     {
       "id": "native.apple.2d4ee298bdd1c05d",
@@ -23841,27 +23901,27 @@
     {
       "id": "native.apple.a02fd99740d29bd3",
       "source": "New Thread",
-      "translated": "新建对话"
+      "translated": "新建话题"
     },
     {
       "id": "native.apple.b625801dd04b09f2",
       "source": "New thread",
-      "translated": "新建对话"
+      "translated": "新建话题"
     },
     {
       "id": "native.apple.851be81fcc933608",
       "source": "New thread options",
-      "translated": "新建对话选项"
+      "translated": "新建话题选项"
     },
     {
       "id": "native.apple.9ce8a4aba7b444b2",
       "source": "Rename Thread",
-      "translated": "重命名对话"
+      "translated": "重命名话题"
     },
     {
       "id": "native.apple.1dd067c44511c7f0",
       "source": "Thread name",
-      "translated": "对话名称"
+      "translated": "话题名称"
     },
     {
       "id": "native.apple.6ec5a13c0e6c20d9",
@@ -23876,12 +23936,12 @@
     {
       "id": "native.apple.618073d6ab3f2721",
       "source": "Delete Thread",
-      "translated": "删除对话"
+      "translated": "删除话题"
     },
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "该对话及其对话记录将从 Gateway 中移除。"
+      "translated": "该话题及其对话记录将从 Gateway 中移除。"
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23891,12 +23951,12 @@
     {
       "id": "native.apple.ac71e3b2aa496a2c",
       "source": "Thread running",
-      "translated": "对话正在运行"
+      "translated": "话题正在运行"
     },
     {
       "id": "native.apple.c775e87f997278b2",
       "source": "Thread failed",
-      "translated": "对话运行失败"
+      "translated": "话题运行失败"
     },
     {
       "id": "native.apple.ac85292b16a7465f",
@@ -23956,7 +24016,7 @@
     {
       "id": "native.apple.f4998cfb572f23ff",
       "source": "Delete Thread…",
-      "translated": "删除对话…"
+      "translated": "删除话题…"
     },
     {
       "id": "native.apple.6a3425ea2811ff88",
@@ -23971,7 +24031,7 @@
     {
       "id": "native.apple.8802e9576ffd0f65",
       "source": "Retry thread groups",
-      "translated": "重试对话组"
+      "translated": "重试加载话题组"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -23996,7 +24056,7 @@
     {
       "id": "native.apple.b313b80def4bda52",
       "source": "Search threads",
-      "translated": "搜索对话"
+      "translated": "搜索话题"
     },
     {
       "id": "native.apple.c0cc6acc36f413ce",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "每个所选对话及其对话记录都将从 Gateway 中移除。"
+      "translated": "每个所选对话及其记录都将从 Gateway 中移除。"
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24041,7 +24101,7 @@
     {
       "id": "native.apple.6f8acab2256728b5",
       "source": "Manage thread groups",
-      "translated": "管理对话组"
+      "translated": "管理对话分组"
     },
     {
       "id": "native.apple.185f4688f98e244e",
@@ -24236,7 +24296,7 @@
     {
       "id": "native.apple.14df2e4997689fb3",
       "source": "Fork from Here",
-      "translated": "从此处分叉"
+      "translated": "从此处分支"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -24326,7 +24386,7 @@
     {
       "id": "native.apple.e0f045151c8d3137",
       "source": "Gateway changed before the thread operation started.",
-      "translated": "对话操作开始前 Gateway 已更改。"
+      "translated": "Gateway 在对话操作开始前已发生更改。"
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24336,7 +24396,7 @@
     {
       "id": "native.apple.0a5c4e15466c3acc",
       "source": "Clear this thread's history?",
-      "translated": "要清除此对话的历史记录吗？"
+      "translated": "清除此对话的历史记录？"
     },
     {
       "id": "native.apple.6192578088f1b100",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "分支"
+      "translated": "创建分支"
     },
     {
       "id": "native.apple.8768f9ed198edc54",
@@ -24536,22 +24596,22 @@
     {
       "id": "native.apple.8b4f1c5107ea8a0e",
       "source": "Thread",
-      "translated": "对话"
+      "translated": "对话串"
     },
     {
       "id": "native.apple.4d7750c9bf699469",
       "source": "Thread actions",
-      "translated": "对话操作"
+      "translated": "对话串操作"
     },
     {
       "id": "native.apple.bb2f22cc43c97f8e",
       "source": "Thread cost %@",
-      "translated": "对话费用 %@"
+      "translated": "对话串费用 %@"
     },
     {
       "id": "native.apple.6239ced0b86e86f8",
       "source": "Compact Thread",
-      "translated": "压缩对话"
+      "translated": "压缩对话串"
     },
     {
       "id": "native.apple.fa10740f9e272e83",

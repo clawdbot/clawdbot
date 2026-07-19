@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "スレッドを閲覧"
+      "translated": "スレッドを参照"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -1486,7 +1486,7 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "チャット、音声、スレッド、プロバイダー、設定をお試しください。"
+      "translated": "チャット、音声、スレッド、プロバイダー、または設定をお試しください。"
     },
     {
       "id": "native.android.670121e54dbe286f",
@@ -1496,7 +1496,7 @@
     {
       "id": "native.android.d38be650b1bce4a0",
       "source": "Connect the Gateway to search threads.",
-      "translated": "スレッドを検索するには、Gatewayに接続してください。"
+      "translated": "スレッドを検索するにはGatewayに接続してください。"
     },
     {
       "id": "native.android.3d7754721f776ef8",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "「$group」内のスレッドは保持され、「未分類」に戻されます。"
+      "translated": "「$group」内のスレッドは保持され、未分類に戻ります。"
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -4351,12 +4351,12 @@
     {
       "id": "native.android.c1626a6700a570f6",
       "source": "Preferred microphone unavailable; using automatic routing.",
-      "translated": "優先マイクを利用できないため、自動ルーティングを使用します。"
+      "translated": "優先マイクを利用できないため、自動ルーティングを使用しています。"
     },
     {
       "id": "native.android.820bc5d0ce571d8b",
       "source": "Prioritizes connected Bluetooth microphones.",
-      "translated": "接続されているBluetoothマイクを優先します。"
+      "translated": "接続済みのBluetoothマイクを優先します。"
     },
     {
       "id": "native.android.11e48038d5e8bff6",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClawは、このスマートフォンをスレッド、音声、プロバイダー、Gateway向けのシンプルなモバイルコマンド画面に変えます。"
+      "translated": "OpenClawは、このスマートフォンをスレッド、音声、プロバイダー、Gatewayのためのシンプルなモバイルコマンド画面に変えます。"
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -7806,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "最近のスレッドと次のステップを要約します。"
+      "translated": "最近のスレッドと次のステップを要約してください。"
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "最近のOpenClawスレッドの概要と、次のステップを提案してください。"
+      "translated": "最近のOpenClawスレッドの内容をまとめ、次のステップを提案してください。"
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -10794,6 +10794,61 @@
       "translated": "タスクの詳細"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "ピン留め"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "最近"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "モデル"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "思考"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "高速"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "デフォルト（継承）"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "オフ"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "オン"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "フル"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "詳細度"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "デフォルト"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "トランスクリプトをエクスポートできません"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "Gatewayの準備ができると、スレッドが接続されます。"
+      "translated": "Gatewayの準備が整うと、スレッドが接続されます。"
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "worktree で新規チャット"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "新規セッションのオプション…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11041,7 +11101,7 @@
     {
       "id": "native.apple.092659256d26cb03",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "この操作により、スレッドとその記録が完全に削除されます。"
+      "translated": "この操作を行うと、スレッドとその記録が完全に削除されます。"
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11256,12 +11316,12 @@
     {
       "id": "native.apple.4d28a7def2337b9f",
       "source": "Loading archived threads",
-      "translated": "アーカイブ済みのスレッドを読み込んでいます"
+      "translated": "アーカイブ済みのスレッドを読み込み中"
     },
     {
       "id": "native.apple.777d7b706933bd7b",
       "source": "Loading recent threads",
-      "translated": "最近のスレッドを読み込んでいます"
+      "translated": "最近のスレッドを読み込み中"
     },
     {
       "id": "native.apple.22f81ea94bef8410",
@@ -19046,7 +19106,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "メインスレッドのフローティングチャットバーを開くグローバルショートカットです。"
+      "translated": "メインスレッド用のフローティングチャットバーを開くグローバルショートカットです。"
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -19626,7 +19686,7 @@
     {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
-      "translated": "新しいスレッド"
+      "translated": "新規スレッド"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "まだスレッドはありません。最初の受信メッセージまたはハートビートの後に表示されます。"
+      "translated": "スレッドはまだありません。最初の受信メッセージまたはハートビートの後に表示されます。"
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "昨日以降にスレッドで起きたことを要約してください。"
+      "translated": "昨日以降、スレッドで起きたことを要約してください。"
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23396,7 +23456,7 @@
     {
       "id": "native.apple.9e611e3a80e71408",
       "source": "The widget image could not be encoded as PNG.",
-      "translated": "ウィジェットの画像をPNG形式でエンコードできませんでした。"
+      "translated": "ウィジェットの画像をPNGとしてエンコードできませんでした。"
     },
     {
       "id": "native.apple.9a6e8afbe24a262b",
@@ -23546,7 +23606,7 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "このスレッドはアクティブまたは実行中のため、アーカイブできません。"
+      "translated": "このスレッドは、アクティブまたは実行中のためアーカイブできません。"
     },
     {
       "id": "native.apple.8952a111a1075051",
@@ -23791,7 +23851,7 @@
     {
       "id": "native.apple.2d96aa7d3d12f85b",
       "source": "New Thread Options",
-      "translated": "新しいスレッドのオプション"
+      "translated": "新規スレッドのオプション"
     },
     {
       "id": "native.apple.5b0cde807ccb4241",
@@ -23831,7 +23891,7 @@
     {
       "id": "native.apple.6fde4bdf9d5b9191",
       "source": "No Threads",
-      "translated": "スレッドはありません"
+      "translated": "スレッドなし"
     },
     {
       "id": "native.apple.2d4ee298bdd1c05d",
@@ -23896,7 +23956,7 @@
     {
       "id": "native.apple.c775e87f997278b2",
       "source": "Thread failed",
-      "translated": "スレッドに失敗しました"
+      "translated": "スレッドが失敗しました"
     },
     {
       "id": "native.apple.ac85292b16a7465f",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "選択した各スレッドとそのトランスクリプトがGatewayから削除されます。"
+      "translated": "選択した各スレッドとその記録がGatewayから削除されます。"
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24451,12 +24511,12 @@
     {
       "id": "native.apple.1a765291943599e5",
       "source": "New Thread",
-      "translated": "新規スレッド"
+      "translated": "新しいスレッド"
     },
     {
       "id": "native.apple.c7a3a6d5e43dd98f",
       "source": "New Thread Options…",
-      "translated": "新規スレッドのオプション…"
+      "translated": "新しいスレッドのオプション…"
     },
     {
       "id": "native.apple.5361129a24118af6",

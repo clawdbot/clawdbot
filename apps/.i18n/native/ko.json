@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "스레드 찾아보기"
+      "translated": "스레드 탐색"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "\"$group\"의 스레드는 유지되며 그룹 없음으로 다시 이동됩니다."
+      "translated": "\"$group\"의 스레드는 유지되며 그룹 미지정으로 다시 이동합니다."
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -3816,7 +3816,7 @@
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "스레드와 대화 기록이 영구적으로 삭제됩니다."
+      "translated": "이 작업은 스레드와 해당 대화 내용을 영구적으로 삭제합니다."
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3961,7 +3961,7 @@
     {
       "id": "native.android.f289d03e1d3eee98",
       "source": "Open Chat to start or resume the current thread.",
-      "translated": "Chat을 열어 현재 스레드를 시작하거나 재개하세요."
+      "translated": "현재 스레드를 시작하거나 재개하려면 채팅을 여세요."
     },
     {
       "id": "native.android.504b71386e76c6ae",
@@ -3991,7 +3991,7 @@
     {
       "id": "native.android.ee4c727cdafbe963",
       "source": "Main thread",
-      "translated": "기본 스레드"
+      "translated": "메인 스레드"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -4181,7 +4181,7 @@
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "활성 스레드에서 대기 중인 Chat 도구 호출이 여기에 계속 표시됩니다."
+      "translated": "활성 스레드에서 대기 중인 채팅 도구 호출이 여기에 계속 표시됩니다."
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -5756,7 +5756,7 @@
     {
       "id": "native.android.43320b54a68b00a1",
       "source": "No recent threads",
-      "translated": "최근 스레드가 없습니다"
+      "translated": "최근 스레드 없음"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -7806,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "최근 스레드와 다음 단계를 요약하세요."
+      "translated": "최근 스레드와 다음 단계를 요약해 주세요."
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "최근 OpenClaw 스레드의 내용을 요약하고 다음 단계를 제안해 주세요."
+      "translated": "최근 OpenClaw 스레드의 내용을 알려 주고 다음 단계를 제안해 주세요."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -10794,6 +10794,61 @@
       "translated": "작업 세부 정보"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "고정됨"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "최근"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "모델"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "사고"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "빠르게"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "기본값(상속됨)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "끔"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "켬"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "전체"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "상세도"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "기본값"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "대화 기록을 내보낼 수 없음"
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Worktree에서 새 채팅"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "새 세션 옵션…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11041,7 +11101,7 @@
     {
       "id": "native.apple.092659256d26cb03",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "이 작업을 수행하면 스레드와 대화 기록이 영구적으로 삭제됩니다."
+      "translated": "스레드와 대화 기록이 영구적으로 삭제됩니다."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11361,7 +11421,7 @@
     {
       "id": "native.apple.21d9208d86a4d1fe",
       "source": "Loading threads",
-      "translated": "스레드 로드 중"
+      "translated": "스레드 불러오는 중"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "새 채팅 스레드 및 대화 세션에 사용됩니다."
+      "translated": "새 채팅 스레드와 Talk 세션에 사용됩니다."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "어제 이후 내 스레드에서 일어난 일을 요약해 주세요."
+      "translated": "어제 이후 내 스레드에서 있었던 일을 요약해 주세요."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23361,7 +23421,7 @@
     {
       "id": "native.apple.d640691fd196f338",
       "source": "Widget export failed",
-      "translated": "위젯 내보내기에 실패했습니다"
+      "translated": "위젯 내보내기 실패"
     },
     {
       "id": "native.apple.533c6e22a11e88de",
@@ -23546,7 +23606,7 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "활성 상태이거나 실행 중인 스레드는 보관할 수 없습니다."
+      "translated": "이 스레드가 활성 상태이거나 실행 중인 동안에는 보관할 수 없습니다."
     },
     {
       "id": "native.apple.8952a111a1075051",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "스레드와 해당 대화 기록이 Gateway에서 제거됩니다."
+      "translated": "스레드와 대화 기록이 Gateway에서 삭제됩니다."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "선택한 각 스레드와 해당 대화 내용이 Gateway에서 제거됩니다."
+      "translated": "선택한 각 스레드와 해당 대화 내용이 Gateway에서 삭제됩니다."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24231,12 +24291,12 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "여기까지 되돌리기"
+      "translated": "여기로 되돌리기"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
       "source": "Fork from Here",
-      "translated": "여기에서 분기하기"
+      "translated": "여기에서 분기"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "분기"
+      "translated": "포크"
     },
     {
       "id": "native.apple.8768f9ed198edc54",

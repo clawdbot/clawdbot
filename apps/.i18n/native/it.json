@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "Sfoglia i thread"
+      "translated": "Sfoglia le conversazioni"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -1486,22 +1486,22 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "Prova Chat, Voce, Thread, Provider o Impostazioni."
+      "translated": "Prova Chat, Voce, Conversazioni, Provider o Impostazioni."
     },
     {
       "id": "native.android.670121e54dbe286f",
       "source": "Threads",
-      "translated": "Thread"
+      "translated": "Conversazioni"
     },
     {
       "id": "native.android.d38be650b1bce4a0",
       "source": "Connect the Gateway to search threads.",
-      "translated": "Connetti il Gateway per cercare i thread."
+      "translated": "Connetti il Gateway per cercare le conversazioni."
     },
     {
       "id": "native.android.3d7754721f776ef8",
       "source": "No matching threads yet.",
-      "translated": "Nessun thread corrispondente per ora."
+      "translated": "Non ci sono ancora conversazioni corrispondenti."
     },
     {
       "id": "native.android.1d009aa9b54d689d",
@@ -1511,12 +1511,12 @@
     {
       "id": "native.android.9a839f6e3e05a744",
       "source": "OpenClaw thread",
-      "translated": "Thread OpenClaw"
+      "translated": "Conversazione OpenClaw"
     },
     {
       "id": "native.android.d83f82a1e4a5ed99",
       "source": "Open thread",
-      "translated": "Apri thread"
+      "translated": "Apri conversazione"
     },
     {
       "id": "native.android.42fd88c3d0418a4a",
@@ -1541,7 +1541,7 @@
     {
       "id": "native.android.8a1c5365c0538908",
       "source": "Main thread",
-      "translated": "Thread principale"
+      "translated": "Conversazione principale"
     },
     {
       "id": "native.android.5f06e4d6a59f7a59",
@@ -3681,12 +3681,12 @@
     {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
-      "translated": "Thread"
+      "translated": "Conversazioni"
     },
     {
       "id": "native.android.439b324280869527",
       "source": "Focus thread search",
-      "translated": "Porta il cursore sulla ricerca dei thread"
+      "translated": "Vai alla ricerca delle conversazioni"
     },
     {
       "id": "native.android.e0f10db479f627eb",
@@ -3701,12 +3701,12 @@
     {
       "id": "native.android.03981341841b04ac",
       "source": "Search threads",
-      "translated": "Cerca thread"
+      "translated": "Cerca conversazioni"
     },
     {
       "id": "native.android.99570c528a41fa72",
       "source": "Clear thread search",
-      "translated": "Cancella la ricerca dei thread"
+      "translated": "Cancella la ricerca delle conversazioni"
     },
     {
       "id": "native.android.784ecdd6ea2ec5f0",
@@ -3726,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "Cambia layout dei thread"
+      "translated": "Cambia layout delle conversazioni"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3741,12 +3741,12 @@
     {
       "id": "native.android.ebd17565e0ffd8eb",
       "source": "Searching threads",
-      "translated": "Ricerca dei thread"
+      "translated": "Ricerca delle conversazioni"
     },
     {
       "id": "native.android.472d46ae8669f860",
       "source": "No matching threads",
-      "translated": "Nessun thread corrispondente"
+      "translated": "Nessuna conversazione corrispondente"
     },
     {
       "id": "native.android.11c1a8c944bea0ae",
@@ -3766,17 +3766,17 @@
     {
       "id": "native.android.ff81ad1bee00d384",
       "source": "Current thread",
-      "translated": "Thread corrente"
+      "translated": "Conversazione corrente"
     },
     {
       "id": "native.android.fc145645b9620e57",
       "source": "OpenClaw thread",
-      "translated": "Thread OpenClaw"
+      "translated": "Conversazione OpenClaw"
     },
     {
       "id": "native.android.71cbb8dde8bf138b",
       "source": "Rename thread",
-      "translated": "Rinomina thread"
+      "translated": "Rinomina conversazione"
     },
     {
       "id": "native.android.fa420bc51ff675a1",
@@ -3806,12 +3806,12 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "I thread in \"$group\" vengono mantenuti e spostati di nuovo in Non raggruppati."
+      "translated": "Le conversazioni in \"$group\" vengono mantenute e spostate nuovamente in Senza gruppo."
     },
     {
       "id": "native.android.d87a8217ab56999b",
       "source": "Delete thread?",
-      "translated": "Eliminare il thread?"
+      "translated": "Eliminare la conversazione?"
     },
     {
       "id": "native.android.930de97ff47113a8",
@@ -3961,7 +3961,7 @@
     {
       "id": "native.android.f289d03e1d3eee98",
       "source": "Open Chat to start or resume the current thread.",
-      "translated": "Apri la chat per avviare o riprendere il thread corrente."
+      "translated": "Apri Chat per avviare o riprendere il thread corrente."
     },
     {
       "id": "native.android.504b71386e76c6ae",
@@ -4181,7 +4181,7 @@
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "Le chiamate agli strumenti della chat in attesa nel thread attivo rimangono visibili qui."
+      "translated": "Le chiamate agli strumenti di Chat in attesa nel thread attivo rimangono visibili qui."
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4351,7 +4351,7 @@
     {
       "id": "native.android.c1626a6700a570f6",
       "source": "Preferred microphone unavailable; using automatic routing.",
-      "translated": "Il microfono preferito non è disponibile; verrà usato l'instradamento automatico."
+      "translated": "Il microfono preferito non è disponibile; viene usato l'instradamento automatico."
     },
     {
       "id": "native.android.820bc5d0ce571d8b",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClaw trasforma questo telefono in un'interfaccia di comando mobile essenziale per conversazioni, voce, provider e Gateway."
+      "translated": "OpenClaw trasforma questo telefono in un'interfaccia mobile essenziale per thread, voce, provider e Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5691,7 +5691,7 @@
     {
       "id": "native.android.36f78c8c85dc283f",
       "source": "Recent Threads",
-      "translated": "Conversazioni recenti"
+      "translated": "Thread recenti"
     },
     {
       "id": "native.android.e7e2862bffbd0706",
@@ -5751,12 +5751,12 @@
     {
       "id": "native.android.57177017a6a93826",
       "source": "Threads",
-      "translated": "Conversazioni"
+      "translated": "Thread"
     },
     {
       "id": "native.android.43320b54a68b00a1",
       "source": "No recent threads",
-      "translated": "Nessuna conversazione recente"
+      "translated": "Nessun thread recente"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -5796,12 +5796,12 @@
     {
       "id": "native.android.e24db059480f1e6a",
       "source": "Monitoring · 1 thread",
-      "translated": "Monitoraggio · 1 conversazione"
+      "translated": "Monitoraggio · 1 thread"
     },
     {
       "id": "native.android.5a475f37d80e02bc",
       "source": "Monitoring · $sessionCount threads",
-      "translated": "Monitoraggio · $sessionCount conversazioni"
+      "translated": "Monitoraggio · $sessionCount thread"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -5836,7 +5836,7 @@
     {
       "id": "native.android.358c5e0e838d5423",
       "source": "Open thread",
-      "translated": "Apri conversazione"
+      "translated": "Apri thread"
     },
     {
       "id": "native.android.ede6f2717ca8e267",
@@ -6261,7 +6261,7 @@
     {
       "id": "native.android.28a1a1acc5a0959f",
       "source": "Main thread",
-      "translated": "Conversazione principale"
+      "translated": "Thread principale"
     },
     {
       "id": "native.android.b1f9c790e2dbac1b",
@@ -7761,7 +7761,7 @@
     {
       "id": "native.android.0c74bc30a994dd33",
       "source": "Loading thread",
-      "translated": "Caricamento della conversazione"
+      "translated": "Caricamento del thread"
     },
     {
       "id": "native.android.2c1106e1687ab258",
@@ -7806,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "Riassumi le conversazioni recenti e i prossimi passaggi."
+      "translated": "Riassumi i thread recenti e i prossimi passaggi."
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "Aggiornami sulle mie conversazioni recenti in OpenClaw e suggerisci i prossimi passi."
+      "translated": "Aggiornami sui miei thread recenti di OpenClaw e suggerisci i prossimi passaggi."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -8151,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "Conversazioni"
+      "translated": "Thread"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -10794,6 +10794,61 @@
       "translated": "Dettagli attività"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "In evidenza"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Recenti"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Modello"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Ragionamento"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Veloce"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "Predefinito (ereditato)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Disattivato"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Attivato"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Completo"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Livello di dettaglio"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "Predefinito"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Impossibile esportare la trascrizione"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "La conversazione si collega non appena il Gateway è pronto."
+      "translated": "Il thread verrà collegato quando il Gateway sarà pronto."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10859,9 +10914,14 @@
       "translated": "Nuova chat nel worktree"
     },
     {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Opzioni nuova sessione…"
+    },
+    {
       "id": "native.apple.003b25ddafeb18e9",
       "source": "Threads…",
-      "translated": "Conversazioni…"
+      "translated": "Thread…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11026,7 +11086,7 @@
     {
       "id": "native.apple.31d5c7287cfb3abe",
       "source": "Delete Thread?",
-      "translated": "Eliminare la conversazione?"
+      "translated": "Eliminare il thread?"
     },
     {
       "id": "native.apple.d3395564809f1120",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "Utilizzato per le nuove conversazioni di Chat e le sessioni di Talk."
+      "translated": "Utilizzato per i nuovi thread di chat e le sessioni Talk."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15736,7 +15796,7 @@
     {
       "id": "native.apple.11fe8b9941954dfb",
       "source": "Threads",
-      "translated": "Conversazioni"
+      "translated": "Thread"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -19046,7 +19106,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "Scorciatoia globale che apre una barra della chat mobile per la conversazione principale."
+      "translated": "Scorciatoia globale che apre una barra di chat mobile per il thread principale."
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -19626,7 +19686,7 @@
     {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
-      "translated": "Nuova conversazione"
+      "translated": "Nuovo thread"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21916,7 +21976,7 @@
     {
       "id": "native.apple.3ec2afcbc298c673",
       "source": "Threads",
-      "translated": "Conversazioni"
+      "translated": "Thread"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "Non ci sono ancora conversazioni. Appariranno dopo il primo messaggio in arrivo o heartbeat."
+      "translated": "Nessun thread. Appariranno dopo il primo messaggio in arrivo o heartbeat."
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -22011,7 +22071,7 @@
     {
       "id": "native.apple.52e37e3a44ae516c",
       "source": "Threads",
-      "translated": "Conversazioni"
+      "translated": "Thread"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "Riassumi cosa è successo nelle mie conversazioni da ieri."
+      "translated": "Riassumi ciò che è successo nei miei thread da ieri."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23196,7 +23256,7 @@
     {
       "id": "native.apple.4edb66657f5aca1f",
       "source": "Thread",
-      "translated": "Conversazione"
+      "translated": "Thread"
     },
     {
       "id": "native.apple.284b2b94c272591d",
@@ -23386,22 +23446,22 @@
     {
       "id": "native.apple.0589cce608418f90",
       "source": "The widget image could not be captured.",
-      "translated": "Non è stato possibile acquisire l'immagine del widget."
+      "translated": "Impossibile acquisire l'immagine del widget."
     },
     {
       "id": "native.apple.dfe24e827fdbe9c5",
       "source": "The widget image could not be copied.",
-      "translated": "Non è stato possibile copiare l'immagine del widget."
+      "translated": "Impossibile copiare l'immagine del widget."
     },
     {
       "id": "native.apple.9e611e3a80e71408",
       "source": "The widget image could not be encoded as PNG.",
-      "translated": "Non è stato possibile codificare l'immagine del widget in formato PNG."
+      "translated": "Impossibile codificare l'immagine del widget in formato PNG."
     },
     {
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
-      "translated": "Non è stato possibile salvare l'immagine del widget."
+      "translated": "Impossibile salvare l'immagine del widget."
     },
     {
       "id": "native.apple.769b7dcea4708c40",
@@ -23546,12 +23606,12 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "Questa conversazione non può essere archiviata mentre è attiva o in esecuzione."
+      "translated": "Questo thread non può essere archiviato mentre è attivo o in esecuzione."
     },
     {
       "id": "native.apple.8952a111a1075051",
       "source": "The main thread cannot be deleted.",
-      "translated": "La conversazione principale non può essere eliminata."
+      "translated": "Il thread principale non può essere eliminato."
     },
     {
       "id": "native.apple.90d0ccf80ca28717",
@@ -23776,7 +23836,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "Le conversazioni in questo gruppo verranno separate dal gruppo."
+      "translated": "Le conversazioni in questo gruppo vengono rimosse dal gruppo."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23861,7 +23921,7 @@
     {
       "id": "native.apple.1dd067c44511c7f0",
       "source": "Thread name",
-      "translated": "Nome conversazione"
+      "translated": "Nome della conversazione"
     },
     {
       "id": "native.apple.6ec5a13c0e6c20d9",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "La conversazione e la relativa trascrizione vengono rimosse dal gateway."
+      "translated": "La conversazione e la relativa trascrizione vengono rimosse dal Gateway."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23891,7 +23951,7 @@
     {
       "id": "native.apple.ac71e3b2aa496a2c",
       "source": "Thread running",
-      "translated": "Conversazione in corso"
+      "translated": "Conversazione in esecuzione"
     },
     {
       "id": "native.apple.c775e87f997278b2",
@@ -23971,7 +24031,7 @@
     {
       "id": "native.apple.8802e9576ffd0f65",
       "source": "Retry thread groups",
-      "translated": "Riprova gruppi di conversazioni"
+      "translated": "Riprova a caricare i gruppi di conversazioni"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -24011,7 +24071,7 @@
     {
       "id": "native.apple.9d0d3f20096cc4da",
       "source": "Thread name",
-      "translated": "Nome conversazione"
+      "translated": "Nome della conversazione"
     },
     {
       "id": "native.apple.833fe2915430c89d",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "Ogni conversazione selezionata e la relativa trascrizione verranno rimosse dal Gateway."
+      "translated": "Ogni conversazione selezionata e la relativa trascrizione verranno rimosse dal gateway."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24326,7 +24386,7 @@
     {
       "id": "native.apple.e0f045151c8d3137",
       "source": "Gateway changed before the thread operation started.",
-      "translated": "Il Gateway è cambiato prima dell'avvio dell'operazione sulla conversazione."
+      "translated": "Il Gateway è cambiato prima dell'inizio dell'operazione sulla conversazione."
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "Crea diramazione"
+      "translated": "Dirama"
     },
     {
       "id": "native.apple.8768f9ed198edc54",

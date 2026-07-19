@@ -529,6 +529,11 @@ import {
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
+  SystemChangeEntrySchema,
+  SystemChangeKindSchema,
+  SystemChangeSourceSchema,
+  SystemChangesListParamsSchema,
+  SystemChangesListResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyParamsSchema,
@@ -791,6 +796,7 @@ export const validateConfigSchemaParams = lazyCompile(ConfigSchemaParamsSchema);
 export const validateConfigSchemaLookupParams = lazyCompile(ConfigSchemaLookupParamsSchema);
 export const validateConfigSchemaLookupResult = lazyCompile(ConfigSchemaLookupResultSchema);
 export const validateSystemAgentChatParams = lazyCompile(SystemAgentChatParamsSchema);
+export const validateSystemChangesListParams = lazyCompile(SystemChangesListParamsSchema);
 export const validateSystemAgentSetupDetectParams = lazyCompile(SystemAgentSetupDetectParamsSchema);
 export const validateSystemAgentSetupVerifyParams = lazyCompile(SystemAgentSetupVerifyParamsSchema);
 export const validateSystemAgentSetupActivateParams = lazyCompile(
@@ -1219,6 +1225,11 @@ export {
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
+  SystemChangeEntrySchema,
+  SystemChangeKindSchema,
+  SystemChangeSourceSchema,
+  SystemChangesListParamsSchema,
+  SystemChangesListResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyParamsSchema,
@@ -1549,6 +1560,11 @@ export type {
   SystemAgentChatParams,
   SystemAgentChatQuestion,
   SystemAgentChatResult,
+  SystemChangeEntry,
+  SystemChangeKind,
+  SystemChangeSource,
+  SystemChangesListParams,
+  SystemChangesListResult,
   SystemAgentSetupDetectParams,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyParams,

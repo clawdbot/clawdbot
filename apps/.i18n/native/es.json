@@ -1486,7 +1486,7 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "Prueba Chat, Voz, Hilos, Proveedores o Ajustes."
+      "translated": "Prueba Chat, Voz, Hilos, Proveedores o Configuración."
     },
     {
       "id": "native.android.670121e54dbe286f",
@@ -4181,7 +4181,7 @@
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "Las llamadas a herramientas del chat que estén en espera en el hilo activo seguirán visibles aquí."
+      "translated": "Las llamadas a herramientas del chat que esperan en el hilo activo siguen visibles aquí."
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClaw convierte este teléfono en una interfaz móvil despejada para gestionar hilos, voz, proveedores y Gateway."
+      "translated": "OpenClaw convierte este teléfono en una interfaz móvil sencilla para hilos, voz, proveedores y Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -10794,6 +10794,61 @@
       "translated": "Detalles de la tarea"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Fijado"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Reciente"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Modelo"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Razonamiento"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Rápido"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "Predeterminado (heredado)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Desactivado"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Activado"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Completo"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Nivel de detalle"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "Predeterminado"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "No se puede exportar la transcripción"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "El hilo se adjuntará cuando el Gateway esté listo."
+      "translated": "El hilo se conecta cuando el Gateway está listo."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Nuevo chat en worktree"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Opciones de nueva sesión…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11026,7 +11086,7 @@
     {
       "id": "native.apple.31d5c7287cfb3abe",
       "source": "Delete Thread?",
-      "translated": "¿Eliminar hilo?"
+      "translated": "¿Eliminar el hilo?"
     },
     {
       "id": "native.apple.d3395564809f1120",
@@ -11071,7 +11131,7 @@
     {
       "id": "native.apple.683032464c497bbd",
       "source": "Rename Thread",
-      "translated": "Cambiar el nombre del hilo"
+      "translated": "Renombrar hilo"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -11381,7 +11441,7 @@
     {
       "id": "native.apple.7396d205574d279f",
       "source": "Thread activity offline",
-      "translated": "Actividad de los hilos sin conexión"
+      "translated": "La actividad de los hilos está sin conexión"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "Aún no hay hilos. Aparecerán después del primer mensaje entrante o señal de actividad."
+      "translated": "Aún no hay hilos. Aparecen después del primer mensaje entrante o heartbeat."
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "Resume lo que ha ocurrido en mis hilos desde ayer."
+      "translated": "Resume lo que ocurrió en mis hilos desde ayer."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23791,7 +23851,7 @@
     {
       "id": "native.apple.2d96aa7d3d12f85b",
       "source": "New Thread Options",
-      "translated": "Opciones del nuevo hilo"
+      "translated": "Opciones de hilo nuevo"
     },
     {
       "id": "native.apple.5b0cde807ccb4241",
@@ -23851,12 +23911,12 @@
     {
       "id": "native.apple.851be81fcc933608",
       "source": "New thread options",
-      "translated": "Opciones del nuevo hilo"
+      "translated": "Opciones de hilo nuevo"
     },
     {
       "id": "native.apple.9ce8a4aba7b444b2",
       "source": "Rename Thread",
-      "translated": "Renombrar hilo"
+      "translated": "Cambiar el nombre del hilo"
     },
     {
       "id": "native.apple.1dd067c44511c7f0",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "El hilo y su transcripción se eliminarán del Gateway."
+      "translated": "El hilo y su transcripción se eliminan del Gateway."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23971,7 +24031,7 @@
     {
       "id": "native.apple.8802e9576ffd0f65",
       "source": "Retry thread groups",
-      "translated": "Reintentar grupos de hilos"
+      "translated": "Volver a intentar cargar los grupos de hilos"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -24456,7 +24516,7 @@
     {
       "id": "native.apple.c7a3a6d5e43dd98f",
       "source": "New Thread Options…",
-      "translated": "Opciones de nuevo hilo…"
+      "translated": "Opciones del nuevo hilo…"
     },
     {
       "id": "native.apple.5361129a24118af6",

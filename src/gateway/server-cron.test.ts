@@ -768,6 +768,212 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("keeps a successful command on cadence when default announce delivery has no channel", async () => {
+    const cfg = createCronConfig("server-cron-command-delivery-failure");
+    loadConfigMock.mockReturnValue(cfg);
+    const deliveryError = "Channel is required (no configured channels detected)";
+    sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "successful-headless-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
+        },
+      });
+      const normalNextRunAtMs = job.state.nextRunAtMs;
+      expect(job.delivery).toEqual({ mode: "announce" });
+
+      await state.cron.run(job.id, "force");
+
+      const updated = state.cron.getJob(job.id);
+      expect(updated?.state.lastRunStatus).toBe("ok");
+      expect(updated?.state.lastError).toBeUndefined();
+      expect(updated?.state.consecutiveErrors ?? 0).toBe(0);
+      expect(updated?.state.nextRunAtMs).toBe(normalNextRunAtMs);
+      expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+      expect(updated?.state.lastDeliveryError).toBe(deliveryError);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("keeps command execution errors on backoff when announce delivery also fails", async () => {
+    const cfg = createCronConfig("server-cron-command-execution-failure");
+    loadConfigMock.mockReturnValue(cfg);
+    const deliveryError = "Channel is required (no configured channels detected)";
+    sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "failed-headless-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stderr.write('failed'); process.exit(7)"],
+        },
+      });
+
+      const dueAtMs = job.state.nextRunAtMs;
+      expect(dueAtMs).toBeTypeOf("number");
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(dueAtMs ?? 0);
+      try {
+        await state.cron.run(job.id, "due");
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      const updated = state.cron.getJob(job.id);
+      expect(updated?.state.lastRunStatus).toBe("error");
+      expect(updated?.state.lastError).toBe("command exited with code 7");
+      expect(updated?.state.consecutiveErrors).toBe(1);
+      expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+      expect(updated?.state.lastDeliveryError).toBe(deliveryError);
+      expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(
+        (updated?.updatedAtMs ?? 0) + 30_000,
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("fails and retains a one-shot command when required delivery fails", async () => {
+    const cfg = createCronConfig("server-cron-command-required-delivery-failure");
+    loadConfigMock.mockReturnValue(cfg);
+    const deliveryError = "network unavailable while delivering command output";
+    sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "successful-command-required-delivery",
+        enabled: true,
+        deleteAfterRun: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
+        },
+        delivery: { mode: "announce", bestEffort: false },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      const updated = state.cron.getJob(job.id);
+      expect(updated?.state.lastRunStatus).toBe("error");
+      expect(updated?.state.lastError).toBe(deliveryError);
+      expect(updated?.state.consecutiveErrors).toBe(1);
+      expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+      expect(updated?.state.lastDeliveryError).toBe(deliveryError);
+      expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(
+        (updated?.updatedAtMs ?? 0) + 30_000,
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("keeps a successful command successful when explicit best-effort delivery fails", async () => {
+    const cfg = createCronConfig("server-cron-command-explicit-best-effort-delivery-failure");
+    loadConfigMock.mockReturnValue(cfg);
+    const deliveryError = "Channel is required (no configured channels detected)";
+    sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "successful-command-best-effort-delivery",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
+        },
+        delivery: { mode: "announce", bestEffort: true },
+      });
+      const normalNextRunAtMs = job.state.nextRunAtMs;
+
+      await state.cron.run(job.id, "force");
+
+      const updated = state.cron.getJob(job.id);
+      expect(updated?.state.lastRunStatus).toBe("ok");
+      expect(updated?.state.lastError).toBeUndefined();
+      expect(updated?.state.consecutiveErrors ?? 0).toBe(0);
+      expect(updated?.state.nextRunAtMs).toBe(normalNextRunAtMs);
+      expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+      expect(updated?.state.lastDeliveryError).toBe(deliveryError);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("deletes a successful one-shot command even when announce delivery fails", async () => {
+    const cfg = createCronConfig("server-cron-command-delivery-failure-delete");
+    loadConfigMock.mockReturnValue(cfg);
+    sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(
+      new Error("Channel is required (no configured channels detected)"),
+    );
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "successful-delete-after-run-command",
+        enabled: true,
+        deleteAfterRun: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(state.cron.getJob(job.id)).toBeUndefined();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("delivers isolated script notify through the cron announce path", async () => {
     const cfg = createCronConfig("server-cron-script-announce");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
@@ -1053,6 +1259,8 @@ describe("buildGatewayCronService", () => {
       const message = typeof announcePayload.message === "string" ? announcePayload.message : "";
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      expect(state.cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("delivered");
     } finally {
       state.cron.stop();
     }

@@ -304,6 +304,13 @@ export type PresenceEntry = {
   reason?: string | null;
   text?: string | null;
   ts?: number | null;
+  user?: {
+    id: string;
+    email?: string | null;
+    name?: string | null;
+    avatarUrl?: string | null;
+  } | null;
+  watchedSessions?: string[] | null;
 };
 
 export type GatewaySessionsDefaults = {

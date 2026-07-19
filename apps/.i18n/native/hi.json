@@ -3726,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "थ्रेड लेआउट टॉगल करें"
+      "translated": "थ्रेड लेआउट बदलें"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "\"$group\" के थ्रेड रखे जाते हैं और वापस असमूहीकृत में चले जाते हैं।"
+      "translated": "\"$group\" के थ्रेड रखे जाते हैं और वापस अवर्गीकृत में चले जाते हैं।"
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -3816,7 +3816,7 @@
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "यह थ्रेड और इसकी ट्रांसक्रिप्ट को स्थायी रूप से हटा देता है।"
+      "translated": "यह थ्रेड और इसकी प्रतिलिपि को स्थायी रूप से हटा देता है।"
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3941,17 +3941,17 @@
     {
       "id": "native.android.8e21a70428def6e0",
       "source": "No threads yet",
-      "translated": "अभी तक कोई थ्रेड नहीं"
+      "translated": "अभी कोई थ्रेड नहीं है"
     },
     {
       "id": "native.android.cda4c5ad8b17e394",
       "source": "No current thread",
-      "translated": "कोई मौजूदा थ्रेड नहीं"
+      "translated": "कोई मौजूदा थ्रेड नहीं है"
     },
     {
       "id": "native.android.be84f061047aa2da",
       "source": "No archived threads",
-      "translated": "कोई आर्काइव किया गया थ्रेड नहीं"
+      "translated": "कोई संग्रहीत थ्रेड नहीं है"
     },
     {
       "id": "native.android.0a38a1167c6b6941",
@@ -3961,12 +3961,12 @@
     {
       "id": "native.android.f289d03e1d3eee98",
       "source": "Open Chat to start or resume the current thread.",
-      "translated": "मौजूदा थ्रेड शुरू करने या फिर से जारी रखने के लिए Chat खोलें।"
+      "translated": "मौजूदा थ्रेड शुरू करने या फिर से जारी रखने के लिए चैट खोलें।"
     },
     {
       "id": "native.android.504b71386e76c6ae",
       "source": "Archived threads will show up here.",
-      "translated": "आर्काइव किए गए थ्रेड यहाँ दिखाई देंगे।"
+      "translated": "संग्रहीत थ्रेड यहाँ दिखाई देंगे।"
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -4181,7 +4181,7 @@
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "सक्रिय थ्रेड में प्रतीक्षारत Chat टूल कॉल यहाँ दिखाई देते रहेंगे।"
+      "translated": "सक्रिय थ्रेड में प्रतीक्षारत चैट टूल कॉल यहाँ दिखाई देते रहेंगे।"
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4376,7 +4376,7 @@
     {
       "id": "native.android.8c4e91f53928efb2",
       "source": "Built-in microphone",
-      "translated": "बिल्ट-इन माइक्रोफ़ोन"
+      "translated": "अंतर्निहित माइक्रोफ़ोन"
     },
     {
       "id": "native.android.14b613cb6e2446b4",
@@ -5756,7 +5756,7 @@
     {
       "id": "native.android.43320b54a68b00a1",
       "source": "No recent threads",
-      "translated": "कोई हाल का थ्रेड नहीं"
+      "translated": "कोई हालिया थ्रेड नहीं"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -10794,6 +10794,61 @@
       "translated": "कार्य का विवरण"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "पिन किया गया"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "हाल के"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "मॉडल"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "सोच-विचार"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "तेज़"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "डिफ़ॉल्ट (इनहेरिट किया गया)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "बंद"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "चालू"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "विस्तार का स्तर"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "डिफ़ॉल्ट"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "प्रतिलेख निर्यात नहीं किया जा सका"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "Gateway तैयार होने पर थ्रेड संलग्न हो जाता है।"
+      "translated": "Gateway तैयार होते ही थ्रेड संलग्न हो जाएगा।"
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Worktree में नया चैट"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "नए सत्र के विकल्प…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11041,7 +11101,7 @@
     {
       "id": "native.apple.092659256d26cb03",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "इससे थ्रेड और उसका ट्रांसक्रिप्ट स्थायी रूप से हट जाएगा।"
+      "translated": "यह थ्रेड और इसकी ट्रांसक्रिप्ट को स्थायी रूप से हटा देता है।"
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11136,7 +11196,7 @@
     {
       "id": "native.apple.5aa32afda85064ea",
       "source": "No recent threads",
-      "translated": "कोई हाल का थ्रेड नहीं"
+      "translated": "कोई हालिया थ्रेड नहीं"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11256,12 +11316,12 @@
     {
       "id": "native.apple.4d28a7def2337b9f",
       "source": "Loading archived threads",
-      "translated": "संग्रहीत थ्रेड लोड किए जा रहे हैं"
+      "translated": "संग्रहीत थ्रेड लोड हो रहे हैं"
     },
     {
       "id": "native.apple.777d7b706933bd7b",
       "source": "Loading recent threads",
-      "translated": "हाल के थ्रेड लोड किए जा रहे हैं"
+      "translated": "हाल के थ्रेड लोड हो रहे हैं"
     },
     {
       "id": "native.apple.22f81ea94bef8410",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "नए Chat थ्रेड और Talk सत्रों के लिए उपयोग किया जाता है।"
+      "translated": "नई चैट थ्रेड और बातचीत सत्रों के लिए उपयोग किया जाता है।"
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -19626,7 +19686,7 @@
     {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
-      "translated": "नया थ्रेड"
+      "translated": "नई थ्रेड"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "अभी तक कोई थ्रेड नहीं है। वे पहला इनबाउंड संदेश या हार्टबीट मिलने के बाद दिखाई देते हैं।"
+      "translated": "अभी तक कोई थ्रेड नहीं है। वे पहला इनबाउंड संदेश या हार्टबीट मिलने के बाद दिखाई देती हैं।"
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "कल से अब तक मेरे थ्रेड में क्या हुआ, उसका सारांश दें।"
+      "translated": "कल से अब तक मेरी थ्रेड में जो हुआ, उसका सारांश दें।"
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23386,22 +23446,22 @@
     {
       "id": "native.apple.0589cce608418f90",
       "source": "The widget image could not be captured.",
-      "translated": "विजेट की छवि कैप्चर नहीं की जा सकी।"
+      "translated": "विजेट की इमेज कैप्चर नहीं की जा सकी।"
     },
     {
       "id": "native.apple.dfe24e827fdbe9c5",
       "source": "The widget image could not be copied.",
-      "translated": "विजेट की छवि कॉपी नहीं की जा सकी।"
+      "translated": "विजेट की इमेज कॉपी नहीं की जा सकी।"
     },
     {
       "id": "native.apple.9e611e3a80e71408",
       "source": "The widget image could not be encoded as PNG.",
-      "translated": "विजेट की छवि को PNG के रूप में एन्कोड नहीं किया जा सका।"
+      "translated": "विजेट की इमेज को PNG के रूप में एन्कोड नहीं किया जा सका।"
     },
     {
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
-      "translated": "विजेट की छवि सहेजी नहीं जा सकी।"
+      "translated": "विजेट की इमेज सेव नहीं की जा सकी।"
     },
     {
       "id": "native.apple.769b7dcea4708c40",
@@ -23546,17 +23606,17 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "सक्रिय या चल रहे इस थ्रेड को आर्काइव नहीं किया जा सकता।"
+      "translated": "सक्रिय या चालू होने के दौरान इस थ्रेड को आर्काइव नहीं किया जा सकता।"
     },
     {
       "id": "native.apple.8952a111a1075051",
       "source": "The main thread cannot be deleted.",
-      "translated": "मुख्य थ्रेड को हटाया नहीं जा सकता।"
+      "translated": "मुख्य थ्रेड को डिलीट नहीं किया जा सकता।"
     },
     {
       "id": "native.apple.90d0ccf80ca28717",
       "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
-      "translated": "इस थ्रेड को आर्काइव करने या हटाने से पहले अटैचमेंट हटाएँ या डिलीवरी की प्रतीक्षा करें।"
+      "translated": "इस थ्रेड को संग्रहित करने या हटाने से पहले अटैचमेंट हटाएँ या उनके डिलीवर होने की प्रतीक्षा करें।"
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23821,7 +23881,7 @@
     {
       "id": "native.apple.87ef57319d1ddc85",
       "source": "The thread could not be created.",
-      "translated": "थ्रेड बनाया नहीं जा सका।"
+      "translated": "थ्रेड नहीं बनाया जा सका।"
     },
     {
       "id": "native.apple.6bd91c435b69d638",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "प्रत्येक चयनित थ्रेड और उसकी ट्रांसक्रिप्ट Gateway से हटा दी जाएगी।"
+      "translated": "हर चुना गया थ्रेड और उसका ट्रांसक्रिप्ट Gateway से हटा दिया जाएगा।"
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24231,7 +24291,7 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "यहाँ तक रिवाइंड करें"
+      "translated": "यहाँ तक वापस जाएँ"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
@@ -24326,7 +24386,7 @@
     {
       "id": "native.apple.e0f045151c8d3137",
       "source": "Gateway changed before the thread operation started.",
-      "translated": "थ्रेड कार्रवाई शुरू होने से पहले Gateway बदल गया।"
+      "translated": "थ्रेड की कार्रवाई शुरू होने से पहले Gateway बदल गया।"
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24551,7 +24611,7 @@
     {
       "id": "native.apple.6239ced0b86e86f8",
       "source": "Compact Thread",
-      "translated": "थ्रेड संक्षिप्त करें"
+      "translated": "थ्रेड को संक्षिप्त करें"
     },
     {
       "id": "native.apple.fa10740f9e272e83",

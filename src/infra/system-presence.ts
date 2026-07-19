@@ -32,6 +32,7 @@ export type SystemPresence = {
     name?: string;
     avatarUrl?: string;
   };
+  watchedSessions?: string[];
   text: string;
   ts: number;
 };

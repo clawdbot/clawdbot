@@ -161,6 +161,16 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
 
+Proof statuses are worker-reported outcomes, not independent verification. A `passed`
+entry means the worker reports that its command or check succeeded; consumers that need
+an independent quality gate should inspect the attached command, URL, or artifact and
+run their own verifier. `workboard_proof` returns the new record's `proofId`. When
+`workboard_complete` reports that same proof's terminal status, pass `proofId` so the
+pending record is resolved in place without losing its identity or timestamp. A proof that
+already has the same terminal status is reused unchanged. Completion proof without
+`proofId` remains append-only, so a later retry cannot rewrite older history merely because
+its command or note is identical.
+
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`

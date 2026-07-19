@@ -283,7 +283,8 @@ extension OpenClawChatViewModel {
             usage: message.usage,
             stopReason: message.stopReason,
             errorMessage: message.errorMessage,
-            details: message.details)
+            details: message.details,
+            isError: message.isError)
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {

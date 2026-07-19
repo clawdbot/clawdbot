@@ -11,6 +11,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let arguments: AnyCodable?
     let details: AnyCodable?
     let resultText: String?
+    let isError: Bool
     let isPending: Bool
 }
 
@@ -32,6 +33,7 @@ enum ChatToolActivity {
                 arguments: call.arguments,
                 details: result?.details,
                 resultText: result?.text,
+                isError: result?.isError ?? false,
                 isPending: false)
         }
 
@@ -42,6 +44,7 @@ enum ChatToolActivity {
                 arguments: nil,
                 details: result.details,
                 resultText: result.text,
+                isError: result.isError ?? false,
                 isPending: false)
         })
         return items
@@ -108,7 +111,8 @@ struct ChatToolActivityRow: View {
         self.resolvedDiff = ChatToolDiff.resolveDiff(
             name: item.name,
             arguments: item.arguments,
-            details: item.details)
+            details: item.details,
+            isError: item.isError)
     }
 
     var body: some View {
@@ -202,11 +206,12 @@ struct ChatToolActivityRow: View {
 
             Image(systemName: Self.symbol(forToolName: self.item.name))
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : Color.secondary)
 
             Text(self.display.title)
                 .font(OpenClawChatTypography.footnoteSemiBold)
-                .foregroundStyle(OpenClawChatTheme.assistantText)
+                .foregroundStyle(
+                    self.item.isError ? OpenClawChatTheme.danger : OpenClawChatTheme.assistantText)
                 .lineLimit(1)
 
             if let detailLine = self.detailLine {
@@ -234,18 +239,29 @@ struct ChatToolActivityRow: View {
     }
 
     private var diffRows: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(self.expandedDiffLines.indices, id: \.self) { index in
-                self.diffRow(self.expandedDiffLines[index])
+        // The orthogonal nested scroll keeps long diff lines reachable without
+        // competing with the transcript's vertical gesture.
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(self.expandedDiffLines.indices, id: \.self) { index in
+                    self.diffRow(self.expandedDiffLines[index])
+                }
             }
+            .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .textSelection(.enabled)
     }
 
     @ViewBuilder
     private func diffRow(_ line: ChatToolDiffLine) -> some View {
-        if line.kind == .skip {
+        if line.kind == .file {
+            Text(verbatim: String(line.text.unicodeScalars.prefix(2000)))
+                .font(OpenClawChatTypography.mono(size: 11, relativeTo: .caption))
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.top, 6)
+        } else if line.kind == .skip {
             Text("⋯")
                 .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
                 .foregroundStyle(.secondary.opacity(0.6))
@@ -267,9 +283,7 @@ struct ChatToolActivityRow: View {
                 Text(verbatim: String(line.text.unicodeScalars.prefix(2000)))
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
                     .foregroundStyle(self.diffTextColor(line.kind))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .background(self.diffBackground(line.kind))
             // Color alone must not carry add/del semantics for assistive tech.
@@ -289,7 +303,7 @@ struct ChatToolActivityRow: View {
             "+ "
         case .del:
             "\u{2212} "
-        case .ctx, .skip:
+        case .ctx, .file, .skip:
             ""
         }
     }
@@ -298,7 +312,7 @@ struct ChatToolActivityRow: View {
         switch kind {
         case .add:
             OpenClawChatTheme.assistantText
-        case .del, .ctx, .skip:
+        case .del, .ctx, .file, .skip:
             .secondary
         }
     }
@@ -309,7 +323,7 @@ struct ChatToolActivityRow: View {
             OpenClawChatTheme.success.opacity(0.14)
         case .del:
             OpenClawChatTheme.danger.opacity(0.12)
-        case .ctx, .skip:
+        case .ctx, .file, .skip:
             .clear
         }
     }

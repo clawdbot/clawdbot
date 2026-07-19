@@ -13,9 +13,9 @@ afterEach(() => {
   clearAgentRunContext(RUN_ID);
 });
 
-function createScopedTool() {
+function createScopedTool(jobId = JOB_ID) {
   return createCronTool(
-    { selfRemoveOnlyJobId: JOB_ID, runId: RUN_ID },
+    { selfRemoveOnlyJobId: jobId, runId: RUN_ID },
     { callGatewayTool: vi.fn() },
   );
 }
@@ -23,8 +23,7 @@ function createScopedTool() {
 function registerRun(pacingEnabled: boolean) {
   claimAgentRunContext(RUN_ID, {
     sessionKey: `agent:main:cron:${JOB_ID}`,
-    cronJobId: JOB_ID,
-    cronPacingEnabled: pacingEnabled,
+    cronRunsByJobId: new Map([[JOB_ID, { pacingEnabled }]]),
   });
 }
 
@@ -70,7 +69,7 @@ describe("cron next_check action", () => {
     ).rejects.toThrow("cron next_check is only available to the currently running job");
   });
 
-  it("drops an unconsumed proposal when the run context changes jobs", async () => {
+  it("keeps proposals isolated when a shared run context adds another job", async () => {
     registerRun(true);
     await createScopedTool().execute("call-next-check-stale", {
       action: "next_check",
@@ -78,10 +77,14 @@ describe("cron next_check action", () => {
     });
 
     claimAgentRunContext(RUN_ID, {
-      cronJobId: "next-job",
-      cronPacingEnabled: true,
+      cronRunsByJobId: new Map([["next-job", { pacingEnabled: true }]]),
+    });
+    await createScopedTool("next-job").execute("call-next-check-next-job", {
+      action: "next_check",
+      in: "30m",
     });
 
-    expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBeUndefined();
+    expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
   });
 });

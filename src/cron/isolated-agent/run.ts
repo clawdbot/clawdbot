@@ -1772,8 +1772,9 @@ export async function runCronIsolatedAgentTurn(params: {
             : existingRunContext.sessionKey,
         sessionId: initialSessionId,
         lifecycleGeneration: runLifecycleGeneration,
-        cronJobId: params.job.id,
-        cronPacingEnabled: params.job.pacing !== undefined,
+        cronRunsByJobId: new Map([
+          [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+        ]),
       },
       {
         trackOwner: true,

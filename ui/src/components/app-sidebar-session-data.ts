@@ -60,6 +60,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   @state() protected sessionCatalogs: SessionCatalog[] = [];
   @state() protected loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   @state() protected sessionMutationError: string | null = null;
+  @state() protected presencePayload: unknown;
+  @state() protected presenceInstanceId?: string;
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
@@ -122,11 +124,11 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
               this.applySessionCatalogHostEvent(event.payload);
               return;
             }
-            if (
-              event.event === "presence" &&
-              this.sessionCatalogLive.observePresence(event.payload)
-            ) {
-              this.requestSessionCatalogRefresh();
+            if (event.event === "presence") {
+              this.presencePayload = event.payload;
+              if (this.sessionCatalogLive.observePresence(event.payload)) {
+                this.requestSessionCatalogRefresh();
+              }
             }
           }),
       )
@@ -522,6 +524,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.connected;
+    const clientChanged = client !== this.gatewayClient;
+    const connectedStarted = connected && !this.gatewayConnected;
     const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
     const connectionChanged = connected !== this.gatewayConnected;
     if (!sourceOrClientChanged && !connectionChanged) {
@@ -531,6 +535,12 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
+    this.presenceInstanceId = client?.instanceId;
+    if (!connected) {
+      this.presencePayload = undefined;
+    } else if (clientChanged || connectedStarted) {
+      this.presencePayload = gateway.snapshot.hello?.snapshot;
+    }
     if (!sourceOrClientChanged) {
       return;
     }

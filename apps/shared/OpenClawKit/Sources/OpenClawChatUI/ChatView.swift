@@ -961,7 +961,8 @@ extension OpenClawChatView {
                     id: toolCallId,
                     name: message.toolName,
                     arguments: nil,
-                    details: message.details))
+                    details: message.details,
+                    isError: message.isError))
 
             let merged = OpenClawChatMessage(
                 id: last.id,
@@ -976,7 +977,8 @@ extension OpenClawChatView {
                 usage: last.usage,
                 stopReason: last.stopReason,
                 errorMessage: last.errorMessage,
-                details: last.details)
+                details: last.details,
+                isError: last.isError)
             result[result.count - 1] = merged
         }
 

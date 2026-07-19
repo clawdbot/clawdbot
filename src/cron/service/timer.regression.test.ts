@@ -4180,7 +4180,7 @@ describe("cron service timer regressions", () => {
     const startedAt = nowMs;
     const endedAt = nowMs + 2_000;
 
-    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { preserveSchedule: true });
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { scheduleMode: "preserve" });
 
     expect(job.state.lastRunAtMs).toBe(startedAt);
     expect(job.state.nextRunAtMs).toBe(expectedNextMs);
@@ -4221,7 +4221,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "429 rate limit exceeded", startedAt, endedAt },
-      { preserveSchedule: true },
+      { scheduleMode: "preserve" },
     );
 
     expect(job.state.lastRunAtMs).toBe(startedAt);

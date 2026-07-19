@@ -3686,7 +3686,7 @@
     {
       "id": "native.android.439b324280869527",
       "source": "Focus thread search",
-      "translated": "Przejdź do wyszukiwania wątków"
+      "translated": "Ustaw fokus na wyszukiwaniu wątków"
     },
     {
       "id": "native.android.e0f10db479f627eb",
@@ -3991,7 +3991,7 @@
     {
       "id": "native.android.ee4c727cdafbe963",
       "source": "Main thread",
-      "translated": "Główny wątek"
+      "translated": "Wątek główny"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -4351,7 +4351,7 @@
     {
       "id": "native.android.c1626a6700a570f6",
       "source": "Preferred microphone unavailable; using automatic routing.",
-      "translated": "Preferowany mikrofon jest niedostępny; używane jest automatyczne kierowanie dźwięku."
+      "translated": "Preferowany mikrofon jest niedostępny; używane jest automatyczne przekierowanie."
     },
     {
       "id": "native.android.820bc5d0ce571d8b",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClaw zmienia ten telefon w przejrzysty mobilny interfejs sterowania wątkami, głosem, dostawcami i Gateway."
+      "translated": "OpenClaw zmienia ten telefon w przejrzysty mobilny interfejs do obsługi wątków, głosu, dostawców i Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -6946,12 +6946,12 @@
     {
       "id": "native.android.cb608d82c5b3352a",
       "source": "Back camera",
-      "translated": "Tylna kamera"
+      "translated": "Tylny aparat"
     },
     {
       "id": "native.android.e89a0e780eed2e1e",
       "source": "Front camera",
-      "translated": "Przednia kamera"
+      "translated": "Przedni aparat"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",
@@ -7761,7 +7761,7 @@
     {
       "id": "native.android.0c74bc30a994dd33",
       "source": "Loading thread",
-      "translated": "Wczytywanie wątku"
+      "translated": "Ładowanie wątku"
     },
     {
       "id": "native.android.2c1106e1687ab258",
@@ -7811,7 +7811,7 @@
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "Podsumuj moje ostatnie wątki w OpenClaw i zaproponuj kolejne kroki."
+      "translated": "Przedstaw mi podsumowanie ostatnich wątków OpenClaw i zaproponuj kolejne kroki."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -10794,6 +10794,61 @@
       "translated": "Szczegóły zadania"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Przypięte"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Ostatnie"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Rozumowanie"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Szybkie"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "Domyślne (dziedziczone)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Wyłączone"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Włączone"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Pełne"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Szczegółowość"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "Domyślne"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Nie można wyeksportować transkrypcji"
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Nowy czat w worktree"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Opcje nowej sesji…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11381,7 +11441,7 @@
     {
       "id": "native.apple.7396d205574d279f",
       "source": "Thread activity offline",
-      "translated": "Aktywność wątków w trybie offline"
+      "translated": "Aktywność wątku jest niedostępna offline"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -23776,7 +23836,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "Wątki w tej grupie zostaną rozgrupowane."
+      "translated": "Wątki w tej grupie przestaną być pogrupowane."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "Wątek i jego transkrypcja zostaną usunięte z gateway."
+      "translated": "Wątek i jego transkrypcja zostaną usunięte z Gateway."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23971,7 +24031,7 @@
     {
       "id": "native.apple.8802e9576ffd0f65",
       "source": "Retry thread groups",
-      "translated": "Ponów próbę dla grup wątków"
+      "translated": "Ponów próbę wczytania grup wątków"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "Każdy wybrany wątek i jego transkrypcja zostaną usunięte z Gateway."
+      "translated": "Każdy wybrany wątek wraz z jego transkrypcją zostanie usunięty z Gateway."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24231,7 +24291,7 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "Przewiń do tego miejsca"
+      "translated": "Cofnij do tego miejsca"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "Utwórz odgałęzienie"
+      "translated": "Rozgałęź"
     },
     {
       "id": "native.apple.8768f9ed198edc54",

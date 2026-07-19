@@ -89,6 +89,28 @@ sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
 }
 
+run_with_locked_swift_packages() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local resolved_snapshot
+  local command_status=0
+
+  if [[ ! -f "$resolved_file" ]]; then
+    echo "ERROR: Swift package lockfile not found at $resolved_file" >&2
+    return 1
+  fi
+  resolved_snapshot="$(mktemp)"
+  cp "$resolved_file" "$resolved_snapshot"
+  "$@" || command_status=$?
+  if ! cmp -s "$resolved_snapshot" "$resolved_file"; then
+    cp "$resolved_snapshot" "$resolved_file"
+    rm "$resolved_snapshot"
+    echo "ERROR: Swift package resolution changed Package.resolved; update it in a separate reviewed change" >&2
+    return 1
+  fi
+  rm "$resolved_snapshot"
+  return "$command_status"
+}
+
 PNPM_CMD=()
 
 resolve_pnpm_cmd() {
@@ -220,8 +242,10 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "📦 Resolving Swift packages [$arch]"
+  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
@@ -363,6 +387,18 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
   cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
 else
   echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
+  exit 1
+fi
+
+echo "⌨️  Copying KeyboardShortcuts resources"
+KEYBOARD_SHORTCUTS_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/KeyboardShortcuts_KeyboardShortcuts.bundle"
+if [ -d "$KEYBOARD_SHORTCUTS_BUNDLE" ]; then
+  # SwiftPM's generated Bundle.module accessor searches Bundle.main.resourceURL for app resources.
+  # Keep this under Contents/Resources or Recorder localization traps before Settings renders.
+  rm -rf "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"
+  cp -R "$KEYBOARD_SHORTCUTS_BUNDLE" "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"
+else
+  echo "ERROR: KeyboardShortcuts resource bundle not found at $KEYBOARD_SHORTCUTS_BUNDLE" >&2
   exit 1
 fi
 

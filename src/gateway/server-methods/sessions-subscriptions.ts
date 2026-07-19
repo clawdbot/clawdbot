@@ -95,7 +95,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         const rollbackSubscription = context.subscribeSessionMessageEvents(
           connId,
           subscriptionKey,
-          { includeApprovals: true },
+          { includeApprovals: true, provisional: true },
         );
         try {
           approvalReplay = context.listSessionPendingApprovals?.(subscriptionKey, client);
@@ -118,6 +118,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        rollbackSubscription?.commit?.();
       } else {
         context.subscribeSessionMessageEvents(connId, subscriptionKey);
       }

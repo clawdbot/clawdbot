@@ -886,6 +886,19 @@ struct OpenClawChatComposer: View {
                         self.setSlashPanelPresented(false)
                     }
                 }
+                // SwiftUI exposes neither the caret row nor soft-wrap geometry.
+                // Start recall only from an empty draft; an active recall can
+                // still walk both directions through the shared state machine.
+                .onKeyPress(.upArrow) {
+                    guard !self.isSlashPopoverPresented else { return .ignored }
+                    return self.viewModel.recallPreviousInput(caretOnFirstLine: false)
+                        ? .handled
+                        : .ignored
+                }
+                .onKeyPress(.downArrow) {
+                    guard !self.isSlashPopoverPresented else { return .ignored }
+                    return self.viewModel.recallNextInput() ? .handled : .ignored
+                }
             #endif
         }
     }

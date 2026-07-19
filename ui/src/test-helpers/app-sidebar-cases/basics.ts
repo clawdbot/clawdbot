@@ -11,6 +11,8 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
+await import("../../components/viewer-facepile.ts");
+
 describe("AppSidebar update card wiring", () => {
   it("shows OpenClaw in the default sidebar entries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -39,6 +41,91 @@ describe("AppSidebar update card wiring", () => {
     expect(card).not.toBeNull();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("AppSidebar viewer presence", () => {
+  it("groups identified viewers for session rows and the footer", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main", "agent:main:work"]),
+    );
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          user: { id: "00-self", name: "Self User" },
+          watchedSessions: ["agent:main:work"],
+        },
+        {
+          instanceId: "alice-1",
+          user: { id: "alice", name: "Alice", avatarUrl: "https://example.test/alice.png" },
+          watchedSessions: ["agent:main:work"],
+        },
+        {
+          instanceId: "alice-2",
+          user: { id: "alice", name: "Alice" },
+          watchedSessions: ["agent:main:main"],
+        },
+        {
+          instanceId: "bob-1",
+          user: { id: "bob", email: "bob@example.test" },
+          watchedSessions: ["agent:main:work"],
+        },
+        ...["carol", "dave", "erin"].map((id) => ({
+          instanceId: `${id}-1`,
+          user: { id, name: id[0]?.toUpperCase() + id.slice(1) },
+          watchedSessions: ["agent:main:work"],
+        })),
+        {
+          instanceId: "anonymous-1",
+          watchedSessions: ["agent:main:work"],
+        },
+        {
+          instanceId: "offline-1",
+          reason: "disconnect",
+          user: { id: "offline", name: "Offline User" },
+          watchedSessions: ["agent:main:work"],
+        },
+      ],
+    });
+    await sidebar.updateComplete;
+
+    const sessionFacepile = sidebar.querySelector<HTMLElement>(
+      '[data-session-key="agent:main:work"] openclaw-viewer-facepile',
+    );
+    const footerFacepile = sidebar.querySelector<HTMLElement>(
+      ".sidebar-footer-bar openclaw-viewer-facepile",
+    );
+    await Promise.all([
+      (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
+      (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
+    ]);
+
+    expect(
+      sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
+    ).toBe("5");
+    expect(
+      [...(sessionFacepile?.querySelectorAll<HTMLElement>("[data-viewer-id]") ?? [])].map(
+        (avatar) => avatar.dataset.viewerId,
+      ),
+    ).toEqual(["alice", "bob", "carol"]);
+    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+2");
+    expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
+    expect(
+      [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
+        (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
+      ),
+    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin"]);
+
+    expect(
+      footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
+    ).toBe("6");
+    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
+    expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
   });
 });
 

@@ -243,13 +243,25 @@ export type SessionMessageSubscriberRegistry = {
   subscribe: (
     connId: string,
     sessionKey: string,
-    opts?: { includeApprovals?: boolean },
-  ) => (() => void) | undefined;
+    opts?: { includeApprovals?: boolean; provisional?: boolean },
+  ) => SessionMessageSubscription | undefined;
   unsubscribe: (connId: string, sessionKey: string) => void;
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
+  getForConnection: (connId: string) => ReadonlySet<string>;
   getApprovals: (sessionKey: string) => ReadonlySet<string>;
   clear: () => void;
+};
+
+type SessionMessageSubscription = (() => void) & { commit: () => void };
+
+type ProvisionalSubscriptionState = {
+  active: boolean;
+  base: number | undefined;
+  baseApprovals: boolean;
+  inflight: number;
+  lastSuccess: number | undefined;
+  lastSuccessApprovals: boolean | undefined;
 };
 
 type ToolRecipientEntry = {
@@ -292,11 +304,61 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
 export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   const connToSessionKeys = new Map<string, Set<string>>();
+  // The final state after overlapping replays settles to their latest success
+  // or the original committed base; failed provisionals cannot leave ghosts.
+  const connToSessionRecency = new Map<string, Map<string, number>>();
+  const provisionalSubscriptions = new Map<string, Map<string, ProvisionalSubscriptionState>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
   const connToApprovalSessionKeys = new Map<string, Set<string>>();
   const empty = new Set<string>();
+  let subscriptionSequence = 0;
 
   const normalize = (value: string): string => value.trim();
+  const rebuildConnectionSessionKeys = (connId: string) => {
+    const recency = connToSessionRecency.get(connId);
+    if (!recency || recency.size === 0) {
+      connToSessionKeys.delete(connId);
+      return;
+    }
+    connToSessionKeys.set(
+      connId,
+      new Set([...recency.entries()].toSorted(([, a], [, b]) => a - b).map(([key]) => key)),
+    );
+  };
+  const setMessageSubscription = (connId: string, sessionKey: string, subscribed: boolean) => {
+    const connIds = sessionToConnIds.get(sessionKey);
+    if (subscribed) {
+      const nextConnIds = connIds ?? new Set<string>();
+      nextConnIds.add(connId);
+      sessionToConnIds.set(sessionKey, nextConnIds);
+      return;
+    }
+    connIds?.delete(connId);
+    if (connIds?.size === 0) {
+      sessionToConnIds.delete(sessionKey);
+    }
+  };
+  const setApprovalSubscription = (connId: string, sessionKey: string, subscribed: boolean) => {
+    const connIds = approvalSessionToConnIds.get(sessionKey);
+    const sessionKeys = connToApprovalSessionKeys.get(connId);
+    if (subscribed) {
+      const nextConnIds = connIds ?? new Set<string>();
+      nextConnIds.add(connId);
+      approvalSessionToConnIds.set(sessionKey, nextConnIds);
+      const nextSessionKeys = sessionKeys ?? new Set<string>();
+      nextSessionKeys.add(sessionKey);
+      connToApprovalSessionKeys.set(connId, nextSessionKeys);
+      return;
+    }
+    connIds?.delete(connId);
+    if (connIds?.size === 0) {
+      approvalSessionToConnIds.delete(sessionKey);
+    }
+    sessionKeys?.delete(sessionKey);
+    if (sessionKeys?.size === 0) {
+      connToApprovalSessionKeys.delete(connId);
+    }
+  };
 
   const registry: SessionMessageSubscriberRegistry = {
     subscribe: (connId: string, sessionKey: string, opts) => {
@@ -305,59 +367,95 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       if (!normalizedConnId || !normalizedSessionKey) {
         return undefined;
       }
-      const hadMessages =
-        sessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
       const hadApprovals =
         approvalSessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
-      const connIds = sessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
-      connIds.add(normalizedConnId);
-      sessionToConnIds.set(normalizedSessionKey, connIds);
+      const recency = connToSessionRecency.get(normalizedConnId) ?? new Map<string, number>();
+      const previousRecency = recency.get(normalizedSessionKey);
+      const states = provisionalSubscriptions.get(normalizedConnId) ?? new Map();
+      const state = states.get(normalizedSessionKey) ?? {
+        base: previousRecency,
+        baseApprovals: hadApprovals,
+        active: true,
+        inflight: 0,
+        lastSuccess: undefined,
+        lastSuccessApprovals: undefined,
+      };
+      state.inflight += 1;
+      states.set(normalizedSessionKey, state);
+      provisionalSubscriptions.set(normalizedConnId, states);
+      subscriptionSequence += 1;
+      const provisionalRecency = subscriptionSequence;
+      setMessageSubscription(normalizedConnId, normalizedSessionKey, true);
+      recency.set(normalizedSessionKey, provisionalRecency);
+      connToSessionRecency.set(normalizedConnId, recency);
+      rebuildConnectionSessionKeys(normalizedConnId);
 
-      const sessionKeys = connToSessionKeys.get(normalizedConnId) ?? new Set<string>();
-      sessionKeys.add(normalizedSessionKey);
-      connToSessionKeys.set(normalizedConnId, sessionKeys);
-
-      if (opts?.includeApprovals) {
-        const approvalConnIds =
-          approvalSessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
-        approvalConnIds.add(normalizedConnId);
-        approvalSessionToConnIds.set(normalizedSessionKey, approvalConnIds);
-
-        const approvalSessionKeys =
-          connToApprovalSessionKeys.get(normalizedConnId) ?? new Set<string>();
-        approvalSessionKeys.add(normalizedSessionKey);
-        connToApprovalSessionKeys.set(normalizedConnId, approvalSessionKeys);
-      } else {
-        const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
-        approvalConnIds?.delete(normalizedConnId);
-        if (approvalConnIds?.size === 0) {
-          approvalSessionToConnIds.delete(normalizedSessionKey);
-        }
-        const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
-        approvalSessionKeys?.delete(normalizedSessionKey);
-        if (approvalSessionKeys?.size === 0) {
-          connToApprovalSessionKeys.delete(normalizedConnId);
-        }
-      }
-      // Replay setup subscribes before reading its snapshot. Preserve the exact
-      // prior state so a failed read cannot leave a ghost or remove a retry.
-      return () => {
-        if (!hadMessages) {
-          registry.unsubscribe(normalizedConnId, normalizedSessionKey);
+      setApprovalSubscription(
+        normalizedConnId,
+        normalizedSessionKey,
+        opts?.includeApprovals === true,
+      );
+      let settled = false;
+      const settle = (succeeded: boolean) => {
+        if (settled || !state.active) {
           return;
         }
-        registry.subscribe(
-          normalizedConnId,
-          normalizedSessionKey,
-          hadApprovals ? { includeApprovals: true } : undefined,
-        );
+        settled = true;
+        if (succeeded) {
+          if (provisionalRecency >= (state.lastSuccess ?? -Infinity)) {
+            state.lastSuccess = provisionalRecency;
+            state.lastSuccessApprovals = opts?.includeApprovals === true;
+          }
+        }
+        state.inflight -= 1;
+        if (state.inflight > 0) {
+          return;
+        }
+        const committedRecency = state.lastSuccess ?? state.base;
+        if (committedRecency === undefined) {
+          recency.delete(normalizedSessionKey);
+          setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
+          setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
+        } else {
+          recency.set(normalizedSessionKey, committedRecency);
+          setMessageSubscription(normalizedConnId, normalizedSessionKey, true);
+          setApprovalSubscription(
+            normalizedConnId,
+            normalizedSessionKey,
+            state.lastSuccessApprovals ?? state.baseApprovals,
+          );
+        }
+        if (recency.size === 0) {
+          connToSessionRecency.delete(normalizedConnId);
+        }
+        rebuildConnectionSessionKeys(normalizedConnId);
+        states.delete(normalizedSessionKey);
+        if (states.size === 0) {
+          provisionalSubscriptions.delete(normalizedConnId);
+        }
       };
+      const rollback = (() => settle(false)) as SessionMessageSubscription;
+      rollback.commit = () => settle(true);
+      if (!opts?.provisional) {
+        rollback.commit();
+        return undefined;
+      }
+      return rollback;
     },
     unsubscribe: (connId: string, sessionKey: string) => {
       const normalizedConnId = normalize(connId);
       const normalizedSessionKey = normalize(sessionKey);
       if (!normalizedConnId || !normalizedSessionKey) {
         return;
+      }
+      const states = provisionalSubscriptions.get(normalizedConnId);
+      const state = states?.get(normalizedSessionKey);
+      if (state) {
+        state.active = false;
+        states?.delete(normalizedSessionKey);
+        if (states?.size === 0) {
+          provisionalSubscriptions.delete(normalizedConnId);
+        }
       }
       const connIds = sessionToConnIds.get(normalizedSessionKey);
       if (connIds) {
@@ -366,12 +464,13 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
           sessionToConnIds.delete(normalizedSessionKey);
         }
       }
-      const sessionKeys = connToSessionKeys.get(normalizedConnId);
-      if (sessionKeys) {
-        sessionKeys.delete(normalizedSessionKey);
-        if (sessionKeys.size === 0) {
-          connToSessionKeys.delete(normalizedConnId);
+      const recency = connToSessionRecency.get(normalizedConnId);
+      if (recency) {
+        recency.delete(normalizedSessionKey);
+        if (recency.size === 0) {
+          connToSessionRecency.delete(normalizedConnId);
         }
+        rebuildConnectionSessionKeys(normalizedConnId);
       }
       const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
       if (approvalConnIds) {
@@ -393,6 +492,11 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       if (!normalizedConnId) {
         return;
       }
+      const states = provisionalSubscriptions.get(normalizedConnId);
+      for (const state of states?.values() ?? []) {
+        state.active = false;
+      }
+      provisionalSubscriptions.delete(normalizedConnId);
       const sessionKeys = connToSessionKeys.get(normalizedConnId);
       if (!sessionKeys) {
         return;
@@ -408,6 +512,7 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         }
       }
       connToSessionKeys.delete(normalizedConnId);
+      connToSessionRecency.delete(normalizedConnId);
 
       const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
       for (const sessionKey of approvalSessionKeys ?? []) {
@@ -426,6 +531,13 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       }
       return sessionToConnIds.get(normalizedSessionKey) ?? empty;
     },
+    getForConnection: (connId: string) => {
+      const normalizedConnId = normalize(connId);
+      if (!normalizedConnId) {
+        return empty;
+      }
+      return connToSessionKeys.get(normalizedConnId) ?? empty;
+    },
     getApprovals: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
       if (!normalizedSessionKey) {
@@ -436,6 +548,13 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
     clear: () => {
       sessionToConnIds.clear();
       connToSessionKeys.clear();
+      connToSessionRecency.clear();
+      for (const states of provisionalSubscriptions.values()) {
+        for (const state of states.values()) {
+          state.active = false;
+        }
+      }
+      provisionalSubscriptions.clear();
       approvalSessionToConnIds.clear();
       connToApprovalSessionKeys.clear();
     },

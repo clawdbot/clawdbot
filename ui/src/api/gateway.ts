@@ -379,6 +379,10 @@ export class GatewayBrowserClient {
     return this.client.connected;
   }
 
+  get instanceId() {
+    return this.opts.instanceId;
+  }
+
   get recoveryScope() {
     return this.recoveryScopeTracker.scope;
   }

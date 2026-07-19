@@ -3726,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "Alihkan tata letak utas"
+      "translated": "Ubah tata letak utas"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "Utas di \"$group\" tetap disimpan dan dipindahkan kembali ke Tanpa Grup."
+      "translated": "Utas di \"$group\" tetap dipertahankan dan dipindahkan kembali ke Tidak dikelompokkan."
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClaw mengubah ponsel ini menjadi antarmuka perintah seluler yang ringkas untuk utas, suara, penyedia, dan Gateway."
+      "translated": "OpenClaw mengubah ponsel ini menjadi antarmuka perintah seluler yang rapi untuk utas, suara, penyedia, dan Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -7806,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "Rangkum utas terbaru dan langkah selanjutnya."
+      "translated": "Rangkum utas terbaru dan langkah berikutnya."
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "Berikan ringkasan tentang utas OpenClaw terbaru saya dan sarankan langkah berikutnya."
+      "translated": "Beri saya ringkasan utas OpenClaw terbaru saya dan sarankan langkah berikutnya."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -10794,6 +10794,61 @@
       "translated": "Detail Tugas"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Disematkan"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Terbaru"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Penalaran"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Cepat"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "Default (diwarisi)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Nonaktif"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Aktif"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Penuh"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Tingkat detail"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "Default"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Tidak Dapat Mengekspor Transkrip"
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Chat Baru di Worktree"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Opsi Sesi Baru…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11071,7 +11131,7 @@
     {
       "id": "native.apple.683032464c497bbd",
       "source": "Rename Thread",
-      "translated": "Ubah Nama Utas"
+      "translated": "Ganti Nama Utas"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "Digunakan untuk utas Obrolan baru dan sesi Bicara."
+      "translated": "Digunakan untuk utas Chat baru dan sesi Talk."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -19046,7 +19106,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "Pintasan global yang membuka bilah obrolan mengambang untuk utas utama."
+      "translated": "Pintasan global yang membuka bilah chat mengambang untuk utas utama."
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "Ringkas apa yang terjadi di utas saya sejak kemarin."
+      "translated": "Rangkum apa yang terjadi di utas saya sejak kemarin."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23546,7 +23606,7 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "Utas ini tidak dapat diarsipkan saat masih aktif atau berjalan."
+      "translated": "Utas ini tidak dapat diarsipkan saat aktif atau sedang berjalan."
     },
     {
       "id": "native.apple.8952a111a1075051",
@@ -23856,7 +23916,7 @@
     {
       "id": "native.apple.9ce8a4aba7b444b2",
       "source": "Rename Thread",
-      "translated": "Ubah Nama Utas"
+      "translated": "Ganti Nama Utas"
     },
     {
       "id": "native.apple.1dd067c44511c7f0",
@@ -24006,7 +24066,7 @@
     {
       "id": "native.apple.854d3928fe5a557c",
       "source": "Rename Thread",
-      "translated": "Ubah Nama Utas"
+      "translated": "Ganti Nama Utas"
     },
     {
       "id": "native.apple.9d0d3f20096cc4da",
@@ -24231,7 +24291,7 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "Putar Balik ke Sini"
+      "translated": "Mundur ke Sini"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "Buat Cabang"
+      "translated": "Cabangkan"
     },
     {
       "id": "native.apple.8768f9ed198edc54",

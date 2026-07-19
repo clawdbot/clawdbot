@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "Explorar conversas"
+      "translated": "Navegar pelas conversas"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "As conversas em \"$group\" são mantidas e retornam para Sem grupo."
+      "translated": "As conversas em \"$group\" são mantidas e movidas de volta para Sem grupo."
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -4391,7 +4391,7 @@
     {
       "id": "native.android.b6a4e674c5fb441a",
       "source": "Wired headset microphone",
-      "translated": "Microfone de headset com fio"
+      "translated": "Microfone do headset com fio"
     },
     {
       "id": "native.android.9c8becb3b0fb5a90",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "O OpenClaw transforma este telefone em uma interface móvel organizada para comandos de conversas, voz, provedores e Gateway."
+      "translated": "O OpenClaw transforma este celular em uma interface móvel simples para conversas, voz, provedores e Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -10794,6 +10794,61 @@
       "translated": "Detalhes da tarefa"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Fixados"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Recentes"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Modelo"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Raciocínio"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Rápido"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "Padrão (herdado)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Desativado"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Ativado"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Completo"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Nível de detalhe"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "Padrão"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Não foi possível exportar a transcrição"
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Novo Chat no Worktree"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Opções da nova sessão…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "Usado para novas conversas no Chat e sessões do Talk."
+      "translated": "Usado para novas conversas de Chat e sessões de Talk."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "Ainda não há conversas. Elas aparecem após a primeira mensagem recebida ou sinal de atividade."
+      "translated": "Ainda não há conversas. Elas aparecem após a primeira mensagem recebida ou heartbeat."
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -23776,7 +23836,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "As conversas deste grupo deixarão de fazer parte de um grupo."
+      "translated": "As conversas deste grupo deixam de ser agrupadas."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23826,7 +23886,7 @@
     {
       "id": "native.apple.6bd91c435b69d638",
       "source": "Search threads",
-      "translated": "Pesquisar conversas"
+      "translated": "Buscar conversas"
     },
     {
       "id": "native.apple.6fde4bdf9d5b9191",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "A conversa e sua transcrição serão removidas do Gateway."
+      "translated": "A conversa e sua transcrição são removidas do Gateway."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23971,7 +24031,7 @@
     {
       "id": "native.apple.8802e9576ffd0f65",
       "source": "Retry thread groups",
-      "translated": "Tentar novamente os grupos de conversas"
+      "translated": "Tentar carregar os grupos de conversas novamente"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -24231,12 +24291,12 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "Rebobinar até aqui"
+      "translated": "Retroceder até aqui"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
       "source": "Fork from Here",
-      "translated": "Criar bifurcação a partir daqui"
+      "translated": "Criar ramificação a partir daqui"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -24326,7 +24386,7 @@
     {
       "id": "native.apple.e0f045151c8d3137",
       "source": "Gateway changed before the thread operation started.",
-      "translated": "O Gateway foi alterado antes do início da operação na conversa."
+      "translated": "O Gateway foi alterado antes do início da operação da conversa."
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "Bifurcar"
+      "translated": "Ramificar"
     },
     {
       "id": "native.apple.8768f9ed198edc54",

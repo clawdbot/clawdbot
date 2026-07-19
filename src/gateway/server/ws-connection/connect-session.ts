@@ -122,7 +122,13 @@ export async function attachAuthenticatedGatewayConnect(
   const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
   const clientId = connectParams.client.id;
   const instanceId = connectParams.client.instanceId;
-  const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
+  // Nodes retain device-owned presence. User clients need one row per connection
+  // so two tabs watching different sessions cannot overwrite each other.
+  const presenceKey = shouldTrackPresence
+    ? role === "node"
+      ? (device?.id ?? instanceId ?? connId)
+      : connId
+    : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
 
   if (isClosed()) {
@@ -343,7 +349,7 @@ export async function attachAuthenticatedGatewayConnect(
       deviceId: device?.id,
       roles: [role],
       scopes,
-      instanceId: device?.id ?? instanceId,
+      instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
       ...(authenticatedUserId
         ? {
             user: authenticatedUserProfile

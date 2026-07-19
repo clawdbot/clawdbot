@@ -1486,7 +1486,7 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "Спробуйте чат, голос, гілки, провайдерів або налаштування."
+      "translated": "Спробуйте чат, голос, гілки, постачальників або налаштування."
     },
     {
       "id": "native.android.670121e54dbe286f",
@@ -1501,7 +1501,7 @@
     {
       "id": "native.android.3d7754721f776ef8",
       "source": "No matching threads yet.",
-      "translated": "Відповідних гілок поки немає."
+      "translated": "Поки немає відповідних гілок."
     },
     {
       "id": "native.android.1d009aa9b54d689d",
@@ -3701,7 +3701,7 @@
     {
       "id": "native.android.03981341841b04ac",
       "source": "Search threads",
-      "translated": "Пошук гілок"
+      "translated": "Шукати гілки"
     },
     {
       "id": "native.android.99570c528a41fa72",
@@ -3726,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "Змінити вигляд гілок"
+      "translated": "Змінити компонування гілок"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3746,7 +3746,7 @@
     {
       "id": "native.android.472d46ae8669f860",
       "source": "No matching threads",
-      "translated": "Відповідних гілок немає"
+      "translated": "Немає відповідних гілок"
     },
     {
       "id": "native.android.11c1a8c944bea0ae",
@@ -3816,7 +3816,7 @@
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Це назавжди видалить гілку та її стенограму."
+      "translated": "Це назавжди видалить гілку та її журнал."
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3966,7 +3966,7 @@
     {
       "id": "native.android.504b71386e76c6ae",
       "source": "Archived threads will show up here.",
-      "translated": "Архівовані гілки з’являться тут."
+      "translated": "Тут відображатимуться архівовані гілки."
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -3991,7 +3991,7 @@
     {
       "id": "native.android.ee4c727cdafbe963",
       "source": "Main thread",
-      "translated": "Головна гілка"
+      "translated": "Основна гілка"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -4351,12 +4351,12 @@
     {
       "id": "native.android.c1626a6700a570f6",
       "source": "Preferred microphone unavailable; using automatic routing.",
-      "translated": "Бажаний мікрофон недоступний; використовується автоматична маршрутизація."
+      "translated": "Бажаний мікрофон недоступний; використовується автоматичне маршрутизування."
     },
     {
       "id": "native.android.820bc5d0ce571d8b",
       "source": "Prioritizes connected Bluetooth microphones.",
-      "translated": "Надає пріоритет підключеним Bluetooth-мікрофонам."
+      "translated": "Надає пріоритет підключеним мікрофонам Bluetooth."
     },
     {
       "id": "native.android.11e48038d5e8bff6",
@@ -4366,7 +4366,7 @@
     {
       "id": "native.android.eaa4d7563a46d307",
       "source": "Unavailable",
-      "translated": "Недоступний"
+      "translated": "Недоступно"
     },
     {
       "id": "native.android.9f5ebf17eb405ba8",
@@ -4381,7 +4381,7 @@
     {
       "id": "native.android.14b613cb6e2446b4",
       "source": "Bluetooth microphone",
-      "translated": "Bluetooth-мікрофон"
+      "translated": "Мікрофон Bluetooth"
     },
     {
       "id": "native.android.c885247b2d7ce271",
@@ -5691,7 +5691,7 @@
     {
       "id": "native.android.36f78c8c85dc283f",
       "source": "Recent Threads",
-      "translated": "Останні гілки"
+      "translated": "Нещодавні гілки"
     },
     {
       "id": "native.android.e7e2862bffbd0706",
@@ -5756,7 +5756,7 @@
     {
       "id": "native.android.43320b54a68b00a1",
       "source": "No recent threads",
-      "translated": "Немає останніх гілок"
+      "translated": "Немає нещодавніх гілок"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -5801,7 +5801,7 @@
     {
       "id": "native.android.5a475f37d80e02bc",
       "source": "Monitoring · $sessionCount threads",
-      "translated": "Моніторинг · $sessionCount гілок"
+      "translated": "Моніторинг · гілок: $sessionCount"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -6261,7 +6261,7 @@
     {
       "id": "native.android.28a1a1acc5a0959f",
       "source": "Main thread",
-      "translated": "Головна гілка"
+      "translated": "Основна гілка"
     },
     {
       "id": "native.android.b1f9c790e2dbac1b",
@@ -6951,7 +6951,7 @@
     {
       "id": "native.android.e89a0e780eed2e1e",
       "source": "Front camera",
-      "translated": "Фронтальна камера"
+      "translated": "Передня камера"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",
@@ -7806,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "Підсумуйте останні гілки та наступні кроки."
+      "translated": "Підсумувати нещодавні гілки та наступні кроки."
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "Ознайом мене з останніми гілками OpenClaw і запропонуй подальші кроки."
+      "translated": "Ознайом мене з моїми нещодавніми гілками OpenClaw і запропонуй наступні кроки."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -10794,6 +10794,61 @@
       "translated": "Відомості про завдання"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Закріплені"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Останні"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Модель"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Міркування"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Швидко"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "За замовчуванням (успадковано)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Вимк."
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Увімк."
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Повне"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Докладність"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "За замовчуванням"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Не вдалося експортувати транскрипт"
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Новий чат у Worktree"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Параметри нового сеансу…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11126,7 +11186,7 @@
     {
       "id": "native.apple.b3c553614f762a58",
       "source": "Recent threads",
-      "translated": "Останні гілки"
+      "translated": "Недавні гілки"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -11136,7 +11196,7 @@
     {
       "id": "native.apple.5aa32afda85064ea",
       "source": "No recent threads",
-      "translated": "Немає останніх гілок"
+      "translated": "Немає недавніх гілок"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11241,7 +11301,7 @@
     {
       "id": "native.apple.9b1d0ef27a1333b0",
       "source": "Archived threads",
-      "translated": "Архівовані гілки"
+      "translated": "Архівні гілки"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11256,12 +11316,12 @@
     {
       "id": "native.apple.4d28a7def2337b9f",
       "source": "Loading archived threads",
-      "translated": "Завантаження архівованих гілок"
+      "translated": "Завантаження архівних гілок"
     },
     {
       "id": "native.apple.777d7b706933bd7b",
       "source": "Loading recent threads",
-      "translated": "Завантаження останніх гілок"
+      "translated": "Завантаження недавніх гілок"
     },
     {
       "id": "native.apple.22f81ea94bef8410",
@@ -11271,12 +11331,12 @@
     {
       "id": "native.apple.1cad51e14db59bf9",
       "source": "No archived threads",
-      "translated": "Немає архівованих гілок"
+      "translated": "Немає архівних гілок"
     },
     {
       "id": "native.apple.18ef832d3a7ddcf8",
       "source": "Archived threads will appear here.",
-      "translated": "Архівовані гілки з’являться тут."
+      "translated": "Архівні гілки з’являться тут."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11376,7 +11436,7 @@
     {
       "id": "native.apple.98b348873556bc46",
       "source": "No recent threads",
-      "translated": "Немає нещодавніх гілок"
+      "translated": "Немає недавніх гілок"
     },
     {
       "id": "native.apple.7396d205574d279f",
@@ -19046,7 +19106,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "Глобальне скорочення, яке відкриває плаваючу панель чату для головної гілки."
+      "translated": "Глобальне сполучення клавіш, яке відкриває плавучу панель чату для основної гілки."
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "Підсумуй, що відбулося в моїх гілках із учорашнього дня."
+      "translated": "Підсумуй, що відбулося в моїх гілках від учора."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23366,7 +23426,7 @@
     {
       "id": "native.apple.533c6e22a11e88de",
       "source": "OK",
-      "translated": "ОК"
+      "translated": "OK"
     },
     {
       "id": "native.apple.e1fb28a2a9756402",
@@ -23386,7 +23446,7 @@
     {
       "id": "native.apple.0589cce608418f90",
       "source": "The widget image could not be captured.",
-      "translated": "Не вдалося зробити знімок віджета."
+      "translated": "Не вдалося захопити зображення віджета."
     },
     {
       "id": "native.apple.dfe24e827fdbe9c5",
@@ -23551,12 +23611,12 @@
     {
       "id": "native.apple.8952a111a1075051",
       "source": "The main thread cannot be deleted.",
-      "translated": "Головну гілку не можна видалити."
+      "translated": "Основну гілку не можна видалити."
     },
     {
       "id": "native.apple.90d0ccf80ca28717",
       "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
-      "translated": "Видаліть вкладення або дочекайтеся доставки, перш ніж архівувати чи видаляти цю гілку."
+      "translated": "Видаліть вкладення або дочекайтеся їх доставки, перш ніж архівувати чи видаляти цю гілку."
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23776,7 +23836,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "Гілки в цій групі буде вилучено з групи."
+      "translated": "Гілки в цій групі буде розгруповано."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "Кожну вибрану гілку та її історію буде видалено з Gateway."
+      "translated": "Кожну вибрану гілку та її стенограму буде видалено з Gateway."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24231,7 +24291,7 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "Перемотати сюди"
+      "translated": "Відкотити до цього місця"
     },
     {
       "id": "native.apple.14df2e4997689fb3",

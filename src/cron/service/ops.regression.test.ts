@@ -27,6 +27,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { enqueueRun, remove, run, start, update } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
+import { ensureLoaded } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 
 const FAST_TIMEOUT_SECONDS = 1;
@@ -409,6 +410,55 @@ describe("cron service ops regressions", () => {
     const staleExecuted = jobs.find((entry) => entry.id === "unrelated-stale-executed");
     expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
     expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
+  });
+
+  it("force-runs a due paced job without consuming its pending slot", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.parse("2026-07-19T09:00:00.000Z");
+    const dueSlot = nowMs - 1_000;
+    const job = createIsolatedRegressionJob({
+      id: "manual-paced-due-slot",
+      name: "manual paced due slot",
+      scheduledAt: nowMs,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs - 60_000 },
+      payload: { kind: "agentTurn", message: "manual paced due slot" },
+      state: { nextRunAtMs: dueSlot, pacedNextRunAtMs: dueSlot },
+    });
+    job.pacing = { min: "15m", max: "4h" };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+
+    const stored = state.store?.jobs.find((entry) => entry.id === job.id);
+    expect(stored?.state.nextRunAtMs).toBe(dueSlot);
+    expect(stored?.state.pacedNextRunAtMs).toBe(dueSlot);
+    expect(stored?.state.forcePreservedNextRunAtMs).toBe(dueSlot);
+
+    const restarted = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs + 5_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await ensureLoaded(restarted);
+
+    const reloaded = restarted.store?.jobs.find((entry) => entry.id === job.id);
+    expect(reloaded?.state.nextRunAtMs).toBe(dueSlot);
+    expect(reloaded?.state.pacedNextRunAtMs).toBe(dueSlot);
+    expect(reloaded?.state.forcePreservedNextRunAtMs).toBe(dueSlot);
   });
 
   it("passes the rehydrated agentTurn payload message to isolated manual runs", async () => {

@@ -161,6 +161,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
                 >${icons.barChart}</span
               >`
             : nothing}
+          <openclaw-viewer-facepile
+            .presencePayload=${this.presencePayload}
+            .selfInstanceId=${this.presenceInstanceId}
+            .sessionKey=${session.key}
+            .maxVisible=${3}
+            variant="session"
+          ></openclaw-viewer-facepile>
           ${session.pinned ? nothing : sessionState}
           ${renderSessionRowBadges({
             ...session,

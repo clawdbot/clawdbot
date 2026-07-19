@@ -58,6 +58,7 @@ import {
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
   repairAgentDatabasesCompositePrimaryKey,
+  repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -174,6 +175,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
         if (tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
           db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+          if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+            repairLegacyGatewayRestartHandoffsForStrictMigration(db);
+          }
           const strictMigration = migrateSqliteSchemaToStrictInTransaction(
             db,
             OPENCLAW_STATE_SCHEMA_SQL,
@@ -242,6 +246,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
         db.exec(OPENCLAW_STATE_SCHEMA_SQL);
         migrateLegacyCronRunLogsToTaskRuns(db);
         if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+          repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_STATE_SCHEMA_SQL, {
             databaseLabel: pathname,
           });

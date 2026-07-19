@@ -42,9 +42,13 @@ const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platfo
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 let lobsterPetModuleLoad: Promise<unknown> | null = null;
+let viewerFacepileModuleLoad: Promise<unknown> | null = null;
 
-function scheduleLobsterPetLoad() {
-  if (lobsterPetModuleLoad || customElements.get("openclaw-lobster-pet")) {
+function scheduleSidebarChromeLoad() {
+  if (
+    (lobsterPetModuleLoad || customElements.get("openclaw-lobster-pet")) &&
+    (viewerFacepileModuleLoad || customElements.get("openclaw-viewer-facepile"))
+  ) {
     return;
   }
   const start = () => {
@@ -52,10 +56,18 @@ function scheduleLobsterPetLoad() {
     // cache and retry when connectivity returns. The sidebar mounts once per
     // page, so without this a transient failure would disable the pet for the
     // whole session; a deploy-pruned chunk stays off until reload, by design.
-    lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
-      lobsterPetModuleLoad = null;
-      window.addEventListener("online", () => start(), { once: true });
-    });
+    if (!customElements.get("openclaw-lobster-pet")) {
+      lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
+        lobsterPetModuleLoad = null;
+        window.addEventListener("online", () => start(), { once: true });
+      });
+    }
+    if (!customElements.get("openclaw-viewer-facepile")) {
+      viewerFacepileModuleLoad ??= import("./viewer-facepile.ts").catch(() => {
+        viewerFacepileModuleLoad = null;
+        window.addEventListener("online", () => start(), { once: true });
+      });
+    }
   };
   if ("requestIdleCallback" in window) {
     requestIdleCallback(() => start(), { timeout: 3000 });
@@ -90,7 +102,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     this.syncOfflineIndicator();
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
-    scheduleLobsterPetLoad();
+    scheduleSidebarChromeLoad();
   }
 
   override disconnectedCallback() {
@@ -294,6 +306,12 @@ class AppSidebar extends AppSidebarSessionListElement {
           />
           <openclaw-lobster-logo-standin .visit=${this.logoVisit}></openclaw-lobster-logo-standin>
         </span>
+        <openclaw-viewer-facepile
+          .presencePayload=${this.presencePayload}
+          .selfInstanceId=${this.presenceInstanceId}
+          .maxVisible=${5}
+          variant="footer"
+        ></openclaw-viewer-facepile>
         <openclaw-sidebar-build-chip
           .basePath=${this.basePath}
           .gatewayVersion=${this.gatewayVersion}

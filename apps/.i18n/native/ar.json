@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "تصفح المحادثات"
+      "translated": "تصفّح المحادثات"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -1486,7 +1486,7 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "جرّب الدردشة أو الصوت أو المحادثات أو موفري الخدمة أو الإعدادات."
+      "translated": "جرّب الدردشة أو الصوت أو المحادثات أو المزوّدين أو الإعدادات."
     },
     {
       "id": "native.android.670121e54dbe286f",
@@ -1496,7 +1496,7 @@
     {
       "id": "native.android.d38be650b1bce4a0",
       "source": "Connect the Gateway to search threads.",
-      "translated": "صِل Gateway للبحث في المحادثات."
+      "translated": "اتصل بـ Gateway للبحث في المحادثات."
     },
     {
       "id": "native.android.3d7754721f776ef8",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "سيتم الاحتفاظ بالمحادثات في \"$group\" ونقلها مجددًا إلى غير المجمّعة."
+      "translated": "يتم الاحتفاظ بالمحادثات في \"$group\" ونقلها مجددًا إلى غير مجمّعة."
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -3816,7 +3816,7 @@
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "يؤدي هذا إلى حذف سلسلة المحادثة وسجلها نهائيًا."
+      "translated": "يؤدي هذا إلى حذف المحادثة ونصها نهائيًا."
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3941,17 +3941,17 @@
     {
       "id": "native.android.8e21a70428def6e0",
       "source": "No threads yet",
-      "translated": "لا توجد سلاسل محادثات بعد"
+      "translated": "لا توجد محادثات بعد"
     },
     {
       "id": "native.android.cda4c5ad8b17e394",
       "source": "No current thread",
-      "translated": "لا توجد سلسلة محادثة حالية"
+      "translated": "لا توجد محادثة حالية"
     },
     {
       "id": "native.android.be84f061047aa2da",
       "source": "No archived threads",
-      "translated": "لا توجد سلاسل محادثات مؤرشفة"
+      "translated": "لا توجد محادثات مؤرشفة"
     },
     {
       "id": "native.android.0a38a1167c6b6941",
@@ -3961,12 +3961,12 @@
     {
       "id": "native.android.f289d03e1d3eee98",
       "source": "Open Chat to start or resume the current thread.",
-      "translated": "افتح الدردشة لبدء سلسلة المحادثة الحالية أو استئنافها."
+      "translated": "افتح الدردشة لبدء المحادثة الحالية أو استئنافها."
     },
     {
       "id": "native.android.504b71386e76c6ae",
       "source": "Archived threads will show up here.",
-      "translated": "ستظهر سلاسل المحادثات المؤرشفة هنا."
+      "translated": "ستظهر المحادثات المؤرشفة هنا."
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -3991,7 +3991,7 @@
     {
       "id": "native.android.ee4c727cdafbe963",
       "source": "Main thread",
-      "translated": "سلسلة المحادثة الرئيسية"
+      "translated": "المحادثة الرئيسية"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -4131,7 +4131,7 @@
     {
       "id": "native.android.da78209effb11cfd",
       "source": "Thread Activity",
-      "translated": "نشاط سلسلة المحادثة"
+      "translated": "نشاط المحادثة"
     },
     {
       "id": "native.android.5d53e328e4deb444",
@@ -4176,12 +4176,12 @@
     {
       "id": "native.android.f615712dfb56319a",
       "source": "Thread activity",
-      "translated": "نشاط سلسلة المحادثة"
+      "translated": "نشاط المحادثة"
     },
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "تظل استدعاءات أدوات الدردشة المنتظرة في سلسلة المحادثة النشطة مرئية هنا."
+      "translated": "تظل استدعاءات أدوات الدردشة المنتظرة في المحادثة النشطة ظاهرة هنا."
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -5141,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "يحوّل OpenClaw هذا الهاتف إلى واجهة أوامر محمولة ومنظمة لسلاسل المحادثات والصوت ومزوّدي الخدمة وGateway."
+      "translated": "يحوّل OpenClaw هذا الهاتف إلى واجهة أوامر محمولة ومنظّمة لسلاسل المحادثات والصوت ومزوّدي الخدمة وGateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5796,7 +5796,7 @@
     {
       "id": "native.android.e24db059480f1e6a",
       "source": "Monitoring · 1 thread",
-      "translated": "المراقبة · سلسلة محادثة واحدة"
+      "translated": "المراقبة · سلسلة محادثات واحدة"
     },
     {
       "id": "native.android.5a475f37d80e02bc",
@@ -5836,7 +5836,7 @@
     {
       "id": "native.android.358c5e0e838d5423",
       "source": "Open thread",
-      "translated": "فتح سلسلة المحادثة"
+      "translated": "فتح سلسلة المحادثات"
     },
     {
       "id": "native.android.ede6f2717ca8e267",
@@ -6261,7 +6261,7 @@
     {
       "id": "native.android.28a1a1acc5a0959f",
       "source": "Main thread",
-      "translated": "سلسلة المحادثة الرئيسية"
+      "translated": "سلسلة المحادثات الرئيسية"
     },
     {
       "id": "native.android.b1f9c790e2dbac1b",
@@ -7761,7 +7761,7 @@
     {
       "id": "native.android.0c74bc30a994dd33",
       "source": "Loading thread",
-      "translated": "جارٍ تحميل سلسلة المحادثة"
+      "translated": "جارٍ تحميل سلسلة المحادثات"
     },
     {
       "id": "native.android.2c1106e1687ab258",
@@ -7811,7 +7811,7 @@
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "أطلعني على أحدث محادثاتي في OpenClaw واقترح الخطوات التالية."
+      "translated": "أطلعني على آخر مستجدات سلاسل محادثاتي الأخيرة في OpenClaw واقترح الخطوات التالية."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -8151,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "المحادثات"
+      "translated": "سلاسل المحادثات"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -10794,6 +10794,61 @@
       "translated": "تفاصيل المهمة"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "مثبّت"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "الأخيرة"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "النموذج"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "التفكير"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "سريع"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "الافتراضي (موروث)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "إيقاف"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "تشغيل"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "كامل"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "مستوى التفصيل"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "الافتراضي"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "تعذّر تصدير النص"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "سيتم إرفاق المحادثة بمجرد أن يصبح Gateway جاهزًا."
+      "translated": "سيتم إرفاق سلسلة المحادثات بمجرد أن تصبح البوابة جاهزة."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10859,9 +10914,14 @@
       "translated": "دردشة جديدة في Worktree"
     },
     {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "خيارات جلسة جديدة…"
+    },
+    {
       "id": "native.apple.003b25ddafeb18e9",
       "source": "Threads…",
-      "translated": "المحادثات…"
+      "translated": "سلاسل المحادثات…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11026,7 +11086,7 @@
     {
       "id": "native.apple.31d5c7287cfb3abe",
       "source": "Delete Thread?",
-      "translated": "حذف المحادثة؟"
+      "translated": "حذف سلسلة المحادثات؟"
     },
     {
       "id": "native.apple.d3395564809f1120",
@@ -11136,7 +11196,7 @@
     {
       "id": "native.apple.5aa32afda85064ea",
       "source": "No recent threads",
-      "translated": "لا توجد محادثات حديثة"
+      "translated": "لا توجد محادثات أخيرة"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11361,7 +11421,7 @@
     {
       "id": "native.apple.21d9208d86a4d1fe",
       "source": "Loading threads",
-      "translated": "جارٍ تحميل سلاسل المحادثات"
+      "translated": "جارٍ تحميل المحادثات"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11371,17 +11431,17 @@
     {
       "id": "native.apple.4be1f79aa2b230ff",
       "source": "Threads unavailable",
-      "translated": "سلاسل المحادثات غير متاحة"
+      "translated": "المحادثات غير متاحة"
     },
     {
       "id": "native.apple.98b348873556bc46",
       "source": "No recent threads",
-      "translated": "لا توجد سلاسل محادثات حديثة"
+      "translated": "لا توجد محادثات أخيرة"
     },
     {
       "id": "native.apple.7396d205574d279f",
       "source": "Thread activity offline",
-      "translated": "نشاط سلاسل المحادثات غير متصل"
+      "translated": "نشاط المحادثة غير متصل"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11841,7 +11901,7 @@
     {
       "id": "native.apple.c9ec1b0e18074d8a",
       "source": "Open Thread",
-      "translated": "فتح سلسلة المحادثة"
+      "translated": "فتح المحادثة"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "يُستخدم لسلاسل محادثات الدردشة الجديدة وجلسات التحدث."
+      "translated": "تُستخدم لمحادثات الدردشة الجديدة وجلسات التحدث."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15736,7 +15796,7 @@
     {
       "id": "native.apple.11fe8b9941954dfb",
       "source": "Threads",
-      "translated": "سلاسل المحادثات"
+      "translated": "المحادثات"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -19046,7 +19106,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "اختصار عام يفتح شريط دردشة عائمًا لسلسلة المحادثة الرئيسية."
+      "translated": "اختصار عام يفتح شريط دردشة عائمًا للمحادثة الرئيسية."
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -19626,7 +19686,7 @@
     {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
-      "translated": "سلسلة محادثة جديدة"
+      "translated": "محادثة جديدة"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21916,7 +21976,7 @@
     {
       "id": "native.apple.3ec2afcbc298c673",
       "source": "Threads",
-      "translated": "سلاسل المحادثات"
+      "translated": "المحادثات"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "لا توجد سلاسل محادثات بعد. ستظهر بعد أول رسالة واردة أو إشارة نبض."
+      "translated": "لا توجد محادثات بعد. ستظهر بعد أول رسالة واردة أو إشارة نبض."
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -22011,7 +22071,7 @@
     {
       "id": "native.apple.52e37e3a44ae516c",
       "source": "Threads",
-      "translated": "سلاسل المحادثات"
+      "translated": "المحادثات"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -23016,7 +23076,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "لخّص ما حدث في سلاسل محادثاتي منذ الأمس."
+      "translated": "لخّص ما حدث في محادثاتي منذ الأمس."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -23196,7 +23256,7 @@
     {
       "id": "native.apple.4edb66657f5aca1f",
       "source": "Thread",
-      "translated": "سلسلة المحادثة"
+      "translated": "المحادثة"
     },
     {
       "id": "native.apple.284b2b94c272591d",
@@ -23386,22 +23446,22 @@
     {
       "id": "native.apple.0589cce608418f90",
       "source": "The widget image could not be captured.",
-      "translated": "تعذّر التقاط صورة الأداة."
+      "translated": "تعذر التقاط صورة الأداة."
     },
     {
       "id": "native.apple.dfe24e827fdbe9c5",
       "source": "The widget image could not be copied.",
-      "translated": "تعذّر نسخ صورة الأداة."
+      "translated": "تعذر نسخ صورة الأداة."
     },
     {
       "id": "native.apple.9e611e3a80e71408",
       "source": "The widget image could not be encoded as PNG.",
-      "translated": "تعذّر ترميز صورة الأداة بتنسيق PNG."
+      "translated": "تعذر ترميز صورة الأداة بتنسيق PNG."
     },
     {
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
-      "translated": "تعذّر حفظ صورة الأداة."
+      "translated": "تعذر حفظ صورة الأداة."
     },
     {
       "id": "native.apple.769b7dcea4708c40",
@@ -23546,12 +23606,12 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "لا يمكن أرشفة سلسلة المحادثة هذه أثناء نشاطها أو تشغيلها."
+      "translated": "لا يمكن أرشفة هذه المحادثة أثناء نشاطها أو تشغيلها."
     },
     {
       "id": "native.apple.8952a111a1075051",
       "source": "The main thread cannot be deleted.",
-      "translated": "لا يمكن حذف سلسلة المحادثة الرئيسية."
+      "translated": "لا يمكن حذف المحادثة الرئيسية."
     },
     {
       "id": "native.apple.90d0ccf80ca28717",
@@ -23791,7 +23851,7 @@
     {
       "id": "native.apple.2d96aa7d3d12f85b",
       "source": "New Thread Options",
-      "translated": "خيارات المحادثة الجديدة"
+      "translated": "خيارات سلسلة المحادثة الجديدة"
     },
     {
       "id": "native.apple.5b0cde807ccb4241",
@@ -23821,17 +23881,17 @@
     {
       "id": "native.apple.87ef57319d1ddc85",
       "source": "The thread could not be created.",
-      "translated": "تعذّر إنشاء المحادثة."
+      "translated": "تعذّر إنشاء سلسلة المحادثة."
     },
     {
       "id": "native.apple.6bd91c435b69d638",
       "source": "Search threads",
-      "translated": "البحث في المحادثات"
+      "translated": "البحث في سلاسل المحادثات"
     },
     {
       "id": "native.apple.6fde4bdf9d5b9191",
       "source": "No Threads",
-      "translated": "لا توجد محادثات"
+      "translated": "لا توجد سلاسل محادثات"
     },
     {
       "id": "native.apple.2d4ee298bdd1c05d",
@@ -23841,27 +23901,27 @@
     {
       "id": "native.apple.a02fd99740d29bd3",
       "source": "New Thread",
-      "translated": "محادثة جديدة"
+      "translated": "سلسلة محادثة جديدة"
     },
     {
       "id": "native.apple.b625801dd04b09f2",
       "source": "New thread",
-      "translated": "محادثة جديدة"
+      "translated": "سلسلة محادثة جديدة"
     },
     {
       "id": "native.apple.851be81fcc933608",
       "source": "New thread options",
-      "translated": "خيارات المحادثة الجديدة"
+      "translated": "خيارات سلسلة المحادثة الجديدة"
     },
     {
       "id": "native.apple.9ce8a4aba7b444b2",
       "source": "Rename Thread",
-      "translated": "إعادة تسمية المحادثة"
+      "translated": "إعادة تسمية سلسلة المحادثة"
     },
     {
       "id": "native.apple.1dd067c44511c7f0",
       "source": "Thread name",
-      "translated": "اسم المحادثة"
+      "translated": "اسم سلسلة المحادثة"
     },
     {
       "id": "native.apple.6ec5a13c0e6c20d9",
@@ -23876,12 +23936,12 @@
     {
       "id": "native.apple.618073d6ab3f2721",
       "source": "Delete Thread",
-      "translated": "حذف المحادثة"
+      "translated": "حذف سلسلة المحادثة"
     },
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "تُزال المحادثة وسجلها من Gateway."
+      "translated": "تُزال سلسلة المحادثة ونصها من Gateway."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23891,12 +23951,12 @@
     {
       "id": "native.apple.ac71e3b2aa496a2c",
       "source": "Thread running",
-      "translated": "المحادثة قيد التشغيل"
+      "translated": "سلسلة المحادثة قيد التشغيل"
     },
     {
       "id": "native.apple.c775e87f997278b2",
       "source": "Thread failed",
-      "translated": "فشلت المحادثة"
+      "translated": "فشلت سلسلة المحادثة"
     },
     {
       "id": "native.apple.ac85292b16a7465f",
@@ -23956,7 +24016,7 @@
     {
       "id": "native.apple.f4998cfb572f23ff",
       "source": "Delete Thread…",
-      "translated": "حذف المحادثة…"
+      "translated": "حذف سلسلة المحادثة…"
     },
     {
       "id": "native.apple.6a3425ea2811ff88",
@@ -23971,7 +24031,7 @@
     {
       "id": "native.apple.8802e9576ffd0f65",
       "source": "Retry thread groups",
-      "translated": "إعادة محاولة مجموعات المحادثات"
+      "translated": "إعادة محاولة تحميل مجموعات سلاسل المحادثات"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -23996,7 +24056,7 @@
     {
       "id": "native.apple.b313b80def4bda52",
       "source": "Search threads",
-      "translated": "البحث في المحادثات"
+      "translated": "البحث في سلاسل المحادثات"
     },
     {
       "id": "native.apple.c0cc6acc36f413ce",
@@ -24021,7 +24081,7 @@
     {
       "id": "native.apple.dc00eb94f33bae15",
       "source": "Delete selected threads?",
-      "translated": "هل تريد حذف المحادثات المحددة؟"
+      "translated": "حذف المحادثات المحددة؟"
     },
     {
       "id": "native.apple.2053fc9f74dc3158",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "ستتم إزالة كل محادثة محددة وسجلها من Gateway."
+      "translated": "ستُزال كل محادثة محددة وسجلها من Gateway."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24231,12 +24291,12 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "إرجاع إلى هنا"
+      "translated": "الرجوع إلى هنا"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
       "source": "Fork from Here",
-      "translated": "إنشاء تفرّع من هنا"
+      "translated": "التفرع من هنا"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -24336,7 +24396,7 @@
     {
       "id": "native.apple.0a5c4e15466c3acc",
       "source": "Clear this thread's history?",
-      "translated": "هل تريد مسح سجل هذه المحادثة؟"
+      "translated": "مسح سجل هذه المحادثة؟"
     },
     {
       "id": "native.apple.6192578088f1b100",
@@ -24476,7 +24536,7 @@
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "إنشاء فرع"
+      "translated": "تفريع"
     },
     {
       "id": "native.apple.8768f9ed198edc54",

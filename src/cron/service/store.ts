@@ -80,10 +80,13 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
     return;
   }
-  // Runtime nextRunAtMs belongs to the old schedule identity; clear it so the
-  // current normalized schedule recomputes from the active clock.
+  // Runtime nextRunAtMs and paced provenance belong to the old scheduling
+  // identity; clear them together so the current inputs recompute atomically.
   params.hydrated.state ??= {};
   params.hydrated.state.nextRunAtMs = undefined;
+  params.hydrated.state.startupCatchupAtMs = undefined;
+  params.hydrated.state.pacedNextRunAtMs = undefined;
+  params.hydrated.state.forcePreservedNextRunAtMs = undefined;
 }
 
 function warnInvalidPersistedCronJob(params: {

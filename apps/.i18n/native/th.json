@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "เรียกดูกระทู้"
+      "translated": "เรียกดูเธรด"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -1486,22 +1486,22 @@
     {
       "id": "native.android.bc70a4ac965b82ba",
       "source": "Try Chat, Voice, Threads, Providers, or Settings.",
-      "translated": "ลองใช้แชท เสียง กระทู้ ผู้ให้บริการ หรือการตั้งค่า"
+      "translated": "ลองใช้แชท เสียง เธรด ผู้ให้บริการ หรือการตั้งค่า"
     },
     {
       "id": "native.android.670121e54dbe286f",
       "source": "Threads",
-      "translated": "กระทู้"
+      "translated": "เธรด"
     },
     {
       "id": "native.android.d38be650b1bce4a0",
       "source": "Connect the Gateway to search threads.",
-      "translated": "เชื่อมต่อ Gateway เพื่อค้นหากระทู้"
+      "translated": "เชื่อมต่อ Gateway เพื่อค้นหาเธรด"
     },
     {
       "id": "native.android.3d7754721f776ef8",
       "source": "No matching threads yet.",
-      "translated": "ยังไม่มีกระทู้ที่ตรงกัน"
+      "translated": "ยังไม่มีเธรดที่ตรงกัน"
     },
     {
       "id": "native.android.1d009aa9b54d689d",
@@ -1511,12 +1511,12 @@
     {
       "id": "native.android.9a839f6e3e05a744",
       "source": "OpenClaw thread",
-      "translated": "กระทู้ OpenClaw"
+      "translated": "เธรด OpenClaw"
     },
     {
       "id": "native.android.d83f82a1e4a5ed99",
       "source": "Open thread",
-      "translated": "เปิดกระทู้"
+      "translated": "เปิดเธรด"
     },
     {
       "id": "native.android.42fd88c3d0418a4a",
@@ -1541,7 +1541,7 @@
     {
       "id": "native.android.8a1c5365c0538908",
       "source": "Main thread",
-      "translated": "กระทู้หลัก"
+      "translated": "เธรดหลัก"
     },
     {
       "id": "native.android.5f06e4d6a59f7a59",
@@ -3681,12 +3681,12 @@
     {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
-      "translated": "กระทู้"
+      "translated": "เธรด"
     },
     {
       "id": "native.android.439b324280869527",
       "source": "Focus thread search",
-      "translated": "โฟกัสการค้นหากระทู้"
+      "translated": "โฟกัสการค้นหาเธรด"
     },
     {
       "id": "native.android.e0f10db479f627eb",
@@ -3701,12 +3701,12 @@
     {
       "id": "native.android.03981341841b04ac",
       "source": "Search threads",
-      "translated": "ค้นหากระทู้"
+      "translated": "ค้นหาเธรด"
     },
     {
       "id": "native.android.99570c528a41fa72",
       "source": "Clear thread search",
-      "translated": "ล้างการค้นหากระทู้"
+      "translated": "ล้างการค้นหาเธรด"
     },
     {
       "id": "native.android.784ecdd6ea2ec5f0",
@@ -3726,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "สลับเค้าโครงกระทู้"
+      "translated": "สลับเค้าโครงเธรด"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3741,12 +3741,12 @@
     {
       "id": "native.android.ebd17565e0ffd8eb",
       "source": "Searching threads",
-      "translated": "กำลังค้นหากระทู้"
+      "translated": "กำลังค้นหาเธรด"
     },
     {
       "id": "native.android.472d46ae8669f860",
       "source": "No matching threads",
-      "translated": "ไม่มีกระทู้ที่ตรงกัน"
+      "translated": "ไม่มีเธรดที่ตรงกัน"
     },
     {
       "id": "native.android.11c1a8c944bea0ae",
@@ -3766,17 +3766,17 @@
     {
       "id": "native.android.ff81ad1bee00d384",
       "source": "Current thread",
-      "translated": "กระทู้ปัจจุบัน"
+      "translated": "เธรดปัจจุบัน"
     },
     {
       "id": "native.android.fc145645b9620e57",
       "source": "OpenClaw thread",
-      "translated": "กระทู้ OpenClaw"
+      "translated": "เธรด OpenClaw"
     },
     {
       "id": "native.android.71cbb8dde8bf138b",
       "source": "Rename thread",
-      "translated": "เปลี่ยนชื่อกระทู้"
+      "translated": "เปลี่ยนชื่อเธรด"
     },
     {
       "id": "native.android.fa420bc51ff675a1",
@@ -3806,17 +3806,17 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "กระทู้ใน \"$group\" จะยังคงอยู่และย้ายกลับไปยังไม่ได้จัดกลุ่ม"
+      "translated": "เธรดใน \"$group\" จะยังคงอยู่และย้ายกลับไปที่ไม่ได้จัดกลุ่ม"
     },
     {
       "id": "native.android.d87a8217ab56999b",
       "source": "Delete thread?",
-      "translated": "ลบกระทู้หรือไม่?"
+      "translated": "ลบเธรดหรือไม่?"
     },
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "การดำเนินการนี้จะลบเธรดและบทสนทนาของเธรดอย่างถาวร"
+      "translated": "การดำเนินการนี้จะลบเธรดและบันทึกการสนทนาอย่างถาวร"
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -4181,7 +4181,7 @@
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "การเรียกใช้เครื่องมือแชทที่กำลังรอในเธรดที่ใช้งานอยู่จะยังคงแสดงที่นี่"
+      "translated": "การเรียกใช้เครื่องมือแชทที่รอดำเนินการในเธรดที่ใช้งานอยู่จะยังคงแสดงที่นี่"
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -5796,12 +5796,12 @@
     {
       "id": "native.android.e24db059480f1e6a",
       "source": "Monitoring · 1 thread",
-      "translated": "กำลังติดตาม · 1 เธรด"
+      "translated": "กำลังตรวจสอบ · 1 เธรด"
     },
     {
       "id": "native.android.5a475f37d80e02bc",
       "source": "Monitoring · $sessionCount threads",
-      "translated": "กำลังติดตาม · $sessionCount เธรด"
+      "translated": "กำลังตรวจสอบ · $sessionCount เธรด"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -7811,7 +7811,7 @@
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "สรุปเธรด OpenClaw ล่าสุดของฉันและแนะนำขั้นตอนถัดไป"
+      "translated": "สรุปความคืบหน้าจากเธรด OpenClaw ล่าสุดของฉันและแนะนำขั้นตอนถัดไป"
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -10794,6 +10794,61 @@
       "translated": "รายละเอียดงาน"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "ปักหมุดแล้ว"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "ล่าสุด"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "โมเดล"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "การคิด"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "เร็ว"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "ค่าเริ่มต้น (สืบทอดมา)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "เต็มรูปแบบ"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "ระดับรายละเอียด"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "ค่าเริ่มต้น"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "ไม่สามารถส่งออกบันทึกการสนทนาได้"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "เธรดจะแนบเมื่อ Gateway พร้อมใช้งาน"
+      "translated": "ระบบจะแนบเธรดเมื่อ Gateway พร้อมใช้งาน"
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10857,6 +10912,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "แชทใหม่ใน Worktree"
+    },
+    {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "ตัวเลือกเซสชันใหม่…"
     },
     {
       "id": "native.apple.003b25ddafeb18e9",
@@ -11041,7 +11101,7 @@
     {
       "id": "native.apple.092659256d26cb03",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "การดำเนินการนี้จะลบเธรดและบทสนทนาอย่างถาวร"
+      "translated": "การดำเนินการนี้จะลบเธรดและบันทึกการสนทนาอย่างถาวร"
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11251,7 +11311,7 @@
     {
       "id": "native.apple.98167401c7267735",
       "source": "Threads unavailable",
-      "translated": "ไม่สามารถใช้งานเธรดได้"
+      "translated": "เธรดไม่พร้อมใช้งาน"
     },
     {
       "id": "native.apple.4d28a7def2337b9f",
@@ -11276,7 +11336,7 @@
     {
       "id": "native.apple.18ef832d3a7ddcf8",
       "source": "Archived threads will appear here.",
-      "translated": "เธรดที่เก็บถาวรจะปรากฏที่นี่"
+      "translated": "เธรดที่เก็บถาวรจะแสดงที่นี่"
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -13331,7 +13391,7 @@
     {
       "id": "native.apple.f4ae5664c3eda95d",
       "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "ใช้สำหรับเธรดแชทใหม่และเซสชันการพูดคุย"
+      "translated": "ใช้สำหรับเธรดแชทและเซสชันการสนทนาใหม่"
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -23391,17 +23451,17 @@
     {
       "id": "native.apple.dfe24e827fdbe9c5",
       "source": "The widget image could not be copied.",
-      "translated": "ไม่สามารถคัดลอกภาพวิดเจ็ตได้"
+      "translated": "ไม่สามารถคัดลอกรูปภาพวิดเจ็ตได้"
     },
     {
       "id": "native.apple.9e611e3a80e71408",
       "source": "The widget image could not be encoded as PNG.",
-      "translated": "ไม่สามารถเข้ารหัสภาพวิดเจ็ตเป็น PNG ได้"
+      "translated": "ไม่สามารถเข้ารหัสรูปภาพวิดเจ็ตเป็น PNG ได้"
     },
     {
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
-      "translated": "ไม่สามารถบันทึกภาพวิดเจ็ตได้"
+      "translated": "ไม่สามารถบันทึกรูปภาพวิดเจ็ตได้"
     },
     {
       "id": "native.apple.769b7dcea4708c40",
@@ -23546,7 +23606,7 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "ไม่สามารถเก็บเธรดนี้ถาวรได้ขณะที่ยังทำงานอยู่หรือกำลังประมวลผล"
+      "translated": "ไม่สามารถเก็บเธรดนี้เข้าคลังขณะที่ยังเปิดใช้งานหรือกำลังทำงานอยู่"
     },
     {
       "id": "native.apple.8952a111a1075051",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "เธรดและบันทึกการสนทนาจะถูกลบออกจาก Gateway"
+      "translated": "เธรดและบทถอดเสียงจะถูกนำออกจาก Gateway"
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -24031,7 +24091,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "เธรดที่เลือกแต่ละรายการและบทสนทนาจะถูกลบออกจาก Gateway"
+      "translated": "เธรดที่เลือกแต่ละรายการและบันทึกการสนทนาจะถูกลบออกจาก Gateway"
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24236,7 +24296,7 @@
     {
       "id": "native.apple.14df2e4997689fb3",
       "source": "Fork from Here",
-      "translated": "แยกแขนงจากตรงนี้"
+      "translated": "แยกแขนงจากที่นี่"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",

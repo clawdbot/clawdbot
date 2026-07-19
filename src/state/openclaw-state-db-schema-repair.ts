@@ -82,6 +82,31 @@ export function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boole
   return true;
 }
 
+export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: DatabaseSync): void {
+  if (!tableExists(db, "gateway_restart_handoff")) {
+    return;
+  }
+  // Schema v2 accepted fractional performance-clock values in INTEGER-affinity columns.
+  // Expired handoffs are transient; retain live rows by canonicalizing only those REAL cells.
+  db.prepare("DELETE FROM gateway_restart_handoff WHERE expires_at <= ?").run(Date.now());
+  db.exec(`
+    UPDATE gateway_restart_handoff
+    SET
+      restart_trace_started_at = CASE
+        WHEN typeof(restart_trace_started_at) = 'real'
+          THEN CAST(restart_trace_started_at AS INTEGER)
+        ELSE restart_trace_started_at
+      END,
+      restart_trace_last_at = CASE
+        WHEN typeof(restart_trace_last_at) = 'real'
+          THEN CAST(restart_trace_last_at AS INTEGER)
+        ELSE restart_trace_last_at
+      END
+    WHERE typeof(restart_trace_started_at) = 'real'
+       OR typeof(restart_trace_last_at) = 'real';
+  `);
+}
+
 export function markCurrentStateSchemaVersion(db: DatabaseSync): void {
   // Pre-v2 databases can legitimately predate the audit table. Leave their
   // version untouched so normal open can create the complete v2 schema first.

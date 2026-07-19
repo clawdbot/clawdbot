@@ -562,7 +562,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           client?.presenceKey &&
           (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
         ) {
-          upsertPresence(client.presenceKey, { reason: "disconnect" });
+          upsertPresence(client.presenceKey, {
+            reason: "disconnect",
+            watchedSessions: undefined,
+          });
           broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
         }
         if (currentDisconnectedNodeId) {

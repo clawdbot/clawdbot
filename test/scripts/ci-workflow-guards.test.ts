@@ -2923,6 +2923,23 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("runs the Plugin SDK API baseline as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-plugin-sdk-api-baseline",
+      group: "plugin-sdk-api-baseline",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("plugin-sdk-api-baseline)");
+    expect(runStep.run).toContain('run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check');
+  });
+
   it("runs the SQLite transaction ratchet in the session boundary check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];

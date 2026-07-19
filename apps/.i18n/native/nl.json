@@ -1431,7 +1431,7 @@
     {
       "id": "native.android.e2cf5a38587382cb",
       "source": "Browse Threads",
-      "translated": "Threads bekijken"
+      "translated": "Door threads bladeren"
     },
     {
       "id": "native.android.9052827e69dafbdc",
@@ -3686,7 +3686,7 @@
     {
       "id": "native.android.439b324280869527",
       "source": "Focus thread search",
-      "translated": "Zoeken naar threads activeren"
+      "translated": "Zoeken in threads activeren"
     },
     {
       "id": "native.android.e0f10db479f627eb",
@@ -3726,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "Threadindeling wisselen"
+      "translated": "Threadindeling wijzigen"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3806,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "Threads in \"$group\" blijven behouden en worden teruggeplaatst naar Niet gegroepeerd."
+      "translated": "Threads in \"$group\" worden behouden en teruggezet naar Niet gegroepeerd."
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -3816,7 +3816,7 @@
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Hiermee worden de thread en het transcript permanent verwijderd."
+      "translated": "Hiermee worden de thread en het transcript ervan permanent verwijderd."
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -5796,12 +5796,12 @@
     {
       "id": "native.android.e24db059480f1e6a",
       "source": "Monitoring · 1 thread",
-      "translated": "Bewaking · 1 thread"
+      "translated": "Monitoren · 1 thread"
     },
     {
       "id": "native.android.5a475f37d80e02bc",
       "source": "Monitoring · $sessionCount threads",
-      "translated": "Bewaking · $sessionCount threads"
+      "translated": "Monitoren · $sessionCount threads"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -6946,12 +6946,12 @@
     {
       "id": "native.android.cb608d82c5b3352a",
       "source": "Back camera",
-      "translated": "Achtercamera"
+      "translated": "Camera aan de achterkant"
     },
     {
       "id": "native.android.e89a0e780eed2e1e",
       "source": "Front camera",
-      "translated": "Frontcamera"
+      "translated": "Camera aan de voorkant"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",
@@ -7811,7 +7811,7 @@
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "Praat me bij over mijn recente OpenClaw-gesprekken en stel vervolgstappen voor."
+      "translated": "Praat me bij over mijn recente OpenClaw-threads en stel vervolgstappen voor."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -8151,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "Gesprekken"
+      "translated": "Threads"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -10794,6 +10794,61 @@
       "translated": "Taakdetails"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Vastgezet"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Recent"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Denkmodus"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Snel"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "Standaard (overgenomen)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Uit"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Aan"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Volledig"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Uitgebreidheid"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "Standaard"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Kan transcript niet exporteren"
@@ -10816,7 +10871,7 @@
     {
       "id": "native.apple.4da775013ac9b123",
       "source": "The thread attaches once the gateway is ready.",
-      "translated": "Het gesprek wordt gekoppeld zodra de Gateway klaar is."
+      "translated": "De thread wordt gekoppeld zodra de Gateway gereed is."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10859,9 +10914,14 @@
       "translated": "Nieuwe chat in worktree"
     },
     {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Opties voor nieuwe sessie…"
+    },
+    {
       "id": "native.apple.003b25ddafeb18e9",
       "source": "Threads…",
-      "translated": "Gesprekken…"
+      "translated": "Threads…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11026,12 +11086,12 @@
     {
       "id": "native.apple.31d5c7287cfb3abe",
       "source": "Delete Thread?",
-      "translated": "Gesprek verwijderen?"
+      "translated": "Thread verwijderen?"
     },
     {
       "id": "native.apple.d3395564809f1120",
       "source": "Delete Thread",
-      "translated": "Gesprek verwijderen"
+      "translated": "Thread verwijderen"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -11041,7 +11101,7 @@
     {
       "id": "native.apple.092659256d26cb03",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Hiermee worden het gesprek en het transcript permanent verwijderd."
+      "translated": "Hiermee worden de thread en het transcript permanent verwijderd."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11071,7 +11131,7 @@
     {
       "id": "native.apple.683032464c497bbd",
       "source": "Rename Thread",
-      "translated": "Gesprek hernoemen"
+      "translated": "Thread hernoemen"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -11081,7 +11141,7 @@
     {
       "id": "native.apple.f887aa956588f237",
       "source": "Thread name",
-      "translated": "Gespreksnaam"
+      "translated": "Threadnaam"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
@@ -11121,12 +11181,12 @@
     {
       "id": "native.apple.7c8231b7b1ca480f",
       "source": "Agent thread",
-      "translated": "Agentgesprek"
+      "translated": "Agentthread"
     },
     {
       "id": "native.apple.b3c553614f762a58",
       "source": "Recent threads",
-      "translated": "Recente gesprekken"
+      "translated": "Recente threads"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -11136,7 +11196,7 @@
     {
       "id": "native.apple.5aa32afda85064ea",
       "source": "No recent threads",
-      "translated": "Geen recente gesprekken"
+      "translated": "Geen recente threads"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11236,12 +11296,12 @@
     {
       "id": "native.apple.b6855cf19a50f477",
       "source": "Threads",
-      "translated": "Gesprekken"
+      "translated": "Threads"
     },
     {
       "id": "native.apple.9b1d0ef27a1333b0",
       "source": "Archived threads",
-      "translated": "Gearchiveerde gesprekken"
+      "translated": "Gearchiveerde threads"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11251,32 +11311,32 @@
     {
       "id": "native.apple.98167401c7267735",
       "source": "Threads unavailable",
-      "translated": "Gesprekken niet beschikbaar"
+      "translated": "Threads niet beschikbaar"
     },
     {
       "id": "native.apple.4d28a7def2337b9f",
       "source": "Loading archived threads",
-      "translated": "Gearchiveerde gesprekken laden"
+      "translated": "Gearchiveerde threads laden"
     },
     {
       "id": "native.apple.777d7b706933bd7b",
       "source": "Loading recent threads",
-      "translated": "Recente gesprekken laden"
+      "translated": "Recente threads laden"
     },
     {
       "id": "native.apple.22f81ea94bef8410",
       "source": "^[\\(count) thread](inflect: true)",
-      "translated": "^[\\(count) gesprek](inflect: true)"
+      "translated": "^[\\(count) thread](inflect: true)"
     },
     {
       "id": "native.apple.1cad51e14db59bf9",
       "source": "No archived threads",
-      "translated": "Geen gearchiveerde gesprekken"
+      "translated": "Geen gearchiveerde threads"
     },
     {
       "id": "native.apple.18ef832d3a7ddcf8",
       "source": "Archived threads will appear here.",
-      "translated": "Gearchiveerde gesprekken verschijnen hier."
+      "translated": "Gearchiveerde threads worden hier weergegeven."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11361,7 +11421,7 @@
     {
       "id": "native.apple.21d9208d86a4d1fe",
       "source": "Loading threads",
-      "translated": "Gesprekken laden"
+      "translated": "Threads laden"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11371,17 +11431,17 @@
     {
       "id": "native.apple.4be1f79aa2b230ff",
       "source": "Threads unavailable",
-      "translated": "Gesprekken niet beschikbaar"
+      "translated": "Threads niet beschikbaar"
     },
     {
       "id": "native.apple.98b348873556bc46",
       "source": "No recent threads",
-      "translated": "Geen recente gesprekken"
+      "translated": "Geen recente threads"
     },
     {
       "id": "native.apple.7396d205574d279f",
       "source": "Thread activity offline",
-      "translated": "Gespreksactiviteit offline"
+      "translated": "Threadactiviteit offline"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11841,7 +11901,7 @@
     {
       "id": "native.apple.c9ec1b0e18074d8a",
       "source": "Open Thread",
-      "translated": "Gesprek openen"
+      "translated": "Thread openen"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -19046,7 +19106,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "Algemene sneltoets die een zwevende chatbalk voor het hoofdgesprek opent."
+      "translated": "Algemene sneltoets waarmee een zwevende chatbalk voor het hoofdgesprek wordt geopend."
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -21926,7 +21986,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "Nog geen gesprekken. Ze verschijnen na het eerste inkomende bericht of heartbeatsignaal."
+      "translated": "Nog geen gesprekken. Ze verschijnen na het eerste inkomende bericht of de eerste heartbeat."
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -23401,7 +23461,7 @@
     {
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
-      "translated": "De widgetafbeelding kon niet worden opgeslagen."
+      "translated": "De widgetafbeelding kon niet worden bewaard."
     },
     {
       "id": "native.apple.769b7dcea4708c40",
@@ -23556,7 +23616,7 @@
     {
       "id": "native.apple.90d0ccf80ca28717",
       "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
-      "translated": "Verwijder bijlagen of wacht tot ze zijn afgeleverd voordat u dit gesprek archiveert of verwijdert."
+      "translated": "Verwijder bijlagen of wacht op de bezorging voordat je deze thread archiveert of verwijdert."
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23696,7 +23756,7 @@
     {
       "id": "native.apple.bbccb4c8db5cac12",
       "source": "Thread Info",
-      "translated": "Gespreksinformatie"
+      "translated": "Threadinformatie"
     },
     {
       "id": "native.apple.e308b012d84b3b3e",
@@ -23731,7 +23791,7 @@
     {
       "id": "native.apple.7b641fed5bace855",
       "source": "Thread Groups",
-      "translated": "Gespreksgroepen"
+      "translated": "Threadgroepen"
     },
     {
       "id": "native.apple.7777b2d2ec43ed59",
@@ -23776,7 +23836,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "Gesprekken in deze groep worden uit de groep gehaald."
+      "translated": "Threads in deze groep worden uit de groep gehaald."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23881,7 +23941,7 @@
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "De thread en het transcript ervan worden uit de gateway verwijderd."
+      "translated": "De thread en het transcript ervan worden uit de Gateway verwijderd."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -24001,17 +24061,17 @@
     {
       "id": "native.apple.c0cc6acc36f413ce",
       "source": "Threads",
-      "translated": "Threads"
+      "translated": "Gesprekken"
     },
     {
       "id": "native.apple.854d3928fe5a557c",
       "source": "Rename Thread",
-      "translated": "Thread hernoemen"
+      "translated": "Gesprek hernoemen"
     },
     {
       "id": "native.apple.9d0d3f20096cc4da",
       "source": "Thread name",
-      "translated": "Threadnaam"
+      "translated": "Gespreksnaam"
     },
     {
       "id": "native.apple.833fe2915430c89d",
@@ -24021,17 +24081,17 @@
     {
       "id": "native.apple.dc00eb94f33bae15",
       "source": "Delete selected threads?",
-      "translated": "Geselecteerde threads verwijderen?"
+      "translated": "Geselecteerde gesprekken verwijderen?"
     },
     {
       "id": "native.apple.2053fc9f74dc3158",
       "source": "Delete Threads",
-      "translated": "Threads verwijderen"
+      "translated": "Gesprekken verwijderen"
     },
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "Elke geselecteerde thread en de bijbehorende transcriptie worden van de Gateway verwijderd."
+      "translated": "Elk geselecteerd gesprek en het bijbehorende transcript worden uit de gateway verwijderd."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -24041,7 +24101,7 @@
     {
       "id": "native.apple.6f8acab2256728b5",
       "source": "Manage thread groups",
-      "translated": "Threadgroepen beheren"
+      "translated": "Gespreksgroepen beheren"
     },
     {
       "id": "native.apple.185f4688f98e244e",
@@ -24056,12 +24116,12 @@
     {
       "id": "native.apple.692972314d04b184",
       "source": "No archived threads",
-      "translated": "Geen gearchiveerde threads"
+      "translated": "Geen gearchiveerde gesprekken"
     },
     {
       "id": "native.apple.d6a4b5711dcd26e7",
       "source": "No threads found",
-      "translated": "Geen threads gevonden"
+      "translated": "Geen gesprekken gevonden"
     },
     {
       "id": "native.apple.f0e9d8f69c1d9190",
@@ -24231,7 +24291,7 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "Terugspoelen naar hier"
+      "translated": "Tot hier terugspoelen"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
@@ -24326,7 +24386,7 @@
     {
       "id": "native.apple.e0f045151c8d3137",
       "source": "Gateway changed before the thread operation started.",
-      "translated": "De Gateway is gewijzigd voordat de threadbewerking begon."
+      "translated": "De Gateway is gewijzigd voordat de gespreksbewerking begon."
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24336,7 +24396,7 @@
     {
       "id": "native.apple.0a5c4e15466c3acc",
       "source": "Clear this thread's history?",
-      "translated": "De geschiedenis van deze thread wissen?"
+      "translated": "De geschiedenis van dit gesprek wissen?"
     },
     {
       "id": "native.apple.6192578088f1b100",
@@ -24351,12 +24411,12 @@
     {
       "id": "native.apple.67ac221dbe7179f0",
       "source": "Rename Thread",
-      "translated": "Thread hernoemen"
+      "translated": "Gesprek hernoemen"
     },
     {
       "id": "native.apple.cf0f7e049603f518",
       "source": "Thread name",
-      "translated": "Threadnaam"
+      "translated": "Gespreksnaam"
     },
     {
       "id": "native.apple.8d636ca6b4764418",
@@ -24376,7 +24436,7 @@
     {
       "id": "native.apple.c0ada47504425f23",
       "source": "Threads",
-      "translated": "Threads"
+      "translated": "Gesprekken"
     },
     {
       "id": "native.apple.c13dbe6b5c01e9bd",
@@ -24451,12 +24511,12 @@
     {
       "id": "native.apple.1a765291943599e5",
       "source": "New Thread",
-      "translated": "Nieuwe thread"
+      "translated": "Nieuw gesprek"
     },
     {
       "id": "native.apple.c7a3a6d5e43dd98f",
       "source": "New Thread Options…",
-      "translated": "Opties voor nieuwe thread…"
+      "translated": "Opties voor nieuw gesprek…"
     },
     {
       "id": "native.apple.5361129a24118af6",
@@ -24466,12 +24526,12 @@
     {
       "id": "native.apple.0e710b81808e5dcf",
       "source": "Threads…",
-      "translated": "Threads…"
+      "translated": "Gesprekken…"
     },
     {
       "id": "native.apple.faad8f92b6bef166",
       "source": "Rename Thread…",
-      "translated": "Thread hernoemen…"
+      "translated": "Gesprek hernoemen…"
     },
     {
       "id": "native.apple.23b61d6cd26ac112",

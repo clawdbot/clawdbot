@@ -142,10 +142,8 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
-  /** Cron job allowed to record a one-shot dynamic-cadence proposal on this run. */
-  cronJobId?: string;
-  cronPacingEnabled?: boolean;
-  cronNextCheckMs?: number;
+  /** Active cadence state by job; admission permits one invocation per job. */
+  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
@@ -298,14 +296,11 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   if (context.projectSessionActive !== undefined) {
     existing.projectSessionActive = context.projectSessionActive;
   }
-  if (context.cronJobId !== undefined) {
-    if (existing.cronJobId !== context.cronJobId) {
-      delete existing.cronNextCheckMs;
+  if (context.cronRunsByJobId !== undefined) {
+    existing.cronRunsByJobId ??= new Map();
+    for (const [jobId, cronRun] of context.cronRunsByJobId) {
+      existing.cronRunsByJobId.set(jobId, cronRun);
     }
-    existing.cronJobId = context.cronJobId;
-  }
-  if (context.cronPacingEnabled !== undefined) {
-    existing.cronPacingEnabled = context.cronPacingEnabled;
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
@@ -417,24 +412,29 @@ export function getAgentRunContext(runId: string) {
 /** Records the latest next-check proposal on the matching paced cron run. */
 export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
   const context = getAgentEventState().runContextById.get(runId);
-  if (!context || context.cronJobId !== jobId) {
+  const cronRun = context?.cronRunsByJobId?.get(jobId);
+  if (!cronRun) {
     throw new Error("cron next_check is only available to the currently running job");
   }
-  if (context.cronPacingEnabled !== true) {
+  if (!cronRun.pacingEnabled) {
     throw new Error("cron next_check requires pacing on the current job");
   }
-  context.cronNextCheckMs = delayMs;
+  cronRun.nextCheckMs = delayMs;
 }
 
 /** Consumes one successful cron run's proposal so it cannot affect a later run. */
 export function consumeCronNextCheckProposal(runId: string, jobId: string): number | undefined {
   const context = getAgentEventState().runContextById.get(runId);
-  if (!context || context.cronJobId !== jobId) {
+  const cronRuns = context?.cronRunsByJobId;
+  const cronRun = cronRuns?.get(jobId);
+  if (!cronRun) {
     return undefined;
   }
-  const delayMs = context.cronNextCheckMs;
-  delete context.cronNextCheckMs;
-  return delayMs;
+  cronRuns?.delete(jobId);
+  if (cronRuns?.size === 0 && context) {
+    delete context.cronRunsByJobId;
+  }
+  return cronRun.nextCheckMs;
 }
 
 export function getAgentRunContextOwnerStatus(

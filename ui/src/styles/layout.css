@@ -1886,6 +1886,66 @@ html.openclaw-native-macos
   stroke-linejoin: round;
 }
 
+.viewer-facepile {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.viewer-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border: 1.5px solid var(--sidebar-bg, var(--bg));
+  border-radius: var(--radius-full);
+  color: white;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.viewer-facepile > openclaw-tooltip:not(:first-child) .viewer-avatar {
+  margin-left: -5px;
+}
+
+.viewer-avatar > img,
+.viewer-avatar > span {
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-avatar > img {
+  object-fit: cover;
+}
+
+.viewer-avatar > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-avatar--overflow {
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0;
+}
+
+.viewer-facepile--session {
+  margin-left: 1px;
+}
+
+.viewer-facepile--footer .viewer-avatar {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
 .sidebar-recent-session__name {
   flex: 1 1 auto;
   min-width: 0;
@@ -2859,6 +2919,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-footer-bar__logo .sidebar-brand__logo {
   width: 18px;
   height: 18px;
+}
+
+.sidebar-footer-bar .viewer-facepile {
+  margin-left: 1px;
 }
 
 .sidebar-footer-bar .sidebar-footer-build {

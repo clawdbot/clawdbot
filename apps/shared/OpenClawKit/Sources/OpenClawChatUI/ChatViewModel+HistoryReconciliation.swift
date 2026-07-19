@@ -29,7 +29,9 @@ extension OpenClawChatViewModel {
                 content: content.content,
                 id: content.id,
                 name: content.name,
-                arguments: content.arguments)
+                arguments: content.arguments,
+                details: content.details,
+                isError: content.isError)
         }
 
         return OpenClawChatMessage(
@@ -42,7 +44,9 @@ extension OpenClawChatViewModel {
             toolName: message.toolName,
             usage: message.usage,
             stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+            errorMessage: message.errorMessage,
+            details: message.details,
+            isError: message.isError)
     }
 
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
@@ -144,7 +148,8 @@ extension OpenClawChatViewModel {
             usage: incoming.usage,
             stopReason: incoming.stopReason,
             errorMessage: incoming.errorMessage,
-            details: incoming.details)
+            details: incoming.details,
+            isError: incoming.isError)
     }
 
     private static func preservingLocalAudioDurations(
@@ -175,7 +180,9 @@ extension OpenClawChatViewModel {
                 content: content.content,
                 id: content.id,
                 name: content.name,
-                arguments: content.arguments)
+                arguments: content.arguments,
+                details: content.details,
+                isError: content.isError)
         }
     }
 
@@ -445,7 +452,9 @@ extension OpenClawChatViewModel {
                 toolName: existing.toolName,
                 usage: existing.usage,
                 stopReason: existing.stopReason,
-                errorMessage: existing.errorMessage)
+                errorMessage: existing.errorMessage,
+                details: existing.details,
+                isError: existing.isError)
         }
         self.replaceMessages(Self.dedupeMessages(updated))
         guard let survivingIndex = self.messages.firstIndex(where: { message in

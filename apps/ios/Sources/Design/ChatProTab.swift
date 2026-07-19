@@ -36,6 +36,7 @@ struct ChatProTab: View {
     @State private var showsTranscriptExportError = false
     @State private var showsBackgroundTasks = false
     @State private var showsSessions = false
+    @State private var showsNewSessionOptions = false
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -164,10 +165,17 @@ struct ChatProTab: View {
                 BackgroundTasksScreen(agentID: self.currentAgentID)
             }
             .sheet(isPresented: self.$showsSessions) {
-                NavigationStack {
-                    CommandSessionsScreen(
-                        usesNativeNavigationChrome: true,
-                        openChat: { self.showsSessions = false })
+                if let viewModel {
+                    ChatSessionsSheet(viewModel: viewModel)
+                }
+            }
+            .sheet(isPresented: self.$showsNewSessionOptions) {
+                if let viewModel {
+                    ChatNewSessionOptionsPopover(viewModel: viewModel) {
+                        self.showsNewSessionOptions = false
+                    }
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
                 }
             }
             .alert(
@@ -588,6 +596,18 @@ struct ChatProTab: View {
             }
 
             Button {
+                self.showsNewSessionOptions = true
+            } label: {
+                Label {
+                    Text("New Session Options…")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+            }
+            .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+
+            Button {
                 self.showsSessions = true
             } label: {
                 Label {
@@ -599,6 +619,11 @@ struct ChatProTab: View {
             }
 
             Divider()
+
+            if let viewModel {
+                ChatModelControlsMenuItems(viewModel: viewModel)
+                Divider()
+            }
 
             Button {
                 self.showsBackgroundTasks = true

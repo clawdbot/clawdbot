@@ -125,6 +125,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let name: String?
     public let arguments: AnyCodable?
     public let details: AnyCodable?
+    public let isError: Bool?
 
     public init(
         type: String?,
@@ -139,7 +140,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         id: String? = nil,
         name: String? = nil,
         arguments: AnyCodable? = nil,
-        details: AnyCodable? = nil)
+        details: AnyCodable? = nil,
+        isError: Bool? = nil)
     {
         self.type = type
         self.text = text
@@ -154,6 +156,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.name = name
         self.arguments = arguments
         self.details = details
+        self.isError = isError
     }
 
     enum CodingKeys: String, CodingKey {
@@ -170,6 +173,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case name
         case arguments
         case details
+        case isError
+        case is_error
     }
 
     public init(from decoder: Decoder) throws {
@@ -185,6 +190,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
         self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
+        self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ??
+            container.decodeIfPresent(Bool.self, forKey: .is_error)
         self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
 
         if let any = try container.decodeIfPresent(AnyCodable.self, forKey: .content) {
@@ -194,6 +201,24 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         } else {
             self.content = nil
         }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.type, forKey: .type)
+        try container.encodeIfPresent(self.text, forKey: .text)
+        try container.encodeIfPresent(self.thinking, forKey: .thinking)
+        try container.encodeIfPresent(self.thinkingSignature, forKey: .thinkingSignature)
+        try container.encodeIfPresent(self.mimeType, forKey: .mimeType)
+        try container.encodeIfPresent(self.fileName, forKey: .fileName)
+        try container.encodeIfPresent(self.durationSeconds, forKey: .durationSeconds)
+        try container.encodeIfPresent(self.content, forKey: .content)
+        try container.encodeIfPresent(self.preview, forKey: .preview)
+        try container.encodeIfPresent(self.id, forKey: .id)
+        try container.encodeIfPresent(self.name, forKey: .name)
+        try container.encodeIfPresent(self.arguments, forKey: .arguments)
+        try container.encodeIfPresent(self.details, forKey: .details)
+        try container.encodeIfPresent(self.isError, forKey: .isError)
     }
 }
 
@@ -243,6 +268,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let stopReason: String?
     public let errorMessage: String?
     public let details: AnyCodable?
+    public let isError: Bool?
 
     enum CodingKeys: String, CodingKey {
         case role
@@ -258,6 +284,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         case stopReason
         case errorMessage
         case details
+        case isError
+        case is_error
         case mediaPath = "MediaPath"
         case mediaPaths = "MediaPaths"
         case mediaType = "MediaType"
@@ -277,7 +305,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         usage: OpenClawChatUsage? = nil,
         stopReason: String? = nil,
         errorMessage: String? = nil,
-        details: AnyCodable? = nil)
+        details: AnyCodable? = nil,
+        isError: Bool? = nil)
     {
         self.id = id
         self.transcriptMessageID = transcriptMessageID
@@ -292,6 +321,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.stopReason = stopReason
         self.errorMessage = errorMessage
         self.details = details
+        self.isError = isError
     }
 
     public init(from decoder: Decoder) throws {
@@ -311,6 +341,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         let decodedStopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
         let decodedErrorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
         let decodedDetails = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
+        let decodedIsError = try container.decodeIfPresent(Bool.self, forKey: .isError) ??
+            container.decodeIfPresent(Bool.self, forKey: .is_error)
 
         self.role = decodedRole
         self.transcriptMessageID = decodedOpenClaw?.id
@@ -322,6 +354,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.stopReason = decodedStopReason
         self.errorMessage = decodedErrorMessage
         self.details = decodedDetails
+        self.isError = decodedIsError
 
         let decodedContent: [OpenClawChatMessageContent] = if let decoded = try? container.decode(
             [OpenClawChatMessageContent].self,
@@ -432,6 +465,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
         try container.encodeIfPresent(self.errorMessage, forKey: .errorMessage)
         try container.encodeIfPresent(self.details, forKey: .details)
+        try container.encodeIfPresent(self.isError, forKey: .isError)
         try container.encode(self.content, forKey: .content)
     }
 }

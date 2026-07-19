@@ -25,6 +25,28 @@ describe("SQLite audit record store", () => {
     });
   });
 
+  it("reads bounded newest-first pages by sequence", async () => {
+    await withTempDir({ prefix: "openclaw-audit-store-latest-" }, async (stateDir) => {
+      const store = createSqliteAuditRecordStore<{ value: number }>({
+        scope: "latest-test",
+        maxEntries: 10,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+
+      store.register("one", { value: 1 }, 100);
+      store.register("two", { value: 2 }, 100);
+      store.register("three", { value: 3 }, 50);
+
+      const firstPage = store.latest({ limit: 2 });
+      expect(firstPage.map((entry) => entry.key)).toEqual(["three", "two"]);
+      expect(firstPage.map((entry) => entry.sequence)).toEqual([3, 2]);
+      expect(store.latest({ limit: 2, beforeSequence: firstPage.at(-1)!.sequence })).toEqual([
+        expect.objectContaining({ key: "one", sequence: 1 }),
+      ]);
+      expect(store.latest({ limit: 0 })).toEqual([]);
+    });
+  });
+
   it("preserves insertion order and prunes the oldest row when timestamps tie", async () => {
     await withTempDir({ prefix: "openclaw-audit-store-ties-" }, async (stateDir) => {
       const store = createSqliteAuditRecordStore<{ value: number }>({

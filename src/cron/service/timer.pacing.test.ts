@@ -9,7 +9,7 @@ import { applyJobResult } from "./timer.js";
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
 const STARTED_AT = ENDED_AT - 1_000;
 
-function makeState() {
+function makeState(triggerMinIntervalMs?: number) {
   return createCronServiceState({
     storePath: "/tmp/cron-pacing-timer/jobs.json",
     cronEnabled: true,
@@ -18,6 +18,9 @@ function makeState() {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...(triggerMinIntervalMs !== undefined
+      ? { cronConfig: { triggers: { enabled: true, minIntervalMs: triggerMinIntervalMs } } }
+      : {}),
   });
 }
 
@@ -53,6 +56,7 @@ describe("applyJobResult dynamic cadence", () => {
   it("keeps existing schedule math when no proposal was recorded", () => {
     const job = makePacedJob({ min: "15m", max: "4h" });
     job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
+    job.state.forcePreservedNextRunAtMs = job.state.nextRunAtMs;
 
     applyJobResult(makeState(), job, {
       status: "ok",
@@ -62,6 +66,62 @@ describe("applyJobResult dynamic cadence", () => {
 
     expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
+    expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
+  });
+
+  it.each([
+    ["without a new proposal", undefined],
+    ["when the forced run records a new proposal", 2 * 60 * 60_000],
+  ] as const)("preserves the exact paced slot on a forced run %s", (_label, delayMs) => {
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const pendingSlot = ENDED_AT + 45 * 60_000;
+    job.state.nextRunAtMs = pendingSlot;
+    job.state.pacedNextRunAtMs = pendingSlot;
+
+    applyJobResult(
+      makeState(),
+      job,
+      {
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        ...(delayMs !== undefined ? { nextCheck: { delayMs } } : {}),
+      },
+      { scheduleMode: "preserve" },
+    );
+
+    expect(job.state.nextRunAtMs).toBe(pendingSlot);
+    expect(job.state.pacedNextRunAtMs).toBe(pendingSlot);
+  });
+
+  it("applies the operator trigger floor after the job-local pacing clamp", () => {
+    const job = makePacedJob({ min: "1s", max: "2m" });
+    job.trigger = { script: "return true" };
+
+    applyJobResult(makeState(60_000), job, {
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      nextCheck: { delayMs: 1_000 },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 60_000);
+    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 60_000);
+  });
+
+  it("keeps the cron anti-spin floor when the configured trigger floor is smaller", () => {
+    const job = makePacedJob({ min: "1ms", max: "2m" });
+    job.trigger = { script: "return true" };
+
+    applyJobResult(makeState(1), job, {
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      nextCheck: { delayMs: 1 },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 2_000);
+    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 2_000);
   });
 
   it("discards proposals on error so normal backoff wins", () => {

@@ -59,7 +59,7 @@ describe("recurring error backoff floor persistence", () => {
           cronConfig: { retry: { backoffMs: [300_000] } },
         });
 
-        // mode "due" (not "force") keeps preserveSchedule false, so the error
+        // mode "due" (not "force") advances cadence, so the error
         // path computes the safety-net backoff floor rather than preserving the
         // recurring anchor.
         await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });

@@ -155,6 +155,14 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `general settings renders the keyboard shortcut recorder`() {
+        let state = AppState(preview: true)
+        let hosting = NSHostingView(rootView: GeneralSettings(state: state))
+        hosting.frame = NSRect(x: 0, y: 0, width: 760, height: 640)
+        hosting.layoutSubtreeIfNeeded()
+        _ = hosting.fittingSize
+    }
+
     @Test func `general settings exercises branches`() {
         GeneralSettings.exerciseForTesting()
     }

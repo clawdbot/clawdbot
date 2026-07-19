@@ -200,12 +200,143 @@ struct ChatToolDiffTests {
             details: AnyCodable(["diff": AnyCodable("+1 added\n-1 removed")])) == nil)
     }
 
+    @Test func `move only patches render the file header`() throws {
+        let patch = "*** Begin Patch\n*** Update File: a/old.txt\n*** Move to: a/new.txt\n*** End Patch"
+        let resolved = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: AnyCodable(["input": AnyCodable(patch)]),
+            details: nil))
+        #expect(resolved.lines == [ChatToolDiffLine(kind: .file, text: "Move a/old.txt → a/new.txt")])
+        #expect(resolved.stat == nil)
+    }
+
     @Test func `patch tools resolve persisted details`() throws {
         let resolved = try #require(ChatToolDiff.resolveDiff(
             name: "apply_patch",
             arguments: nil,
             details: AnyCodable(["diff": AnyCodable("+1 added\n-1 removed")])))
         #expect(resolved.stat == ChatToolDiffStat(added: 1, removed: 1))
+    }
+
+    @Test func `parses numbered update patch envelopes from every argument spelling`() throws {
+        let patch = [
+            "*** Begin Patch",
+            "*** Update File: src/a.swift",
+            "@@ -4,2 +4,2 @@",
+            " context",
+            "-old",
+            "+new",
+            "*** End Patch",
+        ].joined(separator: "\n")
+
+        for key in ["patch", "input", "diff"] {
+            let resolved = try #require(ChatToolDiff.resolveDiff(
+                name: "apply_patch",
+                arguments: AnyCodable([key: AnyCodable(patch)]),
+                details: nil))
+            #expect(resolved.lines == [
+                ChatToolDiffLine(kind: .ctx, lineNo: 4, text: "context"),
+                ChatToolDiffLine(kind: .del, lineNo: 5, text: "old"),
+                ChatToolDiffLine(kind: .add, lineNo: 5, text: "new"),
+            ])
+            #expect(resolved.stat == ChatToolDiffStat(added: 1, removed: 1))
+        }
+    }
+
+    @Test func `separates add delete and move patch files`() throws {
+        let patch = [
+            "*** Begin Patch",
+            "*** Update File: src/old.swift",
+            "*** Move to: src/new.swift",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+            "*** Add File: src/added.swift",
+            "+added",
+            "*** Delete File: src/deleted.swift",
+            "-deleted",
+            "*** End Patch",
+        ].joined(separator: "\n")
+        let resolved = try #require(ChatToolDiff.resolveDiff(
+            name: "applypatch",
+            arguments: AnyCodable(["input": AnyCodable(patch)]),
+            details: nil))
+
+        #expect(resolved.lines == [
+            ChatToolDiffLine(kind: .file, text: "Move src/old.swift → src/new.swift"),
+            ChatToolDiffLine(kind: .del, lineNo: 1, text: "old"),
+            ChatToolDiffLine(kind: .add, lineNo: 1, text: "new"),
+            ChatToolDiffLine(kind: .skip, text: ""),
+            ChatToolDiffLine(kind: .file, text: "Add src/added.swift"),
+            ChatToolDiffLine(kind: .add, lineNo: 1, text: "added"),
+            ChatToolDiffLine(kind: .skip, text: ""),
+            ChatToolDiffLine(kind: .file, text: "Delete src/deleted.swift"),
+            ChatToolDiffLine(kind: .del, lineNo: 1, text: "deleted"),
+        ])
+        #expect(resolved.stat == ChatToolDiffStat(added: 2, removed: 2))
+    }
+
+    @Test func `rejects malformed patch envelopes`() {
+        for patch in [
+            "*** Begin Patch\nnot a file\n*** End Patch",
+            "*** Update File: \n+orphaned",
+            "*** Add File: empty.swift\n*** End Patch",
+        ] {
+            #expect(ChatToolDiff.resolveDiff(
+                name: "patch",
+                arguments: AnyCodable(["patch": AnyCodable(patch)]),
+                details: nil) == nil)
+        }
+    }
+
+    @Test func `renders header only deletes without an exact stat`() throws {
+        let deleted = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: AnyCodable(["patch": AnyCodable("*** Delete File: obsolete.swift")]),
+            details: nil))
+        #expect(deleted.lines == [ChatToolDiffLine(kind: .file, text: "Delete obsolete.swift")])
+        #expect(deleted.stat == nil)
+
+        let multi = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: AnyCodable(["patch": AnyCodable(
+                "*** Add File: added.swift\n+new\n*** Delete File: obsolete.swift")]),
+            details: nil))
+        #expect(multi.lines.last == ChatToolDiffLine(kind: .file, text: "Delete obsolete.swift"))
+        #expect(multi.stat == nil)
+    }
+
+    @Test func `caps patch rows and omits a partial stat`() throws {
+        let patch = (["*** Begin Patch", "*** Update File: big.swift"] +
+            (0..<450).map { "+line \($0)" } + ["*** End Patch"])
+            .joined(separator: "\n")
+        let resolved = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: AnyCodable(["patch": AnyCodable(patch)]),
+            details: nil))
+
+        #expect(resolved.lines.count == 401)
+        #expect(resolved.lines.last == ChatToolDiffLine(kind: .skip, text: ""))
+        #expect(resolved.stat == nil)
+    }
+
+    @Test func `failed edits suppress argument proposals but keep applied details`() throws {
+        #expect(ChatToolDiff.resolveDiff(
+            name: "edit",
+            arguments: AnyCodable(["oldText": "old", "newText": "new"]),
+            details: nil,
+            isError: true) == nil)
+
+        let details = try #require(ChatToolDiff.resolveDiff(
+            name: "edit",
+            arguments: AnyCodable(["oldText": "arg old", "newText": "arg new"]),
+            details: AnyCodable(["diff": AnyCodable("-1 applied old\n+1 applied new")]),
+            isError: true))
+        #expect(details.lines == [
+            ChatToolDiffLine(kind: .del, lineNo: 1, text: "applied old"),
+            ChatToolDiffLine(kind: .add, lineNo: 1, text: "applied new"),
+        ])
+        #expect(details.stat == ChatToolDiffStat(added: 1, removed: 1))
     }
 
     @Test func `truncated details omit the stat`() throws {
@@ -238,5 +369,21 @@ struct ChatToolDiffTests {
 
         #expect(decoded.details == AnyCodable(["diff": AnyCodable("+1 added")]))
         #expect(roundTripped.details == decoded.details)
+    }
+
+    @Test func `message and content decode snake case errors and encode canonically`() throws {
+        let data = Data(#"{"role":"toolResult","is_error":true,"content":[{"type":"tool_result","is_error":true}]}"#
+            .utf8)
+        let decoded = try JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        let encoded = try JSONEncoder().encode(decoded)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let content = try #require((object["content"] as? [[String: Any]])?.first)
+
+        #expect(decoded.isError == true)
+        #expect(decoded.content.first?.isError == true)
+        #expect(object["isError"] as? Bool == true)
+        #expect(object["is_error"] == nil)
+        #expect(content["isError"] as? Bool == true)
+        #expect(content["is_error"] == nil)
     }
 }

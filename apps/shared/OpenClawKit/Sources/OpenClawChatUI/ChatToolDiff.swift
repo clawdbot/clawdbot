@@ -5,6 +5,7 @@ enum ChatToolDiffLineKind: Equatable, Sendable {
     case add
     case del
     case ctx
+    case file
     case skip
 }
 
@@ -34,6 +35,26 @@ enum ChatToolDiff {
     private struct ParsedDetailsDiff {
         let lines: [ChatToolDiffLine]
         let truncated: Bool
+    }
+
+    private enum PatchOperation {
+        case add
+        case delete
+        case update
+    }
+
+    private struct PatchSection {
+        var operation: PatchOperation
+        let sourcePath: String
+        var path: String
+        var lines: [ChatToolDiffLine] = []
+        var added = 0
+        var removed = 0
+    }
+
+    private struct PatchHunk {
+        var oldLine: Int?
+        var newLine: Int?
     }
 
     private static let maxInputLines = 600
@@ -144,11 +165,18 @@ enum ChatToolDiff {
     static func resolveDiff(
         name: String?,
         arguments: AnyCodable?,
-        details: AnyCodable?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
+        details: AnyCodable?,
+        isError: Bool = false) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
         let normalizedName = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let argumentsRecord = arguments?.dictionaryValue
         if self.textEditorToolNames.contains(normalizedName) {
+            if let detailsDiff = self.resolveDetailsDiff(details) {
+                // Applied diff details stay authoritative even when the result reports an error.
+                return detailsDiff
+            }
+            // Failed args describe a proposal, not a mutation known to have been applied.
+            guard !isError else { return nil }
             switch self.string(in: argumentsRecord, keys: ["command"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
@@ -167,16 +195,25 @@ enum ChatToolDiff {
         // Plugin tools own their details schema; only edit-family tools may
         // interpret details.diff as a filesystem diff (mirrors the web guard).
         if self.editToolNames.contains(normalizedName) {
-            return self.resolveEditDiff(argumentsRecord, details: details)
+            if let detailsDiff = self.resolveDetailsDiff(details) {
+                return detailsDiff
+            }
+            guard !isError else { return nil }
+            return self.resolveEditDiff(argumentsRecord, details: nil)
         }
         if self.writeToolNames.contains(normalizedName) {
             if let detailsDiff = self.resolveDetailsDiff(details) {
                 return detailsDiff
             }
+            guard !isError else { return nil }
             return self.resolveWriteDiff(argumentsRecord, keys: ["content", "text", "file_text"])
         }
         if self.patchToolNames.contains(normalizedName) {
-            return self.resolveDetailsDiff(details)
+            if let detailsDiff = self.resolveDetailsDiff(details) {
+                return detailsDiff
+            }
+            guard !isError else { return nil }
+            return self.resolvePatchDiff(argumentsRecord)
         }
         return nil
     }
@@ -201,6 +238,232 @@ enum ChatToolDiff {
         default: .ctx
         }
         return ChatToolDiffLine(kind: kind, lineNo: lineNo, text: String(remainder))
+    }
+
+    private static func resolvePatchDiff(
+        _ arguments: [String: AnyCodable]?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
+    {
+        guard let patch = self.string(in: arguments, keys: ["patch", "input", "diff"]),
+              !patch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+
+        let inputClipped = patch.utf16.count > self.maxLocalInputCharacters
+        let text = inputClipped
+            ? String(decoding: patch.utf16.prefix(self.maxLocalInputCharacters), as: UTF16.self)
+            : patch
+        var sections: [PatchSection] = []
+        var current: PatchSection?
+        var hunk = PatchHunk()
+        var storedRows = 0
+        var clipped = inputClipped
+
+        for raw in self.splitLines(text) {
+            let structural = current?.operation == .update
+                ? raw.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
+                : raw.trimmingCharacters(in: .whitespaces)
+            if let header = self.patchFileHeader(structural) {
+                if let current { sections.append(current) }
+                current = PatchSection(
+                    operation: header.operation,
+                    sourcePath: header.path,
+                    path: header.path)
+                hunk = PatchHunk()
+                continue
+            }
+            if current?.operation == .update,
+               structural.hasPrefix("*** Move to: "),
+               case let path = String(structural.dropFirst("*** Move to: ".count))
+                   .trimmingCharacters(in: .whitespacesAndNewlines),
+                   !path.isEmpty
+            {
+                current?.path = path
+                continue
+            }
+            if structural == "*** Begin Patch" || structural == "*** End Patch" ||
+                structural == "*** End of File" || structural.hasPrefix("*** Environment ID:")
+            {
+                continue
+            }
+            guard var section = current else { continue }
+
+            if section.operation == .update, raw.hasPrefix("@@") {
+                if !section.lines.isEmpty, section.lines.last?.kind != .skip {
+                    self.pushPatchLine(
+                        ChatToolDiffLine(kind: .skip, text: ""),
+                        section: &section,
+                        storedRows: &storedRows,
+                        clipped: &clipped)
+                }
+                hunk = self.parsePatchHunk(raw)
+            } else if section.operation == .add, raw.hasPrefix("+") {
+                self.pushPatchLine(
+                    ChatToolDiffLine(kind: .add, lineNo: section.added + 1, text: String(raw.dropFirst())),
+                    section: &section,
+                    storedRows: &storedRows,
+                    clipped: &clipped)
+            } else if section.operation == .delete, raw.hasPrefix("-") {
+                self.pushPatchLine(
+                    ChatToolDiffLine(kind: .del, lineNo: section.removed + 1, text: String(raw.dropFirst())),
+                    section: &section,
+                    storedRows: &storedRows,
+                    clipped: &clipped)
+            } else if section.operation == .update,
+                      raw.isEmpty || raw.hasPrefix("+") || raw.hasPrefix("-") || raw.hasPrefix(" ")
+            {
+                self.pushPatchHunkLine(
+                    raw,
+                    hunk: &hunk,
+                    section: &section,
+                    storedRows: &storedRows,
+                    clipped: &clipped)
+            }
+            current = section
+        }
+        if let current { sections.append(current) }
+        return self.finishPatch(sections, clipped: clipped)
+    }
+
+    private static func patchFileHeader(
+        _ raw: String) -> (operation: PatchOperation, path: String)?
+    {
+        let headers: [(String, PatchOperation)] = [
+            ("*** Update File: ", .update),
+            ("*** Add File: ", .add),
+            ("*** Delete File: ", .delete),
+        ]
+        for (prefix, operation) in headers where raw.hasPrefix(prefix) {
+            let path = raw.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !path.isEmpty else { return nil }
+            return (operation, path)
+        }
+        return nil
+    }
+
+    private static func pushPatchLine(
+        _ line: ChatToolDiffLine,
+        section: inout PatchSection,
+        storedRows: inout Int,
+        clipped: inout Bool)
+    {
+        switch line.kind {
+        case .add:
+            section.added += 1
+        case .del:
+            section.removed += 1
+        case .ctx, .file, .skip:
+            break
+        }
+        if storedRows < self.maxRenderLines {
+            section.lines.append(line)
+            storedRows += 1
+        } else {
+            clipped = true
+        }
+    }
+
+    private static func parsePatchHunk(_ raw: String) -> PatchHunk {
+        guard raw.hasPrefix("@@ -") else { return PatchHunk() }
+        let body = raw.dropFirst(4)
+        guard let plus = body.range(of: " +"),
+              let end = body[plus.upperBound...].range(of: " @@")
+        else { return PatchHunk() }
+        let old = body[..<plus.lowerBound]
+        let new = body[plus.upperBound..<end.lowerBound]
+
+        func line(_ rangeText: Substring) -> Int? {
+            Int(rangeText.split(separator: ",", maxSplits: 1).first ?? "")
+        }
+        guard let oldLine = line(old), let newLine = line(new) else { return PatchHunk() }
+        return PatchHunk(oldLine: oldLine, newLine: newLine)
+    }
+
+    private static func pushPatchHunkLine(
+        _ raw: String,
+        hunk: inout PatchHunk,
+        section: inout PatchSection,
+        storedRows: inout Int,
+        clipped: inout Bool)
+    {
+        let kind: ChatToolDiffLineKind
+        let lineNo: Int?
+        if raw.hasPrefix("+") {
+            kind = .add
+            lineNo = hunk.newLine
+            if let newLine = hunk.newLine {
+                hunk.newLine = newLine + 1
+            }
+        } else if raw.hasPrefix("-") {
+            kind = .del
+            lineNo = hunk.oldLine
+            if let oldLine = hunk.oldLine {
+                hunk.oldLine = oldLine + 1
+            }
+        } else {
+            kind = .ctx
+            lineNo = hunk.newLine
+            if let oldLine = hunk.oldLine, let newLine = hunk.newLine {
+                hunk.oldLine = oldLine + 1
+                hunk.newLine = newLine + 1
+            }
+        }
+        self.pushPatchLine(
+            ChatToolDiffLine(kind: kind, lineNo: lineNo, text: raw.isEmpty ? "" : String(raw.dropFirst())),
+            section: &section,
+            storedRows: &storedRows,
+            clipped: &clipped)
+    }
+
+    private static func finishPatch(
+        _ sections: [PatchSection],
+        clipped initialClipped: Bool) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
+    {
+        guard !sections.isEmpty else { return nil }
+
+        var lines: [ChatToolDiffLine] = []
+        var clipped = initialClipped
+        let hasHeaderOnlyDelete = sections.contains { section in
+            section.operation == .delete && !section.lines.contains(where: { $0.kind == .del })
+        }
+        func append(_ line: ChatToolDiffLine) {
+            if lines.count < self.maxRenderLines {
+                lines.append(line)
+            } else {
+                clipped = true
+            }
+        }
+        for section in sections {
+            // Header rows also carry move-only and header-only sections that
+            // would otherwise render nothing.
+            let isHeaderOnly = section.lines.isEmpty &&
+                (section.operation == .delete || section.path != section.sourcePath)
+            if sections.count > 1 || isHeaderOnly {
+                if !lines.isEmpty, lines.last?.kind != .skip {
+                    append(ChatToolDiffLine(kind: .skip, text: ""))
+                }
+                append(ChatToolDiffLine(kind: .file, text: self.patchSectionLabel(section)))
+            }
+            section.lines.forEach(append)
+        }
+        if clipped, lines.last?.kind != .skip {
+            lines.append(ChatToolDiffLine(kind: .skip, text: ""))
+        }
+        guard lines.contains(where: { $0.kind == .add || $0.kind == .del || $0.kind == .file }) else { return nil }
+        let stat = self.stat(for: lines)
+        // Zero/zero (move-only) and unknowable header-only-delete stats read as noise or lies.
+        let statMeaningful = !clipped && !hasHeaderOnlyDelete && (stat.added > 0 || stat.removed > 0)
+        return (lines, statMeaningful ? stat : nil)
+    }
+
+    private static func patchSectionLabel(_ section: PatchSection) -> String {
+        if section.operation == .update, section.path != section.sourcePath {
+            return "Move \(section.sourcePath) → \(section.path)"
+        }
+        let verb = switch section.operation {
+        case .add: "Add"
+        case .delete: "Delete"
+        case .update: "Update"
+        }
+        return "\(verb) \(section.path)"
     }
 
     private static func splitLines(_ text: String) -> [String] {
@@ -423,7 +686,7 @@ enum ChatToolDiff {
                 ChatToolDiffStat(added: stat.added + 1, removed: stat.removed)
             case .del:
                 ChatToolDiffStat(added: stat.added, removed: stat.removed + 1)
-            case .ctx, .skip:
+            case .ctx, .file, .skip:
                 stat
             }
         }

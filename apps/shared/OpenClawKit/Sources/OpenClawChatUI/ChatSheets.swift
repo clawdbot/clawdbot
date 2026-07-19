@@ -2,7 +2,7 @@ import Observation
 import SwiftUI
 
 @MainActor
-struct ChatSessionsSheet: View {
+public struct ChatSessionsSheet: View {
     private enum SessionScope: String, CaseIterable, Identifiable {
         case active
         case archived
@@ -35,6 +35,10 @@ struct ChatSessionsSheet: View {
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingGroups = false
 
+    public init(viewModel: OpenClawChatViewModel) {
+        self.viewModel = viewModel
+    }
+
     /// Live view-model sessions serve the default active list; search and the
     /// archived scope fetch one-shot lists (server-side search with local
     /// cached fallback inside the view model).
@@ -58,7 +62,7 @@ struct ChatSessionsSheet: View {
         "\(self.scope.rawValue)|\(self.trimmedSearchText.lowercased())"
     }
 
-    var body: some View {
+    public var body: some View {
         NavigationStack {
             List(selection: self.$selectedSessionKeys) {
                 Section {
