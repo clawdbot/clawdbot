@@ -46,6 +46,7 @@ const view = {
   readOnly: undefined as boolean | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "ok" }] },
+  operationTimeoutMs: 10 * 60_000,
   expiresAtMs: Date.now() + 60_000,
   requestWindowStartedAtMs: Date.now(),
   requestCount: 0,

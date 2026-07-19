@@ -2516,6 +2516,51 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("aborts paginated resource listing with one operation signal", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-deadline-"));
+    const serverPath = path.join(tempDir, "resource-deadline.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      resourcePageDelayMs: 120,
+      resourcePageCursors: ["2", null],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-resource-deadline",
+      sessionKey: "agent:test:session-resource-deadline",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            paged: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 1_000,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      if (!runtime.listResources) {
+        throw new Error("Expected test runtime to expose resource utilities");
+      }
+      await expect(
+        runtime.listResources("paged", { signal: AbortSignal.timeout(500) }),
+      ).resolves.toHaveLength(2);
+      await expect(
+        runtime.listResources("paged", { signal: AbortSignal.timeout(180) }),
+      ).rejects.toThrow(/abort/i);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not pause tools after optional preview read failures", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-preview-failure-"));
     const serverPath = path.join(tempDir, "preview-failure.mjs");

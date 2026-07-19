@@ -12,8 +12,12 @@ import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
+const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
 
-function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRuntime {
+function runtime(
+  readResource: SessionMcpRuntime["readResource"],
+  requestTimeoutMs = 60_000,
+): SessionMcpRuntime {
   return {
     sessionId: "session-1",
     sessionKey: "agent:main:main",
@@ -27,6 +31,7 @@ function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRun
     markUsed: () => {},
     getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
     peekCatalog: () => null,
+    getServerRequestTimeoutMs: () => requestTimeoutMs,
     callTool: vi.fn(),
     readResource,
     dispose: async () => {},
@@ -121,6 +126,35 @@ describe("MCP App UI resources", () => {
     ).toBeUndefined();
   });
 
+  it("snapshots the connected server timeout into the view operation deadline", async () => {
+    const requestTimeoutMs = MCP_APP_VIEW_TTL_MS + 90_000;
+    const sessionRuntime = runtime(
+      async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            text: "<html>demo</html>",
+          },
+        ],
+      }),
+      requestTimeoutMs,
+    );
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.operationTimeoutMs).toBe(
+      requestTimeoutMs,
+    );
+  });
+
   it("keeps valid Apps when optional listing metadata fails", async () => {
     const readResource = vi.fn(async () => ({
       contents: [
@@ -194,7 +228,7 @@ describe("MCP App UI resources", () => {
     releases.slice(1).forEach((entry) => entry());
   });
 
-  it("normalizes CSP and snapshots the session deadline before retaining the view", async () => {
+  it("normalizes CSP and applies the view lifetime floor to the operation deadline", async () => {
     const sessionRuntime = runtime(async () => ({
       contents: [
         {
@@ -230,7 +264,7 @@ describe("MCP App UI resources", () => {
       resourceDomains: ["https://cdn.example.com"],
     });
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
-    expect(view?.requestTimeoutMs).toBe(120_000);
+    expect(view?.operationTimeoutMs).toBe(MCP_APP_VIEW_TTL_MS);
     expect(peekCatalog).not.toHaveBeenCalled();
     expect(buildMcpAppSandboxPath(view?.csp)).toContain("?csp=");
   });

@@ -49,6 +49,32 @@ export type CreateSessionMcpRuntime = (params: {
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }) => SessionMcpRuntime;
 
+export async function waitForSessionMcpRequest<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(signal.reason ?? new Error("MCP request aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export function resolveSessionMcpRuntimeIdleTtlMs(): number {
   return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
 }

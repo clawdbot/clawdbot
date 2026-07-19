@@ -730,6 +730,10 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
+      // The browser watchdog also covers HTTP and body parsing, so it must
+      // outlive the whole server-side operation rather than race it.
+      const operationTimeoutMs =
+        addTimerTimeoutGraceMs(view.operationTimeoutMs) ?? view.operationTimeoutMs;
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -747,13 +751,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
-              ...(view.requestTimeoutMs !== undefined
-                ? {
-                    // Keep the browser's outer deadline behind the SDK request
-                    // so a valid near-deadline response can reach the App.
-                    operationTimeoutMs: addTimerTimeoutGraceMs(view.requestTimeoutMs),
-                  }
-                : {}),
+              operationTimeoutMs,
             }),
       );
       return true;

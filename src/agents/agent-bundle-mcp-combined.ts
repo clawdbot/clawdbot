@@ -1,6 +1,8 @@
 /** Combined session MCP runtime facade for static + requester partitions. */
+import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
+  McpRequestOptions,
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
@@ -105,14 +107,17 @@ export function createCombinedSessionMcpRuntime(params: {
     mergedSourceCatalogs !== null &&
     parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
 
-  const loadCatalog = async (): Promise<McpToolCatalog> => {
+  const loadCatalog = async (
+    options?: Pick<McpRequestOptions, "signal">,
+  ): Promise<McpToolCatalog> => {
+    options?.signal?.throwIfAborted();
     if (cachedCatalog && !cachedCatalog.diagnostics?.length && cachedCatalogIsCurrent()) {
       return cachedCatalog;
     }
     if (catalogInFlight) {
-      return catalogInFlight;
+      return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
     }
-    const inFlight = (async () => {
+    const load = (async () => {
       const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
       if (
         cachedCatalog &&
@@ -128,21 +133,28 @@ export function createCombinedSessionMcpRuntime(params: {
       cachedCatalog = mergeMcpToolCatalogs(catalogs);
       return cachedCatalog;
     })();
-    catalogInFlight = inFlight;
-    try {
-      return await inFlight;
-    } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
+    let trackedLoad: Promise<McpToolCatalog>;
+    trackedLoad = (async () => {
+      try {
+        return await load;
+      } finally {
+        if (catalogInFlight === trackedLoad) {
+          catalogInFlight = undefined;
+        }
       }
-    }
+    })();
+    catalogInFlight = trackedLoad;
+    return await waitForSessionMcpRequest(trackedLoad, options?.signal);
   };
 
   // Fresh combined facades have an empty owner map until the catalog is loaded.
   // Share one in-flight getCatalog so concurrent tool/resource calls do not fan out.
-  const ownerForServer = async (serverName: string): Promise<SessionMcpRuntime> => {
+  const ownerForServer = async (
+    serverName: string,
+    options?: Pick<McpRequestOptions, "signal">,
+  ): Promise<SessionMcpRuntime> => {
     if (serverOwner.size === 0) {
-      await loadCatalog();
+      await loadCatalog(options);
     }
     const owner = serverOwner.get(serverName);
     if (owner) {
@@ -205,36 +217,38 @@ export function createCombinedSessionMcpRuntime(params: {
         part.markUsed();
       }
     },
-    async callTool(serverName, toolName, input) {
-      return await (await ownerForServer(serverName)).callTool(serverName, toolName, input);
+    async callTool(serverName, toolName, input, options) {
+      return await (
+        await ownerForServer(serverName, options)
+      ).callTool(serverName, toolName, input, options);
     },
-    async listTools(serverName, requestParams) {
-      const owner = await ownerForServer(serverName);
+    async listTools(serverName, requestParams, options) {
+      const owner = await ownerForServer(serverName, options);
       if (!owner.listTools) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listTools`);
       }
-      return await owner.listTools(serverName, requestParams);
+      return await owner.listTools(serverName, requestParams, options);
     },
     async listResources(serverName, options) {
-      const owner = await ownerForServer(serverName);
+      const owner = await ownerForServer(serverName, options);
       if (!owner.listResources) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listResources`);
       }
       return await owner.listResources(serverName, options);
     },
     async readResource(serverName, uri, options) {
-      const owner = await ownerForServer(serverName);
+      const owner = await ownerForServer(serverName, options);
       if (!owner.readResource) {
         throw new Error(`bundle-mcp server "${serverName}" does not support readResource`);
       }
       return await owner.readResource(serverName, uri, options);
     },
-    async listResourceTemplates(serverName, requestParams) {
-      const owner = await ownerForServer(serverName);
+    async listResourceTemplates(serverName, requestParams, options) {
+      const owner = await ownerForServer(serverName, options);
       if (!owner.listResourceTemplates) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listResourceTemplates`);
       }
-      return await owner.listResourceTemplates(serverName, requestParams);
+      return await owner.listResourceTemplates(serverName, requestParams, options);
     },
     async listPrompts(serverName) {
       const owner = await ownerForServer(serverName);

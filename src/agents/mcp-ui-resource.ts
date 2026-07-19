@@ -39,7 +39,7 @@ export type McpAppViewLease = {
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
-  requestTimeoutMs?: number;
+  operationTimeoutMs: number;
   expiresAtMs: number;
   requestWindowStartedAtMs: number;
   requestCount: number;
@@ -278,7 +278,10 @@ export async function fetchMcpAppView(params: {
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
     // resources/read established the authoritative server session above. Carry
     // its deadline into the view so catalog invalidation cannot change it later.
-    const requestTimeoutMs = params.runtime.getServerRequestTimeoutMs?.(params.serverName);
+    const operationTimeoutMs = Math.max(
+      MCP_APP_VIEW_TTL_MS,
+      params.runtime.getServerRequestTimeoutMs?.(params.serverName) ?? MCP_APP_VIEW_TTL_MS,
+    );
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);
     pruneViewStore(byteSize, { reserveEntry: true });
@@ -303,7 +306,7 @@ export async function fetchMcpAppView(params: {
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
-      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+      operationTimeoutMs,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
       requestWindowStartedAtMs: Date.now(),
       requestCount: 0,
