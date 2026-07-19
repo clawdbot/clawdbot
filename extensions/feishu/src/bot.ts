@@ -698,6 +698,11 @@ export async function handleFeishuMessage(params: {
     }
   }
 
+  // Resolved dispatch delivery parameters, captured before the dispatch try so
+  // the reply-session conflict notice in the catch block can reuse them.
+  let conflictNoticeCfg = cfg;
+  let conflictNoticeReplyToMessageId: string | undefined = ctx.messageId;
+  let conflictNoticeReplyInThread = false;
   try {
     const core = {
       channel: channelRuntime?.inbound ? channelRuntime : getFeishuRuntime().channel,
@@ -1848,6 +1853,9 @@ export async function handleFeishuMessage(params: {
           sessionKey: route.sessionKey,
         });
 
+      conflictNoticeCfg = effectiveCfg;
+      conflictNoticeReplyToMessageId = replyTargetMessageId;
+      conflictNoticeReplyInThread = replyInThread;
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const turnResult = await core.channel.inbound.run({
         channel: "feishu",
@@ -1917,10 +1925,11 @@ export async function handleFeishuMessage(params: {
       error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
       try {
         await sendMessageFeishu({
-          cfg,
-          to: `chat:${ctx.chatId}`,
+          cfg: conflictNoticeCfg,
+          to: directPreDispatchTarget ?? `chat:${ctx.chatId}`,
           text: "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
-          replyToMessageId: ctx.messageId,
+          replyToMessageId: conflictNoticeReplyToMessageId,
+          replyInThread: conflictNoticeReplyInThread,
           accountId: account.accountId,
         });
       } catch (noticeError) {

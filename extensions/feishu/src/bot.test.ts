@@ -572,7 +572,7 @@ describe("handleFeishuMessage ACP routing", () => {
   });
 
   it("delivers a visible notice when reply-session init conflict exhausts its retry (#108320)", async () => {
-    mockDispatchInboundMessage.mockRejectedValue(
+    mockDispatchInboundMessage.mockRejectedValueOnce(
       new Error("reply session initialization conflicted for agent:main:feishu:direct:ou_sender_1"),
     );
 
@@ -602,6 +602,39 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(notice.to).toBe("chat:oc_dm");
     expect(notice.replyToMessageId).toBe("msg-conflict");
     expect(notice.text).toContain("session stayed busy");
+  });
+
+  it("delivers the reply-session conflict notice inside P2P direct-message threads (#108320)", async () => {
+    mockDispatchInboundMessage.mockRejectedValueOnce(
+      new Error("reply session initialization conflicted for agent:main:feishu:direct:ou_sender_1"),
+    );
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-conflict-thread-child",
+          root_id: "msg-conflict-thread-root",
+          thread_id: "omt-conflict-dm-thread",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_dm",
+        replyToMessageId: "msg-conflict-thread-root",
+        replyInThread: true,
+      }),
+    );
   });
 
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
