@@ -14,6 +14,7 @@ import "../test-helpers/app-sidebar-cases/child-sessions.ts";
 import "../test-helpers/app-sidebar-cases/group-mutations.ts";
 import "../test-helpers/app-sidebar-cases/interactions.ts";
 import "../test-helpers/app-sidebar-cases/narration.ts";
+import "../test-helpers/app-sidebar-cases/pull-request-state.ts";
 import "../test-helpers/app-sidebar-cases/sidebar-scroll.ts";
 import "../test-helpers/app-sidebar-cases/sessions.ts";
 import "../test-helpers/app-sidebar-cases/session-list-sections.ts";

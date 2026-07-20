@@ -103,10 +103,15 @@ struct OpenClawApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {
+                Button("New Gateway Window…") {
+                    WebChatManager.shared.newGatewayWindow()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
                 Button("New Thread") {
                     DashboardManager.shared.dispatchNativeCommand(.newSession)
                 }
-                .keyboardShortcut("n", modifiers: .command)
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {

@@ -151,10 +151,15 @@ function renderGateways(gateways) {
         host: gateway.host,
         port: gateway.port,
         tls: gateway.tls,
-      }).catch(() => {
-        button.disabled = false;
-        elements.discoveryStatus.textContent = "CONNECT FAILED";
-      });
+      })
+        .then(() => {
+          button.disabled = false;
+          elements.discoveryStatus.textContent = "WINDOW OPENED";
+        })
+        .catch(() => {
+          button.disabled = false;
+          elements.discoveryStatus.textContent = "CONNECT FAILED";
+        });
     });
     elements.gatewayList.append(button);
   }

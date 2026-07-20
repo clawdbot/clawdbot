@@ -38,6 +38,19 @@ struct MacGatewayChatTransportMappingTests {
             agentID: nil))
     }
 
+    @Test func `fixed connection does not inherit app wide cache routing`() async throws {
+        let url = try #require(URL(string: "wss://fixed.example"))
+        let connection = GatewayConnection(configProvider: {
+            (url: url, token: nil, password: nil)
+        })
+        let transport = MacGatewayChatTransport(
+            connection: connection,
+            outboxGatewayID: "manual-fixed")
+
+        #expect(await transport.currentOutboxGatewayMatchesConnection())
+        await connection.shutdown()
+    }
+
     @Test func `session settings request preserves verbosity patch`() {
         let request = MacGatewayChatTransport.sessionSettingsRequest(
             sessionKey: "global",

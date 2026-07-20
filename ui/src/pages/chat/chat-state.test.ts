@@ -346,6 +346,168 @@ describe("ChatStateController render lifecycle", () => {
   });
 });
 
+describe("session pull request refresh", () => {
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function createFinalReplyState(refreshSessionPullRequests: ReturnType<typeof vi.fn>) {
+    return {
+      chatComposerFallbackByScope: {},
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatQueue: [],
+      chatQueueByScope: {},
+      chatRunId: null,
+      chatSideResultTerminalRuns: new Set(),
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      refreshSessionPullRequests,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+      sessions: { reconcileRunTerminal: vi.fn() },
+      settings: {},
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+    } as unknown as ChatPageHost;
+  }
+
+  it("requests an authoritative refresh after a final assistant PR link", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Opened `https://github.com/openclaw/openclaw/pull/111532`.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it("refreshes for a visible same-session final from another run", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+    state.chatRunId = "active-run";
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "announcement-run",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Opened https://github.com/openclaw/openclaw/pull/111532",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it("does not inspect the active stream for another run's final", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+    state.chatRunId = "active-run";
+    state.chatStream = "Opened https://github.com/openclaw/openclaw/pull/111532";
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "announcement-run",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Finished the background task." }],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh for an issue link", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Tracked in https://github.com/openclaw/openclaw/issues/111532.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh for another session's PR announcement", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey: "agent:main:other",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Opened https://github.com/openclaw/openclaw/pull/111532",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+  });
+});
+
 describe("route composer fallback", () => {
   function createRouteState(chatMessage: string) {
     const resetChatInputHistoryNavigation = vi.fn();

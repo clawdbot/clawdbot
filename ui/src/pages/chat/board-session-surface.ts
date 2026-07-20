@@ -22,6 +22,8 @@ type BoardSessionSurfaceProps = {
   dockSize: BoardChatDockSize;
   chat: TemplateResult;
   divider: TemplateResult;
+  canMutate: boolean;
+  canGrant: boolean;
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
   onDockChange: (dock: BoardTab["chatDock"]) => void;
@@ -139,6 +141,8 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
         .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
         .sessions=${props.sessions}
+        .canMutate=${props.canMutate}
+        .canGrant=${props.canGrant}
       ></openclaw-board-view>
     </div>
   `;
@@ -161,6 +165,7 @@ export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
         aria-label=${t("chat.board.reopenChat")}
         title=${t("chat.board.reopenChat")}
         ?hidden=${props.dock !== "hidden"}
+        ?disabled=${!props.canMutate}
         @click=${() => props.onDockChange(props.reopenDock)}
       >
         ${icons.messageSquare}<span>${t("chat.board.chatFace")}</span>

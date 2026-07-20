@@ -246,7 +246,14 @@ public struct BoardWidget: Codable, Sendable {
     public let revision: Int
     public let instanceid: String?
     public let declaredsummary: [String]?
+    public let declared: BoardWidgetDeclared?
     public let frameurl: String?
+    public let viewticket: String?
+    public let viewticketttlms: Int?
+    public let viewgeneration: String?
+    public let sandboxurl: String?
+    public let sandboxport: Int?
+    public let sandboxorigin: String?
 
     public init(
         name: String,
@@ -260,7 +267,14 @@ public struct BoardWidget: Codable, Sendable {
         revision: Int,
         instanceid: String? = nil,
         declaredsummary: [String]? = nil,
-        frameurl: String? = nil)
+        declared: BoardWidgetDeclared? = nil,
+        frameurl: String? = nil,
+        viewticket: String? = nil,
+        viewticketttlms: Int? = nil,
+        viewgeneration: String? = nil,
+        sandboxurl: String? = nil,
+        sandboxport: Int? = nil,
+        sandboxorigin: String? = nil)
     {
         self.name = name
         self.tabid = tabid
@@ -273,7 +287,14 @@ public struct BoardWidget: Codable, Sendable {
         self.revision = revision
         self.instanceid = instanceid
         self.declaredsummary = declaredsummary
+        self.declared = declared
         self.frameurl = frameurl
+        self.viewticket = viewticket
+        self.viewticketttlms = viewticketttlms
+        self.viewgeneration = viewgeneration
+        self.sandboxurl = sandboxurl
+        self.sandboxport = sandboxport
+        self.sandboxorigin = sandboxorigin
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -288,7 +309,32 @@ public struct BoardWidget: Codable, Sendable {
         case revision
         case instanceid = "instanceId"
         case declaredsummary = "declaredSummary"
+        case declared
         case frameurl = "frameUrl"
+        case viewticket = "viewTicket"
+        case viewticketttlms = "viewTicketTtlMs"
+        case viewgeneration = "viewGeneration"
+        case sandboxurl = "sandboxUrl"
+        case sandboxport = "sandboxPort"
+        case sandboxorigin = "sandboxOrigin"
+    }
+}
+
+public struct BoardWidgetDeclared: Codable, Sendable {
+    public let netorigins: [String]?
+    public let tools: [String]?
+
+    public init(
+        netorigins: [String]? = nil,
+        tools: [String]? = nil)
+    {
+        self.netorigins = netorigins
+        self.tools = tools
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case netorigins = "netOrigins"
+        case tools
     }
 }
 
@@ -620,7 +666,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
     public let title: String?
     public let content: BoardWidgetPutContent
     public let placement: [String: AnyCodable]?
-    public let declared: [String: AnyCodable]?
+    public let declared: BoardWidgetDeclared?
 
     public init(
         sessionkey: String,
@@ -628,7 +674,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         title: String? = nil,
         content: BoardWidgetPutContent,
         placement: [String: AnyCodable]? = nil,
-        declared: [String: AnyCodable]? = nil)
+        declared: BoardWidgetDeclared? = nil)
     {
         self.sessionkey = sessionkey
         self.name = name
@@ -741,6 +787,82 @@ public struct BoardEventParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case widget
         case payload
+    }
+}
+
+public struct BoardTicketEventParams: Codable, Sendable {
+    public let ticket: String
+    public let payload: AnyCodable
+
+    public init(
+        ticket: String,
+        payload: AnyCodable)
+    {
+        self.ticket = ticket
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ticket
+        case payload
+    }
+}
+
+public struct BoardPromptAuthorizeParams: Codable, Sendable {
+    public let ticket: String
+
+    public init(
+        ticket: String)
+    {
+        self.ticket = ticket
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ticket
+    }
+}
+
+public struct BoardDataReadParams: Codable, Sendable {
+    public let ticket: String
+    public let bindingid: String
+    public let params: [String: AnyCodable]?
+
+    public init(
+        ticket: String,
+        bindingid: String,
+        params: [String: AnyCodable]? = nil)
+    {
+        self.ticket = ticket
+        self.bindingid = bindingid
+        self.params = params
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ticket
+        case bindingid = "bindingId"
+        case params
+    }
+}
+
+public struct BoardActionParams: Codable, Sendable {
+    public let ticket: String
+    public let action: String
+    public let jobid: String
+
+    public init(
+        ticket: String,
+        action: String,
+        jobid: String)
+    {
+        self.ticket = ticket
+        self.action = action
+        self.jobid = jobid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ticket
+        case action
+        case jobid = "jobId"
     }
 }
 

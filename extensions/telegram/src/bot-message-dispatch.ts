@@ -65,20 +65,23 @@ async function resolveStickerVisionSupport(
   }
 }
 
-function includeStickerDescription(body: string | undefined, formattedDescription: string): string {
-  if (!body) {
-    return formattedDescription;
+function includeStickerDescription(params: {
+  body: string | undefined;
+  formattedDescription: string;
+}): string {
+  if (!params.body) {
+    return params.formattedDescription;
   }
-  const current = body.trim();
-  if (!current || current === "<media:image>") {
-    return formattedDescription;
+  const current = params.body.trim();
+  if (!current) {
+    return params.formattedDescription;
   }
   // Cached descriptions can already be present from inbound context construction.
   // Keep that body intact so captions, forwarded text, and supplemental context survive.
-  if (body.includes(formattedDescription)) {
-    return body;
+  if (params.body.includes(params.formattedDescription)) {
+    return params.body;
   }
-  return `${formattedDescription}\n${body}`;
+  return `${params.formattedDescription}\n${params.body}`;
 }
 
 function resolveTelegramQuoteContext(params: {
@@ -187,14 +190,19 @@ async function prepareTelegramSticker(params: {
   const formattedDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
   sticker.cachedDescription = description;
   if (!stickerSupportsVision) {
-    context.ctxPayload.Body = includeStickerDescription(
-      context.ctxPayload.Body,
+    const isCaptionlessSticker =
+      !context.ctxPayload.RawBody?.trim() && context.ctxPayload.StickerMediaIncluded === true;
+    context.ctxPayload.Body = includeStickerDescription({
+      body: context.ctxPayload.Body,
       formattedDescription,
-    );
-    context.ctxPayload.BodyForAgent = includeStickerDescription(
-      context.ctxPayload.BodyForAgent,
-      formattedDescription,
-    );
+    });
+    context.ctxPayload.BodyForAgent =
+      isCaptionlessSticker && !context.ctxPayload.BodyForAgent?.trim()
+        ? formattedDescription
+        : includeStickerDescription({
+            body: context.ctxPayload.BodyForAgent,
+            formattedDescription,
+          });
     context.ctxPayload.SkipStickerMediaUnderstanding = true;
   }
   cacheSticker({

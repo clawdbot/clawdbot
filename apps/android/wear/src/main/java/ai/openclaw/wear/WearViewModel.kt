@@ -40,6 +40,7 @@ internal data class WearUiState(
   val realtimeTalk: WearRealtimeTalkSnapshot = WearRealtimeTalkSnapshot(),
   val realtimeCapturing: Boolean = false,
   val realtimePlaying: Boolean = false,
+  val realtimeMouthLevel: Float = 0f,
   val realtimePlaybackFailed: Boolean = false,
   val talkBusy: Boolean = false,
   val controlBusy: Boolean = false,
@@ -65,6 +66,7 @@ internal fun WearUiState.resetForPhoneChange(): WearUiState =
     realtimeTalk = WearRealtimeTalkSnapshot(),
     realtimeCapturing = false,
     realtimePlaying = false,
+    realtimeMouthLevel = 0f,
     realtimePlaybackFailed = false,
     talkBusy = false,
     controlBusy = false,
@@ -92,6 +94,7 @@ internal fun WearUiState.switchSessionContext(session: WearSession): WearUiState
     selectedModelRef = session.modelRef,
     models = emptyList(),
     realtimeTalk = WearRealtimeTalkSnapshot(),
+    realtimeMouthLevel = 0f,
     talkBusy = false,
     error = null,
   )
@@ -152,6 +155,7 @@ internal class WearViewModel(
               realtimeTalk = WearRealtimeTalkSnapshot(),
               realtimeCapturing = false,
               realtimePlaying = false,
+              realtimeMouthLevel = 0f,
               talkBusy = false,
               error = "Watch audio link disconnected",
             )
@@ -167,6 +171,11 @@ internal class WearViewModel(
     viewModelScope.launch {
       realtimeTalkClient.isPlaying.collect { playing ->
         mutableState.update { it.copy(realtimePlaying = playing) }
+      }
+    }
+    viewModelScope.launch {
+      realtimeTalkClient.mouthLevel.collect { level ->
+        mutableState.update { it.copy(realtimeMouthLevel = level) }
       }
     }
     refresh()

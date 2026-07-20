@@ -71,6 +71,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
   @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
+  @property({ type: Boolean }) canMutate = true;
+  @property({ type: Boolean }) canGrant = true;
 
   @state() private previewItems: BoardGridItem[] | null = null;
   @state() private gestureName = "";
@@ -224,7 +226,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     widget: BoardViewWidget,
     event: PointerEvent,
   ): void {
-    if (event.button !== 0 || this.gesture || this.mutationPending) {
+    if (!this.canMutate || event.button !== 0 || this.gesture || this.mutationPending) {
       return;
     }
     const snapshot = this.snapshot;
@@ -582,6 +584,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}
                 .setSize=${rects.length}
                 .busy=${this.mutationPending}
+                .canMutate=${this.canMutate}
+                .canGrant=${this.canGrant}
               ></openclaw-board-widget-cell>
             `;
           },

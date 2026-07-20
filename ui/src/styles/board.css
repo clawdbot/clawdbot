@@ -461,6 +461,59 @@ openclaw-board-widget-cell {
   width: 6px;
 }
 
+@media (hover: hover) and (pointer: fine) {
+  /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
+     pinned when interaction leaves the card bounds. */
+  .board-widget {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .board-widget__bar {
+    backdrop-filter: blur(6px);
+    background: color-mix(in srgb, var(--board-surface) 92%, transparent);
+    border-radius: 11px 11px 0 0;
+    height: 38px;
+    left: 0;
+    opacity: 0;
+    position: absolute;
+    right: 0;
+    top: 0;
+    transition:
+      opacity 120ms ease,
+      visibility 0s linear 120ms;
+    visibility: hidden;
+    z-index: 5;
+  }
+
+  .board-widget__resize-handle {
+    opacity: 0;
+    transition:
+      opacity 120ms ease,
+      visibility 0s linear 120ms;
+    visibility: hidden;
+  }
+
+  .board-widget:hover .board-widget__bar,
+  .board-widget:hover .board-widget__resize-handle,
+  .board-widget:focus-within .board-widget__bar,
+  .board-widget:focus-within .board-widget__resize-handle,
+  .board-widget--dragging .board-widget__bar,
+  .board-widget--dragging .board-widget__resize-handle,
+  .board-widget:has(.board-widget__menu[open]) .board-widget__bar,
+  .board-widget:has(.board-widget__menu[open]) .board-widget__resize-handle {
+    opacity: 1;
+    /* Delay-only override: reveal flips visibility immediately while the base
+       shorthand keeps the fade, and reduced-motion's transition: none stays
+       authoritative because no transition-property is redeclared here. */
+    transition-delay: 0s;
+    visibility: visible;
+  }
+
+  .board-widget__body {
+    border-radius: 11px;
+  }
+}
+
 .board-widget__grant,
 .board-widget__error {
   align-content: center;
@@ -496,6 +549,37 @@ openclaw-board-widget-cell {
   max-width: 36ch;
   padding-left: 18px;
   text-align: left;
+}
+
+.board-widget__grant-groups {
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+  text-align: left;
+}
+
+.board-widget__grant-groups section {
+  display: grid;
+  gap: 3px;
+}
+
+.board-widget__grant-groups section > strong {
+  color: var(--text, #d7dae0);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.board-widget__capabilities {
+  background: color-mix(in srgb, var(--success, #4fbf78) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success, #4fbf78) 45%, transparent);
+  border-radius: 999px;
+  color: var(--success, #4fbf78);
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
+  padding: 3px 6px;
+  text-transform: uppercase;
 }
 
 .board-widget__grant-mark {
@@ -591,6 +675,8 @@ openclaw-board-widget-cell {
 
 @media (prefers-reduced-motion: reduce) {
   .board-widget,
+  .board-widget__bar,
+  .board-widget__resize-handle,
   .board-tabs__tab,
   .swarm-widget__dot--running {
     animation: none;

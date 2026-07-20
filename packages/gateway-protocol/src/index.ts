@@ -28,8 +28,11 @@ export * from "./schema/board.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
+  BoardActionParamsSchema,
+  BoardDataReadParamsSchema,
   BoardEventParamsSchema,
   BoardGetParamsSchema,
+  BoardPromptAuthorizeParamsSchema,
   BoardUpdateParamsSchema,
   BoardWidgetContentSchema,
   BoardWidgetAppViewParamsSchema,
@@ -684,6 +687,9 @@ export const validateBoardWidgetAppViewParams = lazyCompile(BoardWidgetAppViewPa
 export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
 export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
 export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);
+export const validateBoardPromptAuthorizeParams = lazyCompile(BoardPromptAuthorizeParamsSchema);
+export const validateBoardDataReadParams = lazyCompile(BoardDataReadParamsSchema);
+export const validateBoardActionParams = lazyCompile(BoardActionParamsSchema);
 export const validateWorktreesCreateParams = lazyCompile(WorktreesCreateParamsSchema);
 export const validateWorktreesRemoveParams = lazyCompile(WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = lazyCompile(WorktreesRestoreParamsSchema);

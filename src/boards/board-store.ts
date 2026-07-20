@@ -5,7 +5,9 @@ import type {
   BoardSnapshot,
   BoardWidgetMaterializedContent,
   BoardWidgetMaterializedPutParams,
+  BoardWidgetDeclared,
 } from "../../packages/gateway-protocol/src/index.js";
+import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
   applyBoardOps,
   BOARD_SIZE_PRESETS,
@@ -21,6 +23,7 @@ export type BoardWidgetHtmlDocument = {
   sha256: string;
   viewGeneration: string;
   grantState: "none" | "pending" | "granted" | "rejected";
+  declared?: BoardWidgetDeclared;
 };
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
@@ -30,7 +33,7 @@ export type BoardWidgetMcpAppDocument = {
   declaredTools: string[];
   interactive: boolean;
 };
-type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
+export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
 
 export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;
@@ -70,6 +73,16 @@ export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
       ...(widget.declaredSummary !== undefined
         ? { declaredSummary: [...widget.declaredSummary] }
         : {}),
+      ...(widget.declared !== undefined
+        ? {
+            declared: {
+              ...(widget.declared.netOrigins
+                ? { netOrigins: [...widget.declared.netOrigins] }
+                : {}),
+              ...(widget.declared.tools ? { tools: [...widget.declared.tools] } : {}),
+            },
+          }
+        : {}),
     })),
   };
 }
@@ -78,8 +91,8 @@ function createBoardWidgetDocument(
   content: BoardWidgetMaterializedContent,
   revision: number,
   grantState: BoardWidgetHtmlDocument["grantState"],
+  declared: BoardWidgetDeclared | undefined,
   instanceId: string,
-  declaredTools: readonly string[],
 ): BoardWidgetDocument {
   if (content.kind === "html") {
     return {
@@ -88,6 +101,7 @@ function createBoardWidgetDocument(
       sha256: createHash("sha256").update(content.html).digest("hex"),
       viewGeneration: instanceId,
       grantState,
+      ...(declared ? { declared } : {}),
     };
   }
   return {
@@ -95,7 +109,7 @@ function createBoardWidgetDocument(
     revision,
     instanceId,
     grantState,
-    declaredTools: [...declaredTools],
+    declaredTools: [...(declared?.tools ?? [])],
     interactive: content.interactive,
   };
 }
@@ -135,7 +149,11 @@ function grantScopeMatches(
 export function createBoardWidgetPutSnapshot(
   prior: BoardSnapshot,
   params: BoardWidgetMaterializedPutParams,
-  options: { grantScopeMatches: boolean; instanceId: string },
+  context: {
+    grantScopeMatches: boolean;
+    grantedSha256?: string;
+    instanceId: string;
+  },
 ): BoardSnapshot {
   if (
     params.content.kind === "html" &&
@@ -163,14 +181,21 @@ export function createBoardWidgetPutSnapshot(
   }
   const size = BOARD_SIZE_PRESETS[(params.placement?.size ?? "md") as BoardSize];
   const widgetRevision = (existing?.revision ?? 0) + 1;
-  const declaredSummary = createBoardDeclaredSummary(params.declared);
-  // A grant follows new bytes only when every declared capability was already approved.
-  // Any widening must return to pending before the widget can be served.
+  const declared = normalizeBoardWidgetDeclared(params.declared);
+  const declaredSummary = createBoardDeclaredSummary(declared);
+  const contentSha256 =
+    params.content.kind === "html"
+      ? createHash("sha256").update(params.content.html).digest("hex")
+      : undefined;
+  // HTML grants are frozen to approved bytes. MCP App grants stay within the
+  // source server. Either kind may narrow, but never widen, its declaration.
   const preservesGrant =
-    options.grantScopeMatches &&
+    declared !== undefined &&
+    context.grantScopeMatches &&
     (params.content.kind !== "mcp-app" || params.content.interactive) &&
     existing?.grantState === "granted" &&
-    (declaredSummary ?? []).every((entry) => existing.declaredSummary?.includes(entry));
+    (params.content.kind === "html" ? contentSha256 === context.grantedSha256 : true) &&
+    boardDeclarationIsSubset(declared, existing.declared);
   layout = insertBoardWidget(
     layout,
     {
@@ -193,8 +218,9 @@ export function createBoardWidgetPutSnapshot(
             ? "pending"
             : "none",
       revision: widgetRevision,
-      instanceId: options.instanceId,
+      instanceId: context.instanceId,
       ...(declaredSummary ? { declaredSummary } : {}),
+      ...(declared ? { declared } : {}),
     },
     {
       tabId,
@@ -203,7 +229,9 @@ export function createBoardWidgetPutSnapshot(
     },
   );
   if (!declaredSummary) {
-    delete layout.widgets.find((widget) => widget.name === params.name)!.declaredSummary;
+    const widget = layout.widgets.find((candidate) => candidate.name === params.name)!;
+    delete widget.declaredSummary;
+    delete widget.declared;
   }
   return {
     sessionKey: params.sessionKey,
@@ -278,27 +306,42 @@ export class InMemoryBoardStore implements BoardStore {
   }
 
   putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot {
-    const current = this.boards.get(params.sessionKey);
-    const prior = current?.snapshot ?? emptyBoardSnapshot(params.sessionKey);
-    const documents = new Map(current?.documents ?? []);
+    const declared = normalizeBoardWidgetDeclared(params.declared);
+    const canonicalParams: BoardWidgetMaterializedPutParams = { ...params };
+    if (declared) {
+      canonicalParams.declared = declared;
+    } else {
+      delete canonicalParams.declared;
+    }
+    const current = this.boards.get(canonicalParams.sessionKey);
+    const prior = current?.snapshot ?? emptyBoardSnapshot(canonicalParams.sessionKey);
+    const existingDocument = current?.documents.get(canonicalParams.name);
+    const grantedSha256 =
+      existingDocument && "html" in existingDocument && existingDocument.grantState === "granted"
+        ? existingDocument.sha256
+        : undefined;
     const instanceId = randomBytes(16).toString("hex");
-    const snapshot = createBoardWidgetPutSnapshot(prior, params, {
-      grantScopeMatches: grantScopeMatches(documents.get(params.name), params.content),
+    const snapshot = createBoardWidgetPutSnapshot(prior, canonicalParams, {
+      grantScopeMatches: grantScopeMatches(existingDocument, canonicalParams.content),
+      grantedSha256,
       instanceId,
     });
-    const widgetRevision = snapshot.widgets.find((widget) => widget.name === params.name)!.revision;
-    const widget = snapshot.widgets.find((candidate) => candidate.name === params.name)!;
+    const documents = new Map(current?.documents ?? []);
+    const widgetRevision = snapshot.widgets.find(
+      (widget) => widget.name === canonicalParams.name,
+    )!.revision;
+    const widget = snapshot.widgets.find((candidate) => candidate.name === canonicalParams.name)!;
     documents.set(
-      params.name,
+      canonicalParams.name,
       createBoardWidgetDocument(
-        params.content,
+        canonicalParams.content,
         widgetRevision,
         widget.grantState,
+        declared,
         instanceId,
-        params.declared?.tools ?? [],
       ),
     );
-    this.boards.set(params.sessionKey, { snapshot, documents });
+    this.boards.set(canonicalParams.sessionKey, { snapshot, documents });
     return cloneBoardSnapshot(snapshot);
   }
 
@@ -330,7 +373,24 @@ export class InMemoryBoardStore implements BoardStore {
 
   readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined {
     const document = this.boards.get(sessionKey)?.documents.get(name);
-    return document && "html" in document ? { ...document } : undefined;
+    if (!document) {
+      return undefined;
+    }
+    return "html" in document
+      ? {
+          ...document,
+          ...(document.declared
+            ? {
+                declared: {
+                  ...(document.declared.netOrigins
+                    ? { netOrigins: [...document.declared.netOrigins] }
+                    : {}),
+                  ...(document.declared.tools ? { tools: [...document.declared.tools] } : {}),
+                },
+              }
+            : {}),
+        }
+      : undefined;
   }
 
   readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {

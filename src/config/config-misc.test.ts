@@ -508,6 +508,32 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("ui.prefs.sidebarEntries", () => {
+  it("accepts the route and session entries synchronized by the Control UI", () => {
+    const result = validateConfigObject({
+      ui: {
+        prefs: {
+          sidebarEntries: ["route:usage", "session:agent:main:test"],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects sidebar entries that are not strings", () => {
+    const result = validateConfigObject({
+      ui: {
+        prefs: {
+          sidebarEntries: ["route:usage", 7],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe("gateway.controlUi.embedSandbox", () => {
   it("accepts strict, scripts, and trusted modes", () => {
     for (const mode of ["strict", "scripts", "trusted"] as const) {

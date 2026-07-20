@@ -204,6 +204,53 @@ describe("main session recovery state", () => {
     expect(entry).toEqual(before);
   });
 
+  it("clears orphaned lifecycle fences before healthy foreground admission", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
+    });
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toEqual({ kind: "applied" });
+    expect(entry).toMatchObject({
+      status: "running",
+      abortedLastRun: false,
+    });
+    expect(entry.restartRecoveryRuns).toBeUndefined();
+    expect(entry.mainRestartRecovery).toBeUndefined();
+  });
+
+  it("keeps lifecycle fences while a recovery delivery owner remains", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+      restartRecoveryDeliveryRunId: "active-recovery",
+      restartRecoveryRuns: [{ runId: "active-recovery", lifecycleGeneration: "generation-1" }],
+    });
+    const before = structuredClone(entry);
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toEqual({ kind: "no_change" });
+    expect(entry).toEqual(before);
+  });
+
   it("retires a stale reservation before granting foreground ownership", () => {
     const entry = interruptedEntry({
       mainRestartRecovery: recoveryState({

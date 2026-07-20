@@ -1,6 +1,7 @@
 // Telegram message/session/prompt pipeline shared by bot handler registrars.
 import type { Message } from "grammy/types";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
@@ -130,6 +131,7 @@ export function createTelegramHandlerMessageRuntime({
           mediaRef = media
             ? {
                 path: media.path,
+                kind: media.kind,
                 ...(media.contentType ? { contentType: media.contentType } : {}),
                 ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
               }
@@ -340,6 +342,7 @@ export function createTelegramHandlerMessageRuntime({
         if (entry.messageId && entry.mediaPath && promptMediaPath) {
           promptContextMediaByMessageId.set(entry.messageId, {
             path: promptMediaPath,
+            kind: entry.mediaKind ?? kindFromMime(entry.mediaType) ?? "document",
             ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
           });
         }

@@ -1758,6 +1758,7 @@
                   "web/index",
                   "web/control-ui",
                   "web/dashboard",
+                  "web/dashboards",
                   "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",

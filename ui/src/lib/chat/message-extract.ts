@@ -29,6 +29,11 @@ function processMessageText(text: string, role: string): string {
 }
 
 export function extractText(message: unknown): string | null {
+  // Chat events may carry no message at all (tool-only or heartbeat finals);
+  // a nullish message means "no text", never a crash.
+  if (message == null) {
+    return null;
+  }
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
   const raw =
@@ -53,6 +58,9 @@ export function extractTextCached(message: unknown): string | null {
 }
 
 function extractThinking(message: unknown): string | null {
+  if (message == null) {
+    return null;
+  }
   const m = message as Record<string, unknown>;
   const content = m.content;
   const parts: string[] = [];
@@ -84,6 +92,9 @@ export function extractThinkingCached(message: unknown): string | null {
 }
 
 export function extractRawText(message: unknown): string | null {
+  if (message == null) {
+    return null;
+  }
   const m = message as Record<string, unknown>;
   const role = normalizeLowercaseStringOrEmpty(m.role);
   const content = m.content;

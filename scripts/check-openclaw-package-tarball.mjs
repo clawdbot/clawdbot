@@ -258,6 +258,8 @@ function collectRequiredBundledWorkspaceDependencyErrors(
 }
 
 const phaseTimingsEnabled = process.env.OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS !== "0";
+// Self-contained artifacts can exceed Node's 1 MiB spawnSync output default.
+const TAR_LIST_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 function runPhase(label, action) {
   const startedAt = performance.now();
   try {
@@ -273,11 +275,12 @@ function runPhase(label, action) {
 const list = runPhase("tar list", () =>
   spawnSync("tar", ["-tf", tarball], {
     encoding: "utf8",
+    maxBuffer: TAR_LIST_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   }),
 );
 if (list.status !== 0) {
-  fail(`tar -tf failed for ${tarball}: ${list.stderr || list.status}`);
+  fail(`tar -tf failed for ${tarball}: ${list.stderr || list.error?.message || list.status}`);
 }
 
 const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));

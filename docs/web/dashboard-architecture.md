@@ -155,11 +155,26 @@ Shared infrastructure underneath (this is where the simplification lands):
   one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
   they are byte-frozen (sha256), and changed bytes keep the grant only if the
   declaration shrank.
-- **Authoring shim.** The document wrapper injects
-  `window.openclaw.sendPrompt/emitState/read/call` as the stable author API;
-  whether the transport underneath is our channel or the AppBridge is an
-  internal detail the widget author never sees. Size reporting and theme
-  tokens ride the same bridge.
+- **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
+  `window.openclaw.state`, `window.openclaw.data`, and `window.openclaw.cron`
+  as the stable author API. Dashboard calls share one view-ticket-bound
+  request channel; size reporting and theme tokens remain separate host
+  notifications.
+
+### Modeled residual: WebRTC data channels
+
+The sandbox CSP emits the proposed `webrtc 'block'` directive, but
+[Chromium's current CSP directive set](https://chromium.googlesource.com/chromium/src/+/main/services/network/public/mojom/content_security_policy.mojom#95)
+does not implement it. Scriptable widgets can therefore use WebRTC data
+channels for egress in current Chromium. The same residual already ships for
+inline chat widgets and the MCP Apps host on `main`.
+
+**Accepted tradeoff:** OpenClaw does not gate scriptable widgets on this
+residual. Widget content gains access to sensitive OpenClaw data only through
+an operator-granted, byte-frozen `data:read` capability, and the sandbox
+Permissions Policy blocks camera and microphone access. A DOM API guard is
+best-effort defense-in-depth, not a security boundary, and belongs in
+follow-up hardening.
 
 ### Transcript display: one widget card
 
@@ -262,7 +277,15 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 - `board.widget.put { sessionKey, name, html, manifest, placement }` —
   `operator.write` (agent tool path and pin path)
 - `board.widget.grant { sessionKey, name, decision }` — `operator.approvals`
-- `board.event { sessionKey, widget, payload }` — tier-1 state event ingest —
+- `board.event { ticket, payload }` — ticket-bound tier-1 state event ingest;
+  the legacy trusted-host `{ sessionKey, widget, payload }` shape remains —
+  `operator.write`
+- `board.prompt.authorize { ticket }` — returns whether a visible prompt send
+  still needs per-click confirmation — `operator.read`
+- `board.data.read { ticket, bindingId, params? }` — gateway-side allowlisted
+  read binding resolution — `operator.read`
+- `board.action { ticket, action: "cron.trigger", jobId }` — exact-grant
+  automation dispatch through the existing cron run-now path —
   `operator.write`
 
 Events (in `EVENT_SCOPE_GUARDS`, read scope):

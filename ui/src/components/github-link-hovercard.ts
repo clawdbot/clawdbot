@@ -91,6 +91,10 @@ function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | nul
   return { href: url.href, kind, number: Number(numberText), owner, repo };
 }
 
+export function isGitHubPullRequestLink(href: string): boolean {
+  return parseGitHubIssueOrPullRequestLink(href)?.kind === "pull";
+}
+
 function safeAvatarDataUrl(value: unknown): string | undefined {
   return typeof value === "string" && /^data:image\/(?:gif|jpeg|png|webp);base64,/u.test(value)
     ? value

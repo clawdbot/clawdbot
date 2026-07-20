@@ -135,6 +135,7 @@ export function createTelegramMessageContextRuntime(
     return {
       ...entryWithoutProviderMediaRef,
       mediaPath: media.path,
+      mediaKind: media.kind,
       ...(media.contentType ? { mediaType: media.contentType } : {}),
     };
   };
@@ -152,7 +153,7 @@ export function createTelegramMessageContextRuntime(
     sender_username: node.senderUsername,
     timestamp_ms: node.timestamp,
     body: node.body,
-    media_type: media?.contentType ?? node.mediaType,
+    media_type: media?.contentType ?? media?.kind ?? node.mediaType,
     media_path: media?.path,
     media_ref: media?.path ? undefined : node.mediaRef,
     reply_to_id: node.replyToId,

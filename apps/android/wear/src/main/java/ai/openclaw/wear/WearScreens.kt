@@ -95,6 +95,7 @@ internal fun OpenClawWearScreens(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   actionBusy: Boolean,
@@ -220,6 +221,7 @@ internal fun OpenClawWearScreens(
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
+            realtimeMouthLevel = realtimeMouthLevel,
             realtimePlaybackFailed = realtimePlaybackFailed,
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
@@ -353,6 +355,7 @@ private fun VoicePage(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
@@ -419,6 +422,7 @@ private fun VoicePage(
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
+            realtimeMouthLevel = realtimeMouthLevel,
             realtimePlaybackFailed = realtimePlaybackFailed,
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
@@ -465,6 +469,7 @@ private fun VoiceHomeMode(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
@@ -533,19 +538,7 @@ private fun VoiceHomeMode(
       state == RealtimeVoiceButtonState.ERROR -> colors.danger
       else -> colors.voiceAccent
     }
-  val containerColor =
-    when {
-      dictatePreview || state == RealtimeVoiceButtonState.IDLE -> colors.surfaceRaised
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger.copy(alpha = 0.28f)
-      else -> colors.voiceAccentSoft
-    }
-  val contentColor =
-    when {
-      dictatePreview -> colors.voiceAccent
-      state == RealtimeVoiceButtonState.IDLE -> colors.text
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger
-      else -> colors.voiceAccent
-    }
+  val avatarState = if (dictatePreview) RealtimeVoiceButtonState.LISTENING else state
   Box(
     modifier =
       Modifier
@@ -586,14 +579,11 @@ private fun VoiceHomeMode(
               .offset(y = (-4).dp)
               .fillMaxWidth(),
         )
-        VoiceOrb(
-          accent = accent,
-          containerColor = containerColor,
-          pulse = dictatePreview || state != RealtimeVoiceButtonState.IDLE,
-          size = 92.dp,
+        Box(
           modifier =
             Modifier
               .align(Alignment.Center)
+              .size(92.dp)
               .combinedClickable(
                 enabled = !dictatePreview,
                 role = Role.Button,
@@ -601,22 +591,16 @@ private fun VoiceHomeMode(
                 onDoubleClick = onOpenThread,
                 onLongClick = startDictate,
               ),
+          contentAlignment = Alignment.Center,
         ) {
-          if (
-            dictatePreview ||
-            state == RealtimeVoiceButtonState.LISTENING ||
-            state == RealtimeVoiceButtonState.SPEAKING
-          ) {
-            LiveWaveform(
-              color = colors.voiceAccent,
-              active = true,
-            )
-          } else {
-            MicrophoneGlyph(
-              color = contentColor,
-              modifier = Modifier.size(38.dp),
-            )
-          }
+          WearTalkAvatar(
+            state = avatarState,
+            mouthLevel = if (realtimePlaying) realtimeMouthLevel else 0f,
+            syntheticSpeech = ttsOnly,
+            accent = accent,
+            danger = colors.danger,
+            modifier = Modifier.fillMaxSize(),
+          )
         }
         statusText?.let { status ->
           Text(
@@ -970,48 +954,6 @@ internal fun nextWearThreadFollowForViewport(
 internal fun wearThreadFollowLatest(state: WearThreadFollowState): WearThreadFollowState = state.copy(followingLatest = true, hasNewContent = false)
 
 @Composable
-private fun VoiceOrb(
-  accent: Color,
-  containerColor: Color,
-  pulse: Boolean,
-  size: androidx.compose.ui.unit.Dp,
-  modifier: Modifier = Modifier,
-  content: @Composable () -> Unit,
-) {
-  val ringAlpha =
-    if (pulse) {
-      val transition = rememberInfiniteTransition(label = "voice-orb-ring")
-      transition
-        .animateFloat(
-          initialValue = 0.4f,
-          targetValue = 1f,
-          animationSpec =
-            infiniteRepeatable(
-              animation = tween(durationMillis = 850),
-              repeatMode = RepeatMode.Reverse,
-            ),
-          label = "voice-orb-ring-alpha",
-        ).value
-    } else {
-      1f
-    }
-  Box(
-    modifier =
-      modifier
-        .size(size)
-        .background(containerColor, CircleShape)
-        .border(
-          width = if (pulse) 3.dp else 1.dp,
-          color = accent.copy(alpha = ringAlpha),
-          shape = CircleShape,
-        ),
-    contentAlignment = Alignment.Center,
-  ) {
-    content()
-  }
-}
-
-@Composable
 private fun MicrophoneGlyph(
   color: Color,
   modifier: Modifier = Modifier,
@@ -1056,47 +998,6 @@ private fun MicrophoneGlyph(
   }
 }
 
-@Composable
-private fun LiveWaveform(
-  color: Color,
-  active: Boolean,
-) {
-  val transition = rememberInfiniteTransition(label = "live-waveform")
-  val phase by
-    transition.animateFloat(
-      initialValue = 0f,
-      targetValue = 1f,
-      animationSpec =
-        infiniteRepeatable(
-          animation = tween(durationMillis = 520),
-          repeatMode = RepeatMode.Reverse,
-        ),
-      label = "live-waveform-phase",
-    )
-  val amplitude = if (active) phase else 0f
-  Row(
-    horizontalArrangement = Arrangement.spacedBy(3.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    modifier = Modifier.height(28.dp),
-  ) {
-    listOf(
-      7f + (8f * amplitude),
-      10f + (13f * (1f - amplitude)),
-      12f + (14f * amplitude),
-      10f + (13f * (1f - amplitude)),
-      7f + (8f * amplitude),
-    ).forEach { barHeight ->
-      Box(
-        modifier =
-          Modifier
-            .width(3.dp)
-            .height(barHeight.dp)
-            .background(color, RoundedCornerShape(2.dp)),
-      )
-    }
-  }
-}
-
 private fun realtimeVoiceButtonState(
   realtimeTalk: WearRealtimeTalkSnapshot,
   ttsOnly: Boolean,
@@ -1129,7 +1030,7 @@ private fun formatVoiceElapsedTime(totalSeconds: Long): String {
   return "$minutes:${seconds.toString().padStart(2, '0')}"
 }
 
-private enum class RealtimeVoiceButtonState {
+internal enum class RealtimeVoiceButtonState {
   IDLE,
   CONNECTING,
   LISTENING,

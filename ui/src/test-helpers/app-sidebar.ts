@@ -165,6 +165,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const openPullRequestSessionKeys = new Set<string>();
   const groupsPut = vi.fn(() => Promise.resolve());
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -205,6 +206,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    hasOpenPullRequest: (key: string) => openPullRequestSessionKeys.has(key),
+    setOpenPullRequest(key: string, hasOpenPullRequest: boolean) {
+      if (hasOpenPullRequest) {
+        openPullRequestSessionKeys.add(key);
+      } else {
+        openPullRequestSessionKeys.delete(key);
+      }
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
     groupsLoad: () => Promise.resolve(),
     groupsPut,
     groupsRename,

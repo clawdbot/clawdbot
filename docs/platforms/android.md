@@ -22,6 +22,17 @@ The official Android app is available on [Google Play](https://play.google.com/s
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
+## Simultaneous gateway sessions
+
+Pair each Gateway once, then open **Settings → Gateway**. The checkmark marks
+the focused Gateway and each switch controls whether a non-focused Gateway's
+operator session stays connected. Enabled Gateways reconnect independently
+while the app is in the foreground, so switching focus does not tear down the
+others. The focused Gateway alone owns the Android node session and device
+capabilities; this prevents simultaneous Gateways from issuing camera,
+location, screen, or notification commands to the same phone. Android can
+suspend the secondary connections after the app leaves the foreground.
+
 ## Wear OS companion
 
 The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
@@ -231,13 +242,14 @@ with `openclaw qr`, then scan or paste it on that page and reconnect. Operators
 who want the reduced profile can select **Limited access** in Control UI or run
 `openclaw qr --limited`.
 
-### Multiple gateways
+### Manage paired gateways
 
-The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+The app keeps a registry of every gateway it has paired with, so you can keep operator sessions connected and change focus without pairing again:
 
-- **Settings -> Gateways** lists paired gateways with the active one marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway.
+- **Settings → Gateway** lists paired gateways with the focused one marked. Tap an entry to focus it; the other enabled operator sessions remain connected.
+- Each switch controls whether that non-focused Gateway stays connected while the app is in the foreground. The focused Gateway remains enabled and owns the phone's node connection and device capabilities.
 - The **Connect** tab shows a quick switcher when more than one gateway is paired.
-- Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per gateway. Switching never mixes state between gateways, and messages queued while offline are delivered only to the gateway they were written for.
+- Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per Gateway. Changing focus never mixes state between Gateways, and messages queued while offline are delivered only to the Gateway they were written for.
 - **Forget** removes a gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
 
 ### Presence alive beacons

@@ -70,6 +70,10 @@ describe.each([
             "Network access: https://weather.example",
             "Tool access: weather.refresh",
           ],
+          declared: {
+            netOrigins: ["https://weather.example"],
+            tools: ["weather.refresh"],
+          },
         },
       ],
     });
@@ -100,10 +104,11 @@ describe.each([
     });
     expect(updated).toMatchObject({
       revision: 4,
-      widgets: [{ revision: 2, grantState: "granted", sizeW: 8, sizeH: 6 }],
+      widgets: [{ revision: 2, grantState: "none", sizeW: 8, sizeH: 6 }],
     });
     expect(updated.widgets[0]).not.toHaveProperty("declaredSummary");
     expect(store.getSnapshot("agent:main:board").widgets[0]).not.toHaveProperty("declaredSummary");
+    expect(updated.widgets[0]).not.toHaveProperty("declared");
   });
 
   it("keeps content-kind semantics and normalized ordering", () => {
@@ -151,7 +156,7 @@ describe.each([
     expect(store.getSnapshot("agent:main:board").widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
-  it("preserves grants only for equal or narrower declarations", () => {
+  it("preserves grants only for unchanged bytes with equal or narrower declarations", () => {
     const store = createStore();
     const first = store.putWidget({
       sessionKey: "agent:main:board",
@@ -167,7 +172,7 @@ describe.each([
     const equal = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
-      content: { kind: "html", html: "two" },
+      content: { kind: "html", html: "one" },
       declared: {
         netOrigins: ["https://one.example", "https://two.example"],
         tools: ["weather.read", "weather.refresh"],
@@ -175,14 +180,14 @@ describe.each([
     });
     expect(equal.widgets[0]).toMatchObject({ revision: 2, grantState: "granted" });
     expect(store.readWidgetHtml("agent:main:board", "scoped")).toMatchObject({
-      html: "two",
+      html: "one",
       grantState: "granted",
     });
 
     const narrower = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
-      content: { kind: "html", html: "three" },
+      content: { kind: "html", html: "one" },
       declared: {
         netOrigins: ["https://one.example"],
         tools: ["weather.read"],
@@ -190,16 +195,32 @@ describe.each([
     });
     expect(narrower.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
 
+    const changed = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "scoped",
+      content: { kind: "html", html: "two" },
+      declared: {
+        netOrigins: ["https://one.example"],
+        tools: ["weather.read"],
+      },
+    });
+    expect(changed.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
+    expect(store.readWidgetHtml("agent:main:board", "scoped")).toMatchObject({
+      html: "two",
+      grantState: "pending",
+    });
+    store.grant("agent:main:board", "scoped", "granted", 4, changed.widgets[0]?.instanceId);
+
     const wider = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
-      content: { kind: "html", html: "four" },
+      content: { kind: "html", html: "two" },
       declared: {
         netOrigins: ["https://one.example", "https://three.example"],
         tools: ["weather.read"],
       },
     });
-    expect(wider.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
+    expect(wider.widgets[0]).toMatchObject({ revision: 5, grantState: "pending" });
   });
 
   it("requires a fresh grant when an MCP app widget changes servers", () => {
@@ -504,6 +525,57 @@ describe("SqliteBoardStore persistence", () => {
     expect(store.listSessionsWithBoards()).toEqual([canonicalSessionKey]);
   });
 
+  it("fails closed when reading a persisted unsafe capability manifest", () => {
+    const stateDir = tempDirs.make("openclaw-board-unsafe-manifest-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:unsafe-manifest";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "status",
+      content: { kind: "html", html: "ok" },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare(
+        "UPDATE board_widgets SET manifest = ?, grant_state = 'granted', granted_sha = sha256 WHERE session_key = ? AND name = 'status'",
+      )
+      .run(
+        JSON.stringify({ netOrigins: ["http://legacy.example"], tools: ["health"] }),
+        sessionKey,
+      );
+
+    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+      name: "status",
+      grantState: "none",
+    });
+    expect(store.getSnapshot(sessionKey).widgets[0]).not.toHaveProperty("declared");
+    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+      html: "ok",
+      grantState: "none",
+    });
+    expect(store.readWidgetHtml(sessionKey, "status")).not.toHaveProperty("declared");
+
+    database.db
+      .prepare(
+        "UPDATE board_widgets SET grant_state = 'rejected' WHERE session_key = ? AND name = 'status'",
+      )
+      .run(sessionKey);
+    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+      name: "status",
+      grantState: "rejected",
+    });
+    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+      html: "ok",
+      grantState: "rejected",
+    });
+  });
+
   it("reads widget bytes only from the canonical per-agent database", () => {
     const stateDir = tempDirs.make("openclaw-board-canonical-bytes-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -575,7 +647,7 @@ describe("SqliteBoardStore persistence", () => {
     });
   });
 
-  it("rebinds a preserved grant to the updated widget digest", () => {
+  it("clears a frozen grant when the widget digest changes", () => {
     const stateDir = tempDirs.make("openclaw-board-granted-digest-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:grant-digest";
@@ -606,16 +678,54 @@ describe("SqliteBoardStore persistence", () => {
         )
         .get(sessionKey),
     ).toEqual({
-      grantState: "granted",
-      grantedSha: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      grantState: "pending",
+      grantedSha: null,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    const row = database.db
-      .prepare(
-        "SELECT granted_sha AS grantedSha, sha256 FROM board_widgets WHERE session_key = ? AND name = 'status'",
-      )
-      .get(sessionKey) as { grantedSha: string; sha256: string };
-    expect(row.grantedSha).toBe(row.sha256);
+  });
+
+  it("requires reapproval for grants stored before byte-frozen semantics", () => {
+    const stateDir = tempDirs.make("openclaw-board-legacy-grant-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:legacy-grant";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    const current = store.putWidget({
+      sessionKey,
+      name: "status",
+      content: { kind: "html", html: "approved" },
+      declared: { tools: ["health"] },
+    });
+    store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId);
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
+      .run(JSON.stringify({ tools: ["health"] }), sessionKey);
+
+    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+      grantState: "pending",
+      declared: { tools: ["health"] },
+    });
+    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+      grantState: "pending",
+      declared: { tools: ["health"] },
+    });
+    expect(
+      store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId).widgets[0],
+    ).toMatchObject({ grantState: "granted" });
+    expect(
+      JSON.parse(
+        (
+          database.db
+            .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
+            .get(sessionKey) as { manifest: string }
+        ).manifest,
+      ),
+    ).toEqual({ tools: ["health"], grantSemanticsVersion: 2 });
   });
 
   it("reopens durable boards and isolates owning agent databases", () => {

@@ -572,6 +572,7 @@ class MainViewModel private constructor(
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
+  val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
@@ -1219,6 +1220,13 @@ class MainViewModel private constructor(
         }
       }
     }
+  }
+
+  fun setGatewayConnectionEnabled(
+    stableId: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setGatewayConnectionEnabled(stableId, enabled)
   }
 
   fun forgetGateway(stableId: String) {

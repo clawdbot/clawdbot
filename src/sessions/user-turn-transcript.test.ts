@@ -324,16 +324,13 @@ describe("user turn transcript persistence", () => {
 
   describe("resolvePersistedUserTurnText", () => {
     it("normalizes the selected clean user-turn transcript text", () => {
-      expect(resolvePersistedUserTurnText("  What is in this image?  ", { hasMedia: true })).toBe(
+      expect(resolvePersistedUserTurnText("  What is in this image?  ")).toBe(
         "What is in this image?",
       );
     });
 
-    it("ignores exact channel media placeholders only when structured media is present", () => {
-      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: true })).toBe(
-        undefined,
-      );
-      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: false })).toBe(
+    it("preserves historical placeholder-like text as ordinary transcript content", () => {
+      expect(resolvePersistedUserTurnText("<media:image> (2 images)")).toBe(
         "<media:image> (2 images)",
       );
     });

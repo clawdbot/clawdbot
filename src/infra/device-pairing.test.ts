@@ -494,7 +494,7 @@ describe("device pairing tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
-  test("caps trusted-proxy auto-approval for new devices and refuses repairs", async () => {
+  test("caps trusted-proxy auto-approval for new devices and upgrades same-key re-requests", async () => {
     const baseDir = await makeDevicePairingDir();
     const initial = await requestDevicePairing(
       {
@@ -523,10 +523,60 @@ describe("device pairing tokens", () => {
       approvedVia: "trusted-proxy",
     });
 
-    const repair = await requestDevicePairing(
+    const upgrade = await requestDevicePairing(
       {
         deviceId: "browser-device-1",
         publicKey: "public-key-browser-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    const upgraded = await approveDevicePairing(
+      upgrade.request.requestId,
+      {
+        callerScopes: ["operator.read", "operator.write"],
+        approvedVia: "trusted-proxy",
+        autoApproveNewDeviceScopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    expectRecordFields(upgraded, "trusted-proxy upgrade result", {
+      status: "approved",
+      requestId: upgrade.request.requestId,
+    });
+    expect((await listDevicePairing(baseDir)).pending).toEqual([]);
+    expect((await getPairedDevice("browser-device-1", baseDir))?.approvedScopes).toEqual([
+      "operator.read",
+      "operator.write",
+    ]);
+  });
+
+  test("refuses trusted-proxy auto-approval when the pending key mismatches the paired device", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const initial = await requestDevicePairing(
+      {
+        deviceId: "browser-device-2",
+        publicKey: "public-key-browser-2",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(
+      initial.request.requestId,
+      {
+        callerScopes: ["operator.read"],
+        approvedVia: "trusted-proxy",
+        autoApproveNewDeviceScopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "browser-device-2",
+        publicKey: "public-key-browser-2-rotated",
         role: "operator",
         scopes: ["operator.read", "operator.write"],
       },
@@ -543,11 +593,56 @@ describe("device pairing tokens", () => {
         baseDir,
       ),
     ).resolves.toBeNull();
-
     expect((await listDevicePairing(baseDir)).pending).toContainEqual(
       expect.objectContaining({ requestId: repair.request.requestId, isRepair: true }),
     );
-    expect((await getPairedDevice("browser-device-1", baseDir))?.approvedScopes).toEqual([
+    expect((await getPairedDevice("browser-device-2", baseDir))?.approvedScopes).toEqual([
+      "operator.read",
+    ]);
+  });
+
+  test("refuses non-trusted-proxy auto-approval for a known device even with a matching key", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const initial = await requestDevicePairing(
+      {
+        deviceId: "browser-device-3",
+        publicKey: "public-key-browser-3",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(
+      initial.request.requestId,
+      {
+        callerScopes: ["operator.read"],
+        approvedVia: "trusted-proxy",
+        autoApproveNewDeviceScopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const upgrade = await requestDevicePairing(
+      {
+        deviceId: "browser-device-3",
+        publicKey: "public-key-browser-3",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    await expect(
+      approveDevicePairing(
+        upgrade.request.requestId,
+        {
+          callerScopes: ["operator.read", "operator.write"],
+          approvedVia: "silent",
+          autoApproveNewDeviceScopes: ["operator.read", "operator.write"],
+        },
+        baseDir,
+      ),
+    ).resolves.toBeNull();
+    expect((await getPairedDevice("browser-device-3", baseDir))?.approvedScopes).toEqual([
       "operator.read",
     ]);
   });

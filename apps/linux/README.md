@@ -40,6 +40,10 @@ The running app gives the headless `openclaw node run` host a single Canvas WebV
 
 The plugin-generated A2UI renderer in `extensions/canvas/src/host/a2ui/` remains the source of truth. The app embeds its committed, synced OpenClawKit mirror from `apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/`. Run `node scripts/sync-native-a2ui.mjs --check` from the repository root after changing those assets.
 
+## Quick Chat widgets
+
+Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message Canvas previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
+
 ## Installer resource
 
 `tauri.conf.json` bundles the repository's canonical `scripts/install-cli.sh` directly as `install-cli.sh`. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.

@@ -1479,9 +1479,7 @@ export async function runPreparedReply(
   const userTurnTranscriptText =
     !hasUserBody && transcriptBody === MEDIA_ONLY_USER_TEXT
       ? ""
-      : resolvePersistedUserTurnText(transcriptBody, {
-          hasMedia: userTurnMediaForPersistence.length > 0,
-        });
+      : resolvePersistedUserTurnText(transcriptBody);
   const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
   const conversationRef = conversationIdentity?.conversationRef;
   const transportMessageId =

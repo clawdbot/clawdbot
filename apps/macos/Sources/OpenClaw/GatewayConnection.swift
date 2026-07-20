@@ -184,6 +184,7 @@ actor GatewayConnection {
     }
 
     private let endpointProvider: EndpointProvider
+    private let supportsSharedEndpointRecovery: Bool
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
     private let sessionBox: WebSocketSessionBox?
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
@@ -218,46 +219,9 @@ actor GatewayConnection {
 
     var canvasPluginSurfaceRefresh: CanvasPluginSurfaceRefresh?
 
-    private struct LossyDecodable<Value: Decodable>: Decodable {
-        let value: Value?
-
-        init(from decoder: Decoder) throws {
-            do {
-                self.value = try Value(from: decoder)
-            } catch {
-                self.value = nil
-            }
-        }
-    }
-
-    private struct LossyCronListResponse: Decodable {
-        let jobs: [LossyDecodable<CronJob>]
-
-        enum CodingKeys: String, CodingKey {
-            case jobs
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.jobs = try container.decodeIfPresent([LossyDecodable<CronJob>].self, forKey: .jobs) ?? []
-        }
-    }
-
-    private struct LossyCronRunsResponse: Decodable {
-        let entries: [LossyDecodable<CronRunLogEntry>]
-
-        enum CodingKeys: String, CodingKey {
-            case entries
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.entries = try container.decodeIfPresent([LossyDecodable<CronRunLogEntry>].self, forKey: .entries) ?? []
-        }
-    }
-
     init(
         endpointProvider: @escaping EndpointProvider = GatewayConnection.defaultEndpointProvider,
+        supportsSharedEndpointRecovery: Bool = true,
         activationBindingKeyProvider: @escaping @Sendable () -> SymmetricKey? =
             GatewayConnection.defaultActivationBindingKey,
         sessionBox: WebSocketSessionBox? = nil,
@@ -266,6 +230,7 @@ actor GatewayConnection {
         })
     {
         self.endpointProvider = endpointProvider
+        self.supportsSharedEndpointRecovery = supportsSharedEndpointRecovery
         self.activationBindingKeyProvider = activationBindingKeyProvider
         self.sessionBox = sessionBox
         self.clientShutdown = clientShutdown
@@ -287,6 +252,7 @@ actor GatewayConnection {
         self.endpointProvider = {
             try await EndpointSnapshot(config: configProvider(), routeAuthority: nil)
         }
+        self.supportsSharedEndpointRecovery = false
         self.activationBindingKeyProvider = activationBindingKeyProvider
         self.sessionBox = sessionBox
         self.clientShutdown = clientShutdown
@@ -319,6 +285,9 @@ actor GatewayConnection {
                 throw error
             }
             try requireCurrentShutdownGeneration(shutdownGeneration)
+            // Profile-bound windows own a fixed endpoint. Shared recovery reads global
+            // connection-mode state and may legitimately retarget only the primary app route.
+            guard self.supportsSharedEndpointRecovery else { throw error }
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
@@ -1678,25 +1647,5 @@ extension GatewayConnection {
 
     func cronAdd(payload: [String: AnyCodable]) async throws {
         try await self.requestVoid(method: .cronAdd, params: payload)
-    }
-
-    nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {
-        let decoded = try JSONDecoder().decode(LossyCronListResponse.self, from: data)
-        let jobs = decoded.jobs.compactMap(\.value)
-        let skipped = decoded.jobs.count - jobs.count
-        if skipped > 0 {
-            gatewayConnectionLogger.warning("cron.list skipped \(skipped, privacy: .public) malformed jobs")
-        }
-        return jobs
-    }
-
-    nonisolated static func decodeCronRunsResponse(_ data: Data) throws -> [CronRunLogEntry] {
-        let decoded = try JSONDecoder().decode(LossyCronRunsResponse.self, from: data)
-        let entries = decoded.entries.compactMap(\.value)
-        let skipped = decoded.entries.count - entries.count
-        if skipped > 0 {
-            gatewayConnectionLogger.warning("cron.runs skipped \(skipped, privacy: .public) malformed entries")
-        }
-        return entries
     }
 }

@@ -123,7 +123,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         from: sender,
         text: "ordinary note",
       },
-      allMedia: [{ path: "/tmp/photo-1.jpg", contentType: "image/jpeg" }],
+      allMedia: [{ path: "/tmp/photo-1.jpg", contentType: "image/jpeg", kind: "image" }],
       options: {
         inboundDebounceMessages: [
           {

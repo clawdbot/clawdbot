@@ -70,6 +70,7 @@ export type SidebarRecentSession = {
   placementState?: SessionPlacementState;
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
+  hasOpenPullRequest: boolean;
   unread: boolean;
   attention: SidebarSessionAttention;
   agentStatusNote?: string;

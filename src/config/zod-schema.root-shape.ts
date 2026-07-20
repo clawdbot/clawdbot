@@ -286,6 +286,7 @@ export const OpenClawSchemaShape = {
           chatPersistCommentary: z.boolean().optional(),
           chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
+          sidebarEntries: z.array(z.string()).optional(),
           sidebarLiveActivity: z.boolean().optional(),
         })
         .optional(),

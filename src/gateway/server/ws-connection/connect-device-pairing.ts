@@ -202,9 +202,14 @@ export async function authorizeGatewayConnectDevice(
       const trustedProxyAutoApproveConfig =
         configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
       const trustedProxyUser = authResult.user?.trim();
+      // A scope upgrade from a device whose paired public key matches the one
+      // this connect just proved by signature is the same physical browser
+      // behind the SSO proxy — auto-approvable like a first pairing. A key
+      // mismatch stays a manual owner decision (possible deviceId squat).
+      const isTrustedProxySameKeyUpgrade =
+        reason === "scope-upgrade" && existingPairedDevice?.publicKey === devicePublicKey;
       const allowTrustedProxyDeviceAutoApproval =
-        reason === "not-paired" &&
-        !existingPairedDevice &&
+        ((reason === "not-paired" && !existingPairedDevice) || isTrustedProxySameKeyUpgrade) &&
         role === "operator" &&
         (isBrowserOperatorUi || isWebchat) &&
         authMethod === "trusted-proxy" &&
@@ -294,7 +299,8 @@ export async function authorizeGatewayConnectDevice(
               allowControlUiOperatorBootstrapPairing,
       });
       const trustedProxyAutoApproveScopes =
-        allowTrustedProxyDeviceAutoApproval && pairing.request.isRepair !== true
+        allowTrustedProxyDeviceAutoApproval &&
+        (pairing.request.isRepair !== true || isTrustedProxySameKeyUpgrade)
           ? resolveTrustedProxyControlUiScopes({
               requestedScopes: resolveTrustedProxyDeviceAutoApproveScopes({
                 requestedScopes: scopes,

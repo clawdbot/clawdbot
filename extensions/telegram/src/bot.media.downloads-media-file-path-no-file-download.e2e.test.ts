@@ -161,7 +161,11 @@ describe("telegram inbound media", () => {
             expect(request.filePathHint).toBe("photos/1.jpg");
             expect(params.replySpy).toHaveBeenCalledTimes(1);
             const payload = replyPayload(params.replySpy);
-            expect(payload.Body).toContain("<media:image>");
+            expect(payload).toMatchObject({
+              BodyForAgent: "",
+              MediaTypes: ["image/jpeg"],
+              RawBody: "",
+            });
           },
         },
         {
@@ -175,12 +179,18 @@ describe("telegram inbound media", () => {
             runtimeError: ReturnType<typeof vi.fn>;
           }) => {
             expect(params.fetchSpy).not.toHaveBeenCalled();
-            expect(params.replySpy).not.toHaveBeenCalled();
+            expect(params.replySpy).toHaveBeenCalledTimes(1);
+            expect(replyPayload(params.replySpy)).toMatchObject({
+              BodyForAgent: "",
+              MediaTypes: ["image"],
+              RawBody: "",
+            });
             expect(params.runtimeError).not.toHaveBeenCalled();
           },
         },
       ]) {
         replySpy.mockClear();
+        replySpy.mockResolvedValueOnce({ text: "ack" });
         runtimeError.mockClear();
         const fetchSpy = scenario.setupFetch();
 
@@ -208,6 +218,7 @@ describe("telegram inbound media", () => {
     async () => {
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      replySpy.mockResolvedValueOnce({ text: "ack" });
       const fetchSpy = mockTelegramFileDownload({
         contentType: "image/jpeg",
         bytes: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
@@ -235,7 +246,7 @@ describe("telegram inbound media", () => {
         expect(runtimeError).not.toHaveBeenCalled();
         expect(replySpy).toHaveBeenCalledTimes(1);
         const payload = replyPayload(replySpy);
-        expect(payload.Body).toContain("<media:image>");
+        expect(payload).toMatchObject({ BodyForAgent: "", RawBody: "" });
         expect(payload.MediaPaths).toContain(inboundPath);
       } finally {
         fetchSpy.mockRestore();

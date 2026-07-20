@@ -162,6 +162,19 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
 }
 
 @Suite(.serialized) struct GatewayConnectionControllerTests {
+    @Test @MainActor func `background cancels operator fleet reconciliation`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        controller.setScenePhase(.active)
+        #expect(controller._test_hasOperatorFleetReconcileTask())
+        controller.setScenePhase(.background)
+
+        #expect(!controller._test_hasOperatorFleetReconcileTask())
+        #expect(controller.operatorFleet.statuses.isEmpty)
+    }
+
     @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
         let appModel = NodeAppModel()
         let disconnectedOwner = appModel.chatViewModelOwnerID
@@ -574,6 +587,23 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
                 clientDisplayName: "Phone"))
 
         #expect(lhs.hasSameConnectionInputs(as: rhs))
+    }
+
+    @Test @MainActor func `operator fleet retains enabled runtime during endpoint gap`() {
+        let fleet = GatewayOperatorFleet()
+        let config = Self.makeGatewayConnectConfig(stableID: "bonjour|secondary")
+        defer { fleet.stopAll() }
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Secondary")])
+        #expect(fleet.statuses.map(\.stableID) == [config.stableID])
+
+        fleet.reconcile(desiredStableIDs: [config.stableID], configs: [])
+        #expect(fleet.statuses.map(\.stableID) == [config.stableID])
+
+        fleet.reconcile(desiredStableIDs: [], configs: [])
+        #expect(fleet.statuses.isEmpty)
     }
 
     @Test @MainActor func `same target retry unpauses retained pairing problem`() {

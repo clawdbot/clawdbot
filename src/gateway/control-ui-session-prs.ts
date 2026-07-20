@@ -34,6 +34,7 @@ const MAX_PULL_REQUESTS = 3;
 export type ControlUiSessionPullRequestsParams = {
   sessionKey: string;
   agentId?: string;
+  refresh?: boolean;
 };
 
 /** GitHub repo + branch resolved from a session's git checkout. */
@@ -60,6 +61,7 @@ type PullListItem = {
 type CacheEntry = {
   expiresAt: number;
   promise: Promise<ControlUiSessionPullRequests>;
+  refreshMode: "normal" | "forced" | null;
   // Survives refetch failures so rate-limited refreshes degrade to stale
   // chips instead of clearing the row.
   lastGood?: ControlUiSessionPullRequest[];
@@ -78,7 +80,11 @@ export function parseControlUiSessionPullRequestsParams(
     return null;
   }
   const agentId = typeof value.agentId === "string" ? value.agentId.trim() : "";
-  return agentId ? { sessionKey, agentId } : { sessionKey };
+  return {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+    ...(value.refresh === true ? { refresh: true } : {}),
+  };
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
@@ -579,30 +585,67 @@ export async function loadControlUiSessionPullRequests(
   // alive when GitHub is rate limited; only the GitHub fetch is cached.
   const [branch, snapshot] = await Promise.all([
     resolveSessionBranch(context),
-    cachedBranchPullRequests(context, deps),
+    cachedBranchPullRequests(context, deps, params.refresh === true),
   ]);
   return branch ? { ...snapshot, branch } : snapshot;
 }
 
-function cachedBranchPullRequests(
+function trackBranchRefresh(
+  entry: CacheEntry,
+  mode: "normal" | "forced",
+  load: () => Promise<ControlUiSessionPullRequests>,
+): Promise<ControlUiSessionPullRequests> {
+  // Publish the replacement promise before any awaited work so later callers
+  // cannot overtake a queued forced refresh with an older normal result.
+  entry.expiresAt = Date.now() + SUCCESS_CACHE_MS;
+  entry.refreshMode = mode;
+  const refreshPromise = load();
+  const trackedPromise = refreshPromise.finally(() => {
+    if (entry.promise === trackedPromise) {
+      entry.refreshMode = null;
+    }
+  });
+  entry.promise = trackedPromise;
+  return trackedPromise;
+}
+
+async function cachedBranchPullRequests(
   context: SessionPullRequestGitContext,
   deps: LoadSessionPullRequestDeps,
+  refresh: boolean,
 ): Promise<ControlUiSessionPullRequests> {
   const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}`;
   const cached = branchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     branchCache.delete(key);
     branchCache.set(key, cached);
-    return cached.promise;
+    if (!refresh || cached.refreshMode === "forced") {
+      return cached.promise;
+    }
+    const pendingSnapshot = cached.promise;
+    const pendingRefreshMode = cached.refreshMode;
+    const pendingExpiresAt = cached.expiresAt;
+    return trackBranchRefresh(cached, "forced", async () => {
+      const snapshot = await pendingSnapshot;
+      // GitHub quota backoff stays authoritative even when a PR announcement
+      // queues this lookup behind an older normal or settled request.
+      if (snapshot.rateLimited) {
+        if (pendingRefreshMode === null) {
+          cached.expiresAt = pendingExpiresAt;
+        }
+        return snapshot;
+      }
+      return refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, cached);
+    });
   }
   const entry: CacheEntry = cached ?? {
     expiresAt: 0,
     promise: Promise.resolve({ pullRequests: [], rateLimited: false }),
+    refreshMode: null,
   };
-  // Optimistic expiry dedupes concurrent panes while the refresh is in
-  // flight; failures shorten it inside refreshBranchPullRequests.
-  entry.expiresAt = Date.now() + SUCCESS_CACHE_MS;
-  entry.promise = refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry);
+  const promise = trackBranchRefresh(entry, refresh ? "forced" : "normal", () =>
+    refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry),
+  );
   branchCache.delete(key);
   branchCache.set(key, entry);
   while (branchCache.size > CACHE_LIMIT) {
@@ -612,5 +655,5 @@ function cachedBranchPullRequests(
     }
     branchCache.delete(oldestKey);
   }
-  return entry.promise;
+  return promise;
 }

@@ -366,6 +366,31 @@ describe("main session recovery store", () => {
     expect(accessorSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKeys: [sessionKey] });
   });
 
+  it("atomically clears orphaned lifecycle fences from a healthy row", async () => {
+    await write(
+      interruptedEntry({
+        abortedLastRun: false,
+        mainRestartRecovery: undefined,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
+      }),
+    );
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      sessionId: "session-1",
+      status: "running",
+      abortedLastRun: false,
+    });
+    expect(read().restartRecoveryRuns).toBeUndefined();
+    expect(read().mainRestartRecovery).toBeUndefined();
+  });
+
   it("binds a foreground claim to its lifecycle run", async () => {
     await write(interruptedEntry());
 

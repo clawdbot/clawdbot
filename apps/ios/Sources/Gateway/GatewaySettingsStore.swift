@@ -58,8 +58,8 @@ enum GatewaySettingsStore {
     private static let gatewayCustomHeadersService = "ai.openclawfoundation.app.gateway.custom-headers"
     private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
-    struct GatewayRegistryEntry: Codable, Equatable, Identifiable {
-        enum Kind: String, Codable {
+    struct GatewayRegistryEntry: Codable, Equatable, Identifiable, Sendable {
+        enum Kind: String, Codable, Sendable {
             case manual
             case discovered
         }
@@ -85,14 +85,6 @@ enum GatewaySettingsStore {
                 lhs.useTLS == rhs.useTLS &&
                 lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
         }
-    }
-
-    struct GatewayRegistry: Codable, Equatable {
-        var version: Int = 1
-        var activeStableID: String?
-        var entries: [GatewayRegistryEntry] = []
-
-        static let empty = GatewayRegistry()
     }
 
     struct GatewayCredentialMetadata: Codable, Equatable {
@@ -480,7 +472,7 @@ enum GatewaySettingsStore {
             account: self.gatewayRegistryAccount),
             let data = json.data(using: .utf8),
             let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data),
-            registry.version == 1
+            (1...2).contains(registry.version)
         else { return .empty }
         return self.normalizedGatewayRegistry(registry)
     }
@@ -507,18 +499,12 @@ enum GatewaySettingsStore {
         }
         if activate {
             registry.activeStableID = normalized.stableID
+            if !registry.connectedStableIDs.contains(where: {
+                GatewayStableIdentifier.matches($0, normalized.stableID)
+            }) {
+                registry.connectedStableIDs.append(normalized.stableID)
+            }
         }
-        return self.saveGatewayRegistry(registry)
-    }
-
-    @discardableResult
-    static func setActiveGateway(stableID: String) -> Bool {
-        guard let stableID = GatewayStableIdentifier.exact(stableID) else { return false }
-        var registry = self.loadGatewayRegistry()
-        guard let storedID = registry.entries.first(where: {
-            GatewayStableIdentifier.matches($0.stableID, stableID)
-        })?.stableID else { return false }
-        registry.activeStableID = storedID
         return self.saveGatewayRegistry(registry)
     }
 
@@ -538,6 +524,7 @@ enum GatewaySettingsStore {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return false }
         var registry = self.loadGatewayRegistry()
         registry.entries.removeAll { GatewayStableIdentifier.matches($0.stableID, stableID) }
+        registry.connectedStableIDs.removeAll { GatewayStableIdentifier.matches($0, stableID) }
         if GatewayStableIdentifier.matches(registry.activeStableID, stableID) {
             registry.activeStableID = nil
         }
@@ -576,7 +563,8 @@ enum GatewaySettingsStore {
         self.removeLastGatewayDefaults(defaults)
     }
 
-    private static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
+    static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
+        guard self.gatewayRegistryMutationsAllowed() else { return false }
         let normalized = self.normalizedGatewayRegistry(registry)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -587,6 +575,17 @@ enum GatewaySettingsStore {
             json,
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
+    }
+
+    private static func gatewayRegistryMutationsAllowed() -> Bool {
+        guard let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+        else { return true }
+        guard let data = json.data(using: .utf8),
+              let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data)
+        else { return false }
+        return (1...2).contains(registry.version)
     }
 
     private static func normalizedGatewayRegistry(_ registry: GatewayRegistry) -> GatewayRegistry {
@@ -606,7 +605,19 @@ enum GatewaySettingsStore {
                 GatewayStableIdentifier.matches($0.stableID, activeID)
             })?.stableID
         }
-        return GatewayRegistry(version: 1, activeStableID: activeStableID, entries: entries)
+        var seenConnected = Set<GatewayStableIdentifier.Key>()
+        let connectedStableIDs: [String] = registry.connectedStableIDs.compactMap { connectedID in
+            guard let entry = entries.first(where: {
+                GatewayStableIdentifier.matches($0.stableID, connectedID)
+            }), let key = GatewayStableIdentifier.key(entry.stableID), seenConnected.insert(key).inserted
+            else { return nil }
+            return entry.stableID
+        }
+        return GatewayRegistry(
+            version: 1,
+            activeStableID: activeStableID,
+            connectedStableIDs: connectedStableIDs,
+            entries: entries)
     }
 
     private static func normalizedGatewayRegistryEntry(
@@ -637,7 +648,15 @@ enum GatewaySettingsStore {
     }
 
     private static func migrateGatewayRegistryIfNeeded(defaults: UserDefaults = .standard) {
-        if KeychainStore.loadString(service: self.gatewayService, account: self.gatewayRegistryAccount) != nil {
+        if let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+        {
+            guard let data = json.data(using: .utf8),
+                  let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data),
+                  (1...2).contains(registry.version)
+            else { return }
+            _ = self.saveGatewayRegistry(registry)
             _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
             self.removeLastGatewayDefaults(defaults)
             return
@@ -645,7 +664,10 @@ enum GatewaySettingsStore {
 
         let legacy = self.loadLegacyLastGatewayConnection(defaults: defaults)
         guard let entry = legacy.flatMap(self.gatewayRegistryEntry(from:)) else { return }
-        let registry = GatewayRegistry(activeStableID: entry.stableID, entries: [entry])
+        let registry = GatewayRegistry(
+            activeStableID: entry.stableID,
+            connectedStableIDs: [entry.stableID],
+            entries: [entry])
         guard self.saveGatewayRegistry(registry) else { return }
         _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
         self.removeLastGatewayDefaults(defaults)

@@ -273,7 +273,7 @@ export function applyServerUiPrefs(
   }
   const changed: ServerUiPrefs = {};
   for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
-    if (lastSeenRaw === null || prefs[prefKey] !== lastSeen[prefKey]) {
+    if (lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey])) {
       (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
     }
   }
@@ -331,6 +331,9 @@ async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
         await client.request("config.patch", {
           baseHash,
           raw: JSON.stringify({ ui: { prefs } }),
+          ...(prefs.sidebarEntries !== undefined
+            ? { replacePaths: ["ui.prefs.sidebarEntries"] }
+            : {}),
           note: "control-ui prefs sync",
         });
         staleConfigHashes.add(baseHash);

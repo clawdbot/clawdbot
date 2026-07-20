@@ -9,6 +9,7 @@ mod installer;
 mod notify;
 mod pending_approvals;
 mod quickchat;
+mod quickchat_widgets;
 mod tray;
 mod updater;
 
@@ -786,6 +787,8 @@ fn main() {
         quickchat::quickchat_set_shortcut,
         quickchat::quickchat_shortcut,
         quickchat::quickchat_show_dashboard,
+        quickchat_widgets::quickchat_refresh_widget_surface,
+        quickchat_widgets::quickchat_sync_widgets,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -809,6 +812,8 @@ fn main() {
         quickchat::quickchat_set_shortcut,
         quickchat::quickchat_shortcut,
         quickchat::quickchat_show_dashboard,
+        quickchat_widgets::quickchat_refresh_widget_surface,
+        quickchat_widgets::quickchat_sync_widgets,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -831,6 +836,9 @@ fn main() {
                 }
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label().starts_with("gateway-") {
+                    return;
+                }
                 let state = window.app_handle().state::<DesktopState>();
                 if !state.is_quitting() {
                     api.prevent_close();

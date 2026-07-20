@@ -152,15 +152,18 @@ import {
 } from "./audit-activity.js";
 import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
+  BoardActionParamsSchema,
   BoardCanvasDocumentSourceSchema,
   BoardChangedEventSchema,
   BoardCommandEventSchema,
   BoardCommandSchema,
+  BoardDataReadParamsSchema,
   BoardEventParamsSchema,
   BoardFocusTabCommandSchema,
   BoardGetParamsSchema,
   BoardMcpAppDescriptorSchema,
   BoardOpSchema,
+  BoardPromptAuthorizeParamsSchema,
   BoardSetChatDockCommandSchema,
   BoardSnapshotSchema,
   BoardTabCreateOpSchema,
@@ -181,6 +184,7 @@ import {
   BoardWidgetPutParamsSchema,
   BoardWidgetRemoveOpSchema,
   BoardWidgetResizeOpSchema,
+  BoardWidgetDeclaredSchema,
   BoardWidgetSchema,
 } from "./board.js";
 import {
@@ -597,6 +601,7 @@ import {
 export const ProtocolSchemas = {
   BoardTab: BoardTabSchema,
   BoardWidget: BoardWidgetSchema,
+  BoardWidgetDeclared: BoardWidgetDeclaredSchema,
   BoardSnapshot: BoardSnapshotSchema,
   BoardTabCreateOp: BoardTabCreateOpSchema,
   BoardTabUpdateOp: BoardTabUpdateOpSchema,
@@ -620,6 +625,9 @@ export const ProtocolSchemas = {
   BoardWidgetAppViewParams: BoardWidgetAppViewParamsSchema,
   BoardWidgetAppViewResult: BoardWidgetAppViewResultSchema,
   BoardEventParams: BoardEventParamsSchema,
+  BoardPromptAuthorizeParams: BoardPromptAuthorizeParamsSchema,
+  BoardDataReadParams: BoardDataReadParamsSchema,
+  BoardActionParams: BoardActionParamsSchema,
   BoardChangedEvent: BoardChangedEventSchema,
   BoardFocusTabCommand: BoardFocusTabCommandSchema,
   BoardSetChatDockCommand: BoardSetChatDockCommandSchema,

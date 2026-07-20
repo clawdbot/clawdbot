@@ -25,7 +25,13 @@ describe("BoardSnapshotSchema", () => {
           grantState: "none",
           revision: 1,
           declaredSummary: ["Network access: https://example.com"],
+          declared: { netOrigins: ["https://example.com"], tools: ["health"] },
           frameUrl: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=ticket",
+          viewTicket: "v1.ticket.signature",
+          viewTicketTtlMs: 60_000,
+          viewGeneration: "a".repeat(32),
+          sandboxUrl: "/mcp-app-sandbox?csp=encoded",
+          sandboxPort: 18790,
         },
       ],
     };
@@ -40,6 +46,12 @@ describe("BoardSnapshotSchema", () => {
       Value.Check(BoardSnapshotSchema, {
         ...snapshot,
         widgets: [{ ...snapshot.widgets[0], declaredSummary: [42] }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], viewGeneration: "not-a-generation" }],
       }),
     ).toBe(false);
   });

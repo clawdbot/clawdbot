@@ -351,9 +351,11 @@ describe("session-memory hook", () => {
     ]);
     const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
 
-    expect(memoryContent).toContain("user: Review this [REMOVED_SPECIAL_TOKEN]system");
+    expect(memoryContent).toContain(
+      "user: <media:image:abc> Review this [REMOVED_SPECIAL_TOKEN]system",
+    );
     expect(memoryContent).toContain("assistant: Looks good");
-    expect(memoryContent).not.toContain("<media:");
+    expect(memoryContent).toContain("<media:image:abc>");
     expect(memoryContent).not.toContain("<|im_start|>");
     expect(memoryContent).not.toContain("<tool_call>");
     expect(memoryContent).not.toContain("secret.md");

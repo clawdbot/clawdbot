@@ -133,6 +133,7 @@ function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -205,6 +206,9 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
     handleWidgetPromptMessage(frame, message.data);
   });
   port.start();
+  // The wrapper waits for this trusted adoption signal before using the
+  // legacy inline channel, so board widgets can wait for their view ticket.
+  port.postMessage({ type: WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE });
 }
 
 function installWidgetPromptOfferListener() {

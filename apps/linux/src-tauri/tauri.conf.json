@@ -68,9 +68,9 @@
         },
         {
           "identifier": "quickchat",
-          "description": "Quick Chat can select agents, configure its shortcut, send messages, and receive window events.",
+          "description": "Quick Chat can select agents, configure its shortcut, send messages, render hosted widgets, and receive window events.",
           "local": true,
-          "windows": ["quickchat"],
+          "webviews": ["quickchat"],
           "permissions": [
             "allow-quickchat",
             "core:event:allow-listen",

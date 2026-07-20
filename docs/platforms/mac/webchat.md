@@ -9,12 +9,26 @@ The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It connec
 
 The full chat window is a native split view:
 
-- **Sessions sidebar**: searchable session list with pinned, gateway-backed group, and recent sections. Spawned child sessions nest beneath their parent inside each section; collapsed parents summarize running, failed, and unread descendants. Context menus support session info, rename, pin, fork, read/unread, archive/restore, copy session key, and delete. The primary new-session action (or Cmd-N) creates immediately via `sessions.create`; its adjacent options popover can select an agent and request a managed worktree with an optional base ref.
+- **Sessions sidebar**: searchable session list with pinned, gateway-backed group, and recent sections. Spawned child sessions nest beneath their parent inside each section; collapsed parents summarize running, failed, and unread descendants. Context menus support session info, rename, pin, fork, read/unread, archive/restore, copy session key, and delete. The primary new-session action (or Shift-Cmd-N) creates immediately via `sessions.create`; its adjacent options popover can select an agent and request a managed worktree with an optional base ref.
 - **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), model controls, and a session actions menu. Models are grouped by provider with the default provider first, while pinned and recent models remain at the top. The controls can inherit or override the model's thinking level, choose tool-call verbosity, and toggle Fast responses. The menu can rename or fork the current session and update its pin, read, or archive state. **Sessions…** (Shift-Cmd-S) opens the Active/Archived manager for gateway search, group management, session inspection, rename, pin, archive, and restore. Select mode applies pin, unpin, archive, or delete to several active sessions while keeping individual failures visible. Separate menu checkmarks show or hide assistant reasoning and tool activity; both are on by default and remembered across launches.
 - **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Pending agent questions render as native cards with single- or multi-select options, free-text **Other** answers, expiry countdowns, and shared terminal state. Empty chats offer desktop starter prompts. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy its visible Markdown without hidden reasoning. Truncated assistant messages also offer **Open Full Message**, which loads a selectable Markdown reader. Use **Listen** for gateway TTS with a local speech fallback.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
 The anchored compact chat panel from the menu bar keeps the compact single-column layout with the same model, thinking, verbosity, and Fast controls inline, plus starter prompts, Talk Mode, voice notes, and Listen. Assistant reasoning and tool activity remain hidden in this compact surface.
+
+## Multiple Gateway windows
+
+Choose **File → New Gateway Window…** or press Cmd-N, then enter a `ws://` or
+`wss://` endpoint and its optional token or password. Each saved profile owns
+an independent Gateway connection, device-auth scope, transcript cache,
+offline outbox, route leases, and window restoration key. These windows can
+stay connected and run chats simultaneously; opening the same profile again
+focuses its existing window.
+
+The menu-bar app's configured Gateway remains the owner of Mac node
+capabilities and Talk Mode. Additional Gateway windows are operator-only, so a
+second Gateway cannot silently retarget global microphone or device controls.
+Listen/TTS and normal chat actions use the window's own Gateway connection.
 
 ## Quick Chat bar
 

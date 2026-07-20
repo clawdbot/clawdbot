@@ -51,6 +51,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     const ctxPayload = {
       Body: body,
       BodyForAgent: body,
+      RawBody: "What is this?",
       MediaPath: "/tmp/sticker.webp",
       Sticker: {
         fileId: "sticker-file",
@@ -74,6 +75,26 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
         SkipStickerMediaUnderstanding: true,
       }),
     });
+  });
+
+  it("preserves supplemental context when describing a captionless sticker", async () => {
+    describeStickerImage.mockResolvedValueOnce("A contextual sticker");
+    const ctxPayload = {
+      Body: "reply-chain context",
+      BodyForAgent: "reply-chain context",
+      RawBody: "",
+      MediaPath: "/tmp/sticker.webp",
+      Sticker: {
+        fileId: "sticker-file",
+        fileUniqueId: "sticker-unique",
+      },
+      StickerMediaIncluded: true,
+    } as TelegramMessageContext["ctxPayload"];
+
+    await dispatchWithContext({ context: createContext({ ctxPayload }) });
+
+    expect(ctxPayload.Body).toBe("[Sticker] A contextual sticker\nreply-chain context");
+    expect(ctxPayload.BodyForAgent).toBe("[Sticker] A contextual sticker\nreply-chain context");
   });
 
   it("streams drafts in private threads and forwards thread id", async () => {

@@ -61,6 +61,7 @@ describe("buildTelegramMessageContext sticker media", () => {
         {
           path: stickerPath,
           contentType: "image/webp",
+          kind: "sticker",
           stickerMetadata: {
             emoji: "🔥",
             setName: "NewSet",

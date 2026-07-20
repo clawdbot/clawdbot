@@ -5220,6 +5220,7 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
+.session-row-badge--pull-request,
 .session-row-badge--cloud[data-placement-state="active"] {
   color: var(--ok);
 }

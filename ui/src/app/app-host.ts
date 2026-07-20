@@ -604,6 +604,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       scope: context.gateway.connection.gatewayUrl,
       snapshotHash: snapshot.hash ?? undefined,
       onApplied: (patch) => {
+        if (patch.sidebarEntries !== undefined) {
+          context.navigation.update({ sidebarEntries: patch.sidebarEntries });
+        }
         if (isSupportedLocale(patch.locale)) {
           void i18n.setLocale(patch.locale);
         }

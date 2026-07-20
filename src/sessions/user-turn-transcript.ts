@@ -38,10 +38,6 @@ type PersistedUserTurnMediaFields = {
   MediaTypes?: string[];
 };
 
-type ResolvePersistedUserTurnTextOptions = {
-  hasMedia?: boolean;
-};
-
 type PersistedUserTurnMediaFieldSource = {
   MediaPath?: string | null;
   MediaPaths?: readonly (string | null | undefined)[] | null;
@@ -61,19 +57,10 @@ function normalizeTranscriptText(value: string | null | undefined): string {
   return value ?? "";
 }
 
-const CHANNEL_MEDIA_PLACEHOLDER_PATTERN = /^<media:[a-z0-9_-]+>(?:\s+\([^)]*\))?$/i;
-
-// Select text for persisted user turns. Channel-generated media placeholders
-// are dropped only when structured media is present, keeping plain text intact.
-export function resolvePersistedUserTurnText(
-  value: string | null | undefined,
-  options: ResolvePersistedUserTurnTextOptions = {},
-): string | undefined {
+// Select normalized text for persisted user turns.
+export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
   const normalized = normalizeOptionalText(value);
   if (!normalized) {
-    return undefined;
-  }
-  if (options.hasMedia === true && CHANNEL_MEDIA_PLACEHOLDER_PATTERN.test(normalized)) {
     return undefined;
   }
   return normalized;

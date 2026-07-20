@@ -45,6 +45,41 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Alpha status"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Beta chart"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Main"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Operations"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Queue depth"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/command-palette.ts",

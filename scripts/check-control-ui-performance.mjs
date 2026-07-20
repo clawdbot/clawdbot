@@ -12,10 +12,11 @@ const KIB = 1024;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // 312 KiB accompanies the live-narration sidebar feature (2026-07): the
-  // controller is a lazy chunk; only its thin element/pref wiring (~1.5 KiB)
-  // stays in startup, which exhausted the previous ratchet's headroom.
-  startupJsGzipBytes: 312 * KIB,
+  // 313 KiB accompanies the widget sandbox-origin diagnostics (2026-07): the
+  // startup catalog gained the operator hint strings and main sat within
+  // ~0.1 KiB of the previous ceiling, failing source builds whose zlib packs
+  // slightly worse than CI's. One KiB restores explicit headroom.
+  startupJsGzipBytes: 313 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,

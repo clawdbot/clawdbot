@@ -37,15 +37,20 @@ import {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resolveTelegramTextContent,
-  resolveTelegramMediaPlaceholder,
+  resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
+  resolveTelegramTextContent,
   type TelegramForwardedContext,
+  type TelegramMediaKind,
   type TelegramTextEntity,
 } from "./body-helpers.js";
 import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
-export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
+export type {
+  TelegramForwardedContext,
+  TelegramMediaKind,
+  TelegramTextEntity,
+} from "./body-helpers.js";
 export {
   buildSenderLabel,
   buildSenderName,
@@ -54,7 +59,7 @@ export {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resolveTelegramMediaPlaceholder,
+  resolveTelegramPrimaryMedia,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -589,6 +594,7 @@ export type TelegramReplyTarget = {
   senderId?: string;
   senderUsername?: string;
   body?: string;
+  mediaType?: TelegramMediaKind;
   kind: "reply" | "quote";
   source: "reply_to_message" | "external_reply";
   quoteText?: string;
@@ -617,6 +623,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
 
   const replyLike = reply ?? externalReply;
+  const replyMedia = resolveTelegramPrimaryMedia(replyLike);
   const rawReplyText =
     replyLike && typeof replyLike.text === "string"
       ? replyLike.text
@@ -631,19 +638,16 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
-      body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
-      if (!body) {
-        const locationData = extractTelegramLocation(replyLike);
-        if (locationData) {
-          body = formatLocationText(locationData);
-        }
+      const locationData = extractTelegramLocation(replyLike);
+      if (locationData) {
+        body = formatLocationText(locationData);
       }
     }
   }
   if (!body && !replyLike) {
     return null;
   }
-  if (!body && !filteredQuoteText && !filteredReplyText) {
+  if (!body && !replyMedia && !filteredQuoteText && !filteredReplyText) {
     return null;
   }
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
@@ -665,6 +669,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
     senderUsername: replyLike?.from?.username ?? undefined,
     body: body || undefined,
+    mediaType: replyMedia?.kind,
     kind,
     source,
     quoteText: kind === "quote" ? quoteText : undefined,

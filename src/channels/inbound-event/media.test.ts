@@ -45,18 +45,16 @@ describe("channel inbound media facts", () => {
     expect(formatMediaPlaceholderText([])).toBe("");
   });
 
-  it("replaces optimistic media placeholders and preserves real captions", () => {
+  it("returns unavailable notices alone or appended to real captions", () => {
     expect(
       formatInboundMediaUnavailableText({
-        body: "<media:image>",
-        mediaPlaceholder: "<media:image>",
+        body: "",
         notice: "[test image attachment unavailable]",
       }),
     ).toBe("[test image attachment unavailable]");
     expect(
       formatInboundMediaUnavailableText({
         body: "please inspect this",
-        mediaPlaceholder: "<media:image>",
         notice: "[test image attachment unavailable]",
       }),
     ).toBe("please inspect this\n\n[test image attachment unavailable]");

@@ -292,6 +292,7 @@ internal fun OpenClawWearApp(
         speaking = speaking,
         realtimeCapturing = state.realtimeCapturing,
         realtimePlaying = state.realtimePlaying,
+        realtimeMouthLevel = state.realtimeMouthLevel,
         realtimePlaybackFailed = state.realtimePlaybackFailed,
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
         actionBusy =

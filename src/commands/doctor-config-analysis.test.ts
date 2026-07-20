@@ -6,6 +6,7 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   formatConfigPath,
   noteImplicitFallbackClobberWarnings,
+  noteSandboxOriginProxyWarning,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
 } from "./doctor-config-analysis.js";
@@ -346,5 +347,35 @@ describe("collectImplicitFallbackClobberWarnings", () => {
         '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
     ]);
+  });
+});
+
+describe("noteSandboxOriginProxyWarning", () => {
+  function warningsFor(cfg: OpenClawConfig): string[] {
+    noteMock.mockClear();
+    noteSandboxOriginProxyWarning(cfg);
+    return noteMock.mock.calls.map((call) => String(call[0]));
+  }
+
+  it("warns for trusted-proxy gateways without a sandbox origin", () => {
+    const warnings = warningsFor({
+      gateway: { auth: { mode: "trusted-proxy" } },
+    } as OpenClawConfig);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("mcp.apps.sandboxOrigin is not set");
+    expect(warnings[0]).toContain("sandbox listener");
+  });
+
+  it("stays silent when a sandbox origin is configured", () => {
+    const warnings = warningsFor({
+      gateway: { auth: { mode: "trusted-proxy" } },
+      mcp: { apps: { sandboxOrigin: "https://widgets.example.com" } },
+    } as OpenClawConfig);
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("stays silent for non-proxy auth modes", () => {
+    expect(warningsFor({ gateway: { auth: { mode: "token" } } } as OpenClawConfig)).toHaveLength(0);
+    expect(warningsFor({} as OpenClawConfig)).toHaveLength(0);
   });
 });

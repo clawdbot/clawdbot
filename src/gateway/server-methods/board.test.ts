@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
-import { InMemoryBoardStore } from "../../boards/board-store.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -12,7 +11,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
-import { createBoardHandlers } from "./board.js";
+import {
+  createBoardHarness as createHarness,
+  createMcpAppDependencies,
+} from "./board.test-support.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -25,63 +27,6 @@ vi.mock("./sessions.runtime.js", () => ({
     resolved: {},
   })),
 }));
-
-type BoardMcpAppDependencies = NonNullable<Parameters<typeof createBoardHandlers>[3]>;
-
-function createMcpAppDependencies(): BoardMcpAppDependencies {
-  let lease = 0;
-  const runtime = { getCatalog: vi.fn() };
-  return {
-    resolveActiveView: vi.fn(async ({ viewId }: { viewId: string }) => ({
-      runtime,
-      view: {
-        viewId,
-        serverName: "server",
-        toolName: "tool",
-        uiResourceUri: "ui://resource",
-        toolCallId: "call",
-        allowedAppToolNames: new Set(["server.refresh", "server.search"]),
-      },
-    })),
-    resolveAllowedToolNames: vi.fn(async () => ["server.refresh", "server.search"]),
-    mintFromTranscript: vi.fn(async ({ readOnly }: { readOnly: boolean }) => {
-      lease += 1;
-      return {
-        runtime,
-        view: {
-          viewId: `mcp-app-board-${lease}`,
-          expiresAtMs: 10_000 + lease,
-          ...(readOnly ? { readOnly: true as const } : {}),
-        },
-      };
-    }),
-  } as unknown as BoardMcpAppDependencies;
-}
-
-function createHarness(
-  readCanvasHtml?: Parameters<typeof createBoardHandlers>[2],
-  mcpApp: BoardMcpAppDependencies = createMcpAppDependencies(),
-  store: InMemoryBoardStore = new InMemoryBoardStore(),
-) {
-  const broadcast = vi.fn();
-  const handlers = createBoardHandlers(store, undefined, readCanvasHtml, mcpApp);
-  const invoke = async (method: string, params: Record<string, unknown>) => {
-    const respond = vi.fn<RespondFn>();
-    await handlers[method]!({
-      req: { type: "req", id: "test", method, params },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        broadcast,
-        getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
-      } as unknown as GatewayRequestContext,
-    });
-    return respond;
-  };
-  return { store, broadcast, invoke, mcpApp };
-}
 
 describe("board gateway methods", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -106,6 +51,9 @@ describe("board gateway methods", () => {
           "board.widget.grant",
           "board.widget.appView",
           "board.event",
+          "board.prompt.authorize",
+          "board.data.read",
+          "board.action",
         ].map((method) => [method, resolveCoreOperatorGatewayMethodScope(method)]),
       ),
     ).toEqual({
@@ -115,6 +63,9 @@ describe("board gateway methods", () => {
       "board.widget.grant": "operator.approvals",
       "board.widget.appView": "operator.read",
       "board.event": "operator.write",
+      "board.prompt.authorize": "operator.read",
+      "board.data.read": "operator.read",
+      "board.action": "operator.write",
     });
   });
 
@@ -194,6 +145,19 @@ describe("board gateway methods", () => {
     expect(statusFrameUrl).toMatch(
       /^\/__openclaw__\/board\/agent%3Amain%3Amain\/status\/index\.html\?bt=v1\./u,
     );
+    expect(first.widgets.find((widget) => widget.name === "plain")).toMatchObject({
+      viewTicket: expect.stringMatching(/^v1\./u),
+      viewTicketTtlMs: 120_000,
+      viewGeneration: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/u),
+      sandboxPort: 18790,
+    });
+    expect(first.widgets.find((widget) => widget.name === "status")).toMatchObject({
+      viewTicket: expect.stringMatching(/^v1\./u),
+      viewGeneration: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/u),
+      sandboxPort: 18790,
+    });
     expect(first.widgets.find((widget) => widget.name === "status")?.declaredSummary).toEqual([
       "Network access: https://status.example",
       "Tool access: status.refresh",
@@ -211,6 +175,29 @@ describe("board gateway methods", () => {
     expect(second.widgets.find((widget) => widget.name === "plain")?.frameUrl).not.toBe(
       plainFrameUrl,
     );
+  });
+
+  it("starts the shared sandbox host only when an admitted widget needs it", async () => {
+    let sandboxPort: number | undefined;
+    const ensureSandboxHostPort = vi.fn(async () => {
+      sandboxPort = 18790;
+      return sandboxPort;
+    });
+    const { invoke } = createHarness(undefined, undefined, undefined, {
+      getMcpAppSandboxPort: () => sandboxPort,
+      ensureSandboxHostPort,
+    });
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "status",
+      content: { kind: "html", html: "<p>ok</p>" },
+    });
+
+    const response = await invoke("board.get", { sessionKey: "agent:main:main" });
+    const snapshot = response.mock.calls[0]?.[1] as BoardSnapshot;
+
+    expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
+    expect(snapshot.widgets[0]).toMatchObject({ sandboxPort: 18790 });
   });
 
   it("applies updates and broadcasts board.changed", async () => {
@@ -502,7 +489,7 @@ describe("board gateway methods", () => {
     );
     const authorizeAppInteraction = vi
       .mocked(mcpApp.mintFromTranscript)
-      .mock.calls.at(-1)?.[0].authorizeAppInteraction;
+      .mock.calls.at(-1)?.[0]?.authorizeAppInteraction;
     if (!authorizeAppInteraction) {
       throw new Error("interactive board lease must carry a grant check");
     }
@@ -575,10 +562,14 @@ describe("board gateway methods", () => {
     });
 
     expect(readCanvasDocument).toHaveBeenCalledWith("cv_123");
-    expect(store.readWidgetHtml("session", "canvas-widget")).toMatchObject({
-      html: "<!doctype html><p>same wrapped bytes</p>",
-      revision: 1,
-    });
+    const stored = store.readWidgetHtml("session", "canvas-widget");
+    expect(stored).toMatchObject({ revision: 1 });
+    expect(stored && "html" in stored ? stored.html : "").toContain(
+      "<!doctype html><p>same wrapped bytes</p>",
+    );
+    expect(stored && "html" in stored ? stored.html : "").toContain(
+      "openclaw:widget-bridge-port-offer",
+    );
     expect(response).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ widgets: [expect.objectContaining({ name: "canvas-widget" })] }),
@@ -587,6 +578,81 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       revision: 1,
       widget: "canvas-widget",
+    });
+  });
+
+  it("installs the trusted bridge before arbitrary complete HTML", async () => {
+    const { invoke, store } = createHarness();
+    const untrusted = '<!doctype html><script>void window.openclaw?.prompt.send("forged")</script>';
+
+    const response = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "complete-document",
+      title: "Complete document",
+      content: { kind: "html", html: untrusted },
+      declared: {
+        netOrigins: ["https://api.open-meteo.com"],
+        tools: ["prompt"],
+      },
+    });
+
+    expect(response.mock.calls[0]?.[0]).toBe(true);
+    const stored = store.readWidgetHtml("session", "complete-document");
+    const html = stored && "html" in stored ? stored.html : "";
+    expect(html).toContain("openclaw:widget-host-init-ack");
+    expect(html.indexOf("openclaw:widget-bridge-port-offer")).toBeLessThan(html.indexOf(untrusted));
+    expect(html).toContain("connect-src https://api.open-meteo.com");
+  });
+
+  it("uses one canonical declaration for wrapper bytes and persisted grants", async () => {
+    const { invoke, store } = createHarness();
+    const content = { kind: "html" as const, html: "<p>canonical</p>" };
+
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "canonical",
+      content,
+      declared: {
+        netOrigins: ["https://z.example", "https://a.example", "https://z.example"],
+        tools: ["sessions.list", "prompt", "prompt"],
+      },
+    });
+    await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "canonical",
+      decision: "granted",
+      revision: 1,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+    });
+    const granted = store.readWidgetHtml("session", "canonical");
+
+    const updated = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "canonical",
+      content,
+      declared: {
+        netOrigins: ["https://a.example", "https://z.example"],
+        tools: ["prompt", "sessions.list"],
+      },
+    });
+
+    expect(updated.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        widgets: [
+          expect.objectContaining({
+            name: "canonical",
+            grantState: "granted",
+            declared: {
+              netOrigins: ["https://a.example", "https://z.example"],
+              tools: ["prompt", "sessions.list"],
+            },
+          }),
+        ],
+      }),
+    );
+    expect(store.readWidgetHtml("session", "canonical")).toMatchObject({
+      sha256: granted && "sha256" in granted ? granted.sha256 : "missing",
+      grantState: "granted",
     });
   });
 
@@ -705,6 +771,170 @@ describe("board gateway methods", () => {
     expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
     expect(duplicate.mock.calls[0]?.[1]).toEqual({ ok: true, appended: false });
     expect(peekSystemEvents("session")).toEqual(['[dashboard] {"count":1} on widget counter']);
+  });
+
+  it("binds state.emit notices to the widget view ticket", async () => {
+    const { invoke } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "counter",
+      content: { kind: "html", html: "ok" },
+    });
+    const board = await invoke("board.get", { sessionKey: "session" });
+    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const ticket = snapshot.widgets[0]?.viewTicket;
+
+    const response = await invoke("board.event", { ticket, payload: { count: 2 } });
+
+    expect(response.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
+    expect(peekSystemEvents("session")).toEqual(['[dashboard] {"count":2} on widget counter']);
+  });
+
+  it("skips prompt confirmation only for an explicitly granted prompt tool", async () => {
+    const { invoke, store } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "plain",
+      content: { kind: "html", html: "plain" },
+    });
+    let board = await invoke("board.get", { sessionKey: "session" });
+    let snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const plain = await invoke("board.prompt.authorize", {
+      ticket: snapshot.widgets.find((widget) => widget.name === "plain")?.viewTicket,
+    });
+    expect(plain.mock.calls[0]?.[1]).toEqual({ confirmationRequired: true });
+
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "approved",
+      content: { kind: "html", html: "approved" },
+      declared: { tools: ["prompt"] },
+    });
+    await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "approved",
+      decision: "granted",
+      revision: 1,
+      instanceId: store.getSnapshot("session").widgets.find((widget) => widget.name === "approved")
+        ?.instanceId,
+    });
+    board = await invoke("board.get", { sessionKey: "session" });
+    snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const approved = await invoke("board.prompt.authorize", {
+      ticket: snapshot.widgets.find((widget) => widget.name === "approved")?.viewTicket,
+    });
+    expect(approved.mock.calls[0]?.[1]).toEqual({ confirmationRequired: false });
+  });
+
+  it("enforces data bindings against the granted tool set", async () => {
+    const readDataBinding = vi.fn(async () => ({ sessions: ["one"] }));
+    const { invoke, store } = createHarness(undefined, { readDataBinding });
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "reader",
+      content: { kind: "html", html: "reader" },
+    });
+    let board = await invoke("board.get", { sessionKey: "session" });
+    let snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const denied = await invoke("board.data.read", {
+      ticket: snapshot.widgets[0]?.viewTicket,
+      bindingId: "sessions.list",
+      params: { limit: 2 },
+    });
+    expect(denied.mock.calls[0]?.[0]).toBe(false);
+    expect(readDataBinding).not.toHaveBeenCalled();
+
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "reader",
+      content: { kind: "html", html: "reader" },
+      declared: { tools: ["sessions.list"] },
+    });
+    await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "reader",
+      decision: "granted",
+      revision: 2,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+    });
+    board = await invoke("board.get", { sessionKey: "session" });
+    snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const allowed = await invoke("board.data.read", {
+      ticket: snapshot.widgets[0]?.viewTicket,
+      bindingId: "sessions.list",
+      params: { limit: 2 },
+    });
+    expect(allowed.mock.calls[0]?.[1]).toEqual({ sessions: ["one"] });
+    expect(readDataBinding).toHaveBeenCalledWith(
+      "sessions.list",
+      { limit: 2 },
+      expect.objectContaining({ params: expect.any(Object) }),
+    );
+  });
+
+  it("rejects unknown data bindings inside the gateway allowlist boundary", async () => {
+    const { invoke, store } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "reader",
+      content: { kind: "html", html: "reader" },
+      declared: { tools: ["secrets.dump"] },
+    });
+    await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "reader",
+      decision: "granted",
+      revision: 1,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+    });
+    const board = await invoke("board.get", { sessionKey: "session" });
+    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const response = await invoke("board.data.read", {
+      ticket: snapshot.widgets[0]?.viewTicket,
+      bindingId: "secrets.dump",
+    });
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("not allowed") }),
+    );
+  });
+
+  it("runs only the exact granted cron job capability", async () => {
+    const triggerCronJob = vi.fn(async (jobId: string) => ({ ok: true, jobId }));
+    const { invoke, store } = createHarness(undefined, { triggerCronJob });
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "runner",
+      content: { kind: "html", html: "runner" },
+      declared: { tools: ["cron.trigger:job-1"] },
+    });
+    await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "runner",
+      decision: "granted",
+      revision: 1,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+    });
+    const board = await invoke("board.get", { sessionKey: "session" });
+    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const ticket = snapshot.widgets[0]?.viewTicket;
+
+    const denied = await invoke("board.action", {
+      ticket,
+      action: "cron.trigger",
+      jobId: "job-2",
+    });
+    expect(denied.mock.calls[0]?.[0]).toBe(false);
+    expect(triggerCronJob).not.toHaveBeenCalled();
+
+    const allowed = await invoke("board.action", {
+      ticket,
+      action: "cron.trigger",
+      jobId: "job-1",
+    });
+    expect(allowed.mock.calls[0]?.[1]).toEqual({ ok: true, jobId: "job-1" });
+    expect(triggerCronJob).toHaveBeenCalledWith("job-1", expect.any(Object));
   });
 
   it("caps board.event payloads at 8KB and notices at 500 characters", async () => {

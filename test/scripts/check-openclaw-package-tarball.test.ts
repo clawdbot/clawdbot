@@ -17,6 +17,7 @@ import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-d
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
+const NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES = 1024 * 1024;
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
 const DEEP_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts";
 const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
@@ -138,6 +139,36 @@ describe("check-openclaw-package-tarball", () => {
     expect(extra.status).not.toBe(0);
     expect(extra.stderr).toContain("Unexpected OpenClaw package tarball check argument: extra");
     expect(extra.stderr).not.toContain("OpenClaw package tarball does not exist");
+  });
+
+  it("accepts tarballs whose entry list exceeds Node's default spawn buffer", () => {
+    const longNameSuffix = "x".repeat(80);
+    const largeEntryList = Object.fromEntries(
+      Array.from({ length: 8_000 }, (_, index) => [
+        `dist/control-ui/assets/large-entry-list/asset-${String(index).padStart(5, "0")}-${longNameSuffix}.txt`,
+        "",
+      ]),
+    );
+
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n", ...largeEntryList },
+      (tarball) => {
+        const listing = spawnSync("tar", ["-tf", tarball], {
+          encoding: "utf8",
+          maxBuffer: NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES * 2,
+        });
+        expect(listing.status, listing.stderr).toBe(0);
+        expect(Buffer.byteLength(listing.stdout)).toBeGreaterThan(
+          NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES,
+        );
+
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+    );
   });
 
   it.runIf(process.platform !== "win32")(

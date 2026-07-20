@@ -1612,6 +1612,7 @@ private fun GatewaySettingsScreen(
   val manualTls by viewModel.manualTls.collectAsState()
   val pairedGateways by viewModel.pairedGateways.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  val connectedGatewayStableIds by viewModel.connectedGatewayStableIds.collectAsState()
   val discoveredGateways by viewModel.gateways.collectAsState()
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -1879,8 +1880,17 @@ private fun GatewaySettingsScreen(
                 }
               },
               trailing = {
-                TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
-                  Text(nativeString("Forget"))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Switch(
+                    checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
+                    onCheckedChange = { enabled ->
+                      viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
+                    },
+                    enabled = entry.stableId != activeGatewayStableId,
+                  )
+                  TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
+                    Text(nativeString("Forget"))
+                  }
                 }
               },
               onClick =

@@ -10,12 +10,14 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 export type TelegramMediaRef = {
-  path: string;
+  kind: TelegramMediaKind;
+  path?: string;
   contentType?: string;
   stickerMetadata?: StickerMetadata;
   sourceMessageId?: string;

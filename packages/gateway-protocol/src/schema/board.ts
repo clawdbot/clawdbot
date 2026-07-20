@@ -21,6 +21,11 @@ export const BoardSizeSchema = Type.Union([
   Type.Literal("full"),
 ]);
 
+export const BOARD_CRON_JOB_ID_MAX_LENGTH = 256;
+export const BOARD_CRON_TRIGGER_PREFIX = "cron.trigger:";
+export const BOARD_WIDGET_TOOL_MAX_LENGTH =
+  BOARD_CRON_TRIGGER_PREFIX.length + BOARD_CRON_JOB_ID_MAX_LENGTH;
+
 export const BoardTabSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.String({ minLength: 1, maxLength: 80 }),
@@ -28,6 +33,18 @@ export const BoardTabSchema = closedObject({
   chatDock: BoardChatDockSchema,
 });
 export type BoardTab = Static<typeof BoardTabSchema>;
+
+export const BoardWidgetDeclaredSchema = closedObject({
+  netOrigins: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 2048 }), { maxItems: 32 }),
+  ),
+  tools: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: BOARD_WIDGET_TOOL_MAX_LENGTH }), {
+      maxItems: 64,
+    }),
+  ),
+});
+export type BoardWidgetDeclared = Static<typeof BoardWidgetDeclaredSchema>;
 
 export const BoardWidgetSchema = closedObject({
   name: BoardWidgetNameSchema,
@@ -46,7 +63,14 @@ export const BoardWidgetSchema = closedObject({
   revision: Type.Integer({ minimum: 1 }),
   instanceId: Type.Optional(NonEmptyString),
   declaredSummary: Type.Optional(Type.Array(Type.String())),
+  declared: Type.Optional(BoardWidgetDeclaredSchema),
   frameUrl: Type.Optional(Type.String()),
+  viewTicket: Type.Optional(Type.String()),
+  viewTicketTtlMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  viewGeneration: Type.Optional(Type.String({ pattern: "^[a-f0-9]{32}$" })),
+  sandboxUrl: Type.Optional(Type.String()),
+  sandboxPort: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
+  sandboxOrigin: Type.Optional(Type.String()),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 
@@ -170,12 +194,7 @@ export const BoardWidgetPutParamsSchema = closedObject({
       after: Type.Optional(BoardWidgetNameSchema),
     }),
   ),
-  declared: Type.Optional(
-    closedObject({
-      netOrigins: Type.Optional(Type.Array(Type.String())),
-      tools: Type.Optional(Type.Array(Type.String())),
-    }),
-  ),
+  declared: Type.Optional(BoardWidgetDeclaredSchema),
 });
 export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
 /** Materialized input accepted by the board store after gateway source resolution. */
@@ -206,12 +225,45 @@ export const BoardWidgetAppViewResultSchema = closedObject({
 });
 export type BoardWidgetAppViewResult = Static<typeof BoardWidgetAppViewResultSchema>;
 
-export const BoardEventParamsSchema = closedObject({
+export const BoardViewTicketSchema = Type.String({ minLength: 1, maxLength: 2048 });
+
+export const BoardLegacyEventParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   widget: BoardWidgetNameSchema,
   payload: Type.Unknown(),
 });
+export const BoardTicketEventParamsSchema = closedObject({
+  ticket: BoardViewTicketSchema,
+  payload: Type.Unknown(),
+});
+export const BoardEventParamsSchema = Type.Union([
+  BoardLegacyEventParamsSchema,
+  BoardTicketEventParamsSchema,
+]);
 export type BoardEventParams = Static<typeof BoardEventParamsSchema>;
+
+export const BoardPromptAuthorizeParamsSchema = closedObject({
+  ticket: BoardViewTicketSchema,
+});
+export type BoardPromptAuthorizeParams = Static<typeof BoardPromptAuthorizeParamsSchema>;
+
+export const BoardDataReadParamsSchema = closedObject({
+  ticket: BoardViewTicketSchema,
+  bindingId: Type.String({ minLength: 1, maxLength: 64 }),
+  params: Type.Optional(
+    Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
+      maxProperties: 64,
+    }),
+  ),
+});
+export type BoardDataReadParams = Static<typeof BoardDataReadParamsSchema>;
+
+export const BoardActionParamsSchema = closedObject({
+  ticket: BoardViewTicketSchema,
+  action: Type.Literal("cron.trigger"),
+  jobId: Type.String({ minLength: 1, maxLength: BOARD_CRON_JOB_ID_MAX_LENGTH }),
+});
+export type BoardActionParams = Static<typeof BoardActionParamsSchema>;
 
 export const BoardChangedEventSchema = closedObject({
   sessionKey: NonEmptyString,

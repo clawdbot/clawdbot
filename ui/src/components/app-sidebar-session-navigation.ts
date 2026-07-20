@@ -165,6 +165,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         placementState: row.placement?.state,
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
+        hasOpenPullRequest: context?.sessions.hasOpenPullRequest?.(row.key) === true,
         unread: row.unread === true,
         attention: this.resolveSessionAttention(row),
         agentStatusNote: this.resolveSessionAgentStatus(row)?.note,

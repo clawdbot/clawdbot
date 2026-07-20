@@ -1732,6 +1732,10 @@ html.openclaw-native-macos
   width: 12px;
   height: 12px;
   stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-recent-session--dragging {

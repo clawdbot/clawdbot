@@ -216,6 +216,10 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       );
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("1 could not be fetched and was skipped");
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        MediaPaths: ["/tmp/p1.jpg", ""],
+        MediaTypes: ["image/png", "image"],
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -242,6 +246,10 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("0 of 2 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        MediaTypes: ["image", "image"],
+      });
+      expect(replySpy.mock.calls[0]?.[0]?.MediaPaths).toBeUndefined();
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -272,6 +280,10 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("1 of 3 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        MediaPaths: ["/tmp/p1.jpg", "", ""],
+        MediaTypes: ["image/png", "image", "image"],
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }

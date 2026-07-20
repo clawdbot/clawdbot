@@ -46,6 +46,8 @@ final class WebChatManager {
     private var panelRoute: WebChatRoute?
     private var currentChatRoute: WebChatRoute?
     private var cachedPreferredSessionKey: String?
+    private var profileWindowControllers: [String: WebChatSwiftUIWindowController] = [:]
+    private var profileWindowRoutes: [String: WebChatRoute] = [:]
 
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
@@ -88,6 +90,61 @@ final class WebChatManager {
         self.windowController = controller
         self.windowRoute = route
         self.currentChatRoute = route
+        controller.show()
+    }
+
+    func newGatewayWindow() {
+        guard let draft = Self.promptForGatewayProfile() else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let profile = try await MacGatewayProfileStore.shared.upsert(
+                    name: draft.name,
+                    url: draft.url,
+                    token: draft.token,
+                    password: draft.password)
+                try await self.show(profile: profile)
+            } catch {
+                Self.showProfileError(error)
+            }
+        }
+    }
+
+    func show(profile: MacGatewayProfile) async throws {
+        let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+        if let existing = self.profileWindowControllers[profile.id] {
+            existing.show()
+            Task {
+                try? await connection.refresh()
+            }
+            return
+        }
+        let sessionKey = await connection.mainSessionKey()
+        // MainActor methods are reentrant across the fleet and connection awaits.
+        // A concurrent Cmd-N for the same profile must reuse the first completed window.
+        if let existing = self.profileWindowControllers[profile.id] {
+            existing.show()
+            Task {
+                try? await connection.refresh()
+            }
+            return
+        }
+        let route = WebChatRoute(sessionKey: sessionKey, agentID: nil)
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: route.sessionKey,
+            agentID: route.agentID,
+            presentation: .window,
+            connection: connection,
+            gatewayID: profile.id,
+            windowTitle: "\(profile.name) — OpenClaw",
+            windowAutosaveName: "OpenClawChatWindow-\(profile.id)")
+        controller.onSessionKeyChanged = { [weak self, weak controller] key in
+            guard let self, let controller, self.profileWindowControllers[profile.id] === controller else { return }
+            self.profileWindowRoutes[profile.id] = (self.profileWindowRoutes[profile.id] ?? route)
+                .replacingSessionKey(key)
+        }
+        self.profileWindowControllers[profile.id] = controller
+        self.profileWindowRoutes[profile.id] = route
         controller.show()
     }
 
@@ -162,6 +219,12 @@ final class WebChatManager {
         self.panelRoute = nil
         self.currentChatRoute = nil
         self.cachedPreferredSessionKey = nil
+        for controller in self.profileWindowControllers.values {
+            controller.close()
+        }
+        self.profileWindowControllers.removeAll()
+        self.profileWindowRoutes.removeAll()
+        Task { await MacGatewayConnectionFleet.shared.shutdown() }
     }
 
     func close() {
@@ -178,5 +241,53 @@ final class WebChatManager {
         requestedRoute: WebChatRoute) -> Bool
     {
         currentRoute == requestedRoute
+    }
+
+    private struct GatewayProfileDraft {
+        let name: String
+        let url: URL
+        let token: String?
+        let password: String?
+    }
+
+    private static func promptForGatewayProfile() -> GatewayProfileDraft? {
+        let nameField = NSTextField(string: "")
+        nameField.placeholderString = "Gateway name"
+        let urlField = NSTextField(string: "wss://")
+        urlField.placeholderString = "wss://gateway.example.com"
+        let tokenField = NSSecureTextField(string: "")
+        tokenField.placeholderString = "Token (optional)"
+        let passwordField = NSSecureTextField(string: "")
+        passwordField.placeholderString = "Password (optional)"
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: "Name"), nameField],
+            [NSTextField(labelWithString: "Gateway URL"), urlField],
+            [NSTextField(labelWithString: "Token"), tokenField],
+            [NSTextField(labelWithString: "Password"), passwordField],
+        ])
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 1).width = 320
+        grid.rowSpacing = 8
+
+        let alert = NSAlert()
+        alert.messageText = "New Gateway Window"
+        alert.informativeText = "This window keeps an independent connection to its Gateway."
+        alert.accessoryView = grid
+        alert.addButton(withTitle: "Open Window")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let url = URL(string: urlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return GatewayProfileDraft(
+            name: nameField.stringValue,
+            url: url,
+            token: tokenField.stringValue,
+            password: passwordField.stringValue)
+    }
+
+    private static func showProfileError(_ error: Error) {
+        let alert = NSAlert(error: error)
+        alert.messageText = "Could Not Open Gateway Window"
+        alert.runModal()
     }
 }

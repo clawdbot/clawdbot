@@ -227,7 +227,7 @@ async function createAudioCtx(params?: {
     content: params?.content ?? createSafeAudioFixtureBuffer(2048),
   });
   return {
-    Body: params?.body ?? "<media:audio>",
+    Body: params?.body ?? "",
     MediaPath: mediaPath,
     MediaType: params?.mediaType ?? "audio/ogg",
   } satisfies MsgContext;
@@ -446,7 +446,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("keeps caption for command parsing when audio has user text", async () => {
     const ctx = await createAudioCtx({
-      body: "<media:audio> /capture status",
+      body: "/capture status",
     });
     ctx.CommandAuthorized = false;
     const result = await applyMediaUnderstanding({
@@ -467,7 +467,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("handles URL-only attachments for audio transcription", async () => {
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "",
       MediaUrl: "https://example.com/note.ogg",
       MediaType: "audio/ogg",
       ChatType: "direct",
@@ -546,7 +546,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "",
       MediaUrl: "https://example.com/tiny.ogg",
       MediaType: "audio/ogg",
       ChatType: "dm",
@@ -668,7 +668,7 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedAudio).toBe(false);
     expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
   });
 
   it("falls back to CLI model when provider fails", async () => {
@@ -852,7 +852,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
     const [command] = getRunExecCall();
     expect(command).toBe("sherpa-onnx-offline");
   });
@@ -994,7 +994,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
@@ -1026,7 +1026,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
@@ -1039,7 +1039,7 @@ describe("applyMediaUnderstanding", () => {
       content: "image-bytes",
     });
     const ctx: MsgContext = {
-      Body: "<media:image>",
+      Body: "",
       MediaPath: imagePath,
       MediaType: "image/jpeg",
     };
@@ -1091,7 +1091,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:image> show Dom",
+      Body: "show Dom",
       MediaPath: imagePath,
       MediaType: "image/jpeg",
     };
@@ -1137,7 +1137,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:image>",
+      Body: "",
       MediaPath: imagePath,
       MediaType: "image/jpeg",
     };
@@ -1178,7 +1178,7 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(imagePath, "image-bytes");
     const describeImage = vi.fn(async () => ({ text: "workspace image" }));
     const ctx: MsgContext = {
-      Body: "<media:image>",
+      Body: "",
       MediaPath: relativeImagePath,
       MediaType: "image/jpeg",
       MediaWorkspaceDir: mediaWorkspaceDir,
@@ -1227,7 +1227,7 @@ describe("applyMediaUnderstanding", () => {
     });
     const describeImage = vi.fn(async () => ({ text: "normalized image" }));
     const ctx: MsgContext = {
-      Body: "<media:image>",
+      Body: "",
       MediaPath: imagePath,
       MediaType: "image/heic",
     };
@@ -1274,7 +1274,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "",
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
@@ -1358,7 +1358,7 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(audioPathB, audioBytes);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "",
       MediaPaths: [audioPathA, audioPathB],
       MediaTypes: ["audio/ogg", "audio/ogg"],
     };
@@ -1402,7 +1402,7 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(tinyPath, tinyAudio);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "",
       MediaPaths: [validPath, tinyPath],
       MediaTypes: ["audio/ogg", "audio/ogg"],
     };
@@ -1452,7 +1452,7 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
-      Body: "<media:mixed>",
+      Body: "",
       MediaPaths: [imagePath, audioPath, videoPath],
       MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
     };
@@ -1513,7 +1513,7 @@ describe("applyMediaUnderstanding", () => {
     const describeImage = vi.fn(async () => ({ text: "image ok" }));
     const transcribeAudio = vi.fn(async () => ({ text: "audio ok" }));
     const ctx: MsgContext = {
-      Body: "<media:mixed>",
+      Body: "",
       MediaPaths: [imagePath, audioPath, filePath],
       MediaTypes: ["image/jpeg", "audio/ogg", "text/plain"],
     };
@@ -1560,7 +1560,7 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
-      Body: "<media:mixed>",
+      Body: "",
       MediaPaths: [imagePath, audioPath, videoPath],
       MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
     };

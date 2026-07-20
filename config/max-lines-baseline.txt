@@ -295,7 +295,6 @@ extensions/telegram/src/bot-native-commands.ts
 extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
-extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts
 extensions/telegram/src/bot/delivery.test.ts
 extensions/telegram/src/channel.ts
 extensions/telegram/src/draft-stream.test.ts
@@ -304,7 +303,6 @@ extensions/telegram/src/fetch.test.ts
 extensions/telegram/src/fetch.ts
 extensions/telegram/src/format.ts
 extensions/telegram/src/lane-delivery.test.ts
-extensions/telegram/src/message-cache.test.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/polling-session.ts

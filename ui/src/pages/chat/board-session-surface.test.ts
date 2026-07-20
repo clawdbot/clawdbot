@@ -70,6 +70,8 @@ describe("board session shell", () => {
         dockSize: { height: 300, width: 420 },
         chat: html`<div data-test-chat>chat</div>`,
         divider: html`<div class="board-session-surface__divider" data-test-divider></div>`,
+        canMutate: true,
+        canGrant: true,
         callbacks: {
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
@@ -101,6 +103,8 @@ describe("board session shell", () => {
         dockSize: { height: 300, width: 420 },
         chat: html`<div data-test-chat>chat</div>`,
         divider: html`<div class="board-session-surface__divider"></div>`,
+        canMutate: true,
+        canGrant: true,
         callbacks: {
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
@@ -130,6 +134,8 @@ describe("board session shell", () => {
       dockSize: { height: 300, width: 420 },
       chat: html`<div data-test-chat>chat</div>`,
       divider: html`<div class="board-session-surface__divider"></div>`,
+      canMutate: true,
+      canGrant: true,
       callbacks: {
         applyOps: (ops: Parameters<typeof provider.applyOps>[0]) => provider.applyOps(ops),
         grant: (...args: Parameters<typeof provider.grant>) => provider.grant(...args),

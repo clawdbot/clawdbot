@@ -385,6 +385,10 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      matchesContextOverflowError: ({ errorMessage }) =>
+        /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
+          errorMessage,
+        ),
       ...buildProviderReplayFamilyHooks({
         family: "openai-compatible",
         dropReasoningFromHistory: false,

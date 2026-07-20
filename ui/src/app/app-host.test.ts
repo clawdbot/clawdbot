@@ -13,6 +13,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import type {
   ApplicationContext,
@@ -22,6 +23,7 @@ import type {
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { resetServerUiPrefsSync } from "./server-prefs.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -42,6 +44,11 @@ type ShellInitializationState = {
     snapshot: { client: GatewayBrowserClient | null; connected: boolean },
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
+};
+
+type ShellServerPreferencesState = {
+  runtime: { context: ApplicationContext };
+  reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
 };
 
 type ShellKeyboardState = {
@@ -337,6 +344,39 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenClaw shell server preferences", () => {
+  it("refreshes live navigation when a sidebar preference arrives from the gateway", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    resetServerUiPrefsSync();
+    const sidebarEntries = ["route:usage", "session:agent:main:test"];
+    const updateNavigation = vi.fn();
+    const refreshTheme = vi.fn();
+    const runtimeConfig = {
+      state: {
+        configSnapshot: {
+          config: { ui: { prefs: { sidebarEntries } } },
+          hash: "sidebar-config-hash",
+        },
+      },
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const context = {
+      gateway: { connection: { gatewayUrl: "ws://sidebar.test" } },
+      navigation: { update: updateNavigation },
+      theme: { refresh: refreshTheme },
+    } as unknown as ApplicationContext;
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellServerPreferencesState;
+    shell.runtime = { context };
+
+    shell.reconcileServerUiPrefs(runtimeConfig);
+
+    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    resetServerUiPrefsSync();
   });
 });
 

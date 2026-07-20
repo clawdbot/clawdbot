@@ -45,7 +45,7 @@ async function buildGroupVoiceContext(params: {
       from: { id: params.fromId, first_name: params.firstName },
       voice: { file_id: params.fileId },
     },
-    allMedia: [{ path: params.mediaPath, contentType: "audio/ogg" }],
+    allMedia: [{ path: params.mediaPath, contentType: "audio/ogg", kind: "audio" }],
     options: { forceWasMentioned: true },
     cfg: {
       agents: { defaults: { model: DEFAULT_MODEL, workspace: DEFAULT_WORKSPACE } },
@@ -73,9 +73,11 @@ function expectTranscriptRendered(
   expect(ctx?.ctxPayload?.MediaTranscribedIndexes).toEqual([0]);
 }
 
-function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGroupVoiceContext>>) {
+function expectAudioFactWithEmptyBody(ctx: Awaited<ReturnType<typeof buildGroupVoiceContext>>) {
   expect(ctx).not.toBeNull();
-  expect(ctx?.ctxPayload?.Body).toContain("<media:audio>");
+  expect(ctx?.ctxPayload?.BodyForAgent).toBe("");
+  expect(ctx?.ctxPayload?.RawBody).toBe("");
+  expect(ctx?.ctxPayload?.MediaTypes).toEqual(["audio/ogg"]);
 }
 
 describe("buildTelegramMessageContext audio transcript body", () => {
@@ -117,7 +119,7 @@ describe("buildTelegramMessageContext audio transcript body", () => {
     });
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expectAudioPlaceholderRendered(ctx);
+    expectAudioFactWithEmptyBody(ctx);
   });
 
   it("uses topic disableAudioPreflight=false to override group disableAudioPreflight=true", async () => {
@@ -157,6 +159,6 @@ describe("buildTelegramMessageContext audio transcript body", () => {
     });
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expectAudioPlaceholderRendered(ctx);
+    expectAudioFactWithEmptyBody(ctx);
   });
 });

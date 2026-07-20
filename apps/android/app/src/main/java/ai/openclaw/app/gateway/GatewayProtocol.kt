@@ -459,6 +459,9 @@ enum class GatewayMethod(
   ConversationsList("conversations.list"),
   SessionDiscussionInfo("session.discussion.info"),
   SessionDiscussionOpen("session.discussion.open"),
+  BoardPromptAuthorize("board.prompt.authorize"),
+  BoardDataRead("board.data.read"),
+  BoardAction("board.action"),
 }
 
 enum class GatewayEvent(
