@@ -6,7 +6,8 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock, fetchGuardedProviderDownloadResponseMock } =
+  getProviderHttpMocks();
 
 let buildRunwayVideoGenerationProvider: typeof import("./video-generation-provider.js").buildRunwayVideoGenerationProvider;
 
@@ -141,6 +142,46 @@ describe("runway video generation provider", () => {
     expect(metadata.taskId).toBe("task-1");
     expect(metadata.status).toBe("SUCCEEDED");
     expect(metadata.endpoint).toBe("/v1/text_to_video");
+  });
+
+  it("routes the generated video download through the SSRF-guarded fetch", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-1" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-1",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+      )
+      .mockResolvedValueOnce({
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/webm" }),
+      });
+
+    await buildRunwayVideoGenerationProvider().generateVideo({
+      provider: "runway",
+      model: "gen4.5",
+      prompt: "a tiny lobster DJ under neon lights",
+      cfg: {},
+      durationSeconds: 4,
+      aspectRatio: "16:9",
+    });
+
+    expect(fetchGuardedProviderDownloadResponseMock).toHaveBeenCalledTimes(1);
+    const params = fetchGuardedProviderDownloadResponseMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(params).toMatchObject({
+      url: "https://example.com/out.mp4",
+      provider: "runway",
+      allowPrivateNetwork: false,
+    });
+    expect(params).toHaveProperty("dispatcherPolicy");
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {

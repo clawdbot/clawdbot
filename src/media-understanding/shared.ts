@@ -363,6 +363,40 @@ export async function fetchProviderDownloadResponse(params: {
   });
 }
 
+export async function fetchGuardedProviderDownloadResponse(
+  params: GuardedProviderRequestParams & {
+    url: string;
+    init?: RequestInit;
+    deadline?: ProviderOperationDeadline;
+    timeoutMs?: ProviderOperationTimeoutMs;
+    fetchFn: typeof fetch;
+    provider?: string;
+    requestFailedMessage: string;
+    retry?: TransientProviderRetryConfig;
+  },
+): Promise<GuardedFetchResult> {
+  const deadline =
+    params.deadline ??
+    createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs,
+      label: params.requestFailedMessage,
+    });
+  return await fetchGuardedProviderOperationResponse({
+    stage: "download",
+    url: params.url,
+    init: params.init ?? { method: "GET" },
+    timeoutMs: createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
+    }),
+    fetchFn: params.fetchFn,
+    provider: params.provider,
+    requestFailedMessage: params.requestFailedMessage,
+    retry: params.retry,
+    guardedOptions: buildGuardedRequestOptions(params),
+  });
+}
+
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
@@ -565,6 +599,19 @@ function mergeGuardedRequestSsrfPolicy(params: {
   return { ...params.ssrfPolicy, allowPrivateNetwork: true };
 }
 
+function buildGuardedRequestOptions(
+  params: GuardedProviderRequestParams,
+): GuardedProviderRequestOptions {
+  const ssrfPolicy = mergeGuardedRequestSsrfPolicy(params);
+  return {
+    ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
+    ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+    ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+    ...(params.mode !== undefined ? { mode: params.mode } : {}),
+  };
+}
+
 function resolveGuardedRequestOptions(
   params: GuardedProviderRequestParams,
 ): GuardedProviderRequestOptions | undefined {
@@ -578,14 +625,7 @@ function resolveGuardedRequestOptions(
   ) {
     return undefined;
   }
-  const ssrfPolicy = mergeGuardedRequestSsrfPolicy(params);
-  return {
-    ...(ssrfPolicy ? { ssrfPolicy } : {}),
-    ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
-    ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-    ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-    ...(params.mode !== undefined ? { mode: params.mode } : {}),
-  };
+  return buildGuardedRequestOptions(params);
 }
 
 async function fetchGuardedProviderOperationResponse(params: {
