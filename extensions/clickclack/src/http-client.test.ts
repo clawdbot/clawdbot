@@ -125,6 +125,116 @@ function streamedErrorResponse(body: string, limit: number) {
 }
 
 describe("ClickClack HTTP client", () => {
+  it("aborts a REST request that stalls before response headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, init?: RequestInit) =>
+          await new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              reject(new Error("expected ClickClack request signal"));
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      );
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "fake",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      const rejection = expect(client.me()).rejects.toMatchObject({
+        name: "TimeoutError",
+        message: "request timed out",
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await rejection;
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the REST deadline active while reading the response body", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("expected ClickClack request signal");
+        }
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"user":'));
+            signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "fake",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      const rejection = expect(client.me()).rejects.toMatchObject({
+        name: "TimeoutError",
+        message: "request timed out",
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await rejection;
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives channel media uploads a larger transfer deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, init?: RequestInit) =>
+          await new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              reject(new Error("expected ClickClack request signal"));
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      );
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "fake",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      const rejection = expect(
+        client.createUpload({
+          workspaceId: "workspace-1",
+          buffer: Buffer.from("media"),
+          filename: "media.txt",
+          contentType: "text/plain",
+        }),
+      ).rejects.toMatchObject({ name: "TimeoutError", message: "request timed out" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      await rejection;
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("creates, updates, and reads managed discussion channels", async () => {
     const channel = {
       id: "chn_discussion",

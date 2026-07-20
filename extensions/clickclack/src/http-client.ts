@@ -2,6 +2,7 @@
  * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
  * delivery code.
  */
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonResponse,
@@ -58,10 +59,20 @@ type ClientOptions = {
   fetch?: typeof fetch;
 };
 
+type ClickClackRequestInit = RequestInit & {
+  timeoutMs?: number;
+};
+
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
 const CLICKCLACK_CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
+// Keep self-hosted REST calls from pinning gateway startup, event recovery, or
+// delivery when a peer accepts the request but stalls before or during JSON.
+const CLICKCLACK_REQUEST_TIMEOUT_MS = 30_000;
+// Uploads may legitimately carry the full 64 MiB channel media allowance, so
+// retain a larger transfer budget without weakening small control-plane calls.
+const CLICKCLACK_UPLOAD_REQUEST_TIMEOUT_MS = 120_000;
 // Keep REST and websocket JSON under the same bounded response budget. ClickClack
 // accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
 // valid frame can exceed 1 MiB before ws hands it to the event parser.
@@ -139,31 +150,52 @@ export function createClickClackClient(options: ClientOptions) {
     Accept: "application/json",
   };
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const requestHeaders = new Headers(init.headers);
+  async function request<T>(path: string, init: ClickClackRequestInit = {}): Promise<T> {
+    const url = `${baseUrl}${path}`;
+    const { timeoutMs = CLICKCLACK_REQUEST_TIMEOUT_MS, ...requestInit } = init;
+    const requestHeaders = new Headers(requestInit.headers);
     for (const [key, value] of Object.entries(headers)) {
       requestHeaders.set(key, value);
     }
     if (correlationId) {
       requestHeaders.set(CLICKCLACK_CORRELATION_ID_HEADER, correlationId);
     }
-    if (init.body && !(init.body instanceof FormData)) {
+    if (requestInit.body && !(requestInit.body instanceof FormData)) {
       requestHeaders.set("Content-Type", "application/json");
     }
-    const response = await fetcher(`${baseUrl}${path}`, { ...init, headers: requestHeaders });
-    if (!response.ok) {
-      const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
-      // Remote error bodies are untrusted output; redact them even when the
-      // operator disables log redaction or overrides log-only patterns.
-      throw new ClickClackHttpError(
-        response.status,
-        redactToolPayloadText(detail),
-        new Headers(response.headers),
-      );
-    }
-    return await readProviderJsonResponse<T>(response, "ClickClack response", {
-      maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+    const timeout = buildTimeoutAbortSignal({
+      timeoutMs,
+      signal: requestInit.signal ?? undefined,
+      operation: "clickclack-api",
+      url,
     });
+    try {
+      const response = await fetcher(url, {
+        ...requestInit,
+        headers: requestHeaders,
+        signal: timeout.signal,
+      });
+      if (!response.ok) {
+        const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+        // Remote error bodies are untrusted output; redact them even when the
+        // operator disables log redaction or overrides log-only patterns.
+        throw new ClickClackHttpError(
+          response.status,
+          redactToolPayloadText(detail),
+          new Headers(response.headers),
+        );
+      }
+      return await readProviderJsonResponse<T>(response, "ClickClack response", {
+        maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+      });
+    } catch (error) {
+      if (timeout.signal?.aborted) {
+        throw timeout.signal.reason;
+      }
+      throw error;
+    } finally {
+      timeout.cleanup();
+    }
   }
 
   async function fetchEventPage(
@@ -455,6 +487,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ upload: ClickClackUpload }>(`/api/uploads?${query.toString()}`, {
         method: "POST",
         body: form,
+        timeoutMs: CLICKCLACK_UPLOAD_REQUEST_TIMEOUT_MS,
       });
       return data.upload;
     },
