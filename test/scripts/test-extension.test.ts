@@ -702,7 +702,7 @@ describe("scripts/test-extension.mjs", () => {
     ).resolves.toBe(0);
 
     expect(
-      runGroup.mock.calls.map(([params]) => params.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH),
+      runGroup.mock.calls.map(([params]) => params.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH),
     ).toEqual([
       path.join(cacheRoot, "extension-batch", "0-heavy"),
       path.join(cacheRoot, "extension-batch", "1-middle"),
