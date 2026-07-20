@@ -17,6 +17,7 @@ import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAccountId,
   normalizeAgentId,
@@ -159,6 +160,9 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     return lookup.fallbackDefaultAgentId;
   }
   const normalized = normalizeAgentId(trimmed);
+  if (normalized === DEFAULT_AGENT_ID) {
+    return DEFAULT_AGENT_ID;
+  }
   if (lookup.byNormalizedId.size === 0) {
     return sanitizeAgentId(trimmed);
   }
