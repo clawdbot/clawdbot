@@ -11,10 +11,16 @@ import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
 import { isGeminiCliPersonalOAuth } from "./oauth.settings.js";
-import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth.shared.js";
+import {
+  MISSING_CLIENT_SECRET_GUIDANCE,
+  REDIRECT_URI,
+  TOKEN_URL,
+  type GeminiCliOAuthCredentials,
+} from "./oauth.shared.js";
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 const GOOGLE_OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const MISSING_CLIENT_SECRET_ERROR_PATTERN = /client[_ ]?secret/i;
 
 async function requestTokenGrant(
   body: URLSearchParams,
@@ -40,7 +46,11 @@ async function requestTokenGrant(
       response,
       GOOGLE_OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES,
     );
-    throw new Error(`Token exchange failed: ${errorText}`);
+    const hint =
+      !body.has("client_secret") && MISSING_CLIENT_SECRET_ERROR_PATTERN.test(errorText)
+        ? ` No client_secret was sent because none is configured. ${MISSING_CLIENT_SECRET_GUIDANCE}`
+        : "";
+    throw new Error(`Token exchange failed: ${errorText}${hint}`);
   }
 
   return readProviderJsonResponse<{

@@ -1,5 +1,6 @@
 // Google plugin module implements oauth behavior.
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { isPublicClientOAuthConfig } from "./oauth.credentials.js";
 import {
   buildAuthUrl,
   generateOAuthState,
@@ -8,7 +9,11 @@ import {
   shouldUseManualOAuthFlow,
   waitForLocalCallback,
 } from "./oauth.flow.js";
-import type { GeminiCliOAuthContext, GeminiCliOAuthCredentials } from "./oauth.shared.js";
+import {
+  MISSING_CLIENT_SECRET_GUIDANCE,
+  type GeminiCliOAuthContext,
+  type GeminiCliOAuthCredentials,
+} from "./oauth.shared.js";
 import { exchangeCodeForTokens, refreshTokensForGeminiCli } from "./oauth.token.js";
 
 export async function loginGeminiCliOAuth(
@@ -29,6 +34,13 @@ export async function loginGeminiCliOAuth(
         ].join("\n"),
     "Gemini CLI OAuth",
   );
+
+  if (isPublicClientOAuthConfig()) {
+    await ctx.note(
+      `No OAuth client secret is configured, so sign-in continues as a public client using PKCE only. ${MISSING_CLIENT_SECRET_GUIDANCE}`,
+      "Gemini CLI OAuth",
+    );
+  }
 
   const { verifier, challenge } = generatePkce();
   const state = generateOAuthState();

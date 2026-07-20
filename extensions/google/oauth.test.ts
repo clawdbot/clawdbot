@@ -995,6 +995,101 @@ describe("loginGeminiCliOAuth", () => {
     ).rejects.toThrow("OAuth state mismatch - please try again");
   });
 
+  it("notes public client PKCE mode when no client secret is configured", async () => {
+    delete process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET;
+    const { requests } = installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD) {
+        return responseJson({
+          currentTier: { id: "standard-tier" },
+          cloudaicompanionProject: { id: "prod-project" },
+        });
+      }
+      return undefined;
+    });
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { notes } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(notes).toContainEqual(
+      expect.stringContaining("continues as a public client using PKCE only"),
+    );
+    expect(notes).toContainEqual(expect.stringContaining("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET"));
+
+    const tokenRequest = requireRecordedRequest(
+      requests.find((request) => request.url === TOKEN_URL),
+      "token",
+    );
+    expect(getFormField(tokenRequest.init?.body, "client_secret")).toBeNull();
+  });
+
+  it("does not note public client mode when a client secret is configured", async () => {
+    const { requests } = installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD) {
+        return responseJson({
+          currentTier: { id: "standard-tier" },
+          cloudaicompanionProject: { id: "prod-project" },
+        });
+      }
+      return undefined;
+    });
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { notes } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(notes).not.toContainEqual(expect.stringContaining("public client"));
+
+    const tokenRequest = requireRecordedRequest(
+      requests.find((request) => request.url === TOKEN_URL),
+      "token",
+    );
+    expect(getFormField(tokenRequest.init?.body, "client_secret")).toBe(
+      "GOCSPX-test-client-secret",
+    );
+  });
+
+  it("appends missing client secret guidance when token exchange fails without a secret", async () => {
+    delete process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET;
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson(
+          { error: "invalid_request", error_description: "client_secret is missing." },
+          400,
+        ),
+    });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    const failure = exchangeCodeForTokens("oauth-code", "pkce-verifier");
+    await expect(failure).rejects.toThrow("client_secret is missing.");
+    await expect(failure).rejects.toThrow("No client_secret was sent because none is configured.");
+    await expect(failure).rejects.toThrow("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET");
+  });
+
+  it("keeps the raw token error for unrelated failures when no client secret is configured", async () => {
+    delete process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET;
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({ error: "invalid_grant", error_description: "Bad Request" }, 400),
+    });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    const failure = exchangeCodeForTokens("oauth-code", "pkce-verifier");
+    await expect(failure).rejects.toThrow("invalid_grant");
+    await expect(failure).rejects.not.toThrow("No client_secret was sent");
+    await expect(failure).rejects.not.toThrow("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET");
+  });
+
+  it("keeps the raw token error when a client secret was sent", async () => {
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({ error: "invalid_grant", error_description: "Bad Request" }, 400),
+    });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    const failure = exchangeCodeForTokens("oauth-code", "pkce-verifier");
+    await expect(failure).rejects.toThrow("invalid_grant");
+    await expect(failure).rejects.not.toThrow("No client_secret was sent");
+  });
+
   it("rejects first login when project discovery fails and no stored identity exists", async () => {
     const { requests } = installGeminiOAuthFetchMock(({ url }) => {
       if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {

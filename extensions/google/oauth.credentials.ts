@@ -350,6 +350,10 @@ function findGeminiCliCredentialsInTree(
   return null;
 }
 
+export function isPublicClientOAuthConfig(): boolean {
+  return Boolean(resolveEnv(CLIENT_ID_KEYS)) && !resolveEnv(CLIENT_SECRET_KEYS);
+}
+
 export function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string } {
   const envClientId = resolveEnv(CLIENT_ID_KEYS);
   const envClientSecret = resolveEnv(CLIENT_SECRET_KEYS);

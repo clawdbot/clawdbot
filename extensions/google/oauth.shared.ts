@@ -4,6 +4,7 @@ export const CLIENT_SECRET_KEYS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ];
+export const MISSING_CLIENT_SECRET_GUIDANCE = `If your Google OAuth client is a confidential web or desktop client, set ${CLIENT_SECRET_KEYS.join(" or ")} and sign in again.`;
 export const REDIRECT_URI = "http://localhost:8085/oauth2callback";
 export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
