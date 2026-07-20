@@ -472,20 +472,20 @@ describe("mantis before/after runtime", () => {
       process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
       let parentPid: number | undefined;
       let descendantPid: number | undefined;
+      const run = runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        outputDir: ".artifacts/qa-e2e/mantis/default-runner-abort",
+        repoRoot,
+        signal: controller.signal,
+        skipBuild: true,
+        skipInstall: true,
+      });
+      const settled = run.then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ error, status: "rejected" as const }),
+      );
       try {
-        const run = runMantisBeforeAfter({
-          baseline: "baseline-ref",
-          candidate: "candidate-ref",
-          outputDir: ".artifacts/qa-e2e/mantis/default-runner-abort",
-          repoRoot,
-          signal: controller.signal,
-          skipBuild: true,
-          skipInstall: true,
-        });
-        const settled = run.then(
-          () => ({ status: "fulfilled" as const }),
-          (error: unknown) => ({ error, status: "rejected" as const }),
-        );
         [parentPid, descendantPid] = await Promise.all([
           readPid(parentPidPath, 2_000),
           readPid(descendantPidPath, 2_000),
@@ -505,6 +505,8 @@ describe("mantis before/after runtime", () => {
         }
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
       } finally {
+        controller.abort();
+        await Promise.race([settled, sleep(4_000)]);
         if (previousPath === undefined) {
           delete process.env.PATH;
         } else {
