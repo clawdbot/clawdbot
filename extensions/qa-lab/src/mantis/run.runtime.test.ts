@@ -162,7 +162,6 @@ async function runGit(repoRoot: string, args: readonly string[]) {
     cwd: repoRoot,
     env: process.env,
     killProcessTree: true,
-    outputCapture: "buffer",
     timeoutMs: 5_000,
   });
   if (result.code !== 0) {
