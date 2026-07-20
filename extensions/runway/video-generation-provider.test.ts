@@ -184,6 +184,51 @@ describe("runway video generation provider", () => {
     expect(params).toHaveProperty("dispatcherPolicy");
   });
 
+  it("threads the configured allowPrivateNetwork opt-in into the guarded download", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-1" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-1",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+      )
+      .mockResolvedValueOnce({
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/webm" }),
+      });
+
+    await buildRunwayVideoGenerationProvider().generateVideo({
+      provider: "runway",
+      model: "gen4.5",
+      prompt: "a tiny lobster DJ under neon lights",
+      cfg: {
+        models: {
+          providers: {
+            runway: {
+              baseUrl: "https://api.dev.runwayml.com",
+              models: [],
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+      durationSeconds: 4,
+      aspectRatio: "16:9",
+    });
+
+    expect(fetchGuardedProviderDownloadResponseMock).toHaveBeenCalledTimes(1);
+    const params = fetchGuardedProviderDownloadResponseMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(params).toMatchObject({ provider: "runway", allowPrivateNetwork: true });
+  });
+
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: streamedJsonResponse({ id: "task-too-large" }),

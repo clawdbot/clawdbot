@@ -111,14 +111,17 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       },
     resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,
+    sanitizeConfiguredModelProviderRequest: (request: unknown) => request,
     resolveProviderHttpRequestConfig: (params: {
       baseUrl?: string;
       defaultBaseUrl: string;
       allowPrivateNetwork?: boolean;
       defaultHeaders?: Record<string, string>;
+      request?: { allowPrivateNetwork?: boolean };
     }) => ({
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: params.allowPrivateNetwork === true,
+      allowPrivateNetwork:
+        (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
       headers: new Headers(params.defaultHeaders),
       dispatcherPolicy: undefined,
     }),
@@ -293,6 +296,31 @@ describe("byteplus video generation provider", () => {
     const params = guardedDownloadParamsMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(params).toMatchObject({ provider: "byteplus", allowPrivateNetwork: false });
     expect(params).toHaveProperty("dispatcherPolicy");
+  });
+
+  it("threads the configured allowPrivateNetwork opt-in into the guarded download", async () => {
+    mockSuccessfulBytePlusTask();
+
+    await buildBytePlusVideoGenerationProvider().generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      prompt: "A lantern floats upward into the night sky",
+      cfg: {
+        models: {
+          providers: {
+            byteplus: {
+              baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+              models: [],
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(guardedDownloadParamsMock).toHaveBeenCalledTimes(1);
+    const params = guardedDownloadParamsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(params).toMatchObject({ provider: "byteplus", allowPrivateNetwork: true });
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {

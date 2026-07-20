@@ -13,6 +13,7 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -407,6 +408,9 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           provider: "runway",
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.runway?.request,
+          ),
         });
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}${endpoint}`,
