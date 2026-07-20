@@ -1729,7 +1729,11 @@ process.on("SIGINT", shutdown);`,
       cfg: {
         mcp: {
           servers: {
-            child: { command: process.execPath, args: [serverPath] },
+            child: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 90_000,
+            },
             healthy: { command: process.execPath, args: [healthyServerPath] },
           },
         },
@@ -1754,6 +1758,7 @@ process.on("SIGINT", shutdown);`,
         "closed transport to schedule a catalog retry",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
+      expect(runtime.getServerRequestTimeoutMs?.("child")).toBe(90_000);
       await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow("is not connected");
       await waitForFileTextCount(logPath, "recv tools/list", 2, LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await expect(

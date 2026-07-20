@@ -155,6 +155,33 @@ describe("MCP App UI resources", () => {
     );
   });
 
+  it("keeps materialized Apps when the server timeout snapshot is unavailable", async () => {
+    const sessionRuntime = runtime(async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>demo</html>",
+        },
+      ],
+    }));
+    sessionRuntime.getServerRequestTimeoutMs = () => undefined;
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(result?.viewId).toMatch(/^mcp-app-/u);
+    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.operationTimeoutMs).toBe(
+      MCP_APP_VIEW_TTL_MS,
+    );
+  });
+
   it("keeps valid Apps when optional listing metadata fails", async () => {
     const readResource = vi.fn(async () => ({
       contents: [
