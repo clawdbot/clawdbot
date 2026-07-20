@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gateway-protocol",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.4",
   "description": "Typed schemas and runtime validators for the OpenClaw Gateway WebSocket protocol",
   "keywords": [
     "gateway",
