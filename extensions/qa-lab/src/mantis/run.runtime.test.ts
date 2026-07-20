@@ -566,6 +566,54 @@ describe("mantis before/after runtime", () => {
     }
   });
 
+  it("fails the run when a successful lane cannot clean up its worktree", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-only");
+    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const commands: { args: readonly string[]; command: string; stage: string }[] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      commands.push({ args, command, stage: execution.stage });
+      if (command === "git" && execution.stage === "worktree-add") {
+        expect(args[4]).toBe(baselineWorktreeDir);
+        await fs.mkdir(String(args[4]), { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        expect(args[4]).toBe(baselineWorktreeDir);
+        return {
+          ...successfulCommandResult(),
+          code: 1,
+          stderr: "cleanup refused baseline worktree",
+        } satisfies StubCommandResult;
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/cleanup-only",
+        repoRoot,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow("baseline worktree-cleanup failed with exit code 1");
+
+    expect(commands.map((entry) => entry.stage)).toEqual([
+      "worktree-add",
+      "qa",
+      "worktree-cleanup",
+    ]);
+    await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toContain(
+      "baseline worktree-cleanup failed with exit code 1",
+    );
+  });
+
   it("stops an active injected lane command when aborted", async () => {
     const controller = new AbortController();
     const stages: string[] = [];
@@ -656,16 +704,39 @@ describe("mantis before/after runtime", () => {
       const descendantPidPath = path.join(repoRoot, "abort-descendant.pid");
       const gitShimPath = path.join(binDir, "git");
       await fs.mkdir(binDir, { recursive: true });
+      const descendantSource = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1_000);",
+      ].join("\n");
       await fs.writeFile(
         gitShimPath,
         [
-          "#!/bin/sh",
-          'if [ "$1" = worktree ] && [ "$2" = remove ]; then rm -rf "$5"; exit 0; fi',
-          "trap '' TERM",
-          `printf '%s' "$$" > ${JSON.stringify(parentPidPath)}`,
-          "sh -c 'trap \"\" TERM; while :; do sleep 1; done' &",
-          `printf '%s' "$!" > ${JSON.stringify(descendantPidPath)}`,
-          "while :; do sleep 1; done",
+          "#!/usr/bin/env node",
+          "const { rmSync, writeFileSync } = require('node:fs');",
+          "const { spawn } = require('node:child_process');",
+          "const args = process.argv.slice(2);",
+          "if (args[0] === 'worktree' && args[1] === 'remove') {",
+          "  const separator = args.indexOf('--');",
+          "  const worktreePath = separator >= 0 ? args[separator + 1] : args[4];",
+          "  rmSync(worktreePath, { force: true, recursive: true });",
+          "  process.exit(0);",
+          "}",
+          "if (args[0] !== 'worktree' || args[1] !== 'add') {",
+          "  console.error(`unexpected git shim invocation: ${args.join(' ')}`);",
+          "  process.exit(1);",
+          "}",
+          `writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));`,
+          `const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(
+            descendantSource,
+          )}], { stdio: 'ignore' });`,
+          "descendant.once('error', (error) => { throw error; });",
+          "if (!Number.isInteger(descendant.pid)) {",
+          "  console.error('failed to spawn descendant process');",
+          "  process.exit(1);",
+          "}",
+          `writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1_000);",
         ].join("\n"),
         { encoding: "utf8", mode: 0o755 },
       );
