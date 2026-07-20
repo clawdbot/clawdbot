@@ -103,6 +103,35 @@ function writeAlphaSdkAliasDistFixture(pluginDir: string, label: string) {
   );
 }
 
+function writeAlphaSdkAliasSetupDistFixture(pluginDir: string, label: string) {
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "setup-entry.js"),
+    [
+      'import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";',
+      "export default defineBundledChannelSetupEntry({",
+      "  importMetaUrl: import.meta.url,",
+      "  plugin: { specifier: './setup-plugin.js', exportName: 'setupPlugin' },",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "setup-plugin.js"),
+    [
+      "export const setupPlugin = {",
+      "  id: 'alpha',",
+      `  meta: { id: 'alpha', label: '${label}' },`,
+      "  capabilities: {},",
+      "  config: {},",
+      "};",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 function collectBundledChannelEntrypointOffenders(
   bundledPluginRoots: string[],
   isOffender: (source: string, filePath: string) => boolean,
@@ -434,8 +463,13 @@ describe("bundled channel entry shape guards", () => {
 
   it("falls back through the cached loader for package-local dist entries needing SDK aliases", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-package-dist-"));
-    const pluginDir = path.join(root, "extensions", "alpha", "dist");
+    // Packaged installs place channel dists under `<packageRoot>/dist/extensions/<id>/dist`.
+    // Keep the fixture package.json anonymous: giving it a `name` plus an `exports` map
+    // would let Node package self-reference resolve `openclaw/plugin-sdk/*` natively, the
+    // first load would succeed, and the SDK-alias fallback under test would never run.
+    const pluginDir = path.join(root, "dist", "extensions", "alpha", "dist");
     writeAlphaSdkAliasDistFixture(pluginDir, "Package dist Alpha");
+    writeAlphaSdkAliasSetupDistFixture(pluginDir, "Package dist Alpha Setup");
     fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n', "utf8");
 
     vi.doMock("./bundled-root.js", () => ({
@@ -447,14 +481,24 @@ describe("bundled channel entry shape guards", () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
       listBundledChannelPluginMetadata: () => [
         {
-          ...alphaChannelMetadata(),
+          ...alphaChannelMetadata({ includeSetup: true }),
           source: {
-            source: path.join(root, "extensions", "alpha", "index.ts"),
-            built: path.join(root, "extensions", "alpha", "index.ts"),
+            source: path.join(root, "dist", "extensions", "alpha", "index.js"),
+            built: path.join(root, "dist", "extensions", "alpha", "index.js"),
+          },
+          setupSource: {
+            source: path.join(root, "dist", "extensions", "alpha", "setup-entry.js"),
+            built: path.join(root, "dist", "extensions", "alpha", "setup-entry.js"),
           },
         },
       ],
-      resolveBundledChannelGeneratedPath: () => path.join(pluginDir, "index.js"),
+      resolveBundledChannelGeneratedPath: (
+        _rootDir: string,
+        entry: BundledEntrySource | undefined,
+      ) =>
+        (entry?.built ?? entry?.source ?? "").includes("setup-entry")
+          ? path.join(pluginDir, "setup-entry.js")
+          : path.join(pluginDir, "index.js"),
     }));
 
     try {
@@ -464,6 +508,9 @@ describe("bundled channel entry shape guards", () => {
       );
 
       expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Package dist Alpha");
+      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe(
+        "Package dist Alpha Setup",
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
