@@ -102,6 +102,7 @@ async function writeListToolsMcpServer(params: {
   hangToolCallsUntilRestartMarkerPath?: string;
   notifyListChangedOnInitialized?: boolean;
   notifyListChangedAfterFirstList?: boolean;
+  notifyListChangedOnCallTool?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
   listToolsJsonRpcErrorMessage?: string;
@@ -138,6 +139,7 @@ const hangToolCallsUntilRestartMarkerPath = ${JSON.stringify(
     )};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
+const notifyListChangedOnCallTool = ${params.notifyListChangedOnCallTool === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
@@ -314,6 +316,10 @@ function handle(message) {
           }),
         },
       });
+      if (notifyListChangedOnCallTool) {
+        log("notify tools/list_changed");
+        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      }
     }, callToolDelayMs);
   }
   if (message.method === "resources/list") {
@@ -1846,7 +1852,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("does not cache a catalog invalidated while discovery is in flight", async () => {
+  it("cancels an invalidated catalog generation and returns the current generation", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-inflight-invalidated-"));
     const serverPath = path.join(tempDir, "inflight-invalidated.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1944,13 +1950,15 @@ process.on("SIGINT", shutdown);`,
     });
 
     try {
-      const firstCatalog = await runtime.getCatalog();
-      expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["old_tool"]);
+      const currentCatalog = await runtime.getCatalog();
       await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
-      expect(runtime.peekCatalog()).toBeNull();
+      await waitForFileText(
+        logPath,
+        "recv notifications/cancelled",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
 
-      const secondCatalog = await runtime.getCatalog();
-      expect(secondCatalog.tools.map((tool) => tool.toolName)).toEqual(["new_tool"]);
+      expect(currentCatalog.tools.map((tool) => tool.toolName)).toEqual(["new_tool"]);
       expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["new_tool"]);
     } finally {
       await runtime.dispose();
@@ -2368,7 +2376,7 @@ process.on("SIGINT", shutdown);`,
       filePath: serverPath,
       logPath,
       delayMs: 50,
-      notifyListChangedAfterFirstList: true,
+      notifyListChangedOnCallTool: true,
       toolPageCursors,
       tools: [
         {
@@ -2390,6 +2398,7 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.getCatalog()).resolves.toMatchObject({
         tools: [{ toolName: "initial_tool-1" }],
       });
+      await runtime.callTool("paged", "initial_tool-1", {});
       await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
         () => runtime.peekCatalog() === null,
@@ -6056,7 +6065,7 @@ process.on("SIGINT", shutdown);`,
   );
 
   it(
-    "does not dispose sessions shared with a newer catalog generation",
+    "keeps sessions reusable when a catalog generation is superseded",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = makeTempDir(tempDirs, "bundle-mcp-overlap-generation-");
@@ -6179,9 +6188,13 @@ process.on("SIGINT", shutdown);`,
         const secondCatalog = await runtime.getCatalog();
         const firstCatalogResult = await firstCatalog;
 
-        expect(firstCatalogResult.diagnostics?.[0]?.serverName).toBe("overlap");
+        expect(firstCatalogResult.diagnostics ?? []).toEqual([]);
+        expect(firstCatalogResult.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
         expect(secondCatalog.diagnostics ?? []).toEqual([]);
         expect(secondCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+
+        const logText = await fs.readFile(logPath, "utf8");
+        expect(logText.match(/recv initialize/g)).toHaveLength(1);
 
         await expect(runtime.callTool("overlap", "ok_tool", {})).resolves.toMatchObject({
           content: [{ type: "text", text: "still connected" }],
