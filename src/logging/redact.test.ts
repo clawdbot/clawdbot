@@ -137,6 +137,95 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(input);
   });
 
+  it("preserves programmatic env lookups in assignments", () => {
+    const key = "OPENAI_API_KEY";
+    const assignment = (value: string) => `${key}=${value}`;
+    const input = [
+      assignment(`process.env.${key}`),
+      assignment(`process.env["${key}"]`),
+      assignment(`Deno.env.get("${key}")`),
+      assignment(`os.getenv("${key}")`),
+      assignment(`os.environ["${key}"]`),
+      assignment(`os.environ.get("${key}")`),
+      assignment(`$ENV{${key}}`),
+      `${assignment(`process.env.${key}`)};`,
+    ].join("\n");
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+  });
+
+  it("does not preserve env lookups with value continuations", () => {
+    const key = "OPENAI_API_KEY";
+    const input = `${key}=os.getenv("${key}", "fallback-value")`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).not.toBe(input);
+    expect(output).not.toContain("os.getenv(");
+  });
+
+  it("does not preserve content appended to an env lookup in the same match", () => {
+    const key = "OPENAI_API_KEY";
+    const appended = "literal-value";
+    const input = `${key}=process.env.${key};${appended}`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).not.toBe(input);
+    expect(output).not.toContain(appended);
+  });
+
+  it("does not preserve programmatic lookups of a different env key", () => {
+    const key = "OPENAI_API_KEY";
+    const otherKey = "PUBLIC_VALUE";
+    const assignment = (value: string) => `${key}=${value}`;
+    const lookups = [
+      `process.env.${otherKey}`,
+      `process.env["${otherKey}"]`,
+      `Deno.env.get("${otherKey}")`,
+      `os.getenv("${otherKey}")`,
+      `os.environ["${otherKey}"]`,
+      `os.environ.get("${otherKey}")`,
+      `$ENV{${otherKey}}`,
+    ];
+    const outputLines = redactSensitiveText(lookups.map(assignment).join("\n"), {
+      mode: "tools",
+    }).split("\n");
+    expect(outputLines).toHaveLength(lookups.length);
+    for (const [index, lookup] of lookups.entries()) {
+      expect(outputLines[index]).not.toBe(assignment(lookup));
+    }
+  });
+
+  it("does not preserve a longer dotted env key with the assigned key as its prefix", () => {
+    const key = "OPENAI_API_KEY";
+    const input = `${key}=process.env.${key}_SUFFIX`;
+    expect(redactSensitiveText(input, { mode: "tools" })).not.toBe(input);
+  });
+
+  it("does not preserve a match based on an assignment nested in its value", () => {
+    const key = "OPENAI_API_KEY";
+    const literal = "literal-value";
+    const input = `${key}=${literal};${key}=process.env.${key}`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).not.toBe(input);
+    expect(output).not.toContain(literal);
+  });
+
+  it("does not preserve lookups with mismatched quote delimiters", () => {
+    const key = "OPENAI_API_KEY";
+    const assignment = (value: string) => `${key}=${value}`;
+    const lookups = [
+      `process.env["${key}']`,
+      `Deno.env.get("${key}')`,
+      `os.getenv("${key}')`,
+      `os.environ["${key}']`,
+      `os.environ.get("${key}')`,
+    ];
+    const outputLines = redactSensitiveText(lookups.map(assignment).join("\n"), {
+      mode: "tools",
+    }).split("\n");
+    expect(outputLines).toHaveLength(lookups.length);
+    for (const [index, lookup] of lookups.entries()) {
+      expect(outputLines[index]).not.toBe(assignment(lookup));
+    }
+  });
+
   it("masks shell env references that do not match the assignment key", () => {
     const output = redactSensitiveText("DISCORD_BOT_TOKEN=$SUPERSECRET123", { mode: "tools" });
     expect(output).toBe("DISCORD_BOT_TOKEN=***");
