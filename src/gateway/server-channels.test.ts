@@ -3293,8 +3293,7 @@ describe("server-channels auto restart", () => {
     });
 
     let snapshot = manager.getRuntimeSnapshot();
-    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(false);
-    expect(snapshot.channelAccounts.discord?.["account-a"]?.restartPending).toBe(false);
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
 
     await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
 
@@ -3340,7 +3339,7 @@ describe("server-channels auto restart", () => {
       restartPending: false,
       preserveKnownAccount: true,
     });
-    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]).toBeDefined();
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]).toBeUndefined();
 
     manager.setAutostartSuppression({ reason: "crash-loop-breaker", message: "safe mode" });
     await manager.startChannel("discord", undefined, { includeKnownAccounts: true });

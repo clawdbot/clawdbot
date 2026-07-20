@@ -489,7 +489,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return startupTrace ? startupTrace.measure(name, run) : await run();
   };
 
-  const listKnownLiveAccountIds = (channelId: ChannelId, store: ChannelRuntimeStore): string[] => {
+  const listKnownLiveAccountIds = (
+    channelId: ChannelId,
+    store: ChannelRuntimeStore,
+    options: { includeKnownAccountHandoffs?: boolean } = {},
+  ): string[] => {
     const known = new Set<string>([
       ...store.aborts.keys(),
       ...store.starting.keys(),
@@ -501,7 +505,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       if (
         snapshot.running ||
         snapshot.restartPending ||
-        knownAccountDeferredToCaller.has(restartKey(channelId, id))
+        (options.includeKnownAccountHandoffs === true &&
+          knownAccountDeferredToCaller.has(restartKey(channelId, id)))
       ) {
         known.add(id);
       }
@@ -562,7 +567,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const accountIds =
       accountId || !includeKnownAccounts
         ? listedAccountIds
-        : Array.from(new Set([...listedAccountIds, ...listKnownLiveAccountIds(channelId, store)]));
+        : Array.from(
+            new Set([
+              ...listedAccountIds,
+              ...listKnownLiveAccountIds(channelId, store, {
+                includeKnownAccountHandoffs: true,
+              }),
+            ]),
+          );
     if (!accountId) {
       evictStaleChannelAccountState(channelId, store, accountIds);
     }
