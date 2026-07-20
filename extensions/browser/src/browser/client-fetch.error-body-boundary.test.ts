@@ -40,8 +40,10 @@ describe("fetchHttpJson error body boundary", () => {
   let resolveSmallConnectionClosed: () => void;
   let successStreamClosed: Promise<void>;
   let resolveSuccessStreamClosed: () => void;
-  let malformedConnectionClosed: Promise<void>;
-  let resolveMalformedConnectionClosed: () => void;
+  let malformedSuccessConnectionClosed: Promise<void>;
+  let resolveMalformedSuccessConnectionClosed: () => void;
+  let malformedErrorConnectionClosed: Promise<void>;
+  let resolveMalformedErrorConnectionClosed: () => void;
   let streamCompleted: boolean;
   let successStreamCompleted: boolean;
 
@@ -66,8 +68,11 @@ describe("fetchHttpJson error body boundary", () => {
     successStreamClosed = new Promise<void>((resolve) => {
       resolveSuccessStreamClosed = resolve;
     });
-    malformedConnectionClosed = new Promise<void>((resolve) => {
-      resolveMalformedConnectionClosed = resolve;
+    malformedSuccessConnectionClosed = new Promise<void>((resolve) => {
+      resolveMalformedSuccessConnectionClosed = resolve;
+    });
+    malformedErrorConnectionClosed = new Promise<void>((resolve) => {
+      resolveMalformedErrorConnectionClosed = resolve;
     });
     streamCompleted = false;
     successStreamCompleted = false;
@@ -78,10 +83,22 @@ describe("fetchHttpJson error body boundary", () => {
         return;
       }
       if (req.url === "/success-malformed-utf8") {
-        req.socket.once("close", () => resolveMalformedConnectionClosed());
+        req.socket.once("close", () => resolveMalformedSuccessConnectionClosed());
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           Buffer.concat([Buffer.from('{"payload":"'), Buffer.from([0xff]), Buffer.from('"}')]),
+        );
+        return;
+      }
+      if (req.url === "/error-malformed-utf8") {
+        req.socket.once("close", () => resolveMalformedErrorConnectionClosed());
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(
+          Buffer.concat([
+            Buffer.from('{"error":"control '),
+            Buffer.from([0xff]),
+            Buffer.from('"}'),
+          ]),
         );
         return;
       }
@@ -221,7 +238,20 @@ describe("fetchHttpJson error body boundary", () => {
       message: "Browser control response was not valid UTF-8 (HTTP 200)",
       status: 200,
     });
-    await expect(malformedConnectionClosed).resolves.toBeUndefined();
+    await expect(malformedSuccessConnectionClosed).resolves.toBeUndefined();
+  });
+
+  it("rejects malformed UTF-8 error JSON and releases the guarded fetch", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/error-malformed-utf8`).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "Browser control response was not valid UTF-8 (HTTP 500)",
+      status: 500,
+    });
+    await expect(malformedErrorConnectionClosed).resolves.toBeUndefined();
   });
 
   it("preserves a complete diagnostic body within the limit", async () => {
