@@ -226,4 +226,69 @@ describe("registerNodeCli", () => {
     );
     expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("forwards install flags (port/host/runtime/force/json) to runNodeDaemonInstall", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(
+      [
+        "node",
+        "install",
+        "--port",
+        "19000",
+        "--host",
+        "10.0.0.10",
+        "--runtime",
+        "bun",
+        "--force",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    const installArgs = daemonMocks.runNodeDaemonInstall.mock.calls[0]?.[0];
+    expect(installArgs).toMatchObject({
+      port: "19000",
+      host: "10.0.0.10",
+      runtime: "bun",
+      force: true,
+      json: true,
+    });
+  });
+
+  it("registers node status and forwards --json to runNodeDaemonStatus", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "status", "--json"], { from: "user" });
+
+    const args = daemonMocks.runNodeDaemonStatus.mock.calls[0]?.[0];
+    expect(args?.json).toBe(true);
+  });
+
+  it("registers node stop and forwards --json to runNodeDaemonStop", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "stop", "--json"], { from: "user" });
+
+    const args = daemonMocks.runNodeDaemonStop.mock.calls[0]?.[0];
+    expect(args?.json).toBe(true);
+  });
+
+  it("registers node restart and forwards --json to runNodeDaemonRestart", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "restart", "--json"], { from: "user" });
+
+    const args = daemonMocks.runNodeDaemonRestart.mock.calls[0]?.[0];
+    expect(args?.json).toBe(true);
+  });
+
+  it("registers node uninstall and forwards --json to runNodeDaemonUninstall", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "uninstall", "--json"], { from: "user" });
+
+    const args = daemonMocks.runNodeDaemonUninstall.mock.calls[0]?.[0];
+    expect(args?.json).toBe(true);
+  });
 });
