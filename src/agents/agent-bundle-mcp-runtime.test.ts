@@ -327,6 +327,7 @@ function handle(message) {
       });
       return;
     }
+    log("resources/list page " + resourceListCount + " id " + message.id);
     setTimeout(() => {
       const resourcePageCursor = resourcePageCursors?.[resourceListCount - 1];
       send({
@@ -362,6 +363,10 @@ function handle(message) {
         },
       });
     }, promptPageDelayMs);
+    return;
+  }
+  if (message.method === "notifications/cancelled") {
+    log("cancelled request " + message.params?.requestId);
     return;
   }
   if (message.method === "resources/read") {
@@ -2616,6 +2621,61 @@ process.on("SIGINT", shutdown);`,
       await expect(
         runtime.listResources("paged", { signal: AbortSignal.timeout(180) }),
       ).rejects.toThrow(/abort/i);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels only the active page when paginated resource listing aborts", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-cancel-"));
+    const serverPath = path.join(tempDir, "resource-cancel.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      resourcePageDelayMs: 120,
+      resourcePageCount: 2,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-resource-cancel",
+      sessionKey: "agent:test:session-resource-cancel",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            paged: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 1_000,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      if (!runtime.listResources) {
+        throw new Error("Expected test runtime to expose resource utilities");
+      }
+      const controller = new AbortController();
+      const request = runtime.listResources("paged", { signal: controller.signal });
+      await waitForFileText(logPath, "resources/list page 2", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      controller.abort();
+      await expect(request).rejects.toThrow(/abort/i);
+      await waitForFileText(logPath, "cancelled request", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+
+      const logText = await fs.readFile(logPath, "utf8");
+      const requestIds = [...logText.matchAll(/resources\/list page \d+ id (\d+)/g)].map((match) =>
+        Number(match[1]),
+      );
+      const cancelledRequestIds = [...logText.matchAll(/cancelled request (\d+)/g)].map((match) =>
+        Number(match[1]),
+      );
+      expect(requestIds).toHaveLength(2);
+      expect(cancelledRequestIds).toEqual([requestIds[1]]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
