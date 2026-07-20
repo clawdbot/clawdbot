@@ -3027,7 +3027,7 @@ describe("server-channels auto restart", () => {
     let runtimeMeasureCalls = 0;
     const firstRuntimeGate = createDeferred();
     const startupTrace = {
-      measure: async <T,>(name: string, run: () => T | Promise<T>): Promise<T> => {
+      measure: async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
         if (name === "channels.discord.runtime" && runtimeMeasureCalls === 0) {
           runtimeMeasureCalls += 1;
           await firstRuntimeGate.promise;
