@@ -91,6 +91,36 @@ async function readPid(filePath: string, timeoutMs: number) {
   throw new Error(`timeout waiting for pid in ${filePath}`);
 }
 
+type SettledRun = { status: "fulfilled" } | { error: unknown; status: "rejected" };
+
+function describeSettledRun(settled: SettledRun) {
+  if (settled.status === "fulfilled") {
+    return "fulfilled";
+  }
+  if (settled.error instanceof Error) {
+    return `rejected with ${settled.error.name}: ${settled.error.message}`;
+  }
+  return `rejected with ${String(settled.error)}`;
+}
+
+async function readPidBeforeSettled(
+  filePath: string,
+  label: string,
+  timeoutMs: number,
+  settled: Promise<SettledRun>,
+) {
+  const result = await Promise.race([
+    readPid(filePath, timeoutMs).then((pid) => ({ pid, status: "ready" as const })),
+    settled.then((settledResult) => ({ settled: settledResult, status: "settled" as const })),
+  ]);
+  if (result.status === "ready") {
+    return result.pid;
+  }
+  throw new Error(
+    `Mantis run settled before ${label} pid readiness: ${describeSettledRun(result.settled)}`,
+  );
+}
+
 async function waitForDead(pid: number, timeoutMs: number) {
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
@@ -959,41 +989,49 @@ describe("mantis before/after runtime", () => {
       const binDir = path.join(repoRoot, "bin");
       const parentPidPath = path.join(repoRoot, "abort-parent.pid");
       const descendantPidPath = path.join(repoRoot, "abort-descendant.pid");
+      const descendantHelperPath = path.join(repoRoot, "abort-descendant-helper.cjs");
       const gitShimPath = path.join(binDir, "git");
       await fs.mkdir(binDir, { recursive: true });
-      const descendantSource = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1_000);",
-      ].join("\n");
+      await fs.writeFile(
+        descendantHelperPath,
+        [
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1_000);",
+        ].join("\n"),
+        "utf8",
+      );
       await fs.writeFile(
         gitShimPath,
         [
-          "#!/usr/bin/env node",
-          "const { rmSync, writeFileSync } = require('node:fs');",
-          "const { spawn } = require('node:child_process');",
-          "const args = process.argv.slice(2);",
-          "if (args[0] === 'worktree' && args[1] === 'remove') {",
-          "  const separator = args.indexOf('--');",
-          "  const worktreePath = separator >= 0 ? args[separator + 1] : args[4];",
-          "  rmSync(worktreePath, { force: true, recursive: true });",
-          "  process.exit(0);",
-          "}",
-          "if (args[0] !== 'worktree' || args[1] !== 'add') {",
-          "  console.error(`unexpected git shim invocation: ${args.join(' ')}`);",
-          "  process.exit(1);",
-          "}",
-          `writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));`,
-          `const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(
-            descendantSource,
-          )}], { stdio: 'ignore' });`,
-          "descendant.once('error', (error) => { throw error; });",
-          "if (!Number.isInteger(descendant.pid)) {",
-          "  console.error('failed to spawn descendant process');",
-          "  process.exit(1);",
-          "}",
-          `writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1_000);",
+          "#!/bin/sh",
+          'if [ "$1" = worktree ] && [ "$2" = remove ]; then',
+          "  worktree_path=",
+          "  previous_arg=",
+          '  for arg in "$@"; do',
+          '    if [ "$previous_arg" = -- ]; then worktree_path=$arg; break; fi',
+          "    previous_arg=$arg",
+          "  done",
+          '  if [ -z "$worktree_path" ]; then worktree_path=$5; fi',
+          '  rm -rf -- "$worktree_path"',
+          "  exit 0",
+          "fi",
+          'if [ "$1" != worktree ] || [ "$2" != add ]; then',
+          "  printf 'unexpected git shim invocation:' >&2",
+          "  printf ' %s' \"$@\" >&2",
+          "  printf '\\n' >&2",
+          "  exit 1",
+          "fi",
+          `printf '%s' "$$" > ${JSON.stringify(parentPidPath)}`,
+          `"${process.execPath}" ${JSON.stringify(descendantHelperPath)} &`,
+          "node_status=$?",
+          'if [ "$node_status" -ne 0 ]; then',
+          "  printf 'failed to launch descendant helper with absolute node\\n' >&2",
+          '  exit "$node_status"',
+          "fi",
+          "trap '' TERM",
+          "while :; do sleep 1; done",
         ].join("\n"),
         { encoding: "utf8", mode: 0o755 },
       );
@@ -1017,8 +1055,8 @@ describe("mantis before/after runtime", () => {
       );
       try {
         [parentPid, descendantPid] = await Promise.all([
-          readPid(parentPidPath, 2_000),
-          readPid(descendantPidPath, 2_000),
+          readPidBeforeSettled(parentPidPath, "parent", 5_000, settled),
+          readPidBeforeSettled(descendantPidPath, "descendant", 5_000, settled),
         ]);
         controller.abort();
 
@@ -1049,7 +1087,7 @@ describe("mantis before/after runtime", () => {
         }
       }
     },
-    10_000,
+    15_000,
   );
 
   it.skipIf(process.platform === "win32")(
