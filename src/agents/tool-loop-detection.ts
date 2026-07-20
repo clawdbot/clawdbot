@@ -81,52 +81,15 @@ function selectHistoryForScope(
   return history.filter((record) => normalizeRunId(record.runId) === runId);
 }
 
-function asPositiveInt(value: number | undefined, fallback: number): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return fallback;
-  }
-  return value;
-}
-
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
-  const warningThreshold = asPositiveInt(
-    config?.warningThreshold,
-    DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
-  );
-  let criticalThreshold = asPositiveInt(
-    config?.criticalThreshold,
-    DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
-  );
-  let globalCircuitBreakerThreshold = asPositiveInt(
-    config?.globalCircuitBreakerThreshold,
-    DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
-  );
-
-  if (criticalThreshold <= warningThreshold) {
-    criticalThreshold = warningThreshold + 1;
-  }
-  if (globalCircuitBreakerThreshold <= criticalThreshold) {
-    globalCircuitBreakerThreshold = criticalThreshold + 1;
-  }
-
   return {
     enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
-    historySize: asPositiveInt(config?.historySize, DEFAULT_LOOP_DETECTION_CONFIG.historySize),
-    warningThreshold,
-    unknownToolThreshold: asPositiveInt(
-      config?.unknownToolThreshold,
-      DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
-    ),
-    criticalThreshold,
-    globalCircuitBreakerThreshold,
-    detectors: {
-      genericRepeat:
-        config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
-      knownPollNoProgress:
-        config?.detectors?.knownPollNoProgress ??
-        DEFAULT_LOOP_DETECTION_CONFIG.detectors.knownPollNoProgress,
-      pingPong: config?.detectors?.pingPong ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
-    },
+    historySize: DEFAULT_LOOP_DETECTION_CONFIG.historySize,
+    warningThreshold: DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
+    unknownToolThreshold: DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
+    criticalThreshold: DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
+    globalCircuitBreakerThreshold: DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
+    detectors: DEFAULT_LOOP_DETECTION_CONFIG.detectors,
   };
 }
 
@@ -818,4 +781,3 @@ export function recordToolCallOutcome(
   }
   return recordedOutcome;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

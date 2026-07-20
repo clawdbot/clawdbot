@@ -3235,17 +3235,17 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(
-      expectDefined(
-        chatBroadcastCalls(broadcast)[0],
-        "chatBroadcastCalls(broadcast)[0] test invariant",
-      )[1],
-    ).toMatchObject({
+    const payload = expectDefined(
+      chatBroadcastCalls(broadcast)[0],
+      "chatBroadcastCalls(broadcast)[0] test invariant",
+    )[1] as Record<string, unknown>;
+    expect(payload).toMatchObject({
       runId: "client-timeout",
       state: "error",
       stopReason: "timeout",
       errorMessage: "agent provider timeout",
     });
+    expect(payload).not.toHaveProperty("message");
   });
 
   it.each([
@@ -4126,20 +4126,17 @@ describe("agent event handler", () => {
       state?: string;
       errorKind?: string;
       errorMessage?: string;
-      message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
     };
     expect(payload.state).toBe("error");
     expect(payload.errorKind).toBe("rate_limit");
     expect(payload.errorMessage).toContain("Too many requests");
-    expect(payload.message?.role).toBe("assistant");
-    expect(payload.message?.content?.[0]?.text).toContain("Too many requests");
+    expect(payload).not.toHaveProperty("message");
 
     const nodePayload = sessionChatCalls(nodeSendToSession).at(-1)?.[2] as {
       errorKind?: string;
-      message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
     };
     expect(nodePayload.errorKind).toBe("rate_limit");
-    expect(nodePayload.message?.content?.[0]?.text).toContain("Too many requests");
+    expect(nodePayload).not.toHaveProperty("message");
   });
 
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
@@ -4204,12 +4201,14 @@ describe("agent event handler", () => {
       ([, payload]) => (payload as { state?: string }).state === "error",
     );
     expect(chatErrors).toHaveLength(1);
-    expectPayloadFields(chatErrors[0]?.[1], {
+    const errorPayload = chatErrors[0]?.[1] as Record<string, unknown>;
+    expectPayloadFields(errorPayload, {
       runId: "run-chat-send",
       sessionKey: "session-chat-send",
       state: "error",
       errorMessage: "chat.send failed",
     });
+    expect(errorPayload).not.toHaveProperty("message");
     expect(chatRunState.registry.peek("run-chat-send")).toBeUndefined();
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
     expect(agentRunSeq.has("run-chat-send")).toBe(false);

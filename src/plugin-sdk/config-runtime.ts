@@ -74,11 +74,6 @@ export {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-export {
-  TELEGRAM_COMMAND_NAME_PATTERN,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";

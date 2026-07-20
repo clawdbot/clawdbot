@@ -247,6 +247,7 @@ apps/swabble/build/
 
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
+packages/gateway-protocol/protocol.schema.json
 .ant-colony/
 
 # Eclipse

@@ -68,7 +68,7 @@ describe("msteams message handler Graph media recovery", () => {
         {
           path: "/tmp/from-graph.pdf",
           contentType: "application/pdf",
-          placeholder: "<media:document>",
+          kind: "document",
         },
       ]);
       const { deps, getTeamDetails } = createMessageHandlerDeps(cfg);
@@ -109,7 +109,7 @@ describe("msteams message handler Graph media recovery", () => {
       {
         path: "/tmp/explicit.pdf",
         contentType: "application/pdf",
-        placeholder: "<media:document>",
+        kind: "document",
       },
     ]);
     const defaultCfg = {
@@ -140,8 +140,9 @@ describe("msteams message handler Graph media recovery", () => {
       expect.objectContaining({ graphMediaFallback: undefined }),
     );
     expect(firstDispatchedContext()).toMatchObject({
-      BodyForAgent: "<media:document>",
+      BodyForAgent: "",
       MediaPaths: ["/tmp/explicit.pdf"],
+      MediaTypes: ["application/pdf"],
     });
   });
 
@@ -167,6 +168,30 @@ describe("msteams message handler Graph media recovery", () => {
     expect(getTeamDetails).not.toHaveBeenCalled();
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the exact unavailable notice for a Graph-discovered failed attachment", async () => {
+    inboundMediaMockState.resolve.mockResolvedValue([{ kind: "document" }]);
+    const { deps, getTeamDetails } = createMessageHandlerDeps(cfg);
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler({
+      activity: buildChannelActivity({
+        text: "<at>Bot</at>",
+        channelData: {
+          team: { id: "19:team@thread.skype", aadGroupId: "team-aad" },
+          channel: { id: "19:channel@thread.tacv2" },
+        },
+        attachments: [taglessHtmlAttachment],
+      }),
+      getTeamDetails,
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(firstDispatchedContext()).toMatchObject({
+      BodyForAgent: "[msteams attachment unavailable]",
+      MediaTypes: ["document"],
+    });
   });
 
   it("keeps ordinary text when the Teams API cannot resolve the channel AAD group ID", async () => {

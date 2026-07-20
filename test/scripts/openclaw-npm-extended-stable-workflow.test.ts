@@ -138,7 +138,7 @@ describe("minimal npm extended-stable workflow", () => {
     const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
     expect(step(preflight, "Verify release contents").env).toMatchObject({
       OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR:
-        "${{ steps.ai_runtime_tarballs.outputs.dir }}",
+        "${{ steps.core_package_tarballs.outputs.dir }}",
     });
     expect(plugins.if).toBe("${{ inputs.npm_dist_tag == 'extended-stable' }}");
     expect(plugins.env).toMatchObject({
@@ -255,6 +255,23 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(readFileSync(workflowPath, "utf8")).not.toContain(
       "find preflight-tarball -type f -name '*.tgz'",
+    );
+  });
+
+  it("publishes gateway packages in manifest order before the root package", () => {
+    const parsed = workflow();
+    const preflightPack = step(
+      parsed.jobs?.preflight_openclaw_npm,
+      "Pack publishable core packages",
+    );
+    const publish = step(parsed.jobs?.publish_openclaw_npm, "Publish");
+    expect(preflightPack.env?.CORE_PACKAGE_DIRS).toBe(
+      "packages/ai packages/gateway-protocol packages/gateway-client",
+    );
+    expect(readFileSync(workflowPath, "utf8")).toContain('packageName: "@openclaw/gateway-client"');
+    expect(publish.run).toContain(".corePackageTarballs[] | [.packageName, .tarballName] | @tsv");
+    expect(publish.run).toContain(
+      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
   });
 });

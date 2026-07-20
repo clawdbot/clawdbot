@@ -98,6 +98,38 @@ describe("streamOpenAICodexResponses retry classification", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { label: "unparseable", retryAfterMs: "not-a-number" },
+    { label: "empty", retryAfterMs: "" },
+  ])("honors retry-after when retry-after-ms is $label", async ({ retryAfterMs }) => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("rate limited", {
+          status: 429,
+          headers: { "retry-after-ms": retryAfterMs, "retry-after": "7" },
+        }),
+      )
+      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback: TimerHandler) => {
+        if (typeof callback === "function") {
+          callback();
+        }
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      });
+
+    await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 7_000);
+  });
+
   it("does not retry a bodyless 304 response", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

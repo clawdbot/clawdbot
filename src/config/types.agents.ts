@@ -147,8 +147,6 @@ export type AgentConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
-  /** Optional outer run loop retry boundaries. */
-  runRetries?: AgentDefaultsConfig["runRetries"];
   /** Optional per-agent embedded OpenClaw overrides. */
   embeddedAgent?: {
     /** Optional per-agent execution contract override. */

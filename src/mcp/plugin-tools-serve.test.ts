@@ -215,17 +215,17 @@ describe("plugin tools MCP server", () => {
     const executeCall = requireFirstMockCall(execute.mock.calls, "plugin tool execute");
     const requestId = executeCall[0];
     expect(typeof requestId).toBe("string");
-    expect((requestId as string).startsWith("mcp-")).toBe(true);
-    expect(Number.isSafeInteger(Number((requestId as string).slice("mcp-".length)))).toBe(true);
+    expect(requestId).toMatch(
+      /^mcp-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
     expect(executeCall[1]).toEqual({ query: "remember this" });
     expect(executeCall[2]).toBeUndefined();
     expect(executeCall[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
-  it("releases execution tracking after repeated direct MCP calls", async () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now++);
+  it("uses unique ids and releases execution tracking after repeated direct MCP calls", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const executeSuccess = vi.fn().mockResolvedValue({ content: "Stored." });
     const executeFailure = vi.fn().mockRejectedValue(new Error("unavailable"));
     const handlers = createPluginToolsMcpHandlers([
@@ -250,8 +250,12 @@ describe("plugin tools MCP server", () => {
 
     expect(executeSuccess).toHaveBeenCalledTimes(32);
     expect(executeFailure).toHaveBeenCalledTimes(32);
-    for (const [toolCallId] of [...executeSuccess.mock.calls, ...executeFailure.mock.calls]) {
-      expect(consumeTrackedToolExecutionStarted(String(toolCallId))).toBeUndefined();
+    const toolCallIds = [...executeSuccess.mock.calls, ...executeFailure.mock.calls].map(
+      ([toolCallId]) => String(toolCallId),
+    );
+    expect(new Set(toolCallIds).size).toBe(toolCallIds.length);
+    for (const toolCallId of toolCallIds) {
+      expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
     }
   });
 

@@ -3,6 +3,8 @@
 import type { CronServiceContract } from "../cron/service-contract.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
+  /** Serialize agent-job removal with the roster commit and restore on failure. */
+  removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T>;
   /** Temporarily disarm ticks without running startup recovery on resume. */
   pauseScheduling(): void;
   resumeScheduling(): void;

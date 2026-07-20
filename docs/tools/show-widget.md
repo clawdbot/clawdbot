@@ -15,6 +15,8 @@ read_when:
 
 When the agent calls `show_widget`, OpenClaw core wraps `widget_code` in a minimal HTML document, stores it as a Canvas document, and returns a preview handle. The Control UI renders that handle as a sandboxed iframe directly under the tool call, while native apps use an isolated web view. Both restore the widget after history reload.
 
+In Control UI sessions, a Canvas widget can also be pinned to the session dashboard. Set `pin: true` in the tool call, or use **Pin to dashboard** on an existing transcript widget. Pinning reuses the exact hosted document; it does not fetch widget HTML through the browser.
+
 For browser embedding, the wrapper document injects four small host bridges around the widget code:
 
 - A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (160 to 1200 pixels).
@@ -87,7 +89,15 @@ Both implementations use the same required fields:
 
 Discord also accepts optional `button_label` text for the Activity launch button. The Canvas schema intentionally omits this Discord-only field.
 
-The core result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. Discord returns the stored widget and posted-message identifiers.
+The core Canvas tool accepts these optional dashboard placement fields:
+
+- `pin`: also place the widget on the session dashboard.
+- `name`: stable widget name; defaults to a slug of `title`.
+- `tab`: destination tab slug.
+- `size`: one of `sm`, `md`, `lg`, `xl`, or `full`.
+- `after`: sibling widget name after which to place the widget.
+
+The core result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. Pinned results also retain the board widget name so the Control UI does not offer a duplicate pin after transcript reload. Discord returns the stored widget and posted-message identifiers.
 
 `discord_widget` remains registered as a deprecated alias for one release. New agent calls should use `show_widget`.
 

@@ -42,9 +42,10 @@ async function prepare(
   input: Parameters<
     NonNullable<typeof clickClackSetupAdapter.prepareAccountConfigInput>
   >[0]["input"],
+  cfg: OpenClawConfig = {},
 ) {
   return await clickClackSetupAdapter.prepareAccountConfigInput?.({
-    cfg: {},
+    cfg,
     accountId: DEFAULT_ACCOUNT_ID,
     input,
     runtime: createNonExitingRuntimeEnv(),
@@ -127,6 +128,39 @@ describe("ClickClack setup adapter", () => {
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       baseUrl: "https://clickclack.example",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
+  it("claims setup codes through an existing private API base", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {},
+    });
+
+    await prepare(
+      {
+        code: "ABCD-EFGH-JKMN",
+        baseUrl: "https://clack.openclaw.ai",
+      },
+      {
+        channels: {
+          clickclack: {
+            apiBaseUrl: "http://127.0.0.1:8484",
+          },
+        },
+      } as OpenClawConfig,
+    );
+
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      baseUrl: "http://127.0.0.1:8484",
       code: "ABCDEFGHJKMN",
     });
   });

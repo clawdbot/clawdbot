@@ -426,7 +426,6 @@ export const McpConfigSchema = z
         sandboxPort: z.number().int().min(1).max(65535).optional(),
       })
       .optional(),
-    sessionIdleTtlMs: z.number().finite().min(0).optional(),
   })
   .optional();
 

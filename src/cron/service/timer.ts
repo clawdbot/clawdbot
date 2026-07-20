@@ -3,7 +3,7 @@ import pMap, { pMapSkip } from "p-map";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
+import type { CronConfig } from "../../config/types.cron.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
@@ -29,7 +29,7 @@ import {
 } from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
-import { resolveCronExecutionRetryHint } from "../retry-hint.js";
+import { resolveCronExecutionRetryHint, type CronRetryOn } from "../retry-hint.js";
 import {
   createCronRunDiagnosticsFromError,
   normalizeCronRunDiagnostics,
@@ -526,16 +526,11 @@ function resolveCronNextRunWithLowerBound(params: {
   return Math.max(params.naturalNext, params.lowerBoundMs);
 }
 
-function resolveRetryConfig(cronConfig?: CronConfig) {
-  const retry = cronConfig?.retry;
+function resolveRetryConfig() {
   return {
-    maxAttempts:
-      typeof retry?.maxAttempts === "number" ? retry.maxAttempts : DEFAULT_MAX_TRANSIENT_RETRIES,
-    backoffMs:
-      Array.isArray(retry?.backoffMs) && retry.backoffMs.length > 0
-        ? retry.backoffMs
-        : DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, 3),
-    retryOn: Array.isArray(retry?.retryOn) && retry.retryOn.length > 0 ? retry.retryOn : undefined,
+    maxAttempts: DEFAULT_MAX_TRANSIENT_RETRIES,
+    backoffMs: DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, 3),
+    retryOn: undefined,
   };
 }
 
@@ -546,7 +541,7 @@ function resolveTransientCronRetryDecision(params: {
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
-  const retryConfig = resolveRetryConfig(params.cronConfig);
+  const retryConfig = resolveRetryConfig();
   const retryHint = resolveCronExecutionRetryHint({
     error: params.error,
     retryOn: retryConfig.retryOn,
@@ -583,7 +578,7 @@ function resolveDisabledHeartbeatOneShotRetryDecision(params: {
   cronConfig?: CronConfig;
   consecutiveSkipped: number | undefined;
 }): DisabledHeartbeatOneShotRetryDecision {
-  const retryConfig = resolveRetryConfig(params.cronConfig);
+  const retryConfig = resolveRetryConfig();
   const consecutiveSkipped = params.consecutiveSkipped ?? 0;
   if (consecutiveSkipped > retryConfig.maxAttempts) {
     return {
@@ -1000,7 +995,7 @@ export function applyJobResult(
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(
         job.state.consecutiveErrors ?? 1,
-        state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+        DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
       );
       normalNext = computeNormalNext();
       const backoffNext = result.endedAt + backoff;
@@ -1044,8 +1039,7 @@ export function applyJobResult(
       const nextRunAtMs = job.trigger
         ? Math.max(
             pacedNextRunAtMs,
-            result.endedAt +
-              Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs(state.deps.cronConfig)),
+            result.endedAt + Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs()),
           )
         : pacedNextRunAtMs;
       job.state.nextRunAtMs = nextRunAtMs;
@@ -1072,10 +1066,7 @@ export function applyJobResult(
         // would otherwise refire sooner after a successful payload run.
         const minNext =
           result.endedAt +
-          Math.max(
-            MIN_REFIRE_GAP_MS,
-            job.trigger ? resolveCronTriggerMinIntervalMs(state.deps.cronConfig) : 0,
-          );
+          Math.max(MIN_REFIRE_GAP_MS, job.trigger ? resolveCronTriggerMinIntervalMs() : 0);
         job.state.nextRunAtMs = resolveCronNextRunWithLowerBound({
           state,
           job,
@@ -1086,10 +1077,7 @@ export function applyJobResult(
       } else {
         job.state.nextRunAtMs =
           naturalNext !== undefined && job.trigger
-            ? Math.max(
-                naturalNext,
-                result.endedAt + resolveCronTriggerMinIntervalMs(state.deps.cronConfig),
-              )
+            ? Math.max(naturalNext, result.endedAt + resolveCronTriggerMinIntervalMs())
             : naturalNext;
       }
     } else {
@@ -1186,10 +1174,7 @@ export function applyTriggerNoFireResult(
     // Job-level computation keeps per-job cron staggering intact on quiet
     // ticks; raw schedule math would collapse watchers onto exact boundaries.
     const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
-    const floorMs = Math.max(
-      MIN_REFIRE_GAP_MS,
-      resolveCronTriggerMinIntervalMs(state.deps.cronConfig),
-    );
+    const floorMs = Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs());
     // Quiet ticks still advance the schedule; the floor prevents scripts from
     // becoming a headless hot loop even when cron resolves inside the window.
     job.state.nextRunAtMs =
@@ -1608,7 +1593,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
     };
 
-    const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
+    const concurrency = Math.min(resolveRunConcurrency(), Math.max(1, dueJobs.length));
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
@@ -1941,14 +1926,11 @@ function isRunnableJob(params: {
   return previousRunAtMs > lastRunAtMs;
 }
 
-function isErrorBackoffPending(state: CronServiceState, job: CronJob, nowMs: number): boolean {
+function isErrorBackoffPending(_state: CronServiceState, job: CronJob, nowMs: number): boolean {
   if (job.schedule.kind === "at" || resolveJobLastRunStatus(job) !== "error") {
     return false;
   }
-  const backoffUntilMs = resolveJobErrorBackoffUntilMs(
-    job,
-    state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-  );
+  const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs;
 }
 
@@ -1995,10 +1977,7 @@ function deferPendingBackoffMissedCronSlots(
     ) {
       continue;
     }
-    const backoffUntilMs = resolveJobErrorBackoffUntilMs(
-      job,
-      state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-    );
+    const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
     if (backoffUntilMs === undefined || nowMs >= backoffUntilMs) {
       continue;
     }

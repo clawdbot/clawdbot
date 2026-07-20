@@ -65,10 +65,6 @@ export type {
   InboundMentionPolicy,
   InboundImplicitMentionKind,
   InboundMentionDecision,
-  MentionGateParams,
-  MentionGateResult,
-  MentionGateWithBypassParams,
-  MentionGateWithBypassResult,
   ResolveInboundMentionDecisionFlatParams,
   ResolveInboundMentionDecisionNestedParams,
   ResolveInboundMentionDecisionParams,
@@ -76,10 +72,6 @@ export type {
 export {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
-  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
-  resolveMentionGating,
-  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
-  resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
 export type { LocationSource, NormalizedLocation, OutboundLocation } from "../channels/location.js";
 export {
@@ -204,6 +196,7 @@ export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
   buildChannelInboundMediaPayload,
+  formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
   // @deprecated Prefer `buildChannelInboundMediaPayload`.
   buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
@@ -213,6 +206,7 @@ export type {
   ChannelInboundMediaInput as ChannelTurnMediaInput,
   ChannelInboundMediaPayload,
   ChannelInboundMediaPayload as ChannelTurnMediaPayload,
+  MediaPlaceholderTextFact,
 } from "../channels/inbound-event/media.js";
 export type {
   CommandFacts,

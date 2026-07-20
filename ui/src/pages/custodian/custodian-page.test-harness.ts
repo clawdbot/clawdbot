@@ -23,10 +23,7 @@ type TestCustodianPage = HTMLElement & {
 type ContextHarness = {
   context: ApplicationContext;
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-  setGatewayUrl: (gatewayUrl: string) => void;
   setGatewayToken: (token: string) => void;
-  setGatewayBootstrapToken: (bootstrapToken: string) => void;
-  setGatewayDeviceToken: (deviceToken: string) => void;
   emitGatewayEvent: (event: Pick<GatewayEventFrame, "event" | "payload">) => void;
 };
 
@@ -85,22 +82,9 @@ export function createContext(
         listener(snapshot);
       }
     },
-    setGatewayUrl: (gatewayUrl) => {
-      connection.gatewayUrl = gatewayUrl;
-    },
-    setGatewayToken: (token: string) => {
-      connection.token = token;
-    },
-    setGatewayBootstrapToken: (value: string) => {
-      connection.bootstrapToken = value;
-    },
-    setGatewayDeviceToken: (deviceToken: string) => {
-      snapshot = {
-        ...snapshot,
-        hello: snapshot.hello
-          ? { ...snapshot.hello, auth: { ...snapshot.hello.auth, deviceToken } }
-          : snapshot.hello,
-      };
+    setGatewayToken: (value) => {
+      const credentials = { token: value };
+      connection.token = credentials.token;
     },
     emitGatewayEvent: (event) => {
       for (const listener of eventListeners) {

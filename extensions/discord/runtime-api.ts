@@ -38,7 +38,6 @@ export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
   allowListMatches,
-  buildDiscordMediaPayload,
   clearGateways,
   clearPresences,
   createDiscordGatewayPlugin,

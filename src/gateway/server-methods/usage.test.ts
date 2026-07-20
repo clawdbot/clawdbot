@@ -460,6 +460,34 @@ describe("gateway usage helpers", () => {
     );
   });
 
+  it("keeps refreshing cost summaries fresh for the TTL window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+    vi.mocked(loadCostUsageSummaryFromCache).mockResolvedValueOnce({
+      ...costSummary({ totalTokens: 1, totalCost: 0 }),
+      cacheStatus: {
+        status: "refreshing",
+        cachedFiles: 1,
+        pendingFiles: 1,
+        staleFiles: 1,
+      },
+    });
+
+    const config = {} as OpenClawConfig;
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+
+    const entry = testApi.costUsageCache.get("agent:__default__:1-2:gateway");
+    expect(entry?.updatedAt).toBe(Date.now());
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps cost usage cache entries scoped by agentId", async () => {
     const config = {} as OpenClawConfig;
 

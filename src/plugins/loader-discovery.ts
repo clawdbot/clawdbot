@@ -25,7 +25,7 @@ type ResolvedPluginLoadDiscovery = {
   discovery: PluginDiscoveryResult;
   manifestRegistry: PluginManifestRegistry;
   orderedCandidates: PluginCandidate[];
-  manifestByRoot: Map<string, PluginManifestRecord>;
+  manifestBySource: Map<string, PluginManifestRecord>;
   provenance: ReturnType<typeof buildProvenanceIndex>;
 };
 
@@ -89,19 +89,19 @@ export function resolvePluginLoadDiscovery(params: {
     env: context.env,
     installRecords: context.installRecords,
   });
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
+  const manifestBySource = new Map(
+    manifestRegistry.plugins.map((record) => [record.source, record]),
   );
   const orderedCandidates = [...discovery.candidates].toSorted((left, right) =>
     compareDuplicateCandidateOrder({
       left,
       right,
-      manifestByRoot,
+      manifestBySource,
       provenance,
       env: context.env,
     }),
   );
-  return { discovery, manifestRegistry, orderedCandidates, manifestByRoot, provenance };
+  return { discovery, manifestRegistry, orderedCandidates, manifestBySource, provenance };
 }
 
 function nonEmptyInstallRecords(

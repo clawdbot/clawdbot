@@ -9,6 +9,18 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
+vi.mock("../build-info.ts", () => ({
+  CONTROL_UI_BUILD_INFO: {
+    version: "2026.7.19",
+    commit: null,
+    commitAt: null,
+    builtAt: null,
+    branch: null,
+    dirty: null,
+    buildId: "test",
+  },
+}));
+
 const HELLO: GatewayHelloOk = {
   type: "hello-ok",
   protocol: 1,
@@ -88,6 +100,7 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     gateway.start();
 
     expect(current().started).toBe(1);
+    expect(current().opts.clientVersion).toBe("2026.7.19");
     expect(gateway.snapshot.connected).toBe(false);
     expect(gateway.snapshot.reconnecting).toBe(false);
   });

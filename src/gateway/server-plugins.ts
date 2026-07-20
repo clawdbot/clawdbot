@@ -473,9 +473,6 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       };
     },
     getSessionMessages,
-    async getSession(params) {
-      return getSessionMessages(params);
-    },
     async deleteSession(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
       const pluginId =

@@ -206,6 +206,28 @@ describe("channel ingress monitor", () => {
     });
   });
 
+  it("can await claim startup without waiting for active delivery", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery = () => {};
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      const deliver = vi.fn(async () => {
+        await deliveryGate;
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+
+      await monitor.admit({ id: "event-started", lane: "a", text: "hello" });
+      await monitor.waitForPumpIdle();
+
+      expect(deliver).toHaveBeenCalledOnce();
+      releaseDelivery();
+      await monitor.waitForIdle();
+      await monitor.stop();
+    });
+  });
+
   it("drains the next same-lane event after adoption while delivery remains active", async () => {
     await withQueue(async (queue) => {
       let releaseFirst: (() => void) | undefined;

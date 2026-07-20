@@ -41,9 +41,8 @@ For channel config, publish the channel-owned JSON Schema through
 `openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
 subpath is for shared schema primitives and the generic builder. OpenClaw's
 bundled plugins use `plugin-sdk/bundled-channel-config-schema` for retained
-bundled-channel schemas. Deprecated compatibility exports remain on
-`plugin-sdk/channel-config-schema-legacy`; neither bundled schema subpath is a
-pattern for new plugins.
+bundled-channel schemas. That bundled schema subpath is not a pattern for new
+plugins.
 
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
@@ -85,6 +84,13 @@ deprecated re-export barrels are tracked in
 
 The `register(api)` callback receives an `OpenClawPluginApi` object with these
 methods:
+
+Plugins that provide an external team-chat surface for a session can register
+the single process-wide provider exported by
+`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
+reports whether a discussion is unavailable, ready to open, or already open;
+`open({ sessionKey })` creates or resolves the discussion and returns its embed
+and external URLs. Registering another provider replaces the current provider.
 
 ### Capability registration
 
@@ -438,8 +444,7 @@ The contracts intentionally split authority:
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
-  prompt fields from legacy `before_agent_start`, and
-  `enqueueNextTurnInjection`.
+  and `enqueueNextTurnInjection`.
 
 Examples of non-Plan consumers:
 
@@ -596,9 +601,6 @@ For an end-to-end authoring guide, see
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
 | `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
 
 ### Deprecated memory embedding adapters
 
@@ -606,13 +608,12 @@ For an end-to-end authoring guide, see
 | ---------------------------------------------- | ---------------------------------------------- |
 | `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
 
-- `registerMemoryCapability` is the preferred exclusive memory-plugin API.
+- `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
-  so companion plugins can consume exported memory artifacts through
-  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
-  memory plugin's private layout.
-- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
-  `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
+  for host-managed exports. Companion plugins that enumerate those declared
+  artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
+  `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
+  API exists; they must not reach into another plugin's private layout.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.

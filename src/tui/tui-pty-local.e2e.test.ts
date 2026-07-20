@@ -641,7 +641,6 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
     messages: {
       queue: {
         mode: "followup",
-        debounceMs: 25,
       },
     },
   } satisfies OpenClawConfig;

@@ -599,8 +599,8 @@ describe("config schema", () => {
     }
   });
 
-  it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
+  it("rejects removed Firecrawl config from the core web fetch schema", () => {
+    const result = ToolsSchema.safeParse({
       web: {
         fetch: {
           readability: true,
@@ -616,15 +616,7 @@ describe("config schema", () => {
       },
     });
 
-    expect(parsed?.web?.fetch?.readability).toBe(true);
-    expect(parsed?.web?.fetch?.firecrawl).toEqual({
-      enabled: true,
-      apiKey: "firecrawl-test-key",
-      baseUrl: "https://api.firecrawl.dev",
-      onlyMainContent: true,
-      maxAgeMs: 60_000,
-      timeoutSeconds: 15,
-    });
+    expect(result.success).toBe(false);
   });
 
   it("keeps top-level subagent tools schema limited to tool policy", () => {
@@ -950,24 +942,6 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
-  it("accepts WhatsApp Web Baileys socket timing in the runtime zod schema", () => {
-    const parsed = OpenClawSchema.parse({
-      web: {
-        whatsapp: {
-          keepAliveIntervalMs: 15_000,
-          connectTimeoutMs: 60_000,
-          defaultQueryTimeoutMs: 90_000,
-        },
-      },
-    });
-
-    expect(parsed.web?.whatsapp).toEqual({
-      keepAliveIntervalMs: 15_000,
-      connectTimeoutMs: 60_000,
-      defaultQueryTimeoutMs: 90_000,
-    });
-  });
-
   it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {
@@ -1027,29 +1001,6 @@ describe("config schema", () => {
     }
   });
 
-  it("rejects unknown keys inside web fetch firecrawl config", () => {
-    const result = ToolsSchema.safeParse({
-      web: {
-        fetch: {
-          firecrawl: {
-            enabled: true,
-            nope: true,
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const firecrawlIssue = result.error.issues.find(
-        (issue) => JSON.stringify(issue.path) === JSON.stringify(["web", "fetch", "firecrawl"]),
-      );
-      expect(firecrawlIssue?.path).toEqual(["web", "fetch", "firecrawl"]);
-      const firecrawlKeys = (firecrawlIssue as { keys?: unknown } | undefined)?.keys;
-      expect(firecrawlKeys).toEqual(["nope"]);
-    }
-  });
-
   it("looks up a config schema path with immediate child summaries", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway.auth");
     expect(lookup?.path).toBe("gateway.auth");
@@ -1081,7 +1032,7 @@ describe("config schema", () => {
 
   it("includes reload metadata when a resolver is provided", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
-      if (path === "gateway.channelHealthCheckMinutes") {
+      if (path === "gateway.auth.mode") {
         return { kind: "hot" };
       }
       if (path.startsWith("gateway")) {
@@ -1091,13 +1042,12 @@ describe("config schema", () => {
     });
 
     expect(lookup?.reloadKind).toBe("restart");
-    expect(
-      lookup?.children.find((child) => child.path === "gateway.handshakeTimeoutMs")?.reloadKind,
-    ).toBe("restart");
-    expect(
-      lookup?.children.find((child) => child.path === "gateway.channelHealthCheckMinutes")
-        ?.reloadKind,
-    ).toBe("hot");
+    expect(lookup?.children.find((child) => child.path === "gateway.port")?.reloadKind).toBe(
+      "restart",
+    );
+    expect(lookup?.children.find((child) => child.path === "gateway.auth")?.reloadKind).toBe(
+      "restart",
+    );
   });
 
   it("returns a shallow lookup schema without nested composition keywords", () => {

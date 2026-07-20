@@ -5,17 +5,17 @@ import { describe, expect, it } from "vitest";
 import {
   APPLE_I18N_LOCALES,
   buildIosCatalog,
-  checkAppleAppI18n,
   compileMacosLocalizations,
   findAmbiguousRuntimeInterpolations,
   infoPlistTranslationCandidates,
   selectInfoPlistTranslation,
+  verifyAppleAppI18n,
 } from "../../scripts/apple-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 
 describe("Apple app i18n catalogs", () => {
-  it("keeps generated runtime coverage complete for every native locale", async () => {
-    await expect(checkAppleAppI18n()).resolves.toBeUndefined();
+  it("keeps source-owned runtime coverage complete", async () => {
+    await expect(verifyAppleAppI18n()).resolves.toBeUndefined();
   });
 
   it("ships translated runtime keys for iOS, watchOS, and explicit localized calls", async () => {

@@ -325,18 +325,20 @@ export async function buildWhatsAppInboundContext(params: {
             body: entry.body,
             timestamp: entry.timestamp,
             messageId: entry.id,
+            media: entry.media,
           })),
           limit: params.groupHistory?.length ?? 1,
         })
       : undefined;
 
   const media = toInboundMediaFacts(
-    params.msg.payload.media?.path || params.msg.payload.media?.url
+    params.msg.payload.media
       ? [
           {
             path: params.msg.payload.media?.path,
             url: params.msg.payload.media?.url ?? params.msg.payload.media?.path,
             contentType: params.msg.payload.media?.type,
+            kind: params.msg.payload.media?.kind,
           },
         ]
       : undefined,
@@ -535,10 +537,7 @@ export function createWhatsAppReplyPlan(params: {
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
   const statusReactionController = params.statusReactionController ?? null;
-  const statusReactionTiming = {
-    ...DEFAULT_TIMING,
-    ...params.cfg.messages?.statusReactions?.timing,
-  };
+  const statusReactionTiming = DEFAULT_TIMING;
   const removeAckAfterReply = params.cfg.messages?.removeAckAfterReply ?? false;
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);

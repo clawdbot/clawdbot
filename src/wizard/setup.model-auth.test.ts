@@ -13,6 +13,7 @@ const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice,
+  prepareAuthChoice: applyAuthChoice,
   warnIfModelConfigLooksOff,
   resolvePreferredProviderForAuthChoice,
 }));
@@ -71,7 +72,11 @@ describe("runSetupModelAuthStep provider failures", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(result).toEqual({});
+    expect(result).toEqual({
+      config: {},
+      authProfiles: [],
+      persistAuthProfiles: expect.any(Function),
+    });
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Claude CLI is not authenticated on this host."),

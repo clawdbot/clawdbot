@@ -210,8 +210,13 @@ describe("iMessage monitor attachment policy", () => {
           missing: true,
         },
       ],
-      staged: { attachments: [], unavailableCount: 1 },
+      staged: {
+        attachments: [{ contentType: "image/heic", kind: "image" as const }],
+        unavailableCount: 1,
+      },
       expectedBody: "[imessage attachment unavailable]",
+      expectedMediaTypes: ["image/heic"],
+      expectedMediaUrls: undefined,
     },
     {
       name: "uses the first materialized attachment type when earlier media is unavailable",
@@ -229,76 +234,89 @@ describe("iMessage monitor attachment policy", () => {
       ],
       staged: {
         attachments: [
+          { contentType: "image/heic", kind: "image" as const },
           {
             path: "/Users/openclaw/Library/Messages/Attachments/report.pdf",
             contentType: "application/pdf",
+            kind: "document" as const,
           },
         ],
         unavailableCount: 1,
       },
-      expectedBody: "<media:document>\n\n[imessage attachment unavailable]",
+      expectedBody: "[imessage attachment unavailable]",
+      expectedMediaTypes: ["image/heic", "application/pdf"],
+      expectedMediaUrls: ["", "/Users/openclaw/Library/Messages/Attachments/report.pdf"],
     },
-  ])("$name", async ({ name, attachments, staged, expectedBody }) => {
-    stageIMessageAttachmentsMock.mockResolvedValue(staged);
-    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-    let onNotification:
-      | ((message: { method: string; params: unknown }) => void | Promise<void>)
-      | undefined;
-    const client = {
-      request: vi.fn(async () => ({ subscription: 1 })),
-      waitForClose: vi.fn(async () => {
-        await onNotification?.({
-          method: "message",
-          params: {
-            message: {
-              id: 1,
-              guid: `inbound-media-guid-${name}-${Date.now()}`,
-              chat_id: 123,
-              chat_identifier: "+15550001111",
-              sender: "+15550001111",
-              is_from_me: false,
-              is_group: false,
-              text: "",
-              created_at: new Date().toISOString(),
-              attachments,
+  ])(
+    "$name",
+    async ({ name, attachments, staged, expectedBody, expectedMediaTypes, expectedMediaUrls }) => {
+      stageIMessageAttachmentsMock.mockResolvedValue(staged);
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+      let onNotification:
+        | ((message: { method: string; params: unknown }) => void | Promise<void>)
+        | undefined;
+      const client = {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {
+          await onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 1,
+                guid: `inbound-media-guid-${name}-${Date.now()}`,
+                chat_id: 123,
+                chat_identifier: "+15550001111",
+                sender: "+15550001111",
+                is_from_me: false,
+                is_group: false,
+                text: "",
+                created_at: new Date().toISOString(),
+                attachments,
+              },
+            },
+          });
+          await Promise.resolve();
+          await Promise.resolve();
+        }),
+        stop: vi.fn(async () => {}),
+      };
+      createIMessageRpcClientMock.mockImplementation(async (params) => {
+        onNotification = params?.onNotification;
+        return client as never;
+      });
+
+      await monitorIMessageProvider({
+        includeAttachments: true,
+        config: {
+          channels: {
+            imessage: {
+              includeAttachments: true,
+              attachmentRoots: ["/Users/openclaw/Library/Messages/Attachments"],
+              dmPolicy: "allowlist",
+              allowFrom: ["+15550001111"],
+              groupPolicy: "open",
             },
           },
-        });
-        await Promise.resolve();
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      onNotification = params?.onNotification;
-      return client as never;
-    });
+          messages: { inbound: { debounceMs: 0 } },
+          session: { mainKey: "main" },
+        } as never,
+        runtime,
+      });
 
-    await monitorIMessageProvider({
-      includeAttachments: true,
-      config: {
-        channels: {
-          imessage: {
-            includeAttachments: true,
-            attachmentRoots: ["/Users/openclaw/Library/Messages/Attachments"],
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            groupPolicy: "open",
-          },
-        },
-        messages: { inbound: { debounceMs: 0 } },
-        session: { mainKey: "main" },
-      } as never,
-      runtime,
-    });
-
-    expect(runtime.error).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(stageIMessageAttachmentsMock).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() =>
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1),
-    );
-    expect(dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(
-      expectedBody,
-    );
-  });
+      expect(runtime.error).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(stageIMessageAttachmentsMock).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() =>
+        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1),
+      );
+      expect(dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(
+        expectedBody,
+      );
+      expect(
+        dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.MediaTypes,
+      ).toEqual(expectedMediaTypes);
+      expect(dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.MediaUrls).toEqual(
+        expectedMediaUrls,
+      );
+    },
+  );
 });

@@ -74,27 +74,8 @@ describe("resolveAnnounceTargetFromKey", () => {
 });
 
 describe("resolvePingPongTurns", () => {
-  it("defaults to 5 when unset", () => {
-    expect(resolvePingPongTurns(undefined)).toBe(5);
-    expect(resolvePingPongTurns({ session: {} } as never)).toBe(5);
-  });
-
-  it("uses configured values through the 20-turn ceiling", () => {
-    expect(
-      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 10 } } } as never),
-    ).toBe(10);
-    expect(
-      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 20 } } } as never),
-    ).toBe(20);
-  });
-
-  it("keeps defensive floor and ceiling clamps", () => {
-    expect(
-      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: -1 } } } as never),
-    ).toBe(0);
-    expect(
-      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 50 } } } as never),
-    ).toBe(20);
+  it("uses the fixed five-turn limit", () => {
+    expect(resolvePingPongTurns()).toBe(5);
   });
 });
 

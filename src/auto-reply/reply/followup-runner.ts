@@ -18,28 +18,18 @@ import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import {
-  hasDeliberateSilentTerminalReply,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import {
-  isFallbackSummaryError,
-  runWithModelFallback,
-  type ModelFallbackResultClassification,
-} from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import {
   isAgentRunRestartAbortReason,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
-import {
-  buildAgentRuntimeDeliveryPlan,
-  buildAgentRuntimeOutcomePlan,
-} from "../../agents/runtime-plan/build.js";
+import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
@@ -79,7 +69,6 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createAgentLifecycleTerminalBackstop,
-  resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
@@ -156,33 +145,6 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
-
-const PRESERVED_FOLLOWUP_RESULT_CODES = new Set([
-  "empty_result",
-  "reasoning_only_result",
-  "planning_only_result",
-]);
-
-function preserveNonVisibleFollowupResult(
-  classification: ModelFallbackResultClassification,
-): ModelFallbackResultClassification {
-  if (
-    !classification ||
-    !("code" in classification) ||
-    !classification.code ||
-    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code)
-  ) {
-    return classification;
-  }
-  // Follow-up delivery owns its terminal fallback. Preserve the classified result
-  // so that owner can route a visible failure instead of losing it to a thrown summary.
-  return {
-    ...classification,
-    preserveResultOnExhaustion: true,
-    // Prefer any earlier result that carries a user-facing terminal presentation.
-    preserveResultPriority: -1,
-  };
-}
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
@@ -1065,37 +1027,39 @@ export function createFollowupRunner(params: {
         resetAnnounced: false,
       };
       try {
-        const outcomePlan = buildAgentRuntimeOutcomePlan();
-        const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
-          ...resolveModelFallbackOptions(run, runtimeConfig),
-          cfg: runtimeConfig,
-          runId,
-          sessionId: run.sessionId,
-          abortSignal: runAbortSignal,
-          resolveAgentHarnessRuntimeOverride: (provider) =>
-            resolveSessionRuntimeOverrideForProvider({
-              provider,
-              entry: activeSessionEntry,
-              cfg: runtimeConfig,
-            }),
-          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
-            await ensureSelectedAgentHarnessPlugin({
-              config: runtimeConfig,
-              provider,
-              modelId: model,
-              agentId: run.agentId,
-              sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
-              agentHarnessId: agentHarnessRuntimeOverride,
-              agentHarnessRuntimeOverride,
-              workspaceDir: run.workspaceDir,
-            });
+        const selection = resolveModelFallbackOptions(run, runtimeConfig);
+        const fallbackResult = await runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
+          selection: {
+            cfg: selection.cfg,
+            provider: selection.provider,
+            model: selection.model,
+            agentDir: selection.agentDir,
+            fallbacksOverride: selection.fallbacksOverride,
           },
-          classifyResult: ({ result, provider, model }) =>
-            preserveNonVisibleFollowupResult(
-              outcomePlan.classifyRunResult({ result, provider, model }),
-            ),
-          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-          run: async (provider, model, runOptions) => {
+          identity: {
+            runId,
+            agentId: run.agentId,
+            sessionId: run.sessionId,
+            sessionKey: selection.sessionKey,
+          },
+          harness: {
+            workspaceDir: run.workspaceDir,
+            sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+            preparation: { kind: "direct" },
+            resolveRuntimeOverride: (provider) =>
+              resolveSessionRuntimeOverrideForProvider({
+                provider,
+                entry: activeSessionEntry,
+                cfg: runtimeConfig,
+              }),
+          },
+          behavior: { kind: "followup-delivery" },
+          sessionOverride: {
+            kind: "reconcile-completed",
+            reconcile: clearRecoveredAutoFallbackPrimaryProbe,
+          },
+          abortSignal: runAbortSignal,
+          runCandidate: async (provider, model, runOptions) => {
             const suppressQueuedUserPersistenceForCandidate =
               (run.suppressNextUserMessagePersistence ?? false) ||
               queuedUserMessagePersistedAcrossFallback;
@@ -1645,7 +1609,7 @@ export function createFollowupRunner(params: {
           deferredLifecycleError ??
           userFacingErrorPayload ??
           (runResult.meta?.error ? "Agent run failed" : undefined);
-        const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
+        const terminalMetadata = fallbackResult.terminal.metadata;
         if (fallbackExhausted) {
           const exhaustionError = new Error(
             terminalErrorMessage ?? "All model fallback candidates failed",
@@ -1665,10 +1629,7 @@ export function createFollowupRunner(params: {
           settledLifecycleTerminal?.emit("end", runResult);
         }
         if (!fallbackExhausted) {
-          await clearRecoveredAutoFallbackPrimaryProbe({
-            provider: fallbackProvider,
-            model: fallbackModel,
-          });
+          await fallbackResult.settleSessionOverride();
         }
       } catch (err) {
         if (

@@ -227,55 +227,10 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
   tools: {
     loopDetection: {
       enabled: true,
-      historySize: 30,
-      warningThreshold: 10,
-      unknownToolThreshold: 10,
-      criticalThreshold: 20,
-      globalCircuitBreakerThreshold: 30,
-      detectors: {
-        genericRepeat: true,
-        knownPollNoProgress: true,
-        pingPong: true,
-      },
-      postCompactionGuard: {
-        windowSize: 3,
-      },
     },
   },
 }
 ```
-
-<ParamField path="historySize" type="number">
-  Max tool-call history retained for loop analysis.
-</ParamField>
-<ParamField path="warningThreshold" type="number">
-  Repeating no-progress pattern threshold for warnings.
-</ParamField>
-<ParamField path="unknownToolThreshold" type="number">
-  Blocks repeated calls to the same unavailable/unknown tool name after this many misses.
-</ParamField>
-<ParamField path="criticalThreshold" type="number">
-  Higher repeating threshold for blocking critical loops.
-</ParamField>
-<ParamField path="globalCircuitBreakerThreshold" type="number">
-  Hard stop threshold for any no-progress run.
-</ParamField>
-<ParamField path="detectors.genericRepeat" type="boolean">
-  Warn on repeated same-tool/same-args calls.
-</ParamField>
-<ParamField path="detectors.knownPollNoProgress" type="boolean">
-  Warn/block on known poll tools (`process.poll`, `command_status`, etc.).
-</ParamField>
-<ParamField path="detectors.pingPong" type="boolean">
-  Warn/block on alternating no-progress pair patterns.
-</ParamField>
-<ParamField path="postCompactionGuard.windowSize" type="number">
-  Number of attempts after auto-compaction the guard stays armed for; aborts if the agent repeats the same (tool, args, result) inside that window.
-</ParamField>
-
-<Warning>
-If `warningThreshold >= criticalThreshold` or `criticalThreshold >= globalCircuitBreakerThreshold`, validation fails.
-</Warning>
 
 ### `tools.web`
 

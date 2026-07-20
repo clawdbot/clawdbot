@@ -20,6 +20,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pinnedAt",
   "icon",
   "lastReadAt",
+  "agentStatus",
   "markedUnreadAt",
   "lastActivityAt",
   "sessionFile",

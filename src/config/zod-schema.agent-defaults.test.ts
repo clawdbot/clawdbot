@@ -320,14 +320,8 @@ describe("agent defaults schema", () => {
 
   it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
     expect(AgentDefaultsSchema.safeParse({ agentRuntime: { id: "codex" } }).success).toBe(false);
-    expect(AgentDefaultsSchema.safeParse({ embeddedHarness: { runtime: "codex" } }).success).toBe(
-      false,
-    );
     expect(
       AgentEntrySchema.safeParse({ id: "legacy", agentRuntime: { id: "codex" } }).success,
-    ).toBe(false);
-    expect(
-      AgentEntrySchema.safeParse({ id: "legacy", embeddedHarness: { runtime: "codex" } }).success,
     ).toBe(false);
   });
 
@@ -340,38 +334,6 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
-  });
-
-  it("accepts runRetries configuration on defaults and agent entries", () => {
-    const result = AgentDefaultsSchema.parse({
-      runRetries: {
-        base: 24,
-        max: 160,
-      },
-    });
-    expect(result?.runRetries?.base).toBe(24);
-    expect(result?.runRetries?.max).toBe(160);
-
-    const agentResult = AgentEntrySchema.parse({
-      id: "test",
-      runRetries: {
-        min: 10,
-        max: 50,
-      },
-    });
-    expect(agentResult?.runRetries?.min).toBe(10);
-    expect(agentResult?.runRetries?.max).toBe(50);
-  });
-
-  it("rejects runRetries with max < min", () => {
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({ runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "test", runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
   });
 
   it("accepts compaction.truncateAfterCompaction", () => {

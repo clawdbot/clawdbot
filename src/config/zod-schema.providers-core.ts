@@ -32,7 +32,6 @@ import {
   ProviderCommandsSchema,
   SecretInputSchema,
   ReplyToModeSchema,
-  RetryConfigSchema,
   TextChunkModeSchema,
   TtsConfigSchema,
   requireAllowlistAllowFrom,
@@ -135,7 +134,6 @@ const TelegramTopicSchema = z
     systemPrompt: z.string().optional(),
     agentId: z.string().optional(),
     errorPolicy: TelegramErrorPolicySchema,
-    errorCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -145,7 +143,6 @@ const TelegramGroupSchema = buildGroupEntrySchema({
   groupPolicy: GroupPolicySchema.optional(),
   topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
   errorPolicy: TelegramErrorPolicySchema,
-  errorCooldownMs: z.number().int().nonnegative().optional(),
 });
 
 const AutoTopicLabelSchema = z
@@ -171,7 +168,6 @@ const TelegramDirectSchema = z
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
     errorPolicy: TelegramErrorPolicySchema,
-    errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
   })
@@ -222,18 +218,6 @@ const TelegramAccountSchemaBase = z
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     richMessages: z.boolean().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    mediaGroupFlushMs: z
-      .number()
-      .int()
-      .min(10)
-      .max(60_000)
-      .optional()
-      .describe(
-        "Buffer window in milliseconds for Telegram media groups/albums before dispatching them as one inbound message. Default: 500.",
-      ),
-    pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
-    retry: RetryConfigSchema,
     network: z
       .object({
         autoSelectFamily: z.boolean().optional(),
@@ -316,7 +300,6 @@ const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     silentErrorReplies: z.boolean().optional(),
     errorPolicy: TelegramErrorPolicySchema,
-    errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
     trustedLocalFileRoots: z
       .array(z.string())
@@ -577,16 +560,12 @@ const DiscordAccountSchema = z
       .strict()
       .optional(),
     proxy: z.string().optional(),
-    gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
-    gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
-    gatewayRuntimeReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     mentionAliases: z.record(z.string(), DiscordSnowflakeStringSchema).optional(),
     suppressEmbeds: z.boolean().optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
-    retry: RetryConfigSchema,
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -687,14 +666,6 @@ const DiscordAccountSchema = z
     inboundWorker: z
       .object({
         runTimeoutMs: z.number().int().nonnegative().optional(),
-      })
-      .strict()
-      .optional(),
-    eventQueue: z
-      .object({
-        listenerTimeout: z.number().int().positive().optional(),
-        maxQueueSize: z.number().int().positive().optional(),
-        maxConcurrency: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

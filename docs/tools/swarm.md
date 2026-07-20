@@ -239,6 +239,24 @@ The target agent resolves in this order:
 A dedicated, lean worker agent is useful when swarm children need a smaller
 tool surface, cheaper model, or tighter sandbox policy. OpenClaw does not ship
 a built-in `worker` agent id; configure one before naming it as the default.
+Harden that worker with `tools.swarm: false` in its per-agent configuration so
+it can be spawned but cannot start swarms from its own top-level sessions:
+
+```json5
+{
+  tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
+  agents: {
+    list: [
+      {
+        id: "main",
+        default: true,
+        subagents: { allowAgents: ["worker"] },
+      },
+      { id: "worker", tools: { swarm: false } },
+    ],
+  },
+}
+```
 
 Collector approvals fail closed. A child never opens an operator approval
 prompt. A tool action that would require approval is denied, and the child can
@@ -251,9 +269,39 @@ not validate, the collector completion keeps the child's raw text, leaves
 `structured` unset, and includes `schemaError`. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
 
-Swarm enforces all three group caps before starting more work. Children above
-`maxConcurrent` queue FIFO. A spawn that exceeds `maxChildrenPerGroup` or
-`maxTotalPerGroup` is rejected with the relevant config key in the error.
+### Children are leaves
+
+Swarm children are leaves by default. The universal
+`agents.defaults.subagents.maxSpawnDepth` guard prevents a child from spawning
+its own children at the default depth of `1`. The usual orchestration idiom is
+to return work to the parent, not spawn more work from a child:
+
+```javascript
+const plan = await agents.run("Plan this job as independent tasks.", {
+  schema: {
+    type: "object",
+    properties: { tasks: { type: "array", items: { type: "string" } } },
+    required: ["tasks"],
+    additionalProperties: false,
+  },
+});
+return await Promise.all(plan.tasks.map((task) => agents.run(task)));
+```
+
+Nested sub-agents are an operator opt-in through
+`agents.defaults.subagents.maxSpawnDepth` and are discouraged for Swarm.
+Group caps, budgets, and observability all assume flat collector groups.
+
+Every child has one admission owner. Announce and interactive children use
+`agents.defaults.subagents.maxChildrenPerAgent` (default `5`) and do not count
+collector children. Collector children use only `maxChildrenPerGroup` and
+`maxTotalPerGroup`; they do not consume the per-session child budget. The spawn
+depth guard still applies to both modes.
+
+After admission, children above `maxConcurrent` queue FIFO within their swarm
+group, nested inside the global sub-agent lane. These concurrency layers queue
+work rather than rejecting it. A collector spawn that exceeds either group cap
+is rejected with the relevant config key in the error.
 
 ## Observe a Swarm
 
@@ -279,7 +327,8 @@ calls.
 
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
 `tools.*`. It does not use OpenClaw's QuickJS guest API or require
-`tools.codeMode`, but `tools.swarm` must still be enabled. Use this pattern:
+`tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
+`agents_wait` calls support the full 600-second timeout. Use this pattern:
 
 ```javascript
 const tasks = [

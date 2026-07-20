@@ -492,6 +492,18 @@ describe("secret ref resolver", () => {
     },
   );
 
+  it("enforces the built-in per-provider reference limit", async () => {
+    const refs = Array.from({ length: 513 }, (_, index) => ({
+      source: "env" as const,
+      provider: "default",
+      id: `SECRET_${index}`,
+    }));
+
+    await expect(resolveSecretRefValues(refs, { config: {} })).rejects.toThrow(
+      'Secret provider "default" exceeded maxRefsPerProvider (512).',
+    );
+  });
+
   itPosix("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {
     const root = await createCaseDir("exec-link-reject");
     const symlinkPath = path.join(root, "resolver-link.mjs");

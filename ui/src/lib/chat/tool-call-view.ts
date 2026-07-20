@@ -405,6 +405,20 @@ function buildToolCallView(
       return { kind: "generic" };
     }
     const { base, dir } = splitPathForDisplay(path);
+    const authoritativeDiff = readDetailsDiff(source.details);
+    if (authoritativeDiff) {
+      return {
+        kind,
+        target: base,
+        targetDetail: dir,
+        diff: authoritativeDiff.lines,
+        ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
+      };
+    }
+    const details = asRecord(source.details);
+    if (details?.changed === false) {
+      return { kind, target: base, targetDetail: dir };
+    }
     const content = args
       ? editorCommand === "create"
         ? readString(args.file_text)
@@ -419,7 +433,10 @@ function buildToolCallView(
       target: base,
       targetDetail: dir,
       diff,
-      stat: { added: countTextLines(content), removed: 0 },
+      // Present details need created=true before zero removals are authoritative.
+      ...(details && details.created !== true
+        ? {}
+        : { stat: { added: countTextLines(content), removed: 0 } }),
     };
   }
 

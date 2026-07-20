@@ -237,6 +237,59 @@ describe("switchChatHistoryBranch", () => {
   });
 });
 
+describe("active-run commentary reconciliation", () => {
+  it("keeps keyed commentary live across history reloads when persistence is disabled", async () => {
+    const state = createState(activeHistory("run-live"));
+    state.chatRunId = "run-live";
+    state.settings = { chatPersistCommentary: false };
+    state.chatStreamSegments = [{ text: "Checking the workspace", ts: 2, itemId: "preamble-live" }];
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-live");
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Checking the workspace", ts: 2, itemId: "preamble-live" },
+    ]);
+  });
+
+  it("materializes live commentary when history replaces active tool activity", async () => {
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      content: "tool output",
+      timestamp: 3,
+    };
+    const state = createState({
+      ...activeHistory("run-live"),
+      messages: [{ role: "user", content: "do it", timestamp: 1 }, toolResult],
+    });
+    state.chatRunId = "run-live";
+    state.settings = { chatPersistCommentary: false };
+    state.chatStreamSegments = [{ text: "Checking the workspace", ts: 2, itemId: "preamble-live" }];
+    state.toolStreamOrder = ["call-1"];
+    state.toolStreamById.set("call-1", {
+      toolCallId: "call-1",
+      runId: "run-live",
+      name: "read",
+      startedAt: 2,
+      receivedAt: 2,
+      message: toolResult,
+    });
+    state.chatToolMessages = [toolResult];
+
+    await loadChatHistory(state);
+
+    expect(
+      state.chatMessages.some(
+        (message) =>
+          (message as { openclawStreamFallback?: { itemId?: unknown } }).openclawStreamFallback
+            ?.itemId === "preamble-live",
+      ),
+    ).toBe(true);
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+});
+
 describe("chat history plan replay", () => {
   const retainedPlan = {
     runId: "run-retained",

@@ -23,9 +23,11 @@ import {
   buildDiscordInboundAccessContext,
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
+import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { removeDiscordReplayHistoryEntry } from "./message-handler.retry.js";
 import {
+  formatDiscordMediaText,
   resolveReferencedReplyMediaList,
   resolveDiscordMessageText,
   type DiscordMediaInfo,
@@ -436,12 +438,17 @@ export async function buildDiscordMessageProcessContext(params: {
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
   if (ctx.inboundEventKind === "room_event" && shouldIncludeChannelHistory) {
+    const nativeMediaText = formatDiscordMediaText({
+      attachments: message.attachments ?? undefined,
+      stickers: resolveDiscordMessageStickers(message),
+    });
+    const historyText = [text, nativeMediaText].filter(Boolean).join("\n");
     await channelHistory.recordWithMedia({
       historyKey: messageChannelId,
       limit: historyLimit,
       entry: {
         sender: senderName,
-        body: text,
+        body: historyText,
         timestamp: resolveTimestampMs(message.timestamp),
         messageId: message.id,
       },

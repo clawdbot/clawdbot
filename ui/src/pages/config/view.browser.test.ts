@@ -687,8 +687,8 @@ describe("config view", () => {
           auth: {
             type: "object",
             properties: {
-              authPermanentBackoffMinutes: {
-                type: "number",
+              order: {
+                type: "object",
               },
             },
           },
@@ -696,12 +696,12 @@ describe("config view", () => {
       },
       formValue: {
         auth: {
-          authPermanentBackoffMinutes: 10,
+          order: {},
         },
       },
       originalValue: {
         auth: {
-          authPermanentBackoffMinutes: 10,
+          order: {},
         },
       },
     });

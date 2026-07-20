@@ -48,6 +48,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
+import { SwarmActivityTracker } from "./swarm-activity.ts";
 export {
   buildSessionUsageDateParams,
   requestSessionUsage,
@@ -723,6 +724,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     string,
     { token: symbol; previous: string | null | undefined }
   >();
+  const swarmActivity = new SwarmActivityTracker();
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
@@ -853,6 +855,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           }
         }
       }
+      nextResult = swarmActivity.decorate(nextResult);
       canonicalListRevision += 1;
       publish({
         result: nextResult,
@@ -1220,7 +1223,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions,
   ): boolean => {
-    const result = reconcileSessionHistory(state.result, row, defaults, options);
+    const result = swarmActivity.decorate(
+      reconcileSessionHistory(state.result, row, defaults, options),
+    );
     if (result === state.result) {
       return false;
     }
@@ -1238,7 +1243,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    const reconciled = reconcileSessionChanged(state.result, payload, options);
+    swarmActivity.observe(payload);
+    const base = reconcileSessionChanged(state.result, payload, options);
+    const result = swarmActivity.decorate(base.result);
+    const reconciled =
+      result === base.result
+        ? base
+        : {
+            ...base,
+            result,
+            row: base.row ? result?.sessions.find((row) => row.key === base.row?.key) : undefined,
+          };
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
       publish({
         ...state,
@@ -1577,6 +1592,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (connectionChanged) {
       connectionEpoch += 1;
       invalidateGroupsLoad();
+      swarmActivity.clear();
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
@@ -1625,6 +1641,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   });
   const stopEvents = gateway.subscribeEvents((event) => {
     if (isSessionStateEvent(event)) {
+      swarmActivity.observe(event.payload);
+      // Preserve canonical list filtering: decorate rows already admitted here,
+      // then let the refresh below admit new children before applying cached notes.
+      const decoratedResult = swarmActivity.decorate(state.result);
+      if (decoratedResult !== state.result) {
+        publish({ ...state, result: decoratedResult });
+      }
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
         showArchived: lastListOptions.showArchived,
@@ -1716,6 +1739,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       queuedRefresh = null;
       subscribedClient = null;
       pendingModelPatches.clear();
+      swarmActivity.clear();
       stopGateway();
       stopEvents();
       createdListeners.clear();

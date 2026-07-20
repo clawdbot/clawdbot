@@ -165,6 +165,13 @@ type ShellChromeEventState = {
   disconnectedCallback: () => void;
 };
 
+function createDragEvent(type: "dragover" | "drop", types: string[]) {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+  const dataTransfer = { dropEffect: "copy", types };
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  return { dataTransfer, event };
+}
+
 type ShellSettingsSearchLoadState = {
   runtime: {
     context: ApplicationContext;
@@ -459,6 +466,46 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     );
     shell.disconnectedCallback();
     addEventListener.mockRestore();
+  });
+
+  it("prevents unhandled window file drops without overriding accepted targets", () => {
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    const acceptedDropTarget = document.createElement("div");
+    const nativeFileInput = document.createElement("input");
+    nativeFileInput.type = "file";
+    document.body.append(acceptedDropTarget, nativeFileInput);
+    shell.connectedCallback();
+
+    try {
+      for (const type of ["dragover", "drop"] as const) {
+        const unhandled = createDragEvent(type, ["Files"]);
+        window.dispatchEvent(unhandled.event);
+        expect(unhandled.event.defaultPrevented).toBe(true);
+        expect(unhandled.dataTransfer.dropEffect).toBe("none");
+
+        const accepted = createDragEvent(type, ["Files"]);
+        acceptedDropTarget.addEventListener(type, (event) => event.preventDefault(), {
+          once: true,
+        });
+        acceptedDropTarget.dispatchEvent(accepted.event);
+        expect(accepted.event.defaultPrevented).toBe(true);
+        expect(accepted.dataTransfer.dropEffect).toBe("copy");
+
+        const nativeAccepted = createDragEvent(type, ["Files"]);
+        nativeFileInput.dispatchEvent(nativeAccepted.event);
+        expect(nativeAccepted.event.defaultPrevented).toBe(false);
+        expect(nativeAccepted.dataTransfer.dropEffect).toBe("copy");
+
+        const nonFile = createDragEvent(type, ["text/plain"]);
+        window.dispatchEvent(nonFile.event);
+        expect(nonFile.event.defaultPrevented).toBe(false);
+        expect(nonFile.dataTransfer.dropEffect).toBe("copy");
+      }
+    } finally {
+      shell.disconnectedCallback();
+      acceptedDropTarget.remove();
+      nativeFileInput.remove();
+    }
   });
 
   it("handles merged header drawer and palette requests", () => {

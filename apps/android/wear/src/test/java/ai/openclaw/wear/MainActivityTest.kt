@@ -4,7 +4,9 @@ import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MainActivityTest {
@@ -52,6 +54,119 @@ class MainActivityTest {
       ),
     )
   }
+
+  @Test
+  fun threadFollowKeepsStreamingContentVisibleAtLatest() {
+    val first =
+      nextWearThreadFollowForContent(
+        state = WearThreadFollowState(),
+        contentRevision = threadRevision(text = "Hel", streaming = true),
+      )
+    val continued =
+      nextWearThreadFollowForContent(
+        state = first.state,
+        contentRevision = threadRevision(text = "Hello", streaming = true),
+      )
+
+    assertTrue(first.scrollToLatest)
+    assertTrue(continued.scrollToLatest)
+    assertTrue(continued.state.followingLatest)
+    assertFalse(continued.state.hasNewContent)
+  }
+
+  @Test
+  fun threadFollowTargetsTrailingAnchorAfterLatestContent() {
+    assertEquals(-1, wearThreadLatestAnchorIndex(entryCount = 0, thinking = false))
+    assertEquals(1, wearThreadLatestAnchorIndex(entryCount = 1, thinking = false))
+    assertEquals(3, wearThreadLatestAnchorIndex(entryCount = 2, thinking = true))
+  }
+
+  @Test
+  fun threadFollowPreservesManualScrollUntilLatestIsRequested() {
+    val initial =
+      nextWearThreadFollowForContent(
+        state = WearThreadFollowState(),
+        contentRevision = threadRevision(text = "First", streaming = false),
+      )
+    val scrolledBack =
+      nextWearThreadFollowForViewport(
+        state = initial.state,
+        atLatest = false,
+        scrollingBackward = true,
+      )
+    val newContent =
+      nextWearThreadFollowForContent(
+        state = scrolledBack,
+        contentRevision = threadRevision(text = "Second", streaming = false),
+      )
+
+    assertFalse(newContent.scrollToLatest)
+    assertFalse(newContent.state.followingLatest)
+    assertTrue(newContent.state.hasNewContent)
+
+    val latest = wearThreadFollowLatest(newContent.state)
+    assertTrue(latest.followingLatest)
+    assertFalse(latest.hasNewContent)
+  }
+
+  @Test
+  fun threadFollowClearsNewContentWhenUserScrollsToLatest() {
+    val away =
+      WearThreadFollowState(
+        followingLatest = false,
+        hasNewContent = true,
+      )
+
+    val latest =
+      nextWearThreadFollowForViewport(
+        state = away,
+        atLatest = true,
+        scrollingBackward = false,
+      )
+
+    assertTrue(latest.followingLatest)
+    assertFalse(latest.hasNewContent)
+  }
+
+  @Test
+  fun threadFollowResetsWhenRealtimeStops() {
+    val revision = threadRevision(text = "Old", streaming = false)
+    val away =
+      WearThreadFollowState(
+        contentRevision = revision,
+        followingLatest = false,
+        hasNewContent = true,
+      )
+    val stopped =
+      nextWearThreadFollowForContent(
+        state = away,
+        contentRevision = revision,
+        realtimeActive = false,
+      )
+
+    assertFalse(stopped.scrollToLatest)
+    assertTrue(stopped.state.followingLatest)
+    assertFalse(stopped.state.hasNewContent)
+
+    val restarted =
+      nextWearThreadFollowForContent(
+        state = stopped.state,
+        contentRevision = revision,
+      )
+    assertTrue(restarted.scrollToLatest)
+  }
+
+  private fun threadRevision(
+    text: String,
+    streaming: Boolean,
+  ): WearThreadContentRevision =
+    WearThreadContentRevision(
+      entryCount = 1,
+      latestEntryId = "entry-1",
+      latestText = text,
+      latestStreaming = streaming,
+      thinking = false,
+    )
 
   private fun realtimeSnapshot(entryStreaming: Boolean): WearConversationSnapshot =
     WearConversationSnapshot(

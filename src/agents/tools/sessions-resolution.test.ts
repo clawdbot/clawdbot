@@ -190,6 +190,7 @@ describe("resolved session visibility checks", () => {
     for (const testCase of cases) {
       callGatewayMock.mockResolvedValueOnce({ key: testCase.targetSessionKey });
       const result = resolveVisibleSessionReference({
+        action: "history",
         resolvedSession: {
           ok: true,
           key: testCase.targetSessionKey,
@@ -232,6 +233,7 @@ describe("resolved session visibility checks", () => {
 
     await expect(
       resolveVisibleSessionReference({
+        action: "history",
         resolvedSession: {
           ok: true,
           key: "agent:main:subagent:worker-999",

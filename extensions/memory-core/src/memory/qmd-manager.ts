@@ -1308,7 +1308,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       count,
       "paths",
       "Large QMD collections can make OpenClaw run out of file watchers or open files.",
-      "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually.",
       (message) => log.warn(message),
     );
   }

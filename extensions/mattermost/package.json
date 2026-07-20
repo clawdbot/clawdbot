@@ -30,6 +30,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "mattermost",
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "MATTERMOST_BOT_TOKEN",
+            "MATTERMOST_URL"
+          ]
+        }
+      },
       "label": "Mattermost",
       "selectionLabel": "Mattermost (plugin)",
       "docsPath": "/channels/mattermost",

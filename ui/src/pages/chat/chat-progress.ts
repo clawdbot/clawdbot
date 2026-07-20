@@ -2,7 +2,17 @@ import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 
-const workingStartBySession = new Map<string, { runId: string | null; startedAt: number }>();
+type WorkingProgress = {
+  key: string;
+  startedAt: number;
+};
+
+type WorkingProgressCache = WorkingProgress & {
+  runId: string | null;
+};
+
+const workingProgressBySession = new Map<string, WorkingProgressCache>();
+let anonymousWorkingProgressId = 0;
 
 export function buildCompactionDividerItem(
   marker: Record<string, unknown>,
@@ -50,14 +60,14 @@ export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   );
 }
 
-export function resolveWorkingStartedAt(
+export function resolveWorkingProgress(
   sessionKey: string,
   runId: string | null,
   streamStartedAt: number | null,
   queue: ChatQueueItem[],
   streamSegments: Array<{ ts: number }>,
   toolMessages: unknown[],
-): number {
+): WorkingProgress {
   const queuedRunId =
     queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item))
       ?.sendRunId ?? queue.find(shouldRenderQueuedSendInThread)?.sendRunId;
@@ -67,13 +77,11 @@ export function resolveWorkingStartedAt(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
   const explicitRunId = queuedRunId ?? runId ?? toolRunId;
-  const cached = workingStartBySession.get(sessionKey);
-  const cachedStartedAt =
-    cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId)
-      ? cached.startedAt
-      : null;
+  const cached = workingProgressBySession.get(sessionKey);
+  const compatibleCached =
+    cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;
   const candidates = [
-    cachedStartedAt,
+    compatibleCached?.startedAt,
     streamStartedAt,
     ...queue
       .filter(shouldRenderQueuedSendInThread)
@@ -88,17 +96,25 @@ export function resolveWorkingStartedAt(
     }),
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const startedAt = candidates.length > 0 ? Math.min(...candidates) : Date.now();
-  workingStartBySession.set(sessionKey, {
-    runId: explicitRunId ?? cached?.runId ?? null,
+  const key =
+    compatibleCached?.key ??
+    `stream-working:${JSON.stringify([
+      sessionKey,
+      explicitRunId ?? `anonymous-${++anonymousWorkingProgressId}`,
+    ])}`;
+  workingProgressBySession.set(sessionKey, {
+    key,
+    runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
   });
-  return startedAt;
+  return { key, startedAt };
 }
 
-export function clearWorkingStartedAt(sessionKey: string): void {
-  workingStartBySession.delete(sessionKey);
+export function clearWorkingProgress(sessionKey: string): void {
+  workingProgressBySession.delete(sessionKey);
 }
 
-export function resetWorkingStartedAt(): void {
-  workingStartBySession.clear();
+export function resetWorkingProgress(): void {
+  workingProgressBySession.clear();
+  anonymousWorkingProgressId = 0;
 }

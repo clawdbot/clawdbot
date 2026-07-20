@@ -138,7 +138,7 @@ export type InboundMediaFacts = {
   path?: string;
   url?: string;
   contentType?: string;
-  kind?: "image" | "video" | "audio" | "document" | "unknown";
+  kind?: "image" | "video" | "audio" | "document" | "sticker" | "unknown";
   transcribed?: boolean;
   messageId?: string;
 };

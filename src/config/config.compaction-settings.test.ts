@@ -20,7 +20,6 @@ describe("config compaction settings", () => {
   it("preserves memory flush config values", () => {
     const compaction = materializeCompactionConfig({
       mode: "safeguard",
-      reserveTokensFloor: 12_345,
       identifierPolicy: "custom",
       identifierInstructions: "Keep ticket IDs unchanged.",
       qualityGuard: {
@@ -40,9 +39,7 @@ describe("config compaction settings", () => {
       maxActiveTranscriptBytes: "20mb",
     });
 
-    expect(compaction?.reserveTokensFloor).toBe(12_345);
     expect(compaction?.mode).toBe("safeguard");
-    expect(compaction?.reserveTokens).toBeUndefined();
     expect(compaction?.keepRecentTokens).toBeUndefined();
     expect(compaction?.identifierPolicy).toBe("custom");
     expect(compaction?.identifierInstructions).toBe("Keep ticket IDs unchanged.");
@@ -57,23 +54,10 @@ describe("config compaction settings", () => {
     expect(compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
-  it("preserves legacy compaction override values", () => {
-    const compaction = materializeCompactionConfig({
-      reserveTokens: 15_000,
-      keepRecentTokens: 12_000,
-    });
-
-    expect(compaction?.reserveTokens).toBe(15_000);
-    expect(compaction?.keepRecentTokens).toBe(12_000);
-  });
-
   it("defaults compaction mode to safeguard", () => {
-    const compaction = materializeCompactionConfig({
-      reserveTokensFloor: 9000,
-    });
+    const compaction = materializeCompactionConfig({});
 
     expect(compaction?.mode).toBe("safeguard");
-    expect(compaction?.reserveTokensFloor).toBe(9000);
   });
 
   it("preserves recent turn safeguard values during materialization", () => {

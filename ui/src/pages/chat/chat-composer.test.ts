@@ -567,6 +567,28 @@ describe("renderChatComposer controls", () => {
     });
   });
 
+  it("renders reconnect waits as quiet status without the raw transport error", () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "reconnect-1",
+          text: "send me once the gateway is back",
+          createdAt: 1,
+          sendError: "chat.send unavailable during gateway restart",
+          sendState: "waiting-reconnect",
+        },
+      ],
+    });
+    const item = container.querySelector(".chat-queue__item");
+    expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
+    expect(item?.querySelector(".chat-queue__dot")).not.toBeNull();
+    expect(item?.querySelector(".chat-queue__icon")).toBeNull();
+    expect(item?.querySelector(".chat-queue__error")).toBeNull();
+    const badge = item?.querySelector(".chat-queue__badge");
+    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(badge?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+  });
+
   it("renders failed sends as retryable and running commands as inert", () => {
     const onQueueRetry = vi.fn();
     let view = renderComposer({

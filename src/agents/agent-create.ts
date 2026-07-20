@@ -10,8 +10,10 @@ import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../co
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
+import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   createAgentIdentityConfig,
@@ -37,6 +39,7 @@ type CreateAgentResult =
         | "invalid-name"
         | "reserved-id"
         | "already-exists"
+        | "deletion-pending"
         | "invalid-bindings"
         | "unsafe-identity-file";
       agentId?: string;
@@ -114,7 +117,25 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
 
   try {
-    return await withConfigMutationExclusive(async () => {
+    return await withConfigMutationExclusive(async (lockedConfig) => {
+      const deletion = readAgentDeletionJournal(agentId);
+      if (deletion && !deletion.cleanupCompleted) {
+        return createError(
+          "deletion-pending",
+          `agent "${agentId}" deletion cleanup is still pending`,
+          agentId,
+        );
+      }
+      let tombstoneClaimed = false;
+      if (
+        deletion?.cleanupCompleted &&
+        findAgentEntryIndex(listAgentEntries(lockedConfig), agentId) >= 0
+      ) {
+        if (!claimCompletedAgentDeletion(agentId, deletion.operationId)) {
+          throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
+        }
+        tombstoneClaimed = true;
+      }
       const committed = await transformConfig<CreateAgentResult>({
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
@@ -161,7 +182,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             });
           }
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
-          await writeIdentityFile({ workspaceDir: workspace.dir, identity });
+          // A creation-time name is config, not proof that the fresh workspace hatched.
+          // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
+          if (!workspace.bootstrapPending) {
+            await writeIdentityFile({ workspaceDir: workspace.dir, identity });
+          }
 
           return {
             nextConfig,
@@ -178,6 +203,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           };
         },
       });
+      if (
+        deletion?.cleanupCompleted &&
+        !tombstoneClaimed &&
+        committed.result?.status === "created" &&
+        !claimCompletedAgentDeletion(agentId, deletion.operationId)
+      ) {
+        throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
+      }
       return committed.result!;
     });
   } catch (error) {

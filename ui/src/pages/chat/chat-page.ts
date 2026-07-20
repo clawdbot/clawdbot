@@ -135,6 +135,9 @@ export class ChatPage extends OpenClawLightDomElement {
       queueMicrotask(() => {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
           this.consumedDraftData = data;
+          // Route drafts are one-shot actions. Once the matching pane owns the
+          // text, remove it from history so reload/back cannot replay it.
+          this.context.replace("chat", { search: searchForSession(data.sessionKey) });
           this.requestUpdate();
         }
       });

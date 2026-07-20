@@ -39,6 +39,22 @@
     },
     "channel": {
       "id": "matrix",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "MATRIX_HOMESERVER",
+            "MATRIX_USER_ID",
+            "MATRIX_ACCESS_TOKEN",
+            "MATRIX_PASSWORD",
+            "MATRIX_DEVICE_ID",
+            "MATRIX_DEVICE_NAME",
+            "MATRIX_OPS_HOMESERVER",
+            "MATRIX_OPS_ACCESS_TOKEN",
+            "MATRIX_OPS_DEVICE_ID",
+            "MATRIX_OPS_DEVICE_NAME"
+          ]
+        }
+      },
       "approvalFlags": ["native"],
       "label": "Matrix",
       "selectionLabel": "Matrix (plugin)",

@@ -11,6 +11,7 @@ import { resolveStorePath } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   listSqliteSessionEntries,
+  listSqliteSessionEntriesReadOnly,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
@@ -317,6 +318,16 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
     return openSessionEntryReadView(scope).entries();
   }
   return listSqliteSessionEntries(scope);
+}
+
+/**
+ * Health/status introspection must not join the writable lifecycle or register databases;
+ * doing so churns fleet-wide agent handles on every health tick.
+ */
+export function listSessionEntriesReadOnly(
+  scope: SessionEntryListScope = {},
+): SessionEntrySummary[] {
+  return listSqliteSessionEntriesReadOnly(scope);
 }
 
 /**

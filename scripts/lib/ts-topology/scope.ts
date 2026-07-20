@@ -125,8 +125,7 @@ export function createPluginSdkScope(_repoRoot: string): TopologyScope {
   const entrypoints = publicPluginSdkEntrypoints.map((entrypoint) => ({
     entrypoint,
     sourcePath: `src/plugin-sdk/${entrypoint}.ts`,
-    importSpecifier:
-      entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`,
+    importSpecifier: `openclaw/plugin-sdk/${entrypoint}`,
   }));
   return buildScopeFromEntrypoints("plugin-sdk", "OpenClaw plugin-sdk public surface", entrypoints);
 }

@@ -23,6 +23,7 @@ import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -105,6 +106,7 @@ type NativeHookRelayRegistration = {
   config?: OpenClawConfig;
   runId: string;
   channelId?: string;
+  requester?: PluginHookToolRequesterContext;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
@@ -138,6 +140,7 @@ type RegisterNativeHookRelayParams = {
   config?: OpenClawConfig;
   runId: string;
   channelId?: string;
+  requester?: PluginHookToolRequesterContext;
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;
@@ -445,6 +448,7 @@ export function registerNativeHookRelay(
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.requester ? { requester: params.requester } : {}),
     allowedEvents,
     preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,
@@ -1437,6 +1441,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+      ...(params.registration.requester ? { requester: params.registration.requester } : {}),
       ...(params.invocation.cwd
         ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
         : {}),

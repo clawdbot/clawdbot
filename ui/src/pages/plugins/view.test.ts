@@ -200,15 +200,14 @@ describe("renderPlugins", () => {
   it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
     const originalSegmenter = Intl.Segmenter;
     Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
-    vi.resetModules();
 
     try {
-      const { pluginMonogram } = await import("./presentation.ts");
+      const freshModulePath = "./presentation.ts?without-intl-segmenter";
+      const { pluginMonogram } = await import(/* @vite-ignore */ freshModulePath);
       expect(pluginMonogram("😀 Tools")).toBe("😀T");
       expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
     } finally {
       Object.defineProperty(Intl, "Segmenter", { configurable: true, value: originalSegmenter });
-      vi.resetModules();
     }
   });
 
@@ -328,7 +327,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
             toolFilter: false,
@@ -357,6 +356,7 @@ describe("renderPlugins", () => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(onMcpAdd).toHaveBeenCalledWith({
       name: "context7",
+      transport: "streamable-http",
       target: "https://mcp.context7.com/mcp",
     });
   });
@@ -455,7 +455,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://x",
             auth: "oauth",
             toolFilter: false,

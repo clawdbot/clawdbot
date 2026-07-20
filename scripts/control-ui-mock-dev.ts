@@ -1128,6 +1128,13 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "sessions.files.set",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
+    // Lights up the footer facepile and who's-online roster; the email-only
+    // entry keeps the roster's no-display-name row exercised.
+    presenceUsers: [
+      { self: true, id: "presence-riley", name: "Riley", email: "riley@example.com" },
+      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
+      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+    ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
       // config.set/config.apply are served statefully by the mock gateway
@@ -1628,6 +1635,7 @@ const server = await createServer({
     "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
       buildId: "mock",
     }),

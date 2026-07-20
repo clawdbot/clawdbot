@@ -121,13 +121,14 @@ function chunkInteractiveButtons(
  */
 function buildTelegramInteractiveButtons(
   interactive?: LegacyInteractiveReply,
+  options?: { allowWebAppButtons?: boolean },
 ): TelegramInlineButtons | undefined {
   const rows = reduceLegacyInteractiveReply(
     interactive,
     [] as TelegramInlineButton[][],
     (state, block) => {
       if (block.type === "buttons") {
-        chunkInteractiveButtons(block.buttons, state);
+        chunkInteractiveButtons(block.buttons, state, options);
         return state;
       }
       if (block.type === "select") {
@@ -173,14 +174,17 @@ export function buildTelegramPresentationButtons(
 }
 
 /** Resolve Telegram inline buttons, preserving explicit and legacy button precedence. */
-export function resolveTelegramInlineButtons(params: {
-  buttons?: TelegramInlineButtons;
-  presentation?: unknown;
-  interactive?: unknown;
-}): TelegramInlineButtons | undefined {
+export function resolveTelegramInlineButtons(
+  params: {
+    buttons?: TelegramInlineButtons;
+    presentation?: unknown;
+    interactive?: unknown;
+  },
+  options?: { allowWebAppButtons?: boolean },
+): TelegramInlineButtons | undefined {
   return (
     params.buttons ??
-    buildTelegramInteractiveButtons(normalizeLegacyInteractiveReply(params.interactive)) ??
-    buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation))
+    buildTelegramInteractiveButtons(normalizeLegacyInteractiveReply(params.interactive), options) ??
+    buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation), options)
   );
 }

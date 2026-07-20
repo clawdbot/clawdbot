@@ -5364,6 +5364,230 @@ describe("verifySetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
+  it("returns a refreshed staged profile without changing the configured agent store", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "configured-agent");
+    const profileId = "openai:default";
+    await upsertAuthProfileWithLock({
+      profileId,
+      credential: {
+        type: "oauth",
+        provider: "openai",
+        access: "dummy",
+        refresh: "dummy",
+        expires: Date.now() + 3_600_000,
+      },
+      agentDir,
+    });
+    const runEmbeddedAgent = vi.fn(
+      async (params: {
+        agentDir?: string;
+        onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+      }) => {
+        expect(params.agentDir).toBeDefined();
+        expect(params.agentDir).not.toBe(agentDir);
+        expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId]).toEqual({
+          type: "oauth",
+          provider: "openai",
+          access: "fake",
+          refresh: "fake",
+          expires: expect.any(Number),
+        });
+        await updateAuthProfileStoreWithLock({
+          agentDir: params.agentDir!,
+          updater: ({ profiles }) => {
+            profiles[profileId] = {
+              type: "oauth",
+              provider: "openai",
+              access: "sample",
+              refresh: "sample",
+              expires: Date.now() + 7_200_000,
+            };
+            return true;
+          },
+        });
+        return successfulRun("openai", "gpt-5.5", {
+          authProfileId: profileId,
+          onSuccessfulAuthBinding: params.onSuccessfulAuthBinding,
+        });
+      },
+    );
+
+    try {
+      const result = await verifySetupInferenceConfig({
+        config: {
+          auth: {
+            profiles: { [profileId]: { provider: "openai", mode: "oauth" } },
+            order: { openai: [profileId] },
+          },
+          agents: {
+            list: [
+              {
+                id: "main",
+                default: true,
+                agentDir,
+                model: { primary: `openai/gpt-5.5@${profileId}` },
+              },
+            ],
+          },
+        },
+        authProfiles: [
+          {
+            profileId,
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: "fake",
+              refresh: "fake",
+              expires: Date.now() + 3_600_000,
+            },
+          },
+        ],
+        runtime,
+        deps: {
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        authProfiles: [
+          {
+            profileId,
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: "sample",
+              refresh: "sample",
+              expires: expect.any(Number),
+            },
+          },
+        ],
+      });
+      expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual({
+        type: "oauth",
+        provider: "openai",
+        access: "dummy",
+        refresh: "dummy",
+        expires: expect.any(Number),
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("returns a refreshed staged profile when the live inference test fails", async () => {
+    const profileId = "openai:default";
+    const runEmbeddedAgent = vi.fn(async (params: { agentDir?: string }) => {
+      expect(params.agentDir).toBeDefined();
+      await updateAuthProfileStoreWithLock({
+        agentDir: params.agentDir!,
+        updater: ({ profiles }) => {
+          profiles[profileId] = {
+            type: "oauth",
+            provider: "openai",
+            access: "sample",
+            refresh: "sample",
+            expires: Date.now() + 7_200_000,
+          };
+          return true;
+        },
+      });
+      throw new Error("request timed out");
+    });
+
+    const result = await verifySetupInferenceConfig({
+      config: {
+        auth: {
+          profiles: { [profileId]: { provider: "openai", mode: "oauth" } },
+          order: { openai: [profileId] },
+        },
+        agents: { defaults: { model: `openai/gpt-5.5@${profileId}` } },
+      },
+      authProfiles: [
+        {
+          profileId,
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access: "fake",
+            refresh: "fake",
+            expires: Date.now() + 3_600_000,
+          },
+        },
+      ],
+      runtime,
+      deps: {
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "timeout",
+      authProfiles: [
+        {
+          profileId,
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access: "sample",
+            refresh: "sample",
+            expires: expect.any(Number),
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects a staged credential that differs from the configured profile pin", async () => {
+    const runEmbeddedAgent = vi.fn();
+    const result = await verifySetupInferenceConfig({
+      config: {
+        auth: {
+          profiles: { "openai:old": { provider: "openai", mode: "api_key" } },
+          order: { openai: ["openai:old"] },
+        },
+        agents: { defaults: { model: "openai/gpt-5.5@openai:old" } },
+      },
+      authProfiles: [
+        {
+          profileId: "openai:new",
+          credential: {
+            type: "api_key",
+            provider: "openai",
+            key: "test-new-key",
+          },
+        },
+      ],
+      runtime,
+      deps: {
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({
+          version: 1,
+          profiles: {
+            "openai:old": {
+              type: "api_key",
+              provider: "openai",
+              key: "test-old-key",
+            },
+          },
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "auth",
+      error: "The staged credential does not match the configured auth profile.",
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("rejects a configured route that changes during its live check", async () => {
     const initialConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },

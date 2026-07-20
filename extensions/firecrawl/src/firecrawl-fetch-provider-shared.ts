@@ -23,10 +23,7 @@ export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   docsUrl: "https://docs.firecrawl.dev",
   autoDetectOrder: 50,
   credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
-  inactiveSecretPaths: [
-    "plugins.entries.firecrawl.config.webFetch.apiKey",
-    "tools.web.fetch.firecrawl.apiKey",
-  ],
+  inactiveSecretPaths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
   getCredentialValue: (fetchConfig) => {
     if (!fetchConfig || typeof fetchConfig !== "object") {
       return undefined;

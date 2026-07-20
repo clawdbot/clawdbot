@@ -1,10 +1,40 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { validateSystemAgentSetupVerifyParams } from "../index.js";
 import {
+  validateSystemAgentChatHistoryParams,
+  validateSystemAgentSetupVerifyParams,
+} from "../index.js";
+import {
+  SystemAgentChatHistoryResultSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
+
+describe("OpenClaw chat history protocol", () => {
+  it("accepts the default request and bounds explicit limits", () => {
+    expect(validateSystemAgentChatHistoryParams({})).toBe(true);
+    expect(validateSystemAgentChatHistoryParams({ limit: 1 })).toBe(true);
+    expect(validateSystemAgentChatHistoryParams({ limit: 500 })).toBe(true);
+    expect(validateSystemAgentChatHistoryParams({ limit: 0 })).toBe(false);
+    expect(validateSystemAgentChatHistoryParams({ limit: 501 })).toBe(false);
+  });
+
+  it("accepts ordered role, text, and timestamp turns only", () => {
+    expect(
+      Value.Check(SystemAgentChatHistoryResultSchema, {
+        turns: [
+          { role: "user", text: "status", at: 1 },
+          { role: "assistant", text: "healthy", at: 2 },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SystemAgentChatHistoryResultSchema, {
+        turns: [{ role: "tool", text: "hidden", at: 1 }],
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("OpenClaw setup detection protocol", () => {
   it("accepts additive presentation metadata and older results without installs", () => {

@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -81,6 +82,7 @@ function noteSession(session: TeamsMeetingsSession, note: string): void {
 }
 
 export class TeamsMeetingsRuntime {
+  readonly #defaultAgentId: string;
   readonly #sessions: SessionRuntime;
   readonly #requesterSessionKeys = new Map<string, string>();
 
@@ -92,6 +94,9 @@ export class TeamsMeetingsRuntime {
       logger: RuntimeLogger;
     },
   ) {
+    this.#defaultAgentId = normalizeAgentId(
+      params.config.realtime.agentId ?? resolveDefaultAgentId(params.fullConfig),
+    );
     this.#sessions = new MeetingSessionRuntime({
       logger: params.logger,
       logScope: TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope,
@@ -131,7 +136,7 @@ export class TeamsMeetingsRuntime {
         url: TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request, params.config),
         mode: request.mode ?? params.config.defaultMode,
-        agentId: normalizeAgentId(request.agentId ?? params.config.realtime.agentId),
+        agentId: normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
         const session = createTeamsMeetingsSession({ config: params.config, resolved, createdAt });
@@ -257,8 +262,7 @@ export class TeamsMeetingsRuntime {
   #probeContext(): TeamsMeetingsProbeContext {
     return {
       config: this.params.config,
-      resolveAgentId: (request) =>
-        normalizeAgentId(request.agentId ?? this.params.config.realtime.agentId),
+      resolveAgentId: (request) => normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       list: () => this.list(),
       join: async (request) => await this.join(request),
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),

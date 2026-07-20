@@ -1,11 +1,11 @@
 ---
-summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+summary: "Memory search providers, retrieval modes, QMD, and multimodal indexing"
 title: "Memory configuration reference"
 sidebarTitle: "Memory config"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
-  - You want to tune hybrid search, MMR, or temporal decay
+  - You want to enable hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
 
@@ -372,20 +372,7 @@ All under `memorySearch.sync` unless noted:
 | `onSessionStart`               | `boolean` | `true`  | Sync the memory index when a session starts                           |
 | `onSearch`                     | `boolean` | `true`  | Sync lazily on search after detecting content changes                 |
 | `watch`                        | `boolean` | `true`  | Watch memory files (chokidar) and schedule reindex on changes         |
-| `watchDebounceMs`              | `number`  | `1500`  | Debounce window for coalescing rapid file-watch events                |
-| `intervalMinutes`              | `number`  | `0`     | Periodic reindex interval in minutes (`0` disables)                   |
 | `sessions.postCompactionForce` | `boolean` | `true`  | Force a session reindex after compaction-triggered transcript updates |
-
-<ParamField path="chunking.tokens" type="number">
-  Chunk size in tokens used when splitting memory sources before embedding (default: 400).
-</ParamField>
-<ParamField path="chunking.overlap" type="number">
-  Token overlap between adjacent chunks to preserve context near split boundaries (default: 80).
-</ParamField>
-
-<Note>
-Changing `chunking.tokens` or `chunking.overlap` changes chunk boundaries and invalidates the existing index identity (see the Warning under Provider selection).
-</Note>
 
 ---
 
@@ -400,25 +387,20 @@ All under `memorySearch.query`:
 
 And under `memorySearch.query.hybrid`:
 
-| Key                   | Type      | Default | Description                        |
-| --------------------- | --------- | ------- | ---------------------------------- |
-| `enabled`             | `boolean` | `true`  | Enable hybrid BM25 + vector search |
-| `vectorWeight`        | `number`  | `0.7`   | Weight for vector scores (0-1)     |
-| `textWeight`          | `number`  | `0.3`   | Weight for BM25 scores (0-1)       |
-| `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
+| Key       | Type      | Default | Description                        |
+| --------- | --------- | ------- | ---------------------------------- |
+| `enabled` | `boolean` | `true`  | Enable hybrid BM25 + vector search |
 
 <Tabs>
   <Tab title="MMR (diversity)">
-    | Key           | Type      | Default | Description                          |
-    | ------------- | --------- | ------- | ------------------------------------- |
-    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking                |
-    | `mmr.lambda`  | `number`  | `0.7`   | 0 = max diversity, 1 = max relevance |
+    | Key           | Type      | Default | Description           |
+    | ------------- | --------- | ------- | --------------------- |
+    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking |
   </Tab>
   <Tab title="Temporal decay (recency)">
-    | Key                          | Type      | Default | Description               |
-    | ---------------------------- | --------- | ------- | -------------------------- |
-    | `temporalDecay.enabled`      | `boolean` | `false` | Enable recency boost      |
-    | `temporalDecay.halfLifeDays` | `number`  | `30`    | Score halves every N days |
+    | Key                     | Type      | Default | Description          |
+    | ----------------------- | --------- | ------- | -------------------- |
+    | `temporalDecay.enabled` | `boolean` | `false` | Enable recency boost |
 
     Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 
@@ -436,10 +418,8 @@ And under `memorySearch.query.hybrid`:
           maxResults: 6,
           minScore: 0.35,
           hybrid: {
-            vectorWeight: 0.7,
-            textWeight: 0.3,
-            mmr: { enabled: true, lambda: 0.7 },
-            temporalDecay: { enabled: true, halfLifeDays: 30 },
+            mmr: { enabled: true },
+            temporalDecay: { enabled: true },
           },
         },
       },
@@ -494,12 +474,11 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (i
 
 ## Embedding cache
 
-| Key                | Type      | Default | Description                                  |
-| ------------------ | --------- | ------- | -------------------------------------------- |
-| `cache.enabled`    | `boolean` | `true`  | Cache chunk embeddings in SQLite             |
-| `cache.maxEntries` | `number`  | unset   | Best-effort upper bound on cached embeddings |
+| Key             | Type      | Default | Description                      |
+| --------------- | --------- | ------- | -------------------------------- |
+| `cache.enabled` | `boolean` | `true`  | Cache chunk embeddings in SQLite |
 
-Prevents re-embedding unchanged text during reindex or transcript updates. Leave `maxEntries` unset for an unbounded cache; set it when disk growth matters more than peak reindex speed. When set, the oldest entries (by last-updated time) are pruned first once the cache exceeds the limit.
+Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ---
 

@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
+import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import {
@@ -15,6 +17,10 @@ import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+type RunEntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
+type RunEntryResult = Awaited<ReturnType<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>>;
+type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
+
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
@@ -23,6 +29,7 @@ export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
+  runEmbeddedAgentEntryMock: vi.fn(),
   runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
@@ -54,6 +61,17 @@ export function makeTestModel(id: string, contextTokens: number): ModelDefinitio
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
+
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/embedded-agent-runner/run-entry.js")
+  >("../../agents/embedded-agent-runner/run-entry.js");
+  return {
+    ...actual,
+    runEmbeddedAgentEntry: (params: RunEntryParams) =>
+      state.runEmbeddedAgentEntryMock(params, actual.runEmbeddedAgentEntry as RunEntryDelegate),
+  };
+});
 
 vi.mock("../../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: (params: unknown) => state.peekSessionMcpRuntimeMock(params),
@@ -553,6 +571,9 @@ export function setupAgentRunnerExecutionTestState() {
   beforeEach(() => {
     vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();
+    state.runEmbeddedAgentEntryMock
+      .mockReset()
+      .mockImplementation((params: RunEntryParams, delegate: RunEntryDelegate) => delegate(params));
     state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
     state.isCliProviderMock.mockReset();

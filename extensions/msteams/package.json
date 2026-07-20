@@ -36,6 +36,15 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "msteams",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "MSTEAMS_APP_ID",
+            "MSTEAMS_APP_PASSWORD",
+            "MSTEAMS_TENANT_ID"
+          ]
+        }
+      },
       "label": "Microsoft Teams",
       "selectionLabel": "Microsoft Teams (Teams SDK)",
       "docsPath": "/channels/msteams",

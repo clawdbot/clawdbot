@@ -135,7 +135,9 @@ function setupDeps(params: {
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
     runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
-    runAppRecommendations: params.runAppRecommendations ?? vi.fn(async ({ config }) => config),
+    runAppRecommendations:
+      params.runAppRecommendations ??
+      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
     runSystemAgentChat,
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
   } satisfies GuidedOnboardingDeps;

@@ -18,6 +18,7 @@ import {
 // Control UI chat module implements composer persistence behavior.
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { isInflightSteer, isSteeredQueueItem } from "./steered-chip.ts";
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
@@ -762,7 +763,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   const sendState =
     item.sendState === "sending"
       ? "waiting-reconnect"
-      : item.sendState === "executing-command" || item.sendState === "steering"
+      : item.sendState === "executing-command" || isInflightSteer(item)
         ? "unconfirmed"
         : item.sendState === "waiting-model"
           ? "failed"
@@ -783,7 +784,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
       typeof item.createdAt === "number" && Number.isFinite(item.createdAt)
         ? item.createdAt
         : Date.now(),
-    ...(item.kind === "queued" || item.kind === "steered" ? { kind: item.kind } : {}),
+    ...(item.kind === "queued" || isSteeredQueueItem(item) ? { kind: item.kind } : {}),
     ...(attachments.length ? { attachments: attachments as ChatAttachment[] } : {}),
     ...(typeof item.refreshSessions === "boolean" ? { refreshSessions: item.refreshSessions } : {}),
     ...(item.replyToId ? { replyToId: item.replyToId } : {}),

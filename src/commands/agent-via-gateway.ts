@@ -960,6 +960,7 @@ export async function agentCliCommand(
     runtime.exit(1);
     return undefined;
   }
+  const requestedSessionKey = messageOpts.sessionKey?.trim() || null;
   const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
@@ -1006,7 +1007,7 @@ export async function agentCliCommand(
       // Transport loss is ambiguous: the Gateway may still own or recover the original turn.
       // Keep embedded work on a separate session so both processes cannot write one transcript.
       runtime.error?.(
-        `EMBEDDED FALLBACK: Gateway agent ${fallbackReason === "gateway_timeout" ? "timed out" : "connection closed"}; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
+        `EMBEDDED FALLBACK: Gateway agent ${fallbackReason === "gateway_timeout" ? "timed out" : "connection closed"}; continuity was intentionally not preserved. Running embedded agent with fresh session ${fallbackSession.sessionId} to avoid double-driving the original session: ${String(err)}`,
       );
       const agentCommand = await loadEmbeddedAgentCommand();
       const result = await agentCommand(
@@ -1020,6 +1021,11 @@ export async function agentCliCommand(
             fallbackReason,
             fallbackSessionId: fallbackSession.sessionId,
             fallbackSessionKey: fallbackSession.sessionKey,
+            fallback: {
+              reason: fallbackReason,
+              requestedSessionKey,
+              sessionKey: fallbackSession.sessionKey,
+            },
           },
         },
         runtime,

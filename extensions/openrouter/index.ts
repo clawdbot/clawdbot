@@ -31,10 +31,7 @@ import {
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
-import {
-  resolveOpenRouterThinkingProfile,
-  supportsOpenRouterXHighThinking,
-} from "./thinking-policy.js";
+import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
 import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
@@ -358,7 +355,6 @@ export default definePluginEntry({
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
-      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
       resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
       resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,

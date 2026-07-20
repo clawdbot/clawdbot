@@ -82,7 +82,7 @@ Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such
 
 During an isolated run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
 
-Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, `cron.triggers.minIntervalMs` remains a lower bound even when a proposal requests an earlier check.
+Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
 
 ### Day-of-month and day-of-week use OR logic
 
@@ -583,15 +583,8 @@ Use the latest-generation, best-tier model available from your provider for untr
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
-    maxConcurrentRuns: 8,
     triggers: {
       enabled: false,
-      minIntervalMs: 30000,
-    },
-    retry: {
-      maxAttempts: 3,
-      backoffMs: [30000, 60000, 300000],
-      retryOn: ["rate_limit", "overloaded", "network", "timeout", "server_error"],
     },
     webhookToken: "replace-with-dedicated-webhook-token",
     sessionRetention: "24h",
@@ -599,9 +592,7 @@ Use the latest-generation, best-tier model available from your provider for untr
 }
 ```
 
-The `retry` values above are the defaults: up to 3 retries with `30s/60s/5m` backoff, retrying all five transient categories. `webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
-
-`maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
+`webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
 
 `cron.store` is a logical store key and doctor migration path, not a live JSON file to hand-edit. Job data lives in SQLite; use the CLI or Gateway API for changes.
 
@@ -609,7 +600,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
-    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) retry up to `retry.maxAttempts` times (default 3) using `retry.backoffMs` (default 30s, 60s, 5m). Permanent errors disable the job immediately.
+    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) use a built-in retry schedule. Permanent errors disable the job immediately.
 
     **Recurring retry**: consecutive execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
 

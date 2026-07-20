@@ -368,6 +368,7 @@ export function createSessionsSearchTool(opts?: {
           return jsonResult({ status: resolved.status, error: resolved.error });
         }
         const visible = await resolveVisibleSessionReference({
+          action: "list",
           resolvedSession: resolved,
           requesterSessionKey: effectiveRequesterKey,
           restrictToSpawned,

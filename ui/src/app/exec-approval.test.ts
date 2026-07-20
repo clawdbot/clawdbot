@@ -82,6 +82,17 @@ describe("parseExecApprovalRequested", () => {
 
     expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny", "allow-always"]);
   });
+
+  it("preserves the originating engine run id", () => {
+    const result = parseExecApprovalRequested({
+      id: "exec-1",
+      request: { command: "pwd", runId: "engine-run-1" },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+
+    expect(result?.request.runId).toBe("engine-run-1");
+  });
 });
 
 describe("parsePluginApprovalRequested", () => {

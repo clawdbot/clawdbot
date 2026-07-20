@@ -95,11 +95,7 @@ export function formatCliOutputError(
 }
 
 export const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
-const CLI_STREAM_JSON_MIN_TURN_RAW_CHARS = 1_024;
-const CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_RAW_CHARS = 64 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
-const CLI_STREAM_JSON_MIN_TURN_LINES = 100;
-const CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_LINES = 100_000;
 const CLI_STREAM_JSON_MISSING_RESULT_ERROR = "CLI stream-json output ended without a result event.";
 
 /** Incremental assistant text emitted while parsing a streaming CLI response. */
@@ -513,37 +509,13 @@ function shouldUnwrapNestedCliResultText(params: {
   return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
 }
 
-function normalizePositiveInt(
-  value: number | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    return fallback;
-  }
-  return Math.min(Math.max(value, min), max);
-}
-
 export function resolveCliStreamJsonOutputLimits(
-  backend: CliBackendConfig,
+  _backend: CliBackendConfig,
 ): CliStreamJsonOutputLimits {
-  const configured = backend.reliability?.outputLimits;
-  const maxTurnRawChars = normalizePositiveInt(
-    configured?.maxTurnRawChars,
-    CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-    CLI_STREAM_JSON_MIN_TURN_RAW_CHARS,
-    CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_RAW_CHARS,
-  );
   return {
-    maxTurnRawChars,
-    maxPendingLineChars: maxTurnRawChars,
-    maxTurnLines: normalizePositiveInt(
-      configured?.maxTurnLines,
-      CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
-      CLI_STREAM_JSON_MIN_TURN_LINES,
-      CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_LINES,
-    ),
+    maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+    maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+    maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
   };
 }
 

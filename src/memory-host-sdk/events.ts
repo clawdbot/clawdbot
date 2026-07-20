@@ -7,20 +7,10 @@ import {
 } from "./event-store.js";
 import type { MemoryHostEvent, MemoryHostEventRecord } from "./event-types.js";
 
-export type {
-  MemoryDreamOutcome,
-  MemoryHostDreamCompletedEvent,
-  MemoryHostEvent,
-  MemoryHostEventRecord,
-  MemoryHostPromotionAppliedEvent,
-  MemoryHostRecallRecordedEvent,
-  MemoryHostRecallSkippedEvent,
-} from "./event-types.js";
-
 export { normalizeMemoryHostEventRecordForStorage };
 
 /** Legacy workspace JSONL path retained only for doctor migration discovery. */
-export const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = path.join("memory", ".dreams", "events.jsonl");
+const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = path.join("memory", ".dreams", "events.jsonl");
 
 /** Resolve the retired JSONL source path without reading it at runtime. */
 export function resolveMemoryHostEventLogPath(workspaceDir: string): string {

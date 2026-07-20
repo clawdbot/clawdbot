@@ -7,6 +7,7 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
+  ensureRepoToolNodeModulesLink,
   resolveLocalHeavyCheckEnv,
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
@@ -62,6 +63,51 @@ describe("local-heavy-check-runtime", () => {
         resolveCommonDir: () => commonDir,
       }),
     ).toBe(localPath);
+  });
+
+  it("links dependency-less worktrees to the selected checkout's modules", () => {
+    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+    const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+    const commonDir = path.join(primaryRoot, ".git");
+    const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
+    const primaryNodeModules = path.join(primaryRoot, "node_modules");
+    const localNodeModules = path.join(cwd, "node_modules");
+    fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+
+    expect(
+      ensureRepoToolNodeModulesLink(primaryTsgo, {
+        cwd,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localNodeModules);
+    expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
+
+    // The stable link is idempotent for concurrent and later local runners.
+    expect(
+      ensureRepoToolNodeModulesLink(primaryTsgo, {
+        cwd,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localNodeModules);
+  });
+
+  it("leaves existing worktree node_modules directories locally owned", () => {
+    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+    const commonDir = path.join(primaryRoot, ".git");
+    const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
+    const cwd = path.join(primaryRoot, "worktree");
+    const localNodeModules = path.join(cwd, "node_modules");
+    fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
+    fs.mkdirSync(localNodeModules, { recursive: true });
+
+    ensureRepoToolNodeModulesLink(primaryTsgo, {
+      cwd,
+      resolveCommonDir: () => commonDir,
+    });
+
+    expect(fs.lstatSync(localNodeModules).isDirectory()).toBe(true);
+    expect(fs.lstatSync(localNodeModules).isSymbolicLink()).toBe(false);
   });
 
   it("reenables local heavy-check policy for local wrapper entrypoints", () => {

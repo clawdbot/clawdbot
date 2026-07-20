@@ -644,9 +644,7 @@ export async function gatherDaemonStatus(
           .catch(() => [])
       : [];
 
-  const timeoutMs =
-    parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
-    Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
+  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ?? 10_000;
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
@@ -704,7 +702,6 @@ export async function gatherDaemonStatus(
             shouldUseLocalTlsRuntime && tlsRuntime?.enabled
               ? tlsRuntime.fingerprintSha256
               : undefined,
-          preauthHandshakeTimeoutMs: daemonCfg.gateway?.handshakeTimeoutMs,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,

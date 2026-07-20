@@ -221,6 +221,7 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
 <ParamField path="mode" type='"run" | "session"' default="run">
   If `thread: true` and `mode` is omitted, default becomes `session`. `mode: "session"` requires `thread: true`.
   If thread binding is unavailable for the requester channel, use `mode: "run"` instead.
+  With `visible: true`, omit `mode`; visible sessions are persistent and do not support `mode: "run"`.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
@@ -251,7 +252,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, light bootstrap context, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is also rejected when inherited tool restrictions cannot be carried into the dashboard session. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
+With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is rejected when the requester was itself spawned with an inherited tool allowlist or denylist; that restriction is fixed at spawn time and has no config override. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
 
 ### Task names and targeting
 

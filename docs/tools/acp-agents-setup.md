@@ -89,14 +89,8 @@ Core ACP baseline:
       "opencode",
       "qwen",
     ],
-    maxConcurrentSessions: 8,
     stream: {
-      // Defaults are coalesceIdleMs: 350, maxChunkChars: 1800; shown explicitly here.
-      coalesceIdleMs: 350,
-      maxChunkChars: 1800,
-    },
-    runtime: {
-      ttlMinutes: 120,
+      deliveryMode: "live",
     },
   },
 }

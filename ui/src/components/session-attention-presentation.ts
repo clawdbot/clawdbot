@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { resolveSessionAttentionIcon } from "./session-icon-registry.ts";
 
 export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
   if (attention.kind === "none") {
@@ -12,7 +13,9 @@ export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
       ? icons.hand
       : attention.kind === "approval"
         ? icons.key
-        : icons.alertTriangle;
+        : attention.kind === "agent"
+          ? resolveSessionAttentionIcon(attention.icon)
+          : icons.alertTriangle;
   return html`<span
     class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
     data-session-attention=${attention.kind}
@@ -29,6 +32,8 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
       return t("sessionsView.waitingForApproval");
     case "error":
       return t("sessionsView.runFailedReason", { reason: attention.reason });
+    case "agent":
+      return attention.note;
     case "none":
       return undefined;
     default:
@@ -37,7 +42,7 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
 }
 
 export function renderSessionState(session: SidebarRecentSession) {
-  if (session.hasActiveRun || (session.isChild && session.status === "running")) {
+  if (session.hasActiveRun || session.status === "running") {
     return html`<span
       class="session-run-spinner sidebar-recent-session__state"
       role="img"

@@ -80,7 +80,7 @@ const SYNCED_PREFS = {
   }),
   chatPersistCommentary: prefSpec<boolean>({
     extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatPersistCommentary ?? false,
+    local: (settings) => settings.chatPersistCommentary !== false,
   }),
   chatSendShortcut: prefSpec<ChatSendShortcut>({
     extract: (value) =>

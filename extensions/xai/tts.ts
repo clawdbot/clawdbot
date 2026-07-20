@@ -1,4 +1,5 @@
 // Xai plugin module implements tts behavior.
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
@@ -375,7 +376,12 @@ export async function xaiTTSStream(params: {
             if (!encoded) {
               return;
             }
-            const chunk = Buffer.from(encoded, "base64");
+            const canonicalAudio = canonicalizeBase64(encoded);
+            if (!canonicalAudio) {
+              failStream(new Error("xAI TTS stream returned malformed base64 audio data"));
+              return;
+            }
+            const chunk = Buffer.from(canonicalAudio, "base64");
             totalBytes += chunk.length;
             if (totalBytes > maxBytes) {
               errorStream?.(new Error(`xAI TTS audio stream exceeds ${maxBytes} bytes`));

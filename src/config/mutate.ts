@@ -318,8 +318,13 @@ async function withConfigMutationSnapshotLock<T>(
  * Run a multi-phase operation under the canonical cross-process write lock.
  * Nested mutation helpers are reentrant through activeConfigMutationLocks.
  */
-export async function withConfigMutationExclusive<T>(fn: () => Promise<T>): Promise<T> {
-  return await withConfigMutationSnapshotLock({}, async () => await fn());
+export async function withConfigMutationExclusive<T>(
+  fn: (config: OpenClawConfig) => Promise<T>,
+): Promise<T> {
+  return await withConfigMutationSnapshotLock(
+    {},
+    async (prepared) => await fn(prepared.snapshot.sourceConfig),
+  );
 }
 
 function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {

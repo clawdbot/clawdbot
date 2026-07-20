@@ -109,7 +109,6 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
-    expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
     expect(cfg.tools?.profile).toBe("coding");
     expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("coding");
     expect(cfg.channels?.["qa-channel"]?.enabled).toBe(true);

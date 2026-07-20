@@ -73,6 +73,7 @@ import {
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type {
   ConfigSetDryRunError,
@@ -2106,6 +2107,7 @@ function formatDryRunFailureMessage(params: {
   const missingPathErrors = errors.filter((error) => error.kind === "missing-path");
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
+  const modelErrors = errors.filter((error) => error.kind === "model");
   const lines: string[] = [];
   if (missingPathErrors.length > 0) {
     lines.push(...missingPathErrors.map((error) => error.message));
@@ -2126,6 +2128,10 @@ function formatDryRunFailureMessage(params: {
     if (resolveErrors.length > 5) {
       lines.push(`- ... ${resolveErrors.length - 5} more`);
     }
+  }
+  if (modelErrors.length > 0) {
+    lines.push("Dry run failed: model reference validation failed.");
+    lines.push(...modelErrors.map((error) => `- ${error.message}`));
   }
   if (skippedExecRefs > 0) {
     lines.push(
@@ -2227,6 +2233,13 @@ async function runConfigOperations(params: {
       allowExecInDryRun: Boolean(options.allowExec),
     });
     const errors: ConfigSetDryRunError[] = [];
+    const modelRefCheck = await checkTouchedTextModelRefs({
+      config: nextConfig,
+      previousConfig: currentConfigForApplyHint,
+      touchedPaths: operations.map((operation) => operation.setPath),
+      redactDependencyValues: true,
+    });
+    errors.push(...modelRefCheck.errors.map((message) => ({ kind: "model" as const, message })));
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
       errors.push(
         ...policyIssueLines.map((message) => ({
@@ -2268,12 +2281,13 @@ async function runConfigOperations(params: {
           requiresFullSchemaValidation ||
           policyIssueLines.length > 0 ||
           pluginIntegrationProviderErrors.length > 0,
-        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
+        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefCheck.refsTotal > 0,
         resolvabilityComplete:
-          (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
-          selectedDryRunRefs.skippedExecRefs.length === 0,
+          (hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefCheck.refsTotal > 0) &&
+          selectedDryRunRefs.skippedExecRefs.length === 0 &&
+          modelRefCheck.refsChecked === modelRefCheck.refsTotal,
       },
-      refsChecked: selectedDryRunRefs.refsToResolve.length,
+      refsChecked: selectedDryRunRefs.refsToResolve.length + modelRefCheck.refsChecked,
       skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
       ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
     };
@@ -2323,6 +2337,17 @@ async function runConfigOperations(params: {
         ...pluginIntegrationProviderErrors.map((error) => `- ${error.message}`),
       ].join("\n"),
     );
+  }
+
+  const modelRefCheck = await checkTouchedTextModelRefs({
+    config: nextConfig,
+    previousConfig: currentConfigForApplyHint,
+    touchedPaths: operations.map((operation) => operation.setPath),
+    redactDependencyValues: true,
+  });
+  const firstModelError = modelRefCheck.errors[0];
+  if (firstModelError) {
+    throw new Error(firstModelError);
   }
 
   await replaceConfigFile({
@@ -2574,8 +2599,19 @@ export async function runConfigUnset(opts: {
       });
       return;
     }
+    const nextConfig = normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig);
+    const modelRefCheck = await checkTouchedTextModelRefs({
+      config: nextConfig,
+      previousConfig: currentConfigForApplyHint,
+      touchedPaths: [parsedPath],
+      redactDependencyValues: true,
+    });
+    const firstModelError = modelRefCheck.errors[0];
+    if (firstModelError) {
+      throw new Error(firstModelError);
+    }
     await replaceConfigFile({
-      nextConfig: next,
+      nextConfig,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       ...(unsetResult.leafContainer === "array"
         ? { writeOptions: { auditOrigin: "cli" } }
@@ -2584,7 +2620,7 @@ export async function runConfigUnset(opts: {
     const hint = configApplyHintForOperations(
       [buildUnsetOperation(parsedPath)],
       currentConfigForApplyHint,
-      normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig),
+      nextConfig,
     );
     runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {

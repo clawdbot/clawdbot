@@ -18,8 +18,10 @@ import {
   writeTuiLastSessionKey,
 } from "../tui/tui-last-session.js";
 import {
+  getTranscriptRecordMaxChars,
   moveHeartbeatMainSessionEntry,
   resolveHeartbeatMainSessionRepairCandidate,
+  summarizeTranscriptHeartbeatMessages,
 } from "./doctor-heartbeat-main-session-repair.test-support.js";
 import {
   detectStateIntegrityHealthIssues,
@@ -366,7 +368,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples:");
   });
 
-  it("does not warn when the live compatibility main agent dir is missing from agents.list", async () => {
+  it("reports an unconfigured main agent dir after compatibility removal", async () => {
     createAgentDir("main");
 
     const text = await runStateIntegrityText({
@@ -375,11 +377,11 @@ describe("doctor state integrity oauth dir checks", () => {
       },
     });
 
-    expect(text).not.toContain("without a matching agents.list entry");
-    expect(text).not.toContain("Examples:");
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: main");
   });
 
-  it("does not warn when OPENCLAW_AGENT_DIR points at the live compatibility agent dir", async () => {
+  it("does not let OPENCLAW_AGENT_DIR hide an unconfigured agent dir", async () => {
     createAgentDir("legacy");
     const legacyAgentDir = path.join(
       process.env.OPENCLAW_STATE_DIR ?? "",
@@ -395,8 +397,8 @@ describe("doctor state integrity oauth dir checks", () => {
       },
     });
 
-    expect(text).not.toContain("without a matching agents.list entry");
-    expect(text).not.toContain("Examples:");
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: legacy");
   });
 
   it("warns about tombstoned subagent restart recovery sessions", async () => {
@@ -742,6 +744,104 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(
       false,
     );
+  });
+
+  it("repairs a multi-chunk heartbeat transcript without loading it via readFileSync", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, tempHome);
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const transcriptPath = path.join(sessionsDir, "large-heartbeat-session.jsonl");
+    const heartbeatLine = `${JSON.stringify({
+      message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+    })}\n${JSON.stringify({ message: { role: "assistant", content: "HEARTBEAT_OK" } })}\n`;
+    // >64 KiB so the sync scanner must read more than one chunk.
+    const repeats = Math.ceil((80 * 1024) / heartbeatLine.length);
+    fs.writeFileSync(transcriptPath, heartbeatLine.repeat(repeats));
+    expect(fs.statSync(transcriptPath).size).toBeGreaterThan(64 * 1024);
+
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "large-heartbeat-session",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+      params.message.startsWith("Move heartbeat-owned main session"),
+    );
+    try {
+      await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    } finally {
+      const transcriptReads = readFileSyncSpy.mock.calls.filter((call) => {
+        const target = call[0];
+        return typeof target === "string" && path.resolve(target) === path.resolve(transcriptPath);
+      });
+      readFileSyncSpy.mockRestore();
+      expect(transcriptReads).toEqual([]);
+    }
+
+    const summary = summarizeTranscriptHeartbeatMessages(transcriptPath);
+    expect(summary?.heartbeatUserMessages).toBe(repeats);
+    expect(summary?.nonHeartbeatUserMessages).toBe(0);
+    expect(summary?.userMessages).toBe(repeats);
+
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(store["agent:main:main"]).toBeUndefined();
+    const recoveredKey = Object.keys(store).find((key) =>
+      key.startsWith("agent:main:heartbeat-recovered-"),
+    );
+    expect(recoveredKey).toBeDefined();
+    expect(store[recoveredKey!]?.sessionId).toBe("large-heartbeat-session");
+    expect(doctorChangesText()).toContain("Moved heartbeat-owned main session agent:main:main");
+  });
+
+  it("declines repair when a single JSONL record exceeds the scanner record cap", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, tempHome);
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const transcriptPath = path.join(sessionsDir, "oversized-record-session.jsonl");
+    const maxChars = getTranscriptRecordMaxChars();
+    const oversizedRecord = `${"x".repeat(maxChars + 1)}\n`;
+    const heartbeatLine = `${JSON.stringify({
+      message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+    })}\n`;
+    fs.writeFileSync(transcriptPath, `${oversizedRecord}${heartbeatLine}`);
+
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "oversized-record-session",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+      params.message.startsWith("Move heartbeat-owned main session"),
+    );
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    } finally {
+      const transcriptReads = readFileSyncSpy.mock.calls.filter((call) => {
+        const target = call[0];
+        return typeof target === "string" && path.resolve(target) === path.resolve(transcriptPath);
+      });
+      readFileSyncSpy.mockRestore();
+      expect(transcriptReads).toEqual([]);
+    }
+
+    expect(summarizeTranscriptHeartbeatMessages(transcriptPath)).toBeNull();
+    expect(stateIntegrityText()).toContain(
+      "Skipped heartbeat main-session recovery for agent:main:main: the transcript contains a JSONL record larger than",
+    );
+    expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(
+      false,
+    );
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(store["agent:main:main"]?.sessionId).toBe("oversized-record-session");
+    expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
   });
 
   it("does not treat heartbeat-labeled routing metadata as heartbeat ownership", () => {

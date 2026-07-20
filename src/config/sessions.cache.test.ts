@@ -18,7 +18,7 @@ import {
   loadSessionStore,
   saveSessionStore,
   updateSessionStore,
-  updateSessionStoreEntry,
+  patchSessionEntryWithKey,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
 import type { SessionSkillPromptRef } from "./sessions/types.js";
@@ -477,7 +477,7 @@ describe("Session Store Cache", () => {
   it("can publish writer-owned entry patches directly into the object cache", async () => {
     await saveSessionStore(storePath, createSingleSessionStore());
 
-    const persisted = await updateSessionStoreEntry({
+    const persisted = await patchSessionEntryWithKey({
       storePath,
       sessionKey: "session:1",
       takeCacheOwnership: true,
@@ -488,7 +488,7 @@ describe("Session Store Cache", () => {
     });
 
     const cached = loadSessionStore(storePath, { clone: false });
-    expect(cached["session:1"]).toBe(persisted);
+    expect(cached["session:1"]).toBe(persisted?.entry);
     expect(
       expectDefined(cached["session:1"], 'cached["session:1"] test invariant').displayName,
     ).toBe("Entry writer owned");
@@ -502,7 +502,7 @@ describe("Session Store Cache", () => {
     const before = loadSessionStore(storePath, { clone: false });
     const untouched = before["session:2"];
 
-    const persisted = await updateSessionStoreEntry({
+    const persisted = await patchSessionEntryWithKey({
       storePath,
       sessionKey: "session:1",
       update: async () => ({
@@ -513,8 +513,8 @@ describe("Session Store Cache", () => {
 
     const cached = loadSessionStore(storePath, { clone: false });
     expect(cached["session:2"]).toBe(untouched);
-    expect(cached["session:1"]).not.toBe(persisted);
-    persisted!.displayName = "Mutated returned entry";
+    expect(cached["session:1"]).not.toBe(persisted?.entry);
+    persisted!.entry.displayName = "Mutated returned entry";
     expect(
       expectDefined(cached["session:1"], 'cached["session:1"] test invariant').displayName,
     ).toBe("Entry writer owned by default");
@@ -529,7 +529,7 @@ describe("Session Store Cache", () => {
     const untouched = before["session:2"];
     const deliveryContext = { channel: "telegram", to: "chat-1" };
 
-    await updateSessionStoreEntry({
+    await patchSessionEntryWithKey({
       storePath,
       sessionKey: "session:1",
       update: async () => ({ deliveryContext }),
@@ -564,7 +564,7 @@ describe("Session Store Cache", () => {
       force: true,
     });
 
-    await updateSessionStoreEntry({
+    await patchSessionEntryWithKey({
       storePath,
       sessionKey: "session:1",
       update: async () => ({ displayName: "After" }),
@@ -588,7 +588,7 @@ describe("Session Store Cache", () => {
       "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Untouched" }),
     });
 
-    await updateSessionStoreEntry({
+    await patchSessionEntryWithKey({
       storePath,
       sessionKey: "session:1",
       update: async () => ({

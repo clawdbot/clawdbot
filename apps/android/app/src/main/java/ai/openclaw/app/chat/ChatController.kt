@@ -602,6 +602,17 @@ class ChatController internal constructor(
 
   /** Purges cached transcripts and queued sends for one retired authentication scope. */
   internal suspend fun clearGatewayCache(gatewayId: String) {
+    clearGatewayCache(gatewayId) { gateway ->
+      transcriptCache?.clearGateway(gateway)
+      commandOutbox?.clearGateway(gateway)
+    }
+  }
+
+  /** Serializes an owner-provided cross-store purge with every chat cache/outbox mutation. */
+  internal suspend fun clearGatewayCache(
+    gatewayId: String,
+    clearStores: suspend (String) -> Unit,
+  ) {
     val gateway = gatewayId.trim().takeIf { it.isNotEmpty() } ?: return
     synchronized(defaultAgentPersistenceRevisions) {
       defaultAgentPersistenceRevisions[gateway] = (defaultAgentPersistenceRevisions[gateway] ?: 0L) + 1L
@@ -615,8 +626,7 @@ class ChatController internal constructor(
     // deleted here; queued old-owner saves then fail their revision check after this unlocks.
     defaultAgentPersistenceMutex.withLock {
       cacheMutationMutex.withLock {
-        transcriptCache?.clearGateway(gateway)
-        commandOutbox?.clearGateway(gateway)
+        clearStores(gateway)
       }
     }
   }

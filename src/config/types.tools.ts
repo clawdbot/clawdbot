@@ -153,37 +153,9 @@ export type MediaToolsConfig = {
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
-export type ToolLoopDetectionDetectorConfig = {
-  /** Enable warning/blocking for repeated identical calls to the same tool/params. */
-  genericRepeat?: boolean;
-  /** Enable warning/blocking for known no-progress polling loops. */
-  knownPollNoProgress?: boolean;
-  /** Enable warning/blocking for no-progress ping-pong alternating patterns. */
-  pingPong?: boolean;
-};
-
-export type ToolLoopPostCompactionGuardConfig = {
-  /** How many attempts post-compaction the guard remains armed (default: 3). */
-  windowSize?: number;
-};
-
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
-  /** Maximum tool call history entries retained for loop detection (default: 30). */
-  historySize?: number;
-  /** Warning threshold before a warning-only loop classification (default: 10). */
-  warningThreshold?: number;
-  /** Block repeated calls to the same unavailable tool after this many misses (default: 10). */
-  unknownToolThreshold?: number;
-  /** Critical threshold for blocking repetitive loops (default: 20). */
-  criticalThreshold?: number;
-  /** Global no-progress breaker threshold (default: 30). */
-  globalCircuitBreakerThreshold?: number;
-  /** Detector toggles. */
-  detectors?: ToolLoopDetectionDetectorConfig;
-  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
-  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
 export type ToolSearchConfig =
@@ -536,18 +508,11 @@ export type MemorySearchConfig = {
       maxEntries?: number;
     };
   };
-  /** Chunking configuration. */
-  chunking?: {
-    tokens?: number;
-    overlap?: number;
-  };
   /** Sync behavior. */
   sync?: {
     onSessionStart?: boolean;
     onSearch?: boolean;
     watch?: boolean;
-    watchDebounceMs?: number;
-    intervalMinutes?: number;
     /**
      * Timeout in seconds for inline embedding batches during memory indexing.
      * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
@@ -569,25 +534,15 @@ export type MemorySearchConfig = {
     hybrid?: {
       /** Enable hybrid BM25 + vector search (default: true). */
       enabled?: boolean;
-      /** Weight for vector similarity when merging results (0-1). */
-      vectorWeight?: number;
-      /** Weight for BM25 text relevance when merging results (0-1). */
-      textWeight?: number;
-      /** Multiplier for candidate pool size (default: 4). */
-      candidateMultiplier?: number;
       /** Optional MMR re-ranking for result diversity. */
       mmr?: {
         /** Enable MMR re-ranking (default: false). */
         enabled?: boolean;
-        /** Lambda: 0 = max diversity, 1 = max relevance (default: 0.7). */
-        lambda?: number;
       };
       /** Optional temporal decay to boost recency in hybrid scoring. */
       temporalDecay?: {
         /** Enable temporal decay (default: false). */
         enabled?: boolean;
-        /** Half-life in days for exponential decay (default: 30). */
-        halfLifeDays?: number;
       };
     };
   };
@@ -595,8 +550,6 @@ export type MemorySearchConfig = {
   cache?: {
     /** Cache chunk embeddings in SQLite (default: true). */
     enabled?: boolean;
-    /** Optional cap on cached embeddings (best-effort). */
-    maxEntries?: number;
   };
 };
 
@@ -617,8 +570,6 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
-      /** Shared API key slot used by providers that do not need nested config. */
-      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
@@ -643,21 +594,6 @@ export type ToolsConfig = {
           timezone?: string;
         };
       };
-    } & Record<string, unknown>;
-    /** X (formerly Twitter) search tool configuration using xAI Grok. */
-    x_search?: {
-      /** Enable X search tool (default: true when xAI auth is available via plugin config or XAI_API_KEY). */
-      enabled?: boolean;
-      /** Model id to use for X search. */
-      model?: string;
-      /** Keep inline citations in the xAI response payload when available. */
-      inlineCitations?: boolean;
-      /** Optional max search/tool turns for xAI to use internally. */
-      maxTurns?: number;
-      /** Timeout in seconds for X search requests. */
-      timeoutSeconds?: number;
-      /** Cache TTL in minutes for X search results. */
-      cacheTtlMinutes?: number;
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */

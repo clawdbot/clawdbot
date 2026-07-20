@@ -26,11 +26,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import {
-  renderSessionAttentionIcon,
-  renderSessionState,
-} from "./session-attention-presentation.ts";
-import { resolveSessionIcon } from "./session-icon-registry.ts";
+import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import {
   renderSidebarSessionSubtitle,
@@ -70,21 +66,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       sidebarLiveActivity: this.sidebarLiveActivity,
       narrationLine: this.sidebarNarrationLines.get(session.key),
     });
-    const running = session.hasActiveRun || session.status === "running";
+    const pullRequestState = session.worktreeId
+      ? this.sessionPullRequestIndicatorState(session.key, session.worktreeId)
+      : "none";
+    const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
+      session,
+      pullRequestState,
+    );
     const meta = display?.meta ?? session.meta;
     const rowMeta = session.pinned ? "" : meta;
     const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
     const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
     const menuSession = display ? { ...session, meta } : session;
     const title = display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · ");
-    // Pinned rows reposition the state badge into the nav-item slot; render
-    // every state renderSessionState knows (spinner, unread, child terminal
-    // badges) so pinning a subagent session cannot hide its outcome.
-    const sessionState = renderSessionState(session);
-    const pinnedState =
-      session.pinned && sessionState !== nothing
-        ? html`<span class="nav-item__state">${sessionState}</span>`
-        : nothing;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -141,13 +135,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          ${session.attention.kind !== "none"
-            ? renderSessionAttentionIcon(session.attention)
-            : session.pinned
-              ? html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-                  >${resolveSessionIcon(session.icon)}</span
-                >`
-              : nothing}
+          <span class="sidebar-session-indicator">${leadingIndicator}</span>
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
@@ -168,7 +156,6 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
             .maxVisible=${3}
             variant="session"
           ></openclaw-viewer-facepile>
-          ${session.pinned ? nothing : sessionState}
           ${renderSessionRowBadges({
             ...session,
             hasApproval: sessionHasPendingApproval(this.approvalBadgeSnapshot(), session.key),
@@ -532,6 +519,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
     return html`
       <div class="sidebar-recent-session sidebar-recent-session--draft">
         <span class="sidebar-recent-session__link">
+          <span class="sidebar-session-indicator" aria-hidden="true">
+            <span class="sidebar-session-indicator__dot"></span>
+          </span>
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name">${t("newSession.draftRow")}</span>
           </span>

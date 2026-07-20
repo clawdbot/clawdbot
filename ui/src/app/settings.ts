@@ -351,7 +351,7 @@ export function loadSettings(): UiSettings {
     themeMode: "system",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: false,
+    chatPersistCommentary: true,
     chatSendShortcut: "enter",
     catalogOpenTarget: "viewer",
     splitRatio: 0.6,
@@ -554,7 +554,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     themeMode: next.themeMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
-    chatPersistCommentary: next.chatPersistCommentary ?? false,
+    chatPersistCommentary: next.chatPersistCommentary ?? true,
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
       : {}),

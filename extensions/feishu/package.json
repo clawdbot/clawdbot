@@ -34,6 +34,16 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "feishu",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "FEISHU_APP_ID",
+            "FEISHU_APP_SECRET",
+            "FEISHU_VERIFICATION_TOKEN",
+            "FEISHU_ENCRYPT_KEY"
+          ]
+        }
+      },
       "label": "Feishu",
       "selectionLabel": "Feishu/Lark (飞书)",
       "docsPath": "/channels/feishu",

@@ -179,7 +179,6 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
-    getSession: unavailable,
     deleteSession: unavailable,
   };
 }
@@ -308,7 +307,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
   const tasks = createRuntimeTasks({
-    legacyTaskFlow: taskFlow,
+    managedTaskFlow: taskFlow,
   });
   const agent = createRuntimeAgent();
   const runtime = {
@@ -360,12 +359,10 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       },
     },
     tasks,
-    taskFlow,
   } satisfies Omit<
     PluginRuntime,
     | "tts"
     | "mediaUnderstanding"
-    | "stt"
     | "modelAuth"
     | "imageGeneration"
     | "videoGeneration"
@@ -377,7 +374,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         PluginRuntime,
         | "tts"
         | "mediaUnderstanding"
-        | "stt"
         | "modelAuth"
         | "imageGeneration"
         | "videoGeneration"
@@ -388,9 +384,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
 
   defineCachedValue(runtime, "tts", createRuntimeTts);
   defineCachedValue(runtime, "mediaUnderstanding", () => mediaUnderstanding);
-  defineCachedValue(runtime, "stt", () => ({
-    transcribeAudioFile: mediaUnderstanding.transcribeAudioFile,
-  }));
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);

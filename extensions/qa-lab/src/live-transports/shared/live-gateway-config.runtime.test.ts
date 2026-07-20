@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "./live-gateway-config.runtime.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("live QA gateway config", () => {
   it("requires both config and hash from config.get", async () => {
@@ -20,7 +24,12 @@ describe("live QA gateway config", () => {
       .mockResolvedValueOnce({ config: { channels: {} }, hash: "old" })
       .mockRejectedValueOnce(new Error("config changed since last load"))
       .mockResolvedValueOnce({ config: { channels: {} }, hash: "current" })
-      .mockResolvedValueOnce({});
+      .mockResolvedValueOnce({ hash: "applied" })
+      .mockResolvedValueOnce({
+        hash: "applied",
+        configRevisionHash: "applied",
+        appliedConfigHash: "applied",
+      });
 
     await patchLiveQaGatewayConfig({
       gateway: { call },
@@ -45,6 +54,38 @@ describe("live QA gateway config", () => {
       restartDelayMs: 0,
       timeoutMs: 45_000,
     });
+  });
+
+  it("waits for the active Gateway to apply the persisted config revision", async () => {
+    vi.useFakeTimers();
+    const waitForConfigRestartSettle = vi.fn();
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ config: { channels: {} }, hash: "current" })
+      .mockResolvedValueOnce({ hash: "next" })
+      .mockResolvedValueOnce({
+        hash: "next",
+        configRevisionHash: "current",
+        appliedConfigHash: "current",
+      })
+      .mockResolvedValueOnce({
+        hash: "next",
+        configRevisionHash: "next",
+        appliedConfigHash: "next",
+      });
+
+    const patching = patchLiveQaGatewayConfig({
+      gateway: { call },
+      patch: { channels: { slack: { enabled: true } } },
+      timeoutMs: 45_000,
+      waitForConfigRestartSettle,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    await patching;
+
+    expect(call).toHaveBeenCalledTimes(4);
+    expect(waitForConfigRestartSettle).toHaveBeenCalledTimes(1);
   });
 
   it("does not wait for a no-op config patch", async () => {

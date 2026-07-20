@@ -646,7 +646,6 @@ describe("loadPluginMetadataSnapshot process memo", () => {
   it.each([
     ["persisted-registry-missing", undefined],
     ["persisted-registry-stale-source", undefined],
-    ["persisted-registry-disabled", undefined],
     [undefined, { preferPersisted: false }],
   ])("memoizes derived snapshots for %s diagnostics within the process", (code, options) => {
     const stateDir = tempStateDir();

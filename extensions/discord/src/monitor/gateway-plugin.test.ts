@@ -139,8 +139,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
   });
 
-  it("resolves gateway metadata timeout from config, env, then default", () => {
-    expect(resolveDiscordGatewayInfoTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
+  it("resolves gateway metadata timeout from env, then default", () => {
     expect(
       resolveDiscordGatewayInfoTimeoutMs({
         env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "25000" },
@@ -247,22 +246,6 @@ describe("createDiscordGatewayPlugin", () => {
         GatewayIntents.DirectMessageReactions,
       reconnect: { maxAttempts: 50 },
     });
-  });
-
-  it("keeps OpenClaw metadata timeout out of gateway options", () => {
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { gatewayInfoTimeoutMs: 5_000 },
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-    });
-
-    expect(
-      (plugin as unknown as { options?: { gatewayInfoTimeoutMs?: number } }).options
-        ?.gatewayInfoTimeoutMs,
-    ).toBeUndefined();
   });
 
   it("emits transport activity for current gateway socket messages", () => {

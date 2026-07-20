@@ -27,18 +27,18 @@ const publicSdkContractNarrowingTiers = [
     codeSuffix: "-unused-subpath",
     count: 5,
     replacement: "none needed — no known consumers; the subpath is removed without successor",
-    releaseNote: /no known consumers.*removal without a successor/u,
+    releaseNote: /removed without a successor.*no consumers/u,
   },
   {
     name: "bundled-only public export",
     codeSuffix: "-public-demotion",
-    count: 157,
+    count: 152,
     replacement:
       "subpath becomes internal (private-local-only); no external successor — no known external consumers",
-    releaseNote: /public export.*module stays available for bundled plugins.*private-local-only/u,
+    releaseNote:
+      /public export.*removed.*module remains available to bundled plugins.*private-local-only/u,
   },
 ] as const;
-
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -81,29 +81,51 @@ describe("plugin compatibility registry", () => {
   });
 
   it.each(publicSdkContractNarrowingTiers)(
-    "keeps the $name tier on its registry-backed window",
+    "records the removed $name tier",
     ({ codeSuffix, count, replacement, releaseNote }) => {
-      const records = listPluginCompatRecords().filter((record) =>
-        record.code.endsWith(codeSuffix),
+      const records = listPluginCompatRecords().filter(
+        (record) => record.code.endsWith(codeSuffix) && record.status === "removed",
       );
 
       expect(records).toHaveLength(count);
       for (const record of records) {
         expect(record).toMatchObject({
-          status: "deprecated",
+          status: "removed",
           owner: "sdk",
           introduced: "2026-07-15",
           deprecated: "2026-07-15",
           warningStarts: "2026-07-15",
           removeAfter: "2026-07-30",
-          replacement,
-          docsPath: "/plugins/sdk-migration",
         });
+        expect(record.replacement).toBe(replacement);
+        expect(record.docsPath).toBe("/plugins/sdk-migration");
         expect(record.surfaces).toEqual([expect.stringMatching(/^openclaw\/plugin-sdk\//u)]);
         expect(record.releaseNote).toMatch(releaseNote);
       }
     },
   );
+
+  it("keeps shipped public contracts pending until their runtime blockers clear", () => {
+    const records = listPluginCompatRecords().filter(
+      (record) =>
+        record.status === "removal-pending" &&
+        record.removeAfter !== undefined &&
+        record.removeAfter <= "2026-07-30",
+    );
+
+    expect(records.map((record) => record.code)).toEqual([
+      "plugin-sdk-agent-media-payload-public-demotion",
+      "plugin-sdk-media-understanding-public-demotion",
+      "plugin-sdk-memory-host-core-public-demotion",
+      "plugin-sdk-plugin-config-runtime-public-demotion",
+      "plugin-sdk-tool-plugin-public-demotion",
+      "agent-harness-sdk-alias",
+    ]);
+    for (const record of records) {
+      expect(record.replacement).toMatch(/retain the public/u);
+      expect(record.releaseNote).toBeUndefined();
+    }
+  });
 
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
     expect(deprecatedTargetParserOffenders).toEqual([]);

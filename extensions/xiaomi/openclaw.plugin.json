@@ -118,10 +118,6 @@
     "speechProviders": ["xiaomi"],
     "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
-  "providerAuthEnvVars": {
-    "xiaomi": ["XIAOMI_API_KEY"],
-    "xiaomi-token-plan": ["XIAOMI_TOKEN_PLAN_API_KEY"]
-  },
   "providerAuthChoices": [
     {
       "provider": "xiaomi",

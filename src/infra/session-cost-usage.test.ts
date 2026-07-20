@@ -171,6 +171,88 @@ describe("session cost usage", () => {
     });
   });
 
+  it("prices and aggregates usage with each row's agent-local registry", async () => {
+    const root = await makeSessionCostRoot("agent-scoped-pricing");
+    const provider = "demo-agent-scope";
+    const model = "demo-model";
+    const now = new Date().toISOString();
+    const writeAgentUsage = async (agentId: string, inputPrice: number, inputs: number[]) => {
+      const agentRoot = path.join(root, "agents", agentId);
+      const agentDir = path.join(agentRoot, "agent");
+      const sessionsDir = path.join(agentRoot, "sessions");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            [provider]: {
+              models: [
+                {
+                  id: model,
+                  cost: { input: inputPrice, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(sessionsDir, `${agentId}-session.jsonl`),
+        [
+          JSON.stringify({ type: "session", version: 1, id: `${agentId}-session` }),
+          ...inputs.map((input) =>
+            JSON.stringify({
+              type: "message",
+              timestamp: now,
+              message: {
+                role: "assistant",
+                provider,
+                model,
+                usage: { input, output: 0, totalTokens: input },
+              },
+            }),
+          ),
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+    };
+
+    await writeAgentUsage("main", 9, [250_000]);
+    await writeAgentUsage("alpha", 1, [1_000_000, 500_000]);
+    await writeAgentUsage("beta", 2, [1_000_000]);
+    const config = {
+      models: {
+        providers: {
+          [provider]: {
+            models: [
+              {
+                id: model,
+                cost: { input: 7, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const alpha = await loadCostUsageSummary({ agentId: "alpha", config });
+      const beta = await loadCostUsageSummary({ agentId: "beta", config });
+      const unscoped = await loadCostUsageSummary({ config });
+
+      expect(alpha.totals.totalTokens).toBe(1_500_000);
+      expect(alpha.totals.totalCost).toBeCloseTo(1.5, 8);
+      expect(beta.totals.totalTokens).toBe(1_000_000);
+      expect(beta.totals.totalCost).toBeCloseTo(2, 8);
+      expect(alpha.totals.totalCost + beta.totals.totalCost).toBeCloseTo(3.5, 8);
+      expect(unscoped.totals.totalTokens).toBe(250_000);
+      expect(unscoped.totals.totalCost).toBeCloseTo(2.25, 8);
+    });
+  });
+
   it("does not fall back from empty SQLite transcripts to stale JSONL usage files", async () => {
     const root = await makeSessionCostRoot("sqlite-cost-empty");
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");

@@ -431,10 +431,8 @@ export async function runGatewayLoop(params: {
       return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
     }
     try {
-      const { getRuntimeConfig, resolveGatewayRestartDeferralTimeoutMs } =
-        await loadGatewayLifecycleRuntimeModule();
-      const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
-      return resolveGatewayRestartDeferralTimeoutMs(timeoutMs);
+      const { resolveGatewayRestartDeferralTimeoutMs } = await loadGatewayLifecycleRuntimeModule();
+      return resolveGatewayRestartDeferralTimeoutMs();
     } catch {
       return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
     }

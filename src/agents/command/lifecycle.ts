@@ -1,6 +1,10 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
+import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
 import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
@@ -9,6 +13,18 @@ import type { AgentAttemptLifecycleState } from "./attempt-callbacks.js";
 import type { AgentAttemptResult } from "./runtime-loaders.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function resolveTerminalLogLevel(
+  outcome: AgentRunTerminalOutcome,
+): "info" | "warn" | "error" | undefined {
+  if (!outcome.stopReason || outcome.stopReason === "end_turn") {
+    return undefined;
+  }
+  if (outcome.reason === "completed") {
+    return "info";
+  }
+  return outcome.status === "timeout" ? "warn" : "error";
+}
 
 export function resolveAgentRunLifecycleEndLogLevel(meta: {
   aborted?: unknown;
@@ -32,13 +48,7 @@ export function resolveAgentRunLifecycleEndLogLevel(meta: {
     timeoutPhase: meta.timeoutPhase,
     providerStarted: meta.providerStarted,
   });
-  if (!outcome.stopReason || outcome.stopReason === "end_turn") {
-    return undefined;
-  }
-  if (outcome.reason === "completed") {
-    return "info";
-  }
-  return outcome.status === "timeout" ? "warn" : "error";
+  return resolveTerminalLogLevel(outcome);
 }
 
 export function applyAgentRunAbortMetadata<T extends { meta: object }>(
@@ -76,7 +86,7 @@ export function createAgentCommandLifecycle(params: {
     (runResult.meta.error ? "Agent run failed" : undefined);
 
   return {
-    emitFinishing(runResult: AgentAttemptResult) {
+    emitFinishing(terminal: EmbeddedAgentRunEntryTerminal) {
       if (
         params.state.lifecycleEnded ||
         params.state.lifecycleFinishing ||
@@ -94,19 +104,19 @@ export function createAgentCommandLifecycle(params: {
           phase: "finishing",
           startedAt: params.startedAt,
           endedAt: Date.now(),
-          aborted: runResult.meta.aborted ?? false,
-          stopReason: runResult.meta.stopReason,
+          aborted: terminal.metadata.aborted ?? false,
+          stopReason: terminal.outcome.stopReason,
           ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
         },
       });
     },
-    emitEnd(runResult: AgentAttemptResult) {
+    emitEnd(terminal: EmbeddedAgentRunEntryTerminal) {
       if (params.state.lifecycleEnded) {
         return;
       }
       params.state.lifecycleEnded = true;
-      const stopReason = runResult.meta.stopReason;
-      const logLevel = resolveAgentRunLifecycleEndLogLevel(runResult.meta);
+      const stopReason = terminal.outcome.stopReason;
+      const logLevel = resolveTerminalLogLevel(terminal.outcome);
       if (logLevel) {
         log[logLevel](`[agent] run ${params.runId} ended with stopReason=${stopReason}`);
       }
@@ -118,14 +128,18 @@ export function createAgentCommandLifecycle(params: {
           phase: "end",
           startedAt: params.startedAt,
           endedAt: Date.now(),
-          aborted: runResult.meta.aborted ?? false,
+          aborted: terminal.metadata.aborted ?? false,
           stopReason,
           ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
         },
       });
     },
     resolveResultError,
-    emitResultError(runResult: AgentAttemptResult, fallbackExhausted: boolean) {
+    emitResultError(
+      runResult: AgentAttemptResult,
+      fallbackExhausted: boolean,
+      terminal: EmbeddedAgentRunEntryTerminal,
+    ) {
       if (params.state.lifecycleEnded) {
         return;
       }
@@ -142,17 +156,7 @@ export function createAgentCommandLifecycle(params: {
           startedAt: params.startedAt,
           endedAt: Date.now(),
           error,
-          ...(runResult.meta.stopReason ? { stopReason: runResult.meta.stopReason } : {}),
-          ...(runResult.meta.livenessState ? { livenessState: runResult.meta.livenessState } : {}),
-          ...(runResult.meta.timeoutPhase ? { timeoutPhase: runResult.meta.timeoutPhase } : {}),
-          ...(typeof runResult.meta.providerStarted === "boolean"
-            ? { providerStarted: runResult.meta.providerStarted }
-            : {}),
-          ...(typeof runResult.meta.aborted === "boolean"
-            ? { aborted: runResult.meta.aborted }
-            : {}),
-          ...(runResult.meta.replayInvalid === true ? { replayInvalid: true } : {}),
-          ...(runResult.meta.yielded === true ? { yielded: true } : {}),
+          ...terminal.metadata,
           ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         },
       });

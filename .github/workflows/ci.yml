@@ -104,6 +104,7 @@ jobs:
       strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
+      strict_native_i18n: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.strict_native_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
       checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
@@ -1275,14 +1276,25 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
-      - name: Check native app i18n inventory
-        run: pnpm native:i18n:check
+      - name: Verify native app i18n source
+        run: |
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["native:i18n:verify"] ? 0 : 1)'; then
+            pnpm native:i18n:verify
+          else
+            # Historical release targets predate the source/generated split.
+            pnpm native:i18n:check
+            pnpm android:i18n:check
+            pnpm apple:i18n:check
+          fi
 
-      - name: Check Android app i18n resources
-        run: pnpm android:i18n:check
-
-      - name: Check Apple app i18n catalogs
-        run: pnpm apple:i18n:check
+      - name: Check native app generated locale parity
+        if: ${{ needs.preflight.outputs.strict_native_i18n == 'true' }}
+        run: |
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["native:i18n:verify"] ? 0 : 1)'; then
+            pnpm native:i18n:check
+          else
+            echo "Historical target was validated by the legacy native checks."
+          fi
 
   checks-ui:
     permissions:
@@ -1329,7 +1341,9 @@ jobs:
             # Do not retry whole files: several rely on one-shot mocked browser globals.
             pnpm --dir ui test --testTimeout=30000 --isolate
           else
-            pnpm --dir ui test
+            # Three workers deliberately exercise stable non-default file packing so
+            # isolate:false mock-registry leaks fail close to the introducing change.
+            pnpm --dir ui test --maxWorkers 3
           fi
 
   control-ui-i18n:

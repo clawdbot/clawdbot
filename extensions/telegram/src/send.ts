@@ -451,11 +451,7 @@ function setCachedTelegramClientOptions(
 function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
 ): ResolvedTelegramClientOptions {
-  const timeoutSeconds =
-    typeof account.config.timeoutSeconds === "number" &&
-    Number.isFinite(account.config.timeoutSeconds)
-      ? Math.max(1, Math.floor(account.config.timeoutSeconds))
-      : undefined;
+  const timeoutSeconds = undefined;
 
   const cacheEnabled = shouldUseTelegramClientOptionsCache();
   const cacheKey = cacheEnabled
@@ -726,7 +722,6 @@ function createTelegramRequestWithDiag(params: {
 }): TelegramRequestWithDiag {
   const request = createChannelApiRetryRunner({
     retry: params.retry,
-    configRetry: params.account.config.retry,
     verbose: params.verbose,
     ...(params.retryAfterMaxDelayMs !== undefined
       ? { retryAfterMaxDelayMs: params.retryAfterMaxDelayMs }

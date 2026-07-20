@@ -65,6 +65,7 @@ import {
   readNonNegativeIntegerParam,
   readStringParam,
 } from "./common.js";
+import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
@@ -708,6 +709,7 @@ export function createSessionStatusTool(opts?: {
         });
         if (resolvedSession.ok && resolvedSession.resolvedViaSessionId) {
           const visibleSession = await resolveVisibleSessionReference({
+            action: "status",
             resolvedSession,
             requesterSessionKey: effectiveRequesterKey,
             restrictToSpawned: opts?.sandboxed === true,
@@ -823,267 +825,277 @@ export function createSessionStatusTool(opts?: {
       if (!access.allowed) {
         throw new Error(access.error);
       }
+      let scopedResolved = resolved;
 
-      const configured = resolveDefaultModelForAgent({ cfg, agentId });
-      const selectedAgentDir = resolveAgentDir(cfg, agentId);
-      const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const modelRaw = readStringParam(params, "model");
-      let changedModel = false;
-      if (typeof modelRaw === "string") {
-        const selection = await resolveModelOverride({
-          cfg,
-          raw: modelRaw,
-          sessionEntry: resolved.entry,
-          agentId,
-          agentDir: selectedAgentDir,
-          workspaceDir: selectedWorkspaceDir,
-        });
-        const modelSelection =
-          selection.kind === "reset"
-            ? {
-                provider: configured.provider,
-                model: configured.model,
-                isDefault: true,
-              }
-            : {
-                provider: selection.provider,
-                model: selection.model,
-                isDefault: selection.isDefault,
-              };
-        const nextEntry: SessionEntry = { ...resolved.entry };
-        const applied = applyModelOverrideToSessionEntry({
-          entry: nextEntry,
-          selection: modelSelection,
-          markLiveSwitchPending: true,
-        });
-        if (applied.updated) {
-          const patchResult = await patchSessionEntryWithKey(
-            {
-              agentId,
-              sessionKey: resolved.key,
-              storePath,
-            },
-            (entry, context) => {
-              const persistedEntryPatch: SessionEntry = { ...entry };
-              applyModelOverrideToSessionEntry({
-                entry: persistedEntryPatch,
-                selection: modelSelection,
-                markLiveSwitchPending: true,
-              });
-              if (
-                !persistedEntryPatch.sessionId.trim() &&
-                !context.existingEntry?.sessionId?.trim()
-              ) {
-                persistedEntryPatch.sessionId = randomUUID();
-              }
-              return persistedEntryPatch;
-            },
-            {
-              fallbackEntry: resolved.persisted ? undefined : resolved.entry,
-              replaceEntry: true,
-            },
-          );
-          if (!patchResult) {
-            throw new Error(`Unknown sessionKey: ${resolved.key}`);
-          }
-          const persistedEntry = patchResult.entry;
-          resolved = {
-            entry: persistedEntry,
-            key: patchResult.sessionKey,
-            persisted: true,
-          };
-          triggerSessionPatchHook({
-            cfg,
-            sessionEntry: persistedEntry,
-            sessionKey: patchResult.sessionKey,
-            patch: {
-              key: patchResult.sessionKey,
-              model: selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
-            },
-          });
-          changedModel = true;
-        }
-      }
-
-      const activeModelId = opts?.activeModelId?.trim();
-      const activeModelProvider = opts?.activeModelProvider?.trim();
-      const isImplicitCurrentRequest = requestedKeyParam === undefined;
-      const liveSessionKeys = [
-        opts?.runSessionKey,
-        storeScopedRequesterKey,
-        effectiveRequesterKey,
-        visibilityRequesterKey,
-      ];
-      const activeModelIdentity = resolveActiveStatusModelIdentity({
-        activeModelId,
-        activeModelProvider,
-        isImplicitCurrentRequest,
-        isSemanticCurrentRequest,
-        liveSessionKeys,
-        modelRaw,
-        resolvedKey: resolved.key,
-      });
-      const runtimeModelIdentity = activeModelIdentity
-        ? activeModelIdentity
-        : resolveSessionModelIdentityRef(
-            cfg,
-            resolved.entry,
-            agentId,
-            `${configured.provider}/${configured.model}`,
-          );
-      const hasExplicitModelOverride = Boolean(
-        !activeModelIdentity &&
-        (resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim()),
-      );
-      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-      const runtimeModelForCard = runtimeModelIdentity.model.trim();
-      const defaultProviderForCard = hasExplicitModelOverride
-        ? configured.provider
-        : (runtimeProviderForCard ?? "");
-      const defaultModelForCard = hasExplicitModelOverride
-        ? configured.model
-        : runtimeModelForCard || configured.model;
-      const statusSessionEntry = activeModelIdentity
-        ? withActiveStatusModelIdentity(resolved.entry, activeModelIdentity)
-        : !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
-          ? { ...resolved.entry, providerOverride: "" }
-          : resolved.entry;
-      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
-      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
-      const primaryModelLabel =
-        providerForCard && defaultModelForCard
-          ? `${providerForCard}/${defaultModelForCard}`
-          : defaultModelForCard;
-      const isGroup =
-        statusSessionEntry.chatType === "group" ||
-        statusSessionEntry.chatType === "channel" ||
-        resolved.key.includes(":group:") ||
-        resolved.key.includes(":channel:");
-      const taskLine = formatSessionTaskLine({
-        relatedSessionKey: resolved.key,
-        callerOwnerKey: visibilityRequesterKey,
-      });
-      // Tool status may read persisted/configured facts, but must not start provider discovery.
-      const thinkingCatalog = await loadPreparedModelCatalog({
-        config: cfg,
-        agentId,
-        agentDir: selectedAgentDir,
-        readOnly: true,
-        ...(statusSessionEntry.spawnedWorkspaceDir
-          ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
-          : {}),
-      });
-      const { buildStatusText } = await loadCommandsStatusRuntime();
-      const statusText = await buildStatusText({
+      return await runWithScopedSessionAccess({
         cfg,
-        sessionEntry: statusSessionEntry,
-        sessionKey: resolved.key,
-        parentSessionKey: statusSessionEntry.parentSessionKey,
-        sessionScope: cfg.session?.scope,
-        storePath,
-        statusChannel:
-          statusSessionEntry.channel ??
-          statusSessionEntry.lastChannel ??
-          statusSessionEntry.origin?.provider ??
-          "unknown",
-        workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
-        provider: providerForCard,
-        model: defaultModelForCard,
-        thinkingCatalog,
-        resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
-        resolvedFastMode: statusSessionEntry.fastMode,
-        resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
-        resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
-        resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: () =>
-          resolveThinkingDefaultWithRuntimeCatalog({
+        expectedSessionId: access.expectedSessionId,
+        targetSessionKey: scopedResolved.key,
+        run: async () => {
+          const configured = resolveDefaultModelForAgent({ cfg, agentId });
+          const selectedAgentDir = resolveAgentDir(cfg, agentId);
+          const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const modelRaw = readStringParam(params, "model");
+          let changedModel = false;
+          if (typeof modelRaw === "string") {
+            const selection = await resolveModelOverride({
+              cfg,
+              raw: modelRaw,
+              sessionEntry: scopedResolved.entry,
+              agentId,
+              agentDir: selectedAgentDir,
+              workspaceDir: selectedWorkspaceDir,
+            });
+            const modelSelection =
+              selection.kind === "reset"
+                ? {
+                    provider: configured.provider,
+                    model: configured.model,
+                    isDefault: true,
+                  }
+                : {
+                    provider: selection.provider,
+                    model: selection.model,
+                    isDefault: selection.isDefault,
+                  };
+            const nextEntry: SessionEntry = { ...scopedResolved.entry };
+            const applied = applyModelOverrideToSessionEntry({
+              entry: nextEntry,
+              selection: modelSelection,
+              markLiveSwitchPending: true,
+            });
+            if (applied.updated) {
+              const patchResult = await patchSessionEntryWithKey(
+                {
+                  agentId,
+                  sessionKey: scopedResolved.key,
+                  storePath,
+                },
+                (entry, context) => {
+                  const persistedEntryPatch: SessionEntry = { ...entry };
+                  applyModelOverrideToSessionEntry({
+                    entry: persistedEntryPatch,
+                    selection: modelSelection,
+                    markLiveSwitchPending: true,
+                  });
+                  if (
+                    !persistedEntryPatch.sessionId.trim() &&
+                    !context.existingEntry?.sessionId?.trim()
+                  ) {
+                    persistedEntryPatch.sessionId = randomUUID();
+                  }
+                  return persistedEntryPatch;
+                },
+                {
+                  fallbackEntry: scopedResolved.persisted ? undefined : scopedResolved.entry,
+                  replaceEntry: true,
+                },
+              );
+              if (!patchResult) {
+                throw new Error(`Unknown sessionKey: ${scopedResolved.key}`);
+              }
+              const persistedEntry = patchResult.entry;
+              scopedResolved = {
+                entry: persistedEntry,
+                key: patchResult.sessionKey,
+                persisted: true,
+              };
+              triggerSessionPatchHook({
+                cfg,
+                sessionEntry: persistedEntry,
+                sessionKey: patchResult.sessionKey,
+                patch: {
+                  key: patchResult.sessionKey,
+                  model:
+                    selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
+                },
+              });
+              changedModel = true;
+            }
+          }
+
+          const activeModelId = opts?.activeModelId?.trim();
+          const activeModelProvider = opts?.activeModelProvider?.trim();
+          const isImplicitCurrentRequest = requestedKeyParam === undefined;
+          const liveSessionKeys = [
+            opts?.runSessionKey,
+            storeScopedRequesterKey,
+            effectiveRequesterKey,
+            visibilityRequesterKey,
+          ];
+          const activeModelIdentity = resolveActiveStatusModelIdentity({
+            activeModelId,
+            activeModelProvider,
+            isImplicitCurrentRequest,
+            isSemanticCurrentRequest,
+            liveSessionKeys,
+            modelRaw,
+            resolvedKey: scopedResolved.key,
+          });
+          const runtimeModelIdentity = activeModelIdentity
+            ? activeModelIdentity
+            : resolveSessionModelIdentityRef(
+                cfg,
+                scopedResolved.entry,
+                agentId,
+                `${configured.provider}/${configured.model}`,
+              );
+          const hasExplicitModelOverride = Boolean(
+            !activeModelIdentity &&
+            (scopedResolved.entry.providerOverride?.trim() ||
+              scopedResolved.entry.modelOverride?.trim()),
+          );
+          const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
+          const runtimeModelForCard = runtimeModelIdentity.model.trim();
+          const defaultProviderForCard = hasExplicitModelOverride
+            ? configured.provider
+            : (runtimeProviderForCard ?? "");
+          const defaultModelForCard = hasExplicitModelOverride
+            ? configured.model
+            : runtimeModelForCard || configured.model;
+          const statusSessionEntry = activeModelIdentity
+            ? withActiveStatusModelIdentity(scopedResolved.entry, activeModelIdentity)
+            : !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
+              ? { ...scopedResolved.entry, providerOverride: "" }
+              : scopedResolved.entry;
+          const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
+          const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
+          const primaryModelLabel =
+            providerForCard && defaultModelForCard
+              ? `${providerForCard}/${defaultModelForCard}`
+              : defaultModelForCard;
+          const isGroup =
+            statusSessionEntry.chatType === "group" ||
+            statusSessionEntry.chatType === "channel" ||
+            scopedResolved.key.includes(":group:") ||
+            scopedResolved.key.includes(":channel:");
+          const taskLine = formatSessionTaskLine({
+            relatedSessionKey: scopedResolved.key,
+            callerOwnerKey: visibilityRequesterKey,
+          });
+          // Tool status may read persisted/configured facts, but must not start provider discovery.
+          const thinkingCatalog = await loadPreparedModelCatalog({
+            config: cfg,
+            agentId,
+            agentDir: selectedAgentDir,
+            readOnly: true,
+            ...(statusSessionEntry.spawnedWorkspaceDir
+              ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
+              : {}),
+          });
+          const { buildStatusText } = await loadCommandsStatusRuntime();
+          const statusText = await buildStatusText({
             cfg,
+            sessionEntry: statusSessionEntry,
+            sessionKey: scopedResolved.key,
+            parentSessionKey: statusSessionEntry.parentSessionKey,
+            sessionScope: cfg.session?.scope,
+            storePath,
+            statusChannel:
+              statusSessionEntry.channel ??
+              statusSessionEntry.lastChannel ??
+              statusSessionEntry.origin?.provider ??
+              "unknown",
+            workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
             provider: providerForCard,
             model: defaultModelForCard,
-            loadRuntimeCatalog: () =>
-              loadPreparedModelCatalog({
-                config: cfg,
-                agentId,
-                agentDir: selectedAgentDir,
-                readOnly: true,
+            thinkingCatalog,
+            resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
+            resolvedFastMode: statusSessionEntry.fastMode,
+            resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
+            resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
+            resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
+            resolveDefaultThinkingLevel: () =>
+              resolveThinkingDefaultWithRuntimeCatalog({
+                cfg,
+                provider: providerForCard,
+                model: defaultModelForCard,
+                loadRuntimeCatalog: () =>
+                  loadPreparedModelCatalog({
+                    config: cfg,
+                    agentId,
+                    agentDir: selectedAgentDir,
+                    readOnly: true,
+                  }),
               }),
-          }),
-        isGroup,
-        defaultGroupActivation: () => "mention",
-        taskLineOverride: taskLine,
-        skipDefaultTaskLookup: true,
-        primaryModelLabelOverride: primaryModelLabel,
-        ...(providerForCard ? {} : { modelAuthOverride: undefined }),
-        includeTranscriptUsage: true,
-      });
-      const fullStatusText =
-        taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
-      const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
-      const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
-      const liveSessionKeySet = new Set(
-        liveSessionKeys
-          .map((value) => value?.trim())
-          .filter((value): value is string => Boolean(value)),
-      );
-      const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
-      const isLiveRouteSession = activeRouteRunSessionKey
-        ? resolved.key.trim() === activeRouteRunSessionKey
-        : liveSessionKeySet.has(resolved.key.trim());
-      const routeDetails = buildSessionStatusRouteDetails({
-        entry: statusSessionEntry,
-        sessionKey: resolved.key,
-        activeDeliveryContext: opts?.activeDeliveryContext,
-        isLiveRunSession: isLiveRouteSession,
-      });
-      const routeContextText = formatSessionStatusRouteContext(routeDetails);
-      const stateVersion = getSessionStateVersion(resolved.key, agentId);
-      const rawStateChanges =
-        changesSince !== undefined
-          ? listSessionStateEventsSince(resolved.key, agentId, changesSince, 200)
-          : undefined;
-      const stateChanges = rawStateChanges
-        ? compactSessionStateChanges(rawStateChanges)
-        : undefined;
-      const extraBlocks = [
-        routeContextText,
-        rawStateChanges
-          ? formatSessionStateChanges({ stateVersion, stateChanges: rawStateChanges })
-          : undefined,
-      ].filter((block): block is string => Boolean(block));
-      const visibleStatusText =
-        extraBlocks.length > 0
-          ? `${fullStatusText}\n\n${extraBlocks.join("\n\n")}`
-          : fullStatusText;
-      const modelOverrideForResult =
-        modelRaw === undefined
-          ? undefined
-          : resultOverrideModel
-            ? resultOverrideProvider
-              ? `${resultOverrideProvider}/${resultOverrideModel}`
+            isGroup,
+            defaultGroupActivation: () => "mention",
+            taskLineOverride: taskLine,
+            skipDefaultTaskLookup: true,
+            primaryModelLabelOverride: primaryModelLabel,
+            ...(providerForCard ? {} : { modelAuthOverride: undefined }),
+            includeTranscriptUsage: true,
+          });
+          const fullStatusText =
+            taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+          const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
+          const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
+          const liveSessionKeySet = new Set(
+            liveSessionKeys
+              .map((value) => value?.trim())
+              .filter((value): value is string => Boolean(value)),
+          );
+          const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
+          const isLiveRouteSession = activeRouteRunSessionKey
+            ? scopedResolved.key.trim() === activeRouteRunSessionKey
+            : liveSessionKeySet.has(scopedResolved.key.trim());
+          const routeDetails = buildSessionStatusRouteDetails({
+            entry: statusSessionEntry,
+            sessionKey: scopedResolved.key,
+            activeDeliveryContext: opts?.activeDeliveryContext,
+            isLiveRunSession: isLiveRouteSession,
+          });
+          const routeContextText = formatSessionStatusRouteContext(routeDetails);
+          const stateVersion = getSessionStateVersion(scopedResolved.key, agentId);
+          const rawStateChanges =
+            changesSince !== undefined
+              ? listSessionStateEventsSince(scopedResolved.key, agentId, changesSince, 200)
+              : undefined;
+          const stateChanges = rawStateChanges
+            ? compactSessionStateChanges(rawStateChanges)
+            : undefined;
+          const extraBlocks = [
+            routeContextText,
+            rawStateChanges
+              ? formatSessionStateChanges({ stateVersion, stateChanges: rawStateChanges })
+              : undefined,
+          ].filter((block): block is string => Boolean(block));
+          const visibleStatusText =
+            extraBlocks.length > 0
+              ? `${fullStatusText}\n\n${extraBlocks.join("\n\n")}`
+              : fullStatusText;
+          const modelOverrideForResult =
+            modelRaw === undefined
+              ? undefined
               : resultOverrideModel
-            : null;
+                ? resultOverrideProvider
+                  ? `${resultOverrideProvider}/${resultOverrideModel}`
+                  : resultOverrideModel
+                : null;
 
-      return {
-        content: [{ type: "text", text: visibleStatusText }],
-        details: {
-          ok: true,
-          sessionKey: resolved.key,
-          changedModel,
-          stateVersion,
-          ...(stateChanges ? { stateChanges } : {}),
-          ...(modelRaw !== undefined
-            ? {
-                model: resultOverrideModel ?? defaultModelForCard,
-                ...((resultOverrideProvider ?? providerForCard)
-                  ? { modelProvider: resultOverrideProvider ?? providerForCard }
-                  : {}),
-                modelOverride: modelOverrideForResult,
-              }
-            : {}),
-          statusText: visibleStatusText,
-          ...routeDetails,
+          return {
+            content: [{ type: "text", text: visibleStatusText }],
+            details: {
+              ok: true,
+              sessionKey: scopedResolved.key,
+              changedModel,
+              stateVersion,
+              ...(stateChanges ? { stateChanges } : {}),
+              ...(modelRaw !== undefined
+                ? {
+                    model: resultOverrideModel ?? defaultModelForCard,
+                    ...((resultOverrideProvider ?? providerForCard)
+                      ? { modelProvider: resultOverrideProvider ?? providerForCard }
+                      : {}),
+                    modelOverride: modelOverrideForResult,
+                  }
+                : {}),
+              statusText: visibleStatusText,
+              ...routeDetails,
+            },
+          };
         },
-      };
+      });
     },
   };
 }

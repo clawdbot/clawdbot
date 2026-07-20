@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { writeConfigFile } from "../config/config.js";
@@ -11,6 +11,8 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { resetLogger, setLoggerOverride } from "../logging.js";
+import { loggingState } from "../logging/state.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { CONTROL_UI_CLIENT, NODE_CLIENT } from "./server.auth.test-helpers.js";
 import {
@@ -174,6 +176,64 @@ async function connectBrowserWithoutScopes(params: {
 }
 
 describe("trusted-proxy browser device auto-approval", () => {
+  test("auto-approves operator.admin and warns once at startup", async () => {
+    await writeGatewayAuthConfig({
+      mode: "trusted-proxy",
+      deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+    });
+    const identityPath = deviceIdentityPath("trusted-proxy-admin");
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+    const warnings: string[] = [];
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn((message: string) => warnings.push(message)),
+      error: vi.fn(),
+    };
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const res = await connectBrowser({
+          port,
+          identityPath,
+          scopes: ["operator.admin"],
+        });
+        expect(res.ok).toBe(true);
+      });
+      await withGatewayServer(async () => {}, {
+        serverOptions: { auth: { mode: "token", token: "secret" } },
+      });
+    } finally {
+      loggingState.rawConsole = null;
+      resetLogger();
+    }
+
+    expect(
+      warnings.filter((message) =>
+        message.includes(
+          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+        ),
+      ),
+    ).toHaveLength(1);
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.approvedScopes).toEqual(["operator.admin"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    expect(paired?.approvedVia).toBe("trusted-proxy");
+
+    expect(
+      warnings.filter((message) =>
+        message.includes(
+          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin",
+        ),
+      ),
+    ).toHaveLength(1);
+  });
+
   test("auto-approves a new browser device with the default scopes", async () => {
     await writeGatewayAuthConfig({
       mode: "trusted-proxy",

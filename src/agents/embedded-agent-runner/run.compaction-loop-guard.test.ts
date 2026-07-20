@@ -429,15 +429,14 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
-  it("disarms after windowSize observations regardless of match, so later identical calls do not abort", async () => {
-    // Use windowSize: 2 so the guard disarms after 2 observations.
+  it("disarms after the built-in observation window, so later identical calls do not abort", async () => {
     const overflowError = makeOverflowError();
 
     // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
       makeAttemptResult({ promptError: overflowError }),
     );
-    // Attempt 2 (post-compaction): two distinct records → window full,
+    // Attempt 2 (post-compaction): three distinct records → window full,
     // guard disarms with no abort. We then append more identical records
     // afterwards in this test to confirm they are not observed by the guard.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
@@ -445,9 +444,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         .onToolOutcome;
       await executeWrappedToolOutcome("read", { path: "/a" }, "ra", onToolOutcome);
       await executeWrappedToolOutcome("write", { path: "/b" }, "rb", onToolOutcome);
+      await executeWrappedToolOutcome("read", { path: "/c" }, "rc", onToolOutcome);
       return makeAttemptResult({
         promptError: null,
-        toolMetas: [{ toolName: "read" }, { toolName: "write" }],
+        toolMetas: [{ toolName: "read" }, { toolName: "write" }, { toolName: "read" }],
       });
     });
 
@@ -459,76 +459,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
-      ...baseParams,
-      config: {
-        tools: {
-          loopDetection: {
-            postCompactionGuard: { windowSize: 2 },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.meta.error).toBeUndefined();
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses the active agent post-compaction guard window over the global default", async () => {
-    const overflowError = makeOverflowError();
-
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({ promptError: overflowError }),
-    );
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
-        .onToolOutcome;
-      for (let i = 0; i < 3; i += 1) {
-        await executeWrappedToolOutcome(
-          "gateway",
-          { action: "lookup", path: "x" },
-          "identical-result",
-          onToolOutcome,
-        );
-      }
-      return makeAttemptResult({
-        promptError: null,
-        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
-      });
-    });
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...baseParams,
-      agentId: "agent-a",
-      config: {
-        tools: {
-          loopDetection: {
-            postCompactionGuard: { windowSize: 2 },
-          },
-        },
-        agents: {
-          list: [
-            {
-              id: "agent-a",
-              tools: {
-                loopDetection: {
-                  postCompactionGuard: { windowSize: 4 },
-                },
-              },
-            },
-          ],
-        },
-      } as never,
-    });
+    const result = await runEmbeddedAgent(baseParams);
 
     expect(result.meta.error).toBeUndefined();
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
@@ -572,7 +503,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         tools: {
           loopDetection: {
             enabled: false,
-            postCompactionGuard: { windowSize: 2 },
           },
         },
       } as never,

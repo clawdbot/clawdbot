@@ -9,7 +9,7 @@ import { applyJobResult } from "./timer.js";
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
 const STARTED_AT = ENDED_AT - 1_000;
 
-function makeState(triggerMinIntervalMs?: number) {
+function makeState() {
   return createCronServiceState({
     storePath: "/tmp/cron-pacing-timer/jobs.json",
     cronEnabled: true,
@@ -18,9 +18,6 @@ function makeState(triggerMinIntervalMs?: number) {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    ...(triggerMinIntervalMs !== undefined
-      ? { cronConfig: { triggers: { enabled: true, minIntervalMs: triggerMinIntervalMs } } }
-      : {}),
   });
 }
 
@@ -94,34 +91,19 @@ describe("applyJobResult dynamic cadence", () => {
     expect(job.state.pacedNextRunAtMs).toBe(pendingSlot);
   });
 
-  it("applies the operator trigger floor after the job-local pacing clamp", () => {
+  it("applies the built-in trigger floor after the job-local pacing clamp", () => {
     const job = makePacedJob({ min: "1s", max: "2m" });
     job.trigger = { script: "return true" };
 
-    applyJobResult(makeState(60_000), job, {
+    applyJobResult(makeState(), job, {
       status: "ok",
       startedAt: STARTED_AT,
       endedAt: ENDED_AT,
       nextCheck: { delayMs: 1_000 },
     });
 
-    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 60_000);
-    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 60_000);
-  });
-
-  it("keeps the cron anti-spin floor when the configured trigger floor is smaller", () => {
-    const job = makePacedJob({ min: "1ms", max: "2m" });
-    job.trigger = { script: "return true" };
-
-    applyJobResult(makeState(1), job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs: 1 },
-    });
-
-    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 2_000);
-    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 2_000);
+    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30_000);
+    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 30_000);
   });
 
   it("discards proposals on error so normal backoff wins", () => {

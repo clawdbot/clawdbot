@@ -288,7 +288,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbeAuthWarning).toBe("warn");
   });
 
-  it("keeps the local status RPC fallback timeout aligned with configured handshake timeout", async () => {
+  it("uses built-in probe defaults for the local status RPC fallback", async () => {
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",
       gatewayMode: "local",
@@ -313,16 +313,16 @@ describe("resolveGatewayProbeSnapshot", () => {
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     await resolveGatewayProbeSnapshot({
-      cfg: { gateway: { handshakeTimeoutMs: 30_000 } },
+      cfg: {},
       opts: {},
     });
 
     const probeCall = readProbeCall();
-    expect(probeCall.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(probeCall.timeoutMs).toBe(30_000);
+    expect(probeCall).not.toHaveProperty("preauthHandshakeTimeoutMs");
+    expect(probeCall.timeoutMs).toBe(2500);
     const gatewayCall = readGatewayCall();
-    expect(gatewayCall.config).toEqual({ gateway: { handshakeTimeoutMs: 30_000 } });
-    expect(gatewayCall.timeoutMs).toBe(30_000);
+    expect(gatewayCall.config).toEqual({});
+    expect(gatewayCall.timeoutMs).toBe(2000);
   });
 
   it("does not raise an explicit local status RPC fallback timeout", async () => {
@@ -350,12 +350,12 @@ describe("resolveGatewayProbeSnapshot", () => {
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     await resolveGatewayProbeSnapshot({
-      cfg: { gateway: { handshakeTimeoutMs: 30_000 } },
+      cfg: {},
       opts: { timeoutMs: 1000 },
     });
 
     const probeCall = readProbeCall();
-    expect(probeCall.preauthHandshakeTimeoutMs).toBe(30_000);
+    expect(probeCall).not.toHaveProperty("preauthHandshakeTimeoutMs");
     expect(probeCall.timeoutMs).toBe(1000);
     expect(readGatewayCall().timeoutMs).toBe(1000);
   });

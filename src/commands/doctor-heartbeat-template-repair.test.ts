@@ -288,4 +288,44 @@ Add short tasks below the comments only when you want the agent to check somethi
       "Doctor changes",
     );
   });
+
+  it("labels and repairs only the secondary agent with a stale template", async () => {
+    const main = await makeWorkspaceWithHeartbeat("# Main heartbeat task\n");
+    const secondary = await makeWorkspaceWithHeartbeat(`\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+`);
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: main.workspaceDir },
+          { id: "secondary", workspace: secondary.workspaceDir },
+        ],
+      },
+    };
+
+    const findings = await collectHeartbeatTemplateHealthFindings(cfg);
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining('Agent "secondary"'),
+        path: secondary.heartbeatPath,
+        target: "secondary",
+      }),
+    ]);
+
+    await maybeRepairHeartbeatTemplate({ cfg, shouldRepair: true });
+
+    await expect(fs.readFile(main.heartbeatPath, "utf-8")).resolves.toBe("# Main heartbeat task\n");
+    const cleanTemplate = await fs.readFile(
+      path.resolve("src", "agents", "templates", "HEARTBEAT.md"),
+      "utf-8",
+    );
+    await expect(fs.readFile(secondary.heartbeatPath, "utf-8")).resolves.toBe(cleanTemplate);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining('Agent "secondary"'),
+      "Doctor changes",
+    );
+  });
 });

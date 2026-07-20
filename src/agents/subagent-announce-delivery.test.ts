@@ -785,7 +785,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: params.mode ?? "followup",
-              debounceMs: 0,
             },
           },
         }) as never,
@@ -902,7 +901,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       "child done",
       {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
       },
@@ -913,7 +912,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       "child done",
       {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         deliveryTimeoutMs: 120_000,
       },
     );
@@ -944,7 +943,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
       expectRecordFields(retryOptions, {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         waitForTranscriptCommit: true,
       });
       expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
@@ -1028,7 +1027,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
       expectRecordFields(retryOptions, {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         waitForTranscriptCommit: true,
       });
       expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
@@ -1059,7 +1058,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       queueEmbeddedAgentMessageWithOutcome,
       getRuntimeConfig: () =>
         ({
-          messages: { queue: { mode: "steer", debounceMs: 0 } },
+          messages: { queue: { mode: "steer" } },
         }) as never,
     });
 
@@ -1099,7 +1098,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: "steer",
-              debounceMs: 0,
             },
           },
         }) as never,
@@ -1149,7 +1147,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: "steer",
-              debounceMs: 0,
             },
           },
         }) as never,
@@ -1203,7 +1200,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: "steer",
-              debounceMs: 0,
             },
           },
         }) as never,

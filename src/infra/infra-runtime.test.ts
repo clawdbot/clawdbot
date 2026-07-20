@@ -1,7 +1,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 // Tests infra runtime loading and platform-dependent helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import {
   beginGatewayRestartSignalAdmission,
   isGatewayWorkAdmissionClosed,
@@ -10,7 +10,6 @@ import {
 } from "../process/gateway-work-admission.js";
 type RestartModule = typeof import("./restart.js");
 
-let consumeGatewaySigusr1RestartIntent: RestartModule["consumeGatewaySigusr1RestartIntent"];
 let consumeGatewaySigusr1RestartAuthorization: RestartModule["consumeGatewaySigusr1RestartAuthorization"];
 let deferGatewayRestartUntilIdle: RestartModule["deferGatewayRestartUntilIdle"];
 let isGatewaySigusr1RestartExternallyAllowed: RestartModule["isGatewaySigusr1RestartExternallyAllowed"];
@@ -101,7 +100,6 @@ describe("infra runtime", () => {
         `./restart.js?infra-runtime=${freshRestartModuleId++}`,
       );
       ({
-        consumeGatewaySigusr1RestartIntent,
         consumeGatewaySigusr1RestartAuthorization,
         deferGatewayRestartUntilIdle,
         isGatewaySigusr1RestartExternallyAllowed,
@@ -1280,47 +1278,6 @@ describe("infra runtime", () => {
 
         await vi.advanceTimersByTimeAsync(300_000);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
-    it("keeps SIGUSR1 deferred when deferral timeout is explicitly disabled", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 0 } } });
-        setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-
-        await vi.advanceTimersByTimeAsync(300_000);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
-    it("emits SIGUSR1 after explicit deferral timeout even if still pending", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 1_000 } } });
-        setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
-          force: true,
-        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

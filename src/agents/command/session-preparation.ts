@@ -130,6 +130,7 @@ export async function prepareEmbeddedSessionState(params: {
       updatedAt: now,
       sessionStartedAt: entry.sessionStartedAt ?? now,
       lastInteractionAt: now,
+      agentStatus: undefined,
     };
     applyVerboseOverride(next, params.verboseOverride);
     sessionEntry = await persistSessionEntry({

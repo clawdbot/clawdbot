@@ -285,12 +285,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         log,
         telegramTransport,
         createTelegramTransport: createTelegramTransportForPolling,
-        stallThresholdMs: account.config.pollingStallThresholdMs,
         setStatus: opts.setStatus,
         isolatedIngress: {
           enabled: opts.isolatedIngress?.enabled ?? true,
           apiRoot: account.config.apiRoot,
-          timeoutSeconds: account.config.timeoutSeconds,
           proxy: account.config.proxy,
           network: account.config.network,
         },

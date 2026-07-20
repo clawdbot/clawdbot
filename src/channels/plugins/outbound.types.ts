@@ -146,11 +146,11 @@ export type ChannelOutboundTargetRef = {
   threadId?: string | number | null;
 };
 
-export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
+type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
-export type ChannelOutboundChunkContext = {
+type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 

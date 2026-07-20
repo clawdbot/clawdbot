@@ -7,7 +7,13 @@ import { renderSwarmWidget } from "./swarm.ts";
 
 const parentSessionKey = "agent:main:parent";
 
-function session(overrides: Partial<GatewaySessionRow>): GatewaySessionRow {
+type SwarmTestSession = GatewaySessionRow & {
+  swarmLog?: string;
+  swarmPhase?: string;
+  swarmPhaseRank?: number;
+};
+
+function session(overrides: Partial<SwarmTestSession>): SwarmTestSession {
   return {
     key: "agent:main:child",
     kind: "direct",
@@ -78,5 +84,76 @@ describe("swarm board widget", () => {
     expect(container.querySelector("[data-test-id=swarm-empty]")?.textContent?.trim()).toBe(
       "No active swarms.",
     );
+  });
+
+  it("buckets children by phase, labels the default bucket, and shows the latest log", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderSwarmWidget({
+        sessionKey: parentSessionKey,
+        sessions: [
+          session({ key: "unphased", label: "Older child", status: "running" }),
+          session({ key: "planning", label: "Planner", status: "done", swarmPhase: "Plan" }),
+          session({
+            key: "building",
+            label: "Builder",
+            subagentRunState: "active",
+            swarmPhase: "Build",
+            swarmLog: "Implementing the selected plan.",
+          }),
+        ],
+      }),
+      container,
+    );
+
+    expect(
+      [...container.querySelectorAll(".swarm-widget__phase")].map((phase) =>
+        phase.textContent?.trim(),
+      ),
+    ).toEqual(["Unphased", "Plan", "Build"]);
+    expect(
+      [...container.querySelectorAll(".swarm-widget__phase-row")].map(
+        (row) => row.querySelectorAll(".swarm-widget__dot").length,
+      ),
+    ).toEqual([1, 1, 1]);
+    expect(container.querySelector(".swarm-widget__narrator")?.textContent).toContain(
+      "Implementing the selected plan.",
+    );
+  });
+
+  it("orders phase buckets by observation rank, not canonical row order", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderSwarmWidget({
+        sessionKey: parentSessionKey,
+        sessions: [
+          // Canonical list order is reversed vs phase announcement order.
+          session({
+            key: "builder",
+            label: "Builder",
+            status: "running",
+            swarmPhase: "Build",
+            swarmPhaseRank: 1,
+          }),
+          session({ key: "late-unphased", label: "Late child", status: "running" }),
+          session({
+            key: "planner",
+            label: "Planner",
+            status: "done",
+            swarmPhase: "Plan",
+            swarmPhaseRank: 0,
+          }),
+        ],
+      }),
+      container,
+    );
+
+    expect(
+      [...container.querySelectorAll(".swarm-widget__phase")].map((phase) =>
+        phase.textContent?.trim(),
+      ),
+    ).toEqual(["Plan", "Build", "Unphased"]);
   });
 });

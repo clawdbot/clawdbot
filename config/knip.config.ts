@@ -12,6 +12,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/actions/setup-node-env/verify-importers.mjs!",
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -357,6 +358,12 @@ const config = {
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
+    // GatewayBoardProvider and boardExists are constructed/asserted by the
+    // focused Control UI provider tests, not by a separate production module.
+    "ui/src/lib/board/provider.ts": ["exports"],
+    // Greeting cache/fact contracts (hash, alert text, store shapes) are
+    // asserted by the focused greeting unit tests, not by another prod module.
+    "src/system-agent/greeting.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

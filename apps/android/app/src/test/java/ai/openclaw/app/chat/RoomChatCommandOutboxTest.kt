@@ -14,9 +14,9 @@ import org.robolectric.RuntimeEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 class RoomChatCommandOutboxTest {
-  private val database: ChatCacheDatabase =
+  private val database: ClientStateDatabase =
     Room
-      .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), ChatCacheDatabase::class.java)
+      .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), ClientStateDatabase::class.java)
       .build()
 
   private val store = RoomChatCommandOutbox(database = database)

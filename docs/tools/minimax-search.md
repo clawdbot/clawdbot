@@ -75,7 +75,7 @@ MiniMax Search uses these endpoints:
 If `plugins.entries.minimax.config.webSearch.region` is unset, OpenClaw resolves
 the region in this order:
 
-1. `tools.web.search.minimax.region` / plugin-owned `webSearch.region`
+1. Plugin-owned `webSearch.region`
 2. `MINIMAX_API_HOST`
 3. `models.providers.minimax.baseUrl`
 4. `models.providers.minimax-portal.baseUrl`

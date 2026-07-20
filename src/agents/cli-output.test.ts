@@ -1231,33 +1231,6 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
-  it("reports an output-limit error and ignores later chunks", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        reliability: { outputLimits: { maxTurnRawChars: 1024 } },
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push("x".repeat(1025));
-    parser.push(`${JSON.stringify({ type: "result", result: "late" })}\n`);
-    parser.finish();
-
-    expect(parser.getErrorText()).toBe(
-      "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
-    );
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
-    });
-  });
-
   it("streams thinking deltas, skips signature deltas, and dedupes the snapshot", () => {
     const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
     const parser = createCliJsonlStreamingParser({

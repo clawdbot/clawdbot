@@ -1,59 +1,32 @@
-/** Temporary board view contract. A stitch commit will point these at gateway-protocol. */
+import type { BoardOp, BoardSnapshot, BoardWidget } from "@openclaw/gateway-protocol";
 
-type BoardChatDock = "left" | "right" | "bottom" | "hidden";
-type BoardGrantState = "none" | "pending" | "granted" | "rejected";
 export type BoardGrantDecision = "granted" | "rejected";
+export type BoardWidgetAppViewState =
+  | { status: "ready"; viewId: string; expiresAtMs: number }
+  | { status: "stale"; error: string };
 
-export type BoardTab = {
-  tabId: string;
-  title: string;
-  position: number;
-  chatDock: BoardChatDock;
+/** Native Control UI card, derived from session state rather than the board store. */
+type BoardStoredWidget = BoardWidget & {
+  builtin?: never;
+  readOnly?: false | undefined;
 };
-
-export type BoardWidget = {
-  name: string;
-  tabId: string;
-  title?: string;
-  contentKind: "html" | "mcp-app" | "builtin";
-  /** Named native Control UI card; unlike framed widgets it never persists board mutations. */
-  builtin?: "swarm";
-  /** Virtual cards are derived from live session state and cannot be moved or removed. */
-  readOnly?: boolean;
-  sizeW: number;
-  sizeH: number;
-  position: number;
-  grantState: BoardGrantState;
-  revision: number;
+type BoardBuiltinWidget = Omit<BoardWidget, "contentKind"> & {
+  builtin: "swarm";
+  contentKind: "builtin";
+  readOnly: true;
 };
-
-export type BoardSnapshot = {
-  sessionKey: string;
-  revision: number;
-  tabs: BoardTab[];
-  widgets: BoardWidget[];
+export type BoardViewWidget = BoardStoredWidget | BoardBuiltinWidget;
+export type BoardViewSnapshot = Omit<BoardSnapshot, "widgets"> & {
+  widgets: BoardViewWidget[];
 };
-
-export type BoardOp =
-  | { kind: "tab_create"; tabId: string; title: string; chatDock?: BoardChatDock }
-  | {
-      kind: "tab_update";
-      tabId: string;
-      title?: string;
-      chatDock?: BoardChatDock;
-      position?: number;
-    }
-  | { kind: "tab_delete"; tabId: string }
-  | { kind: "tabs_reorder"; tabIds: string[] }
-  | { kind: "widget_move"; name: string; tabId?: string; position?: number; after?: string }
-  | { kind: "widget_resize"; name: string; sizeW: number; sizeH: number }
-  | { kind: "widget_remove"; name: string };
 
 export type BoardViewCallbacks = {
   applyOps: (ops: BoardOp[]) => Promise<void>;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   selectTab: (tabId: string) => void;
-  pinRequest?: never;
+  frameLoadFailed?: (name: string) => Promise<void>;
+  widgetAppView?: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
+  refreshWidgetAppView?: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
 
 export type BoardWidgetFrameUrl = (name: string, revision: number) => string;

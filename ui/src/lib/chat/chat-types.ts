@@ -170,12 +170,14 @@ export type ToolCard = {
     className?: string;
     style?: string;
     sandbox?: "strict" | "scripts";
+    boardWidgetName?: string;
     mcpApp?: {
       viewId: string;
       serverName?: string;
       toolName?: string;
       uiResourceUri?: string;
       toolCallId?: string;
+      originSessionKey?: string;
     };
   };
 };

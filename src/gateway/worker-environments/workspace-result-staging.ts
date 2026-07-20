@@ -456,6 +456,11 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   expectedBaseManifestRef: string;
   alreadyAccepted?: boolean;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  publishAcceptedManifest?: (accepted: {
+    manifestRef: string;
+    manifest: WorkerWorkspaceManifest;
+    conflictPaths: string[];
+  }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
   const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
@@ -509,6 +514,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
       base: staged.base,
       current: staged.current,
       journal: params.journal,
+      publishAcceptedManifest: params.publishAcceptedManifest,
     });
     return { ...applied, changed: changed.size > 0 };
   } finally {
@@ -522,6 +528,11 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
+  publishAcceptedManifest?: (accepted: {
+    manifestRef: string;
+    manifest: WorkerWorkspaceManifest;
+    conflictPaths: string[];
+  }) => Promise<void>;
 }): Promise<{
   applyPreparedStagedResult(): Promise<void>;
   getAppliedWorkspaceResult(): WorkerWorkspaceApplyResult | undefined;
@@ -552,6 +563,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
         stagedResultRef: candidateRef,
         expectedBaseManifestRef: params.request.baseManifestRef,
         journal: params.request.journal,
+        publishAcceptedManifest: params.publishAcceptedManifest,
       });
     },
     getAppliedWorkspaceResult: () => appliedWorkspaceResult,

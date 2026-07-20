@@ -214,7 +214,7 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
 
     const result = await consultRealtimeVoiceAgent({
-      cfg: {} as never,
+      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
       agentRuntime: runtime as never,
       logger: { warn: vi.fn() },
       sessionKey: "voice:15550001234",
@@ -245,8 +245,8 @@ describe("realtime voice agent consult runtime", () => {
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call.sessionId).toBe(voiceSession.sessionId);
     expect(call.sessionKey).toBe("voice:15550001234");
-    expect(call.sandboxSessionKey).toBe("agent:main:voice:15550001234");
-    expect(call.agentId).toBe("main");
+    expect(call.sandboxSessionKey).toBe("agent:operator:voice:15550001234");
+    expect(call.agentId).toBe("operator");
     expect(call.messageProvider).toBe("voice");
     expect(call.lane).toBe("voice");
     expect(call.toolsAllow).toStrictEqual(["read"]);
@@ -416,7 +416,7 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
 
     await consultRealtimeVoiceAgent({
-      cfg: {} as never,
+      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
       agentRuntime: runtime as never,
       logger: { warn: vi.fn() },
       agentId: "voice",

@@ -151,13 +151,10 @@ type FetchFn = typeof fetch;
 type MSTeamsAttachments = DownloadAttachmentsParams["attachments"];
 type LabeledCase = { label: string };
 type FetchCallExpectation = { expectFetchCalled?: boolean };
-type DownloadedMediaExpectation = { path?: string; placeholder?: string };
+type DownloadedMediaExpectation = { path?: string; kind?: "image" | "document" };
 
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_ALLOW_HOSTS = [TEST_HOST];
-const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
-const formatDocumentPlaceholder = (count: number) =>
-  count > 1 ? `${MEDIA_PLACEHOLDER_DOCUMENT} (${count} files)` : MEDIA_PLACEHOLDER_DOCUMENT;
 const IMAGE_ATTACHMENT = { contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: TEST_URL_IMAGE };
 const PNG_BUFFER = Buffer.from("png");
 const PNG_BASE64 = PNG_BUFFER.toString("base64");
@@ -281,8 +278,8 @@ const expectFirstMedia = (media: DownloadedMedia, expected: DownloadedMediaExpec
   if (expected.path !== undefined) {
     expect(first?.path).toBe(expected.path);
   }
-  if (expected.placeholder !== undefined) {
-    expect(first?.placeholder).toBe(expected.placeholder);
+  if (expected.kind !== undefined) {
+    expect(first?.kind).toBe(expected.kind);
   }
 };
 type AttachmentDownloadSuccessCase = LabeledCase & {
@@ -331,7 +328,7 @@ const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
     assert: (media) => {
       expectSingleMedia(media, {
         path: SAVED_PDF_PATH,
-        placeholder: formatDocumentPlaceholder(1),
+        kind: "document",
       });
     },
   }),
@@ -357,7 +354,7 @@ const ATTACHMENT_AUTH_RETRY_CASES: AttachmentAuthRetryCase[] = [
         authAllowHosts: [GRAPH_HOST],
       },
     },
-    expectedMediaLength: 0,
+    expectedMediaLength: 1,
     expectTokenFetch: false,
   }),
 ];
@@ -421,6 +418,15 @@ describe("msteams attachments", () => {
       expectMediaBufferSaved();
     });
 
+    it("preserves the advertised image kind when an inline URL has an opaque MIME", async () => {
+      const media = await downloadAttachmentsWithFetch(
+        createHtmlImageAttachments([createTestUrl("opaque")]),
+        createOkFetchMock("application/octet-stream", "opaque"),
+      );
+
+      expectSingleMedia(media, { path: SAVED_PNG_PATH, kind: "image" });
+    });
+
     it("stores every inline data:image base64 payload", async () => {
       const media = await downloadMSTeamsAttachments(
         buildDownloadParams([
@@ -435,6 +441,14 @@ describe("msteams attachments", () => {
       expect(saveMediaBufferMock).toHaveBeenCalledTimes(2);
     });
 
+    it("preserves HTML-referenced attachments as aligned type-only facts", async () => {
+      const media = await downloadMSTeamsAttachments(
+        buildDownloadParams([createHtmlAttachment('<attachment id="graph-file-1"></attachment>')]),
+      );
+
+      expect(media).toEqual([{ kind: "document", sourceId: "graph-file-1" }]);
+    });
+
     it("skips inline data:image payloads whose bytes sniff as non-image", async () => {
       detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_ZIP);
 
@@ -444,7 +458,8 @@ describe("msteams attachments", () => {
         ]),
       );
 
-      expectAttachmentMediaLength(media, 0);
+      expectAttachmentMediaLength(media, 1);
+      expect(media[0]).toEqual({ kind: "image" });
       expect(saveMediaBufferMock).not.toHaveBeenCalled();
     });
 
@@ -566,7 +581,8 @@ describe("msteams attachments", () => {
         { expectFetchCalled: false },
       );
 
-      expectAttachmentMediaLength(media, 0);
+      expectAttachmentMediaLength(media, 1);
+      expect(media[0]).toEqual({ kind: "image" });
     });
 
     it("blocks redirects to non-https URLs", async () => {
@@ -590,7 +606,8 @@ describe("msteams attachments", () => {
         },
       );
 
-      expectAttachmentMediaLength(media, 0);
+      expectAttachmentMediaLength(media, 1);
+      expect(media[0]).toEqual({ kind: "image" });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
@@ -711,7 +728,8 @@ describe("msteams attachments", () => {
           }),
         );
 
-        expectAttachmentMediaLength(media, 0);
+        expectAttachmentMediaLength(media, 1);
+        expect(media[0]).toEqual({ kind: "image" });
 
         // Migration inlines host + error into the message text — the structured
         // meta object was being dropped by the logger formatter pre-migration.

@@ -5,7 +5,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
-import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import {
   copyStaticExtensionAssets,
@@ -24,7 +23,6 @@ const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
-const PLUGIN_SDK_ROOT_ALIAS_OUTPUT = "dist/plugin-sdk/root-alias.cjs";
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
 const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // v2026.4.29 dispatch lazy chunks. Package updates used to replace the
@@ -146,13 +144,6 @@ const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
   },
 ];
-
-/**
- * Lists generated plugin SDK root-alias outputs.
- */
-function listPluginSdkRootAliasOutputs() {
-  return [PLUGIN_SDK_ROOT_ALIAS_OUTPUT];
-}
 
 /**
  * Lists generated official channel catalog outputs.
@@ -292,7 +283,6 @@ function listLegacyRootRuntimeCompatOutputs(params = {}) {
  */
 export function listCoreRuntimePostBuildOutputs(params = {}) {
   return [
-    ...listPluginSdkRootAliasOutputs(),
     ...listOfficialChannelCatalogOutputs(),
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
@@ -584,7 +574,6 @@ export function runRuntimePostBuild(params = {}) {
       `runtime-postbuild: ${phaseTimings.length} phases completed in ${totalMs}ms (slowest: ${slowest.label} ${slowest.durationMs}ms)`,
     );
   };
-  runPhase("plugin SDK root alias", () => copyPluginSdkRootAlias(params));
   runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));

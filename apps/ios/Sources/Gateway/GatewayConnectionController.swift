@@ -112,7 +112,7 @@ final class GatewayConnectionController {
     @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
     @ObservationIgnored private var pendingForgetCleanups: [
-        GatewayStableIdentifier.Key: (id: UUID, task: Task<Void, Never>)
+        GatewayStableIdentifier.Key: (id: UUID, task: Task<Bool, Never>)
     ] = [:]
     private var pendingConnectionStableID: String?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
@@ -529,16 +529,27 @@ final class GatewayConnectionController {
     }
 
     @discardableResult
-    func forgetGateway(stableID: String) -> Bool {
+    func forgetGateway(stableID: String) async -> Bool {
         guard let stableID = GatewayStableIdentifier.exact(stableID),
               let stableIDKey = GatewayStableIdentifier.key(stableID)
         else { return false }
-        if self.pendingForgetCleanups[stableIDKey] != nil {
-            return true
+        if let pending = self.pendingForgetCleanups[stableIDKey] {
+            return await pending.task.value
         }
-        guard GatewaySettingsStore.removeGatewayRegistryEntry(stableID: stableID) else {
-            return false
+        let cleanupID = UUID()
+        let cleanupTask = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await self.performForgetGateway(stableID: stableID)
         }
+        self.pendingForgetCleanups[stableIDKey] = (cleanupID, cleanupTask)
+        let result = await cleanupTask.value
+        if self.pendingForgetCleanups[stableIDKey]?.id == cleanupID {
+            self.pendingForgetCleanups[stableIDKey] = nil
+        }
+        return result
+    }
+
+    private func performForgetGateway(stableID: String) async -> Bool {
         if GatewayStableIdentifier.matches(self.pendingConnectionStableID, stableID) {
             let cancellationLease = self.cancelPendingConnectionAttempts()
             self.releaseAutoConnectSuppression(after: cancellationLease)
@@ -554,6 +565,21 @@ final class GatewayConnectionController {
             self.appModel?.disconnectForgottenGateway(
                 preservingPendingConnectAttempt: hasDifferentPendingTarget)
         }
+        if shouldDisconnect, let appModel = self.appModel {
+            await appModel.waitForGatewaySessionResetIfNeeded()
+        }
+        // Stage before touching pairing metadata. A crash is reconciled from
+        // the registry: still registered cancels, absent commits the erasure.
+        guard let appModel = self.appModel,
+              await appModel.stageChatOfflineDataRemoval(gatewayID: stableID)
+        else { return false }
+        guard GatewaySettingsStore.removeGatewayRegistryEntry(stableID: stableID) else {
+            appModel.cancelChatOfflineDataRemoval(gatewayID: stableID)
+            return false
+        }
+        // Registry removal is the cross-owner commit point. Clear controller
+        // artifacts before database cleanup, which may fail or be recovered on
+        // a later foreground after the registry row is already gone.
         let instanceID = GatewaySettingsStore.currentInstanceID()
         self.clearLegacyManualGatewayDefaults(matching: stableID)
         GatewaySettingsStore.clearLegacyGatewaySelectors(stableID: stableID)
@@ -568,25 +594,7 @@ final class GatewayConnectionController {
         }
 
         Self.clearDeviceAuthTokens(gatewayID: stableID)
-        let cleanupID = UUID()
-        let cleanupTask = Task { @MainActor [weak appModel] in
-            if let appModel {
-                if shouldDisconnect {
-                    await appModel.waitForGatewaySessionResetIfNeeded()
-                    // A handshake racing teardown can persist a token after the first cleanup.
-                    Self.clearDeviceAuthTokens(gatewayID: stableID)
-                }
-                await appModel.purgeChatTranscriptCache(gatewayID: stableID)
-            } else if let databaseURL = NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID) {
-                OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
-            }
-        }
-        self.pendingForgetCleanups[stableIDKey] = (cleanupID, cleanupTask)
-        Task { @MainActor [weak self] in
-            await cleanupTask.value
-            guard self?.pendingForgetCleanups[stableIDKey]?.id == cleanupID else { return }
-            self?.pendingForgetCleanups[stableIDKey] = nil
-        }
+        _ = appModel.commitChatOfflineDataRemoval(gatewayID: stableID)
         return true
     }
 
@@ -594,7 +602,7 @@ final class GatewayConnectionController {
         guard let stableIDKey = GatewayStableIdentifier.key(stableID),
               let pending = self.pendingForgetCleanups[stableIDKey]
         else { return }
-        await pending.task.value
+        _ = await pending.task.value
         if self.pendingForgetCleanups[stableIDKey]?.id == pending.id {
             self.pendingForgetCleanups[stableIDKey] = nil
         }

@@ -164,6 +164,110 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.assistantTexts).toEqual(["final answer"]);
+    const commentary = result.messagesSnapshot.find(
+      (message) =>
+        (message as { openclawStreamFallback?: { itemId?: unknown } }).openclawStreamFallback
+          ?.itemId === "msg-commentary",
+    );
+    expect(commentary).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Checking the app-server stream" }],
+      openclawStreamFallback: {
+        replacementText: "Checking the app-server stream",
+        source: "segment",
+        itemId: "msg-commentary",
+      },
+      __openclaw: { mirrorIdentity: `${TURN_ID}:commentary:msg-commentary` },
+    });
+    expect((commentary as { phase?: unknown } | undefined)?.phase).toBeUndefined();
+  });
+
+  it("omits durable commentary when the operator explicitly disables persistence", async () => {
+    const params = await createParams();
+    params.config = { ui: { prefs: { chatPersistCommentary: false } } };
+    const projector = await createProjector(params);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "Checking the workspace",
+        },
+        { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "Done" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Done"]);
+    expect(
+      result.messagesSnapshot.some(
+        (message) =>
+          (message as { openclawStreamFallback?: { itemId?: unknown } }).openclawStreamFallback
+            ?.itemId === "msg-commentary",
+      ),
+    ).toBe(false);
+  });
+
+  it("mirrors commentary and tool activity in event order when timestamps collide", async () => {
+    const projector = await createProjector();
+    vi.spyOn(Date, "now").mockReturnValue(100);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-before-tool", phase: "commentary", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Before the tool", "msg-before-tool"));
+
+    projector.recordDynamicToolCall({ callId: "call-search", tool: "memory_search" });
+    projector.recordDynamicToolResult({
+      callId: "call-search",
+      tool: "memory_search",
+      success: true,
+      contentItems: [{ type: "inputText", text: "found it" }],
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-after-tool", phase: "commentary", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("After the tool", "msg-after-tool"));
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-before-tool",
+          phase: "commentary",
+          text: "Before the tool",
+        },
+        {
+          type: "agentMessage",
+          id: "msg-after-tool",
+          phase: "commentary",
+          text: "After the tool",
+        },
+        { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "Done" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const identities = result.messagesSnapshot.flatMap((message) => {
+      const identity = (message as { __openclaw?: { mirrorIdentity?: unknown } })["__openclaw"]
+        ?.mirrorIdentity;
+      return typeof identity === "string" &&
+        (identity.includes(":commentary:") || identity.includes(":tool:"))
+        ? [identity]
+        : [];
+    });
+    expect(identities).toEqual([
+      `${TURN_ID}:commentary:msg-before-tool`,
+      `${TURN_ID}:tool:call-search:call`,
+      `${TURN_ID}:tool:call-search:result`,
+      `${TURN_ID}:commentary:msg-after-tool`,
+    ]);
   });
 
   it("does not double-deliver a commentary note echoed on the raw response lane", async () => {

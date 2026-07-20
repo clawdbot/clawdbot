@@ -531,7 +531,7 @@ export async function tryDispatchAcpReply(params: {
       ...options,
       dispatcher: params.dispatcher,
       delivery,
-      getStats: () => acpManager.getObservabilitySnapshot(params.cfg),
+      getStats: () => acpManager.getObservabilitySnapshot(),
       sessionKey,
       startedAt: acpDispatchStartedAt,
       recordProcessed: params.recordProcessed,

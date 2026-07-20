@@ -132,6 +132,7 @@ type RuntimeConfigTestHarness = {
     patch: ReturnType<
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
     >;
+    patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
     subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
   };
   notify: () => void;
@@ -142,13 +143,23 @@ function createRuntimeConfigHarness(
   runtimeConfigState: RuntimeConfigTestState,
 ): RuntimeConfigTestHarness {
   const listeners = new Set<(state: RuntimeConfigTestState) => void>();
+  const patch = vi.fn<
+    (options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>
+  >(async () => true);
   const runtimeConfig = {
     state: runtimeConfigState,
     refresh: refreshConfig,
     ensureLoaded: vi.fn(async () => undefined),
-    patch: vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>(
-      async () => true,
-    ),
+    patch,
+    patchFromSnapshot: vi.fn(async (build) => {
+      const config = runtimeConfigState.configSnapshot?.sourceConfig ?? {};
+      const built = build(config);
+      if ("error" in built) {
+        runtimeConfigState.lastError = built.error;
+        return false;
+      }
+      return patch(built.options);
+    }),
     subscribe(listener: (state: RuntimeConfigTestState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);

@@ -1,5 +1,5 @@
 /** Classifies cron run failures for retry policy decisions. */
-import type { CronRetryOn } from "../config/types.cron.js";
+export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";
 
 /** Cron retry classifier output consumed by scheduler retry policy. */
 type CronRetryHint = {

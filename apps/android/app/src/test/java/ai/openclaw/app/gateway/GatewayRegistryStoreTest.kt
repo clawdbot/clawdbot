@@ -2,8 +2,11 @@ package ai.openclaw.app.gateway
 
 import ai.openclaw.app.SecurePrefs
 import android.content.Context
+import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -29,9 +32,13 @@ class GatewayRegistryStoreTest {
     assertEquals(alpha.stableId, restored.activeStableId.value)
     assertEquals(42L, restored.activeEntry()?.lastConnectedAtMs)
 
-    restored.remove(alpha.stableId)
+    assertTrue(restored.remove(alpha.stableId))
     assertNull(restored.activeStableId.value)
     assertEquals(listOf(beta.stableId), restored.entries.value.map { it.stableId })
+
+    val afterRemoval = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+    assertNull(afterRemoval.activeStableId.value)
+    assertEquals(listOf(beta.stableId), afterRemoval.entries.value.map { it.stableId })
   }
 
   @Test
@@ -55,6 +62,57 @@ class GatewayRegistryStoreTest {
     val second = securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null)
 
     assertEquals(first, second)
+  }
+
+  @Test
+  fun failedRemovalCommitDoesNotPublishCandidateState() {
+    val (_, securePrefs) = freshPrefs()
+    val failingCommitPrefs =
+      object : SharedPreferences by securePrefs {
+        override fun edit(): SharedPreferences.Editor {
+          val editor = securePrefs.edit()
+          return object : SharedPreferences.Editor by editor {
+            override fun putString(
+              key: String?,
+              value: String?,
+            ): SharedPreferences.Editor {
+              editor.putString(key, value)
+              return this
+            }
+
+            override fun commit(): Boolean = false
+          }
+        }
+      }
+    val store = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), failingCommitPrefs))
+    val alpha = manualEntry("alpha", "alpha.example")
+    store.upsert(alpha)
+    store.setActive(alpha.stableId)
+
+    assertFalse(store.remove(alpha.stableId))
+    assertEquals(listOf(alpha.stableId), store.entries.value.map { it.stableId })
+    assertEquals(alpha.stableId, store.activeStableId.value)
+  }
+
+  @Test
+  fun postCommitObserverFailureDoesNotUndoDurableRemoval() {
+    val (prefs, securePrefs) = freshPrefs()
+    var failObserver = false
+    val store =
+      GatewayRegistryStore(prefs) {
+        if (failObserver) error("simulated observer failure")
+      }
+    val alpha = manualEntry("alpha", "alpha.example")
+    store.upsert(alpha)
+    store.setActive(alpha.stableId)
+    failObserver = true
+
+    assertTrue(store.remove(alpha.stableId))
+    assertTrue(store.entries.value.isEmpty())
+    assertNull(store.activeStableId.value)
+    val restored = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+    assertTrue(restored.entries.value.isEmpty())
+    assertNull(restored.activeStableId.value)
   }
 
   private fun freshPrefs(): Pair<SecurePrefs, android.content.SharedPreferences> {

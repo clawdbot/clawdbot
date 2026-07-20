@@ -241,7 +241,7 @@ async function executeFireAndForgetA2AFrom(requesterSessionKey: string) {
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
   loadConfigMock.mockReturnValue({
-    session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
+    session: { scope: "per-sender", mainKey: "main" },
     tools: {
       agentToAgent: { enabled: true },
       sessions: { visibility: "all" },

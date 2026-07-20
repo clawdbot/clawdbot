@@ -84,10 +84,6 @@
       "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
       "default": "./src/config-runtime.ts"
     },
-    "./config-types": {
-      "types": "./dist/src/plugin-sdk/config-types.d.ts",
-      "default": "./src/config-types.ts"
-    },
     "./plugin-config-runtime": {
       "types": "./dist/src/plugin-sdk/plugin-config-runtime.d.ts",
       "default": "./src/plugin-config-runtime.ts"
@@ -107,10 +103,6 @@
     "./channel-streaming": {
       "types": "./dist/src/plugin-sdk/channel-streaming.d.ts",
       "default": "./src/channel-streaming.ts"
-    },
-    "./channel-runtime": {
-      "types": "./dist/src/plugin-sdk/channel-runtime.d.ts",
-      "default": "./src/channel-runtime.ts"
     },
     "./cli-runtime": {
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
@@ -135,10 +127,6 @@
     "./provider-auth": {
       "types": "./dist/src/plugin-sdk/provider-auth.d.ts",
       "default": "./src/provider-auth.ts"
-    },
-    "./compat": {
-      "types": "./dist/src/plugin-sdk/compat.d.ts",
-      "default": "./src/compat.ts"
     },
     "./provider-auth-runtime": {
       "types": "./dist/src/plugin-sdk/provider-auth-runtime.d.ts",

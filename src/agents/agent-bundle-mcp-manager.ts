@@ -56,7 +56,7 @@ export function createSessionMcpRuntimeManager(
 
   const manager: SessionMcpRuntimeManager = {
     async getOrCreate(params) {
-      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
+      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs();
       await lifecycle.sweepIdleRuntimes();
       if (idleTtlMs > 0) {
         lifecycle.ensureIdleSweepTimer();
@@ -209,7 +209,7 @@ export function createSessionMcpRuntimeManager(
     async getOrCreateRequesterScoped(params) {
       // Scoped-only path for shared-thread harnesses: never open static transports
       // (those stay harness-native) so we do not double-connect.
-      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
+      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs();
       await lifecycle.sweepIdleRuntimes();
       if (idleTtlMs > 0) {
         lifecycle.ensureIdleSweepTimer();

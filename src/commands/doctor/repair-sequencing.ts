@@ -4,6 +4,7 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
+import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
@@ -187,6 +188,16 @@ export async function runDoctorRepairSequence(params: {
   }
   if (pluginDependencyCleanup.warnings.length > 0) {
     warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
+  }
+  const onboardingRecommendationsMigration = migrateLegacyOnboardingRecommendationsScope({
+    cfg: state.candidate,
+    env,
+  });
+  if (onboardingRecommendationsMigration.changes.length > 0) {
+    changeNotes.push(sanitizeLines(onboardingRecommendationsMigration.changes));
+  }
+  if (onboardingRecommendationsMigration.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(onboardingRecommendationsMigration.warnings));
   }
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,

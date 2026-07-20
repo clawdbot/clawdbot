@@ -320,6 +320,35 @@
   border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+/* Attributed sender initials carry their stable identity color inline. */
+.chat-avatar.chat-avatar--sender-initials {
+  color: white;
+  font-size: 12px;
+  letter-spacing: -0.02em;
+}
+
+img.chat-avatar.user {
+  object-fit: cover;
+}
+
+/* Sender avatars pair the route image with an initials fallback; the slot
+   swaps them when the canonical route has no avatar (404). */
+.chat-avatar-slot {
+  display: contents;
+}
+
+.chat-avatar-slot > .chat-avatar--sender-initials {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > img.chat-avatar {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > .chat-avatar--sender-initials {
+  display: grid;
+}
+
 .chat-avatar.assistant {
   background: var(--secondary);
   color: var(--muted);

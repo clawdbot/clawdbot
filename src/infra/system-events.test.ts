@@ -254,6 +254,29 @@ describe("system events (session routing)", () => {
     expect(second).toBe(false);
   });
 
+  it("keeps distinct durable deliveries with identical event content", () => {
+    const sessionKey = "agent:main:durable-duplicates";
+    const first = enqueueSystemEvent("Delegate returned", {
+      sessionKey,
+      trusted: true,
+      sessionDeliveryAckId: "delivery-1",
+      sessionDeliveryAckStateDir: "/tmp/state",
+    });
+    const second = enqueueSystemEvent("Delegate returned", {
+      sessionKey,
+      trusted: true,
+      sessionDeliveryAckId: "delivery-2",
+      sessionDeliveryAckStateDir: "/tmp/state",
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    expect(peekSystemEventEntries(sessionKey).map((entry) => entry.sessionDeliveryAckId)).toEqual([
+      "delivery-1",
+      "delivery-2",
+    ]);
+  });
+
   it("normalizes context keys when checking for context changes", () => {
     const key = "agent:main:test-context";
     expect(isSystemEventContextChanged(key, " build:123 ")).toBe(true);

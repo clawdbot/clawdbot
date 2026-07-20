@@ -569,6 +569,43 @@ function swiftUnionCaseName(value: boolean | number | string | null, fallback: s
   return safeName(String(value));
 }
 
+function emitDiscriminatedUnionCompatibility(name: string): string[] {
+  if (name !== "GatewayErrorDetails") {
+    return [];
+  }
+  // GatewayErrorDetails shipped as the missing-scope struct before it gained an expiry variant.
+  // Keep its initializer and property access source-compatible while the enum carries both cases.
+  return [
+    "    public init(code: String, missingscope: String, requiredscopes: [String]) {",
+    "        self = .missingScope(",
+    "            MissingScopeErrorDetails(",
+    "                code: code,",
+    "                missingscope: missingscope,",
+    "                requiredscopes: requiredscopes",
+    "            )",
+    "        )",
+    "    }",
+    "",
+    "    public var code: String {",
+    "        switch self {",
+    "        case .missingScope(let value): value.code",
+    "        case .mcpAppViewExpired(let value): value.code",
+    "        }",
+    "    }",
+    "",
+    "    public var missingscope: String {",
+    "        if case .missingScope(let value) = self { return value.missingscope }",
+    '        return ""',
+    "    }",
+    "",
+    "    public var requiredscopes: [String] {",
+    "        if case .missingScope(let value) = self { return value.requiredscopes }",
+    "        return []",
+    "    }",
+    "",
+  ];
+}
+
 function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | undefined {
   const branches = schema.oneOf ?? schema.anyOf;
   if (!branches || branches.length < 2) {
@@ -628,6 +665,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
       `public enum ${name}: Codable, Sendable {`,
       ...resolvedCases.map((entry) => `    case ${entry.caseName}(${entry.branchName})`),
       "",
+      ...emitDiscriminatedUnionCompatibility(name),
       "    private enum CodingKeys: String, CodingKey {",
       `        case discriminator = "${discriminator}"`,
       "    }",

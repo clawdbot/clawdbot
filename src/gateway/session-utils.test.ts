@@ -225,6 +225,25 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("projects only unexpired agent status", () => {
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      agentStatus: { note: "Need a key", attention: "key", expiresAt: 1_001 },
+    } satisfies SessionEntry;
+    const params = {
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry,
+    };
+    expect(buildGatewaySessionRow({ ...params, now: 1_000 }).agentStatus).toEqual(
+      entry.agentStatus,
+    );
+    expect(buildGatewaySessionRow({ ...params, now: 1_001 }).agentStatus).toBeUndefined();
+  });
+
   test("session lists apply a bounded default and expose truncation metadata", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
@@ -1125,6 +1144,33 @@ describe("gateway session utils", () => {
       entry,
     });
     expect(row.displayName).toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow keeps dashboard sender identity out of the session title", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "webchat",
+      origin: { label: "Peter", provider: "webchat", chatType: "direct" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:dashboard:chat-1": entry },
+      key: "agent:main:dashboard:chat-1",
+      entry,
+    });
+    expect(row.displayName).toBeUndefined();
+
+    const titledEntry = { ...entry, displayName: "Release Planning" } as SessionEntry;
+    const titledRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:dashboard:chat-1": titledEntry },
+      key: "agent:main:dashboard:chat-1",
+      entry: titledEntry,
+    });
+    expect(titledRow.displayName).toBe("Release Planning");
   });
 
   test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {

@@ -30,6 +30,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "googlechat",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "GOOGLE_CHAT_SERVICE_ACCOUNT",
+            "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"
+          ]
+        }
+      },
       "approvalFlags": ["native"],
       "label": "Google Chat",
       "selectionLabel": "Google Chat (Chat API)",

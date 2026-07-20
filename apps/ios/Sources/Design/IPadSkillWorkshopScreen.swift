@@ -17,16 +17,16 @@ struct IPadSkillWorkshopScreen: View {
     @State private var errorText: String?
     @State private var noticeText: String?
     @State private var presentedProposalRoute: IPadSkillProposalSheetRoute?
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let openSettings: () -> Void
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         openSettings: @escaping () -> Void = {})
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openSettings = openSettings
     }
@@ -35,7 +35,7 @@ struct IPadSkillWorkshopScreen: View {
         IPadSidebarScreenChrome(
             title: "Skill Workshop",
             subtitle: "Review and apply proposed skills.",
-            headerLeadingAction: self.headerLeadingAction,
+            headerSidebarAction: self.headerSidebarAction,
             usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {

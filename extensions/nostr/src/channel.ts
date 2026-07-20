@@ -5,6 +5,7 @@ import {
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildPassiveChannelStatusSummary,
@@ -18,6 +19,7 @@ import {
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  type ChannelOutboundAdapter,
   type ChannelPlugin,
 } from "./channel-api.js";
 import type { NostrProfile } from "./config-schema.js";
@@ -39,6 +41,22 @@ import {
   type ResolvedNostrAccount,
 } from "./types.js";
 
+const NOSTR_TARGET_HINT = "<npub|hex pubkey|nostr:npub...>";
+
+function stripNostrTargetPrefix(target: string): string {
+  return target.trim().replace(/^nostr:/i, "");
+}
+
+function normalizeNostrTarget(target: string): string {
+  const cleaned = stripNostrTargetPrefix(target);
+  try {
+    return normalizePubkey(cleaned);
+  } catch {
+    // Invalid prefixed tokens must stay distinct from "*" so formatting cannot widen access.
+    return target.trim();
+  }
+}
+
 const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount>({
   channelKey: "nostr",
   resolvePolicy: (account) => account.config.dmPolicy,
@@ -46,13 +64,7 @@ const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount
   policyPathSuffix: "dmPolicy",
   defaultPolicy: "pairing",
   approveHint: formatPairingApproveHint("nostr"),
-  normalizeEntry: (raw) => {
-    try {
-      return normalizePubkey(raw.trim().replace(/^nostr:/i, ""));
-    } catch {
-      return raw.trim();
-    }
-  },
+  normalizeEntry: normalizeNostrTarget,
 });
 
 const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccount>({
@@ -77,11 +89,7 @@ const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccou
         if (entry === "*") {
           return "*";
         }
-        try {
-          return normalizePubkey(entry);
-        } catch {
-          return entry;
-        }
+        return normalizeNostrTarget(entry);
       })
       .filter(Boolean),
 });
@@ -90,6 +98,28 @@ const nostrMessageAdapter = createChannelMessageAdapterFromOutbound({
   id: "nostr",
   outbound: nostrOutboundAdapter,
 });
+
+const nostrPluginOutboundAdapter: ChannelOutboundAdapter = {
+  ...nostrOutboundAdapter,
+  resolveTarget: ({ to }) => {
+    const trimmed = to?.trim() ?? "";
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: missingTargetError("Nostr", NOSTR_TARGET_HINT),
+      };
+    }
+    const normalized = normalizeNostrTarget(trimmed);
+    try {
+      return { ok: true, to: normalizePubkey(normalized) };
+    } catch {
+      return {
+        ok: false,
+        error: new Error("Nostr target must be a 64-character hex pubkey or npub value"),
+      };
+    }
+  },
+};
 
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChannelPlugin({
   base: {
@@ -125,25 +155,17 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
     },
     messaging: {
       targetPrefixes: ["nostr"],
-      normalizeTarget: (target) => {
-        // Strip nostr: prefix if present
-        const cleaned = target.trim().replace(/^nostr:/i, "");
-        try {
-          return normalizePubkey(cleaned);
-        } catch {
-          return cleaned;
-        }
-      },
+      normalizeTarget: normalizeNostrTarget,
       targetResolver: {
-        looksLikeId: (input) => {
-          const trimmed = input.trim();
+        looksLikeId: (input, normalized) => {
+          const trimmed = normalized?.trim() || stripNostrTargetPrefix(input);
           return (
             trimmed.startsWith("npub1") ||
             trimmed.startsWith("NPUB1") ||
             /^[0-9a-fA-F]{64}$/.test(trimmed)
           );
         },
-        hint: "<npub|hex pubkey|nostr:npub...>",
+        hint: NOSTR_TARGET_HINT,
       },
       resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
     },
@@ -179,7 +201,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
   security: {
     resolveDmPolicy: resolveNostrDmPolicy,
   },
-  outbound: nostrOutboundAdapter,
+  outbound: nostrPluginOutboundAdapter,
 });
 
 /**

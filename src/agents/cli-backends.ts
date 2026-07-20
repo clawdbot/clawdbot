@@ -337,10 +337,8 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   }
   const baseFresh = base.reliability?.watchdog?.fresh ?? {};
   const baseResume = base.reliability?.watchdog?.resume ?? {};
-  const baseOutputLimits = base.reliability?.outputLimits ?? {};
   const overrideFresh = override.reliability?.watchdog?.fresh ?? {};
   const overrideResume = override.reliability?.watchdog?.resume ?? {};
-  const overrideOutputLimits = override.reliability?.outputLimits ?? {};
   return {
     ...base,
     ...override,
@@ -354,10 +352,6 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     reliability: {
       ...base.reliability,
       ...override.reliability,
-      outputLimits: {
-        ...baseOutputLimits,
-        ...overrideOutputLimits,
-      },
       watchdog: {
         ...base.reliability?.watchdog,
         ...override.reliability?.watchdog,

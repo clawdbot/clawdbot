@@ -842,7 +842,7 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
-  test("provides subagent runtime with sessions.get method aliases", async () => {
+  test("provides subagent runtime session messages through sessions.get", async () => {
     const runtime = await createSubagentRuntime(serverPluginsModule);
     serverPluginsModule.setFallbackGatewayContext(createTestContext("sessions-get-aliases"));
     handleGatewayRequest
@@ -853,20 +853,12 @@ describe("loadGatewayPlugins", () => {
       })
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
         expect(opts.req.method).toBe("sessions.get");
-        expect(opts.req.params).toEqual({ key: "s-legacy" });
-        opts.respond(true, { messages: [{ id: "m-2" }] });
-      })
-      .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-        expect(opts.req.method).toBe("sessions.get");
         expect(opts.req.params).toEqual({ key: "s-limited", limit: 1_000 });
         opts.respond(true, { messages: [{ id: "m-3" }] });
       });
 
     await expect(runtime.getSessionMessages({ sessionKey: "s-read" })).resolves.toEqual({
       messages: [{ id: "m-1" }],
-    });
-    await expect(runtime.getSession({ sessionKey: "s-legacy" })).resolves.toEqual({
-      messages: [{ id: "m-2" }],
     });
     await expect(
       runtime.getSessionMessages({

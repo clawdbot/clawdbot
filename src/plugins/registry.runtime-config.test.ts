@@ -103,8 +103,6 @@ describe("plugin registry runtime config scope", () => {
       replaceScope = getPluginRuntimeGatewayRequestScope();
       return replaceResult;
     };
-    const loadConfig: PluginRuntime["config"]["loadConfig"] = () => config;
-    const writeConfigFile: PluginRuntime["config"]["writeConfigFile"] = async () => {};
     const configRuntime = {
       current: vi.fn(() => {
         currentScope = getPluginRuntimeGatewayRequestScope();
@@ -112,8 +110,6 @@ describe("plugin registry runtime config scope", () => {
       }),
       mutateConfigFile,
       replaceConfigFile,
-      loadConfig,
-      writeConfigFile,
     } satisfies PluginRuntime["config"];
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
@@ -429,7 +425,6 @@ describe("plugin registry runtime config scope", () => {
       run: vi.fn(async () => ({ runId: "subagent-run" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
-      getSession: vi.fn(async () => ({ messages: [] })),
       deleteSession: vi.fn(async () => {}),
     } satisfies PluginRuntime["subagent"];
     const runtime = createPluginRuntime({ subagent });

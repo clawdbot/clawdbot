@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-icon.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
@@ -369,6 +370,15 @@ export const SessionsPatchParamsSchema = closedObject({
       description: "Sidebar icon: one emoji, name:<id>, or svg:<svg ...>...</svg>.",
     }),
   ),
+  statusNote: Type.Optional(
+    Type.Union([Type.String({ maxLength: 120 }), Type.Null()], {
+      description: "Short expiring sidebar status note; null clears it and any declared attention.",
+    }),
+  ),
+  attention: Type.Optional(
+    Type.Union([Type.String({ enum: [...SESSION_AGENT_ATTENTION_ICON_IDS] }), Type.Null()]),
+  ),
+  ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
   archived: Type.Optional(Type.Boolean()),
   pinned: Type.Optional(Type.Boolean()),
   unread: Type.Optional(

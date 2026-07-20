@@ -467,9 +467,8 @@ function hasXaiSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   }
   const pluginConfig = cfg.plugins?.entries?.xai?.config;
   return (
-    (isRecord(pluginConfig) &&
-      (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))) ||
-    (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search))
+    isRecord(pluginConfig) &&
+    (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))
   );
 }
 

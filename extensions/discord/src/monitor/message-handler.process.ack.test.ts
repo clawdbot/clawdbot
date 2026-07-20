@@ -519,17 +519,19 @@ describe("processDiscordMessage ack reactions", () => {
       outcome: "done",
       timingKey: "doneHoldMs",
       configuredHoldMs: 2_000,
+      builtInHoldMs: DEFAULT_TIMING.doneHoldMs,
       terminalEmoji: DEFAULT_EMOJIS.done,
     },
     {
       outcome: "error",
       timingKey: "errorHoldMs",
       configuredHoldMs: 4_000,
+      builtInHoldMs: DEFAULT_TIMING.errorHoldMs,
       terminalEmoji: DEFAULT_EMOJIS.error,
     },
   ] as const)(
-    "uses configured statusReactions.timing.$timingKey for $outcome cleanup",
-    async ({ outcome, timingKey, configuredHoldMs, terminalEmoji }) => {
+    "uses built-in statusReactions.timing.$timingKey for $outcome cleanup",
+    async ({ outcome, timingKey, configuredHoldMs, builtInHoldMs, terminalEmoji }) => {
       vi.useFakeTimers();
       dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
         if (outcome === "done") {
@@ -559,7 +561,7 @@ describe("processDiscordMessage ack reactions", () => {
       await runProcessDiscordMessage(ctx);
       expect(getReactionEmojis()).toContain(terminalEmoji);
 
-      await vi.advanceTimersByTimeAsync(configuredHoldMs - 1);
+      await vi.advanceTimersByTimeAsync(builtInHoldMs - 1);
       expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),

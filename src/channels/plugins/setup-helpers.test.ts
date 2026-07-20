@@ -324,6 +324,29 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(next.channels?.matrix?.accessToken).toBeUndefined();
   });
 
+  it("preserves explicit named-account values over promoted root defaults", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          zalouser: {
+            dmPolicy: "disabled",
+            accounts: {
+              work: {
+                dmPolicy: "allowlist",
+              },
+            },
+          },
+        },
+      }),
+      channelKey: "zalouser",
+    });
+
+    const channel = channelRecord(next, "zalouser");
+    const work = accountRecord(channel, "work");
+    expect(work.dmPolicy).toBe("allowlist");
+    expect(next.channels?.zalouser?.dmPolicy).toBeUndefined();
+  });
+
   it("promotes legacy Matrix keys into an existing non-canonical default account key", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({

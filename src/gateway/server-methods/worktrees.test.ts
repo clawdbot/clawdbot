@@ -149,20 +149,16 @@ describe("worktrees gateway methods", () => {
     }
   });
 
-  it("passes configured cleanup limits to gc", async () => {
+  it("uses the built-in cleanup policy for gc", async () => {
     const service = {
       gc: vi.fn(async () => ({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 })),
     };
     const handlers = createWorktreesHandlers(service as never);
-    const context = {
-      getRuntimeConfig: () => ({
-        worktrees: { cleanup: { maxCount: 25, maxTotalSizeGb: 50 } },
-      }),
-    };
+    const context = { getRuntimeConfig: () => ({}) };
     const response = await call(handlers, "worktrees.gc", {}, { context });
     expect(response?.[0]).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
+      limits: {},
       shouldProtectOwner: expect.any(Function),
     });
   });

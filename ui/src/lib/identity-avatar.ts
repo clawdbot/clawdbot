@@ -1,38 +1,73 @@
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 
+// NOTE: this is sender-controlled metadata. It must never carry the trusted
+// gateway origin — that comes only from the app connection via
+// setAvatarGatewayOrigin().
 export type IdentityAvatarInput = SenderIdentity & {
   profileAvatarUrl?: string;
-  /**
-   * Base URL of a gateway-side avatar proxy (same-origin). When absent, the
-   * email-hash avatar tier is disabled entirely: the browser must never
-   * contact a third-party avatar host directly, because that leaks a
-   * dictionary-recoverable sender email hash plus the viewer's IP per render.
-   */
-  avatarProxyBaseUrl?: string;
 };
+
+const ORIGIN_PROBE = "https://origin-probe.invalid";
+
+let appGatewayOrigin: string | null = null;
+
+function toHttpOrigin(url: string | null | undefined): string | null {
+  if (!url) {
+    return null;
+  }
+  try {
+    const parsed = new URL(url);
+    const scheme =
+      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+    return `${scheme}//${parsed.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Records the connected gateway URL so avatar routes resolve to its origin. */
+export function setAvatarGatewayOrigin(gatewayUrl: string | null | undefined): void {
+  appGatewayOrigin = toHttpOrigin(gatewayUrl);
+}
+
+// Mirrors the server's user-profiles-http-path matcher. Sender metadata may
+// point only at this image route, never another gateway endpoint.
+const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
+
+/**
+ * Returns a browser-safe avatar URL, or null. Only the canonical
+ * /api/users/<id>/avatar route is trusted (pathname pinned, fragment dropped).
+ * The query is preserved: the gateway stamps a ?v=<updatedAt> revision there so
+ * the browser cache-busts a replaced avatar. Since avatars now render as plain
+ * <img> with no attached credentials, a varied query cannot amplify any
+ * client cache — the browser bounds it. Relative paths resolve against the
+ * trusted gateway origin; absolute URLs must match that origin.
+ */
+function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string | null {
+  try {
+    const parsed = new URL(value, ORIGIN_PROBE);
+    if (!USER_AVATAR_PATHNAME.test(parsed.pathname)) {
+      return null;
+    }
+    const suffix = parsed.pathname + parsed.search;
+    if (parsed.origin === ORIGIN_PROBE) {
+      return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
+    }
+    return gatewayOrigin && parsed.origin === gatewayOrigin ? gatewayOrigin + suffix : null;
+  } catch {
+    return null;
+  }
+}
 
 export type ResolvedIdentityAvatar =
   | { kind: "profile"; url: string }
   | { kind: "gravatar"; url: string }
   | { kind: "initials"; initials: string; colorSeed: number };
 
-const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+$/;
-
 function initialsFromLabel(label: string): string {
   const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
   const initials = words.map((word) => Array.from(word)[0] ?? "").join("");
   return initials.toUpperCase() || "?";
-}
-
-const ORIGIN_PROBE = "https://origin-probe.invalid";
-
-/** True only when the value resolves inside the embedding origin for any base. */
-function isOriginRelativePath(value: string): boolean {
-  try {
-    return new URL(value, ORIGIN_PROBE).origin === ORIGIN_PROBE;
-  } catch {
-    return false;
-  }
 }
 
 function stableColorSeed(value: string): number {
@@ -44,51 +79,53 @@ function stableColorSeed(value: string): number {
   return hash >>> 0;
 }
 
-async function sha256Hex(value: string): Promise<string | null> {
-  if (!globalThis.crypto?.subtle) {
-    return null;
-  }
-  try {
-    const digest = await globalThis.crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(value),
-    );
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
-      "",
-    );
-  } catch {
-    return null;
-  }
-}
-
-/** Resolves profile, Gravatar, then deterministic initials without fetching profile data. */
-export async function resolveAvatar(input: IdentityAvatarInput): Promise<ResolvedIdentityAvatar> {
-  const profileAvatarUrl = input.profileAvatarUrl?.trim();
-  // Same-origin only: profile URLs arrive via sender metadata, and an
-  // absolute URL would let a sender make every viewing browser contact an
-  // arbitrary host. Validate with the URL parser (not string prefixes) so
-  // browser normalization quirks — backslashes as slashes, stripped tab or
-  // newline characters — cannot smuggle in a cross-origin target.
-  if (profileAvatarUrl && isOriginRelativePath(profileAvatarUrl)) {
-    return { kind: "profile", url: profileAvatarUrl };
-  }
-
+export function resolveAvatarInitials(
+  input: IdentityAvatarInput,
+): Extract<ResolvedIdentityAvatar, { kind: "initials" }> {
   const id = input.id?.trim();
-  const proxyBase = input.avatarProxyBaseUrl?.trim().replace(/\/+$/, "");
-  if (proxyBase && id && EMAIL_PATTERN.test(id)) {
-    const hash = await sha256Hex(id.toLowerCase());
-    if (hash) {
-      return {
-        kind: "gravatar",
-        url: `${proxyBase}/${hash}?s=64`,
-      };
-    }
-  }
-
   const label = formatSenderLabel(input) ?? "?";
   return {
     kind: "initials",
     initials: initialsFromLabel(label),
     colorSeed: stableColorSeed(id || label),
   };
+}
+
+/**
+ * Resolves a trusted gateway avatar route, else deterministic initials.
+ * Gravatar is served by the gateway inside the profile avatar route itself, so
+ * the client never constructs a Gravatar URL — it only ever renders the
+ * canonical /api/users/<id>/avatar endpoint or falls back to initials.
+ */
+// User-profile ids are crypto UUIDs. Chat sender metadata carries only the id
+// (the prompt-visible envelope stays free of URLs), so a UUID-shaped sender id
+// is the signal to resolve the canonical avatar route for it client-side.
+const PROFILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvatar {
+  // Trusted origin comes only from the app connection, never from `input`.
+  const gatewayOrigin = appGatewayOrigin;
+
+  const profileAvatarUrl = input.profileAvatarUrl?.trim();
+  if (profileAvatarUrl) {
+    const trusted = toTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
+    if (trusted) {
+      return { kind: "profile", url: trusted };
+    }
+  }
+
+  // Sender metadata without an explicit route: a profile-id sender still has a
+  // canonical gateway avatar (upload → Gravatar proxy → 404-to-initials).
+  const id = input.id?.trim();
+  if (id && PROFILE_ID_RE.test(id)) {
+    const trusted = toTrustedAvatarUrl(
+      `/api/users/${encodeURIComponent(id)}/avatar`,
+      gatewayOrigin,
+    );
+    if (trusted) {
+      return { kind: "profile", url: trusted };
+    }
+  }
+
+  return resolveAvatarInitials(input);
 }

@@ -29,6 +29,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import * as chatThread from "./chat-thread.ts";
 import { renderChat, resetChatViewState } from "./chat-view.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
@@ -58,121 +59,117 @@ function registerChatAttachmentPayload(
   return attachment;
 }
 
-const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
-  vi.fn(async (state: ChatHeaderTestState) => {
-    const agentId = state.agentsSelectedId ?? "main";
-    const sessionKey = state.sessionKey;
-    await state.client?.request("tools.effective", { agentId, sessionKey });
-    const override = state.sessions.state.modelOverrides[sessionKey];
-    state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override ?? "(default)"}`;
-    state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
-  }),
-);
-const buildChatItemsMock = vi.hoisted(() =>
-  vi.fn(
-    (props: {
-      messages: unknown[];
-      stream: string | null;
-      streamStartedAt: number | null;
-      runWorking?: boolean;
-      loading?: boolean;
-    }) => {
-      if (
-        props.messages.some(
-          (message) =>
-            typeof message === "object" &&
-            message !== null &&
-            (message as { __testDivider?: unknown })["__testDivider"] === true,
-        )
-      ) {
-        return [
-          {
-            kind: "divider",
-            key: "divider:compaction:test",
-            label: "Compacted history",
-            description:
-              "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
-            action: {
-              kind: "session-checkpoints",
-              label: "Open checkpoints",
-            },
-            timestamp: 1,
+async function refreshVisibleToolsEffectiveForCurrentSessionForTest(state: ChatHeaderTestState) {
+  const agentId = state.agentsSelectedId ?? "main";
+  const sessionKey = state.sessionKey;
+  await state.client?.request("tools.effective", { agentId, sessionKey });
+  const override = state.sessions.state.modelOverrides[sessionKey];
+  state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override ?? "(default)"}`;
+  state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
+}
+const buildChatItemsMock = vi.fn(
+  (props: {
+    messages: unknown[];
+    stream: string | null;
+    streamStartedAt: number | null;
+    runWorking?: boolean;
+    loading?: boolean;
+  }): ReturnType<typeof chatThread.buildCachedChatItems> => {
+    if (
+      props.messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { __testDivider?: unknown })["__testDivider"] === true,
+      )
+    ) {
+      return [
+        {
+          kind: "divider",
+          key: "divider:compaction:test",
+          label: "Compacted history",
+          description:
+            "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
+          action: {
+            kind: "session-checkpoints",
+            label: "Open checkpoints",
           },
-        ];
-      }
-      const items: unknown[] = [];
-      if (props.messages.length > 0) {
-        const virtualRows = props.messages.every(
-          (message) =>
-            typeof message === "object" &&
-            message !== null &&
-            (message as { testVirtualRow?: unknown }).testVirtualRow === true,
-        );
-        if (virtualRows) {
-          items.push(
-            ...props.messages.map((message, index) => {
-              const testMessage = message as {
-                testVirtualKey?: string;
-                testVirtualRole?: string;
-              };
-              const key = testMessage.testVirtualKey ?? String(index);
-              return {
-                kind: "group",
-                key: `group:${key}`,
-                role: testMessage.testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
-                messages: [{ key: `message:${key}`, message }],
-                timestamp: index + 1,
-                isStreaming: false,
-              };
-            }),
-          );
-        } else {
-          items.push({
-            kind: "group",
-            key: "group:assistant:test",
-            role: "assistant",
-            messages: props.messages.map((message, index) => ({
-              key: `message:${index}`,
-              message,
-            })),
-            timestamp: 1,
-            isStreaming: false,
-          });
-        }
-      }
-      // Mirrors buildChatItems: streamed text renders as a stream item; an
-      // empty stream or a working run with no stream shows the reading
-      // indicator (working spark), except on the initial empty load where
-      // the skeleton owns the thread.
-      if (props.stream !== null) {
+          timestamp: 1,
+        },
+      ] as ReturnType<typeof chatThread.buildCachedChatItems>;
+    }
+    const items: unknown[] = [];
+    if (props.messages.length > 0) {
+      const virtualRows = props.messages.every(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { testVirtualRow?: unknown }).testVirtualRow === true,
+      );
+      if (virtualRows) {
         items.push(
-          props.stream
-            ? {
-                kind: "stream",
-                key: "stream:test",
-                text: props.stream,
-                startedAt: props.streamStartedAt ?? 1,
-                isStreaming: true,
-              }
-            : {
-                kind: "reading-indicator",
-                key: "reading:test",
-                startedAt: props.streamStartedAt ?? 1,
-              },
+          ...props.messages.map((message, index) => {
+            const testMessage = message as {
+              testVirtualKey?: string;
+              testVirtualRole?: string;
+            };
+            const key = testMessage.testVirtualKey ?? String(index);
+            return {
+              kind: "group",
+              key: `group:${key}`,
+              role: testMessage.testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
+              messages: [{ key: `message:${key}`, message }],
+              timestamp: index + 1,
+              isStreaming: false,
+            };
+          }),
         );
-      } else if (
-        props.runWorking === true &&
-        !(props.loading === true && props.messages.length === 0)
-      ) {
+      } else {
         items.push({
-          kind: "reading-indicator",
-          key: "reading:test",
-          startedAt: props.streamStartedAt ?? 1,
+          kind: "group",
+          key: "group:assistant:test",
+          role: "assistant",
+          messages: props.messages.map((message, index) => ({
+            key: `message:${index}`,
+            message,
+          })),
+          timestamp: 1,
+          isStreaming: false,
         });
       }
-      return items;
-    },
-  ),
+    }
+    // Mirrors buildChatItems: streamed text renders as a stream item; an
+    // empty stream or a working run with no stream shows the reading
+    // indicator (working spark), except on the initial empty load where
+    // the skeleton owns the thread.
+    if (props.stream !== null) {
+      items.push(
+        props.stream
+          ? {
+              kind: "stream",
+              key: "stream:test",
+              text: props.stream,
+              startedAt: props.streamStartedAt ?? 1,
+              isStreaming: true,
+            }
+          : {
+              kind: "reading-indicator",
+              key: "reading:test",
+              startedAt: props.streamStartedAt ?? 1,
+            },
+      );
+    } else if (
+      props.runWorking === true &&
+      !(props.loading === true && props.messages.length === 0)
+    ) {
+      items.push({
+        kind: "reading-indicator",
+        key: "reading:test",
+        startedAt: props.streamStartedAt ?? 1,
+      });
+    }
+    return items as ReturnType<typeof chatThread.buildCachedChatItems>;
+  },
 );
 const renderMessageGroupMock = vi.fn(
   (
@@ -250,24 +247,6 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-vi.mock("../../components/icons.ts", async (importOriginal) =>
-  importOriginal<typeof import("../../components/icons.ts")>(),
-);
-
-vi.mock("./chat-thread.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chat-thread.ts")>();
-  return {
-    ...actual,
-    buildCachedChatItems: buildChatItemsMock,
-    getExpandedToolCards: () => new Map<string, boolean>(),
-    syncToolCardExpansionState: () => undefined,
-  };
-});
-
-vi.mock("../../lib/agents/tools-effective.ts", () => ({
-  refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
-}));
-
 function renderStreamGroupMock(
   ...[parts, _opts]: Parameters<typeof chatMessage.renderStreamGroup>
 ): ReturnType<typeof chatMessage.renderStreamGroup> {
@@ -287,6 +266,9 @@ function renderWorkGroupSummaryMock(
 }
 
 beforeEach(() => {
+  vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
+  vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
+  vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
   vi.spyOn(chatMessage, "getAssistantAttachmentAvailabilityRenderVersion").mockImplementation(
     () => assistantAttachmentRenderVersionMock.value,
   );
@@ -482,7 +464,8 @@ function createChatHeaderState(
     resetChatInputHistoryNavigation: vi.fn(),
     resetToolStream: vi.fn(),
     resetChatScroll: vi.fn(),
-    onModelChanged: (): Promise<void> => refreshVisibleToolsEffectiveForCurrentSessionMock(state),
+    onModelChanged: (): Promise<void> =>
+      refreshVisibleToolsEffectiveForCurrentSessionForTest(state),
   };
   sessions.subscribe((next) => {
     state.sessionsResult = next.result;
@@ -619,6 +602,7 @@ function createChatProps(
     canSend: true,
     disabledReason: null,
     error: null,
+    runError: null,
     sessions: null,
     sidebarOpen: false,
     sidebarContent: null,
@@ -724,6 +708,22 @@ describe("inline approval card", () => {
     );
     container.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
     expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
+  });
+});
+
+describe("chat run error", () => {
+  it("renders a non-interactive alert immediately above the composer", () => {
+    const container = renderChatView({
+      runError: { summary: "Error: gateway disconnected" },
+    });
+
+    const alert = requireElement(container, ".chat-run-error", "chat run error");
+    const summary = requireElement(alert, ".chat-run-error__summary", "chat run error summary");
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(summary.textContent?.trim()).toBe("Error: gateway disconnected");
+    expect(alert.querySelector(".chat-run-error__icon svg")).not.toBeNull();
+    expect(alert.querySelector("button")).toBeNull();
+    expect(alert.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
   });
 });
 
@@ -892,6 +892,22 @@ describe("direct thread avatar mode", () => {
         "chat-thread--direct",
       ),
     ).toBe(true);
+  });
+
+  it("keeps avatars in direct sessions when the gateway attributes identities", () => {
+    const attributed = renderChatView({
+      sessionKey: "kind-direct",
+      sessions: sessionsListWithKind("kind-direct", "direct"),
+      messages: labeledHistory,
+      attributedIdentity: true,
+    });
+    // Multi-user gateways share even 1:1-shaped sessions, so the author
+    // marker is signal, not decoration.
+    expect(
+      requireElement(attributed, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
   });
 
   it("falls back to session-key shape when session metadata is missing", () => {
@@ -1657,7 +1673,6 @@ afterEach(() => {
   buildChatItemsMock.mockClear();
   renderMessageGroupMock.mockClear();
   assistantAttachmentRenderVersionMock.value = 0;
-  refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -3311,6 +3326,31 @@ describe("chat attachment picker", () => {
     expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
   });
 
+  it("cancels non-file drops outside the composer textarea but keeps them native inside it", () => {
+    const container = renderChatView();
+    const chat = requireElement(container, "section.card.chat", "chat drop target");
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+
+    const outsideDrop = createDragEvent("drop", ["text/uri-list"]);
+    chat.dispatchEvent(outsideDrop);
+    expect(outsideDrop.defaultPrevented).toBe(true);
+
+    const textareaDrop = createDragEvent("drop", ["text/uri-list"]);
+    textarea.dispatchEvent(textareaDrop);
+    expect(textareaDrop.defaultPrevented).toBe(false);
+
+    const range = document.createElement("input");
+    range.type = "range";
+    chat.append(range);
+    const rangeDrop = createDragEvent("drop", ["text/uri-list"]);
+    range.dispatchEvent(rangeDrop);
+    expect(rangeDrop.defaultPrevented).toBe(true);
+  });
+
   it("turns large pasted plain text into a compact attachment", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({
@@ -3475,7 +3515,9 @@ describe("chat attachment picker", () => {
     });
     const droppedFile = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
     const dropEvent = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(dropEvent, "dataTransfer", { value: { files: [droppedFile] } });
+    Object.defineProperty(dropEvent, "dataTransfer", {
+      value: { files: [droppedFile], types: ["Files"] },
+    });
 
     try {
       textarea.dispatchEvent(pasteEvent);
@@ -5397,6 +5439,27 @@ describe("right-click Reply", () => {
       "reply target",
     );
     expect(target.text).toBe("x".repeat(499));
+  });
+
+  it("keeps the native context menu for links inside a replyable bubble", () => {
+    const container = renderChatView({ onSetReply: vi.fn() });
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "hello world";
+    const link = document.createElement("a");
+    link.href = "https://example.com";
+    link.textContent = "Example";
+    bubble.appendChild(link);
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    link.dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
   it("keeps the native context menu when Reply is unavailable", () => {

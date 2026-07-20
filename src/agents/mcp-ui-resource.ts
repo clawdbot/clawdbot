@@ -26,10 +26,12 @@ export type McpAppViewLease = {
   serverName: string;
   toolName: string;
   uiResourceUri: string;
+  toolCallId?: string;
   html: string;
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
@@ -222,6 +224,7 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   viewId?: string;
 }): Promise<
@@ -276,11 +279,15 @@ export async function fetchMcpAppView(params: {
       serverName: params.serverName,
       toolName: params.toolName,
       uiResourceUri: params.uiResourceUri,
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       html,
       ...(csp ? { csp } : {}),
       ...(permissions ? { permissions } : {}),
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
+        : {}),
+      ...(params.authorizeAppInteraction
+        ? { authorizeAppInteraction: params.authorizeAppInteraction }
         : {}),
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
@@ -362,6 +369,7 @@ export function buildMcpAppCanvasPayload(view: {
   toolName: string;
   uiResourceUri: string;
   toolCallId?: string;
+  originSessionKey?: string;
   resultMetaState?: "unavailable";
 }) {
   assertBoundedViewDescriptor(view);
@@ -380,6 +388,7 @@ export function buildMcpAppCanvasPayload(view: {
       toolName: view.toolName,
       uiResourceUri: view.uiResourceUri,
       ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
+      ...(view.originSessionKey ? { originSessionKey: view.originSessionKey } : {}),
       ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
     },
   };

@@ -379,8 +379,8 @@ function createXaiToolManifest() {
     enabledByDefault: true,
     channels: [],
     providers: ["xai"],
-    providerAuthEnvVars: {
-      xai: ["XAI_API_KEY"],
+    setup: {
+      providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
     },
     contracts: {
       tools: ["x_search"],
@@ -1760,8 +1760,8 @@ describe("resolvePluginTools optional tools", () => {
         enabledByDefault: true,
         channels: [],
         providers: [],
-        providerAuthEnvVars: {
-          xai: ["XAI_API_KEY"],
+        setup: {
+          providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
         },
         contracts: {
           tools: ["other_tool", "optional_tool"],

@@ -14,6 +14,7 @@ export type ClaudeSessionCatalogSession = {
   modelProvider: "anthropic";
   cliVersion?: string;
   gitBranch?: string;
+  customGroup?: string;
   archived: false;
 };
 

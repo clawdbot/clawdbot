@@ -8,6 +8,7 @@ export type McpAppHostSandboxCsp = NonNullable<
 /** Bubbling event handled by the owning chat pane through its normal send path. */
 export const WIDGET_PROMPT_EVENT = "openclaw-widget-prompt";
 export type WidgetPromptEventDetail = { text: string };
+export const MCP_APP_VIEW_EXPIRED_EVENT = "openclaw-mcp-app-view-expired";
 
 const WIDGET_PROMPT_MAX_CHARS = 4_000;
 const WIDGET_PROMPT_RATE_WINDOW_MS = 60_000;

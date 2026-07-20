@@ -115,24 +115,18 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Config reference
 
-| Option                           | Description                                                          | Default                                                            |
-| -------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `browser.enabled`                | Enable browser control                                               | `true`                                                             |
-| `browser.executablePath`         | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers the OS default browser when Chromium-based) |
-| `browser.headless`               | Run without GUI                                                      | `false`                                                            |
-| `OPENCLAW_BROWSER_HEADLESS`      | Per-process override for local managed browser headless mode         | unset                                                              |
-| `browser.noSandbox`              | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                            |
-| `browser.attachOnly`             | Do not launch a browser; only attach to an existing one              | `false`                                                            |
-| `browser.cdpPortRangeStart`      | Starting local CDP port for auto-assigned profiles                   | `18800` (derived from the gateway port)                            |
-| `browser.localLaunchTimeoutMs`   | Local managed Chrome discovery timeout, up to `120000`               | `15000`                                                            |
-| `browser.localCdpReadyTimeoutMs` | Local managed post-launch CDP readiness timeout, up to `120000`      | `8000`                                                             |
+| Option                      | Description                                                          | Default                                                            |
+| --------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `browser.enabled`           | Enable browser control                                               | `true`                                                             |
+| `browser.executablePath`    | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers the OS default browser when Chromium-based) |
+| `browser.headless`          | Run without GUI                                                      | `false`                                                            |
+| `OPENCLAW_BROWSER_HEADLESS` | Per-process override for local managed browser headless mode         | unset                                                              |
+| `browser.noSandbox`         | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                            |
+| `browser.attachOnly`        | Do not launch a browser; only attach to an existing one              | `false`                                                            |
 
-Both timeout values must be positive integers up to `120000` ms; other values
-are rejected at config load. On Raspberry Pi, older VPS hosts, or slow
-storage, raise `browser.localLaunchTimeoutMs` when Chrome needs more time to
-expose its CDP HTTP endpoint. Raise `browser.localCdpReadyTimeoutMs` when
-launch succeeds but `openclaw browser start` still reports `not reachable
-after start`.
+On Raspberry Pi, older VPS hosts, or slow storage, use a manually launched
+browser with `attachOnly` when Chrome needs more time to expose its CDP HTTP
+endpoint or become ready than the managed-browser deadline permits.
 
 ### Problem: No Chrome tabs found for profile="user"
 

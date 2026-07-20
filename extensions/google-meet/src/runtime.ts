@@ -1,4 +1,5 @@
 // Google Meet composes platform strategies with the shared meeting session runtime.
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -94,10 +95,6 @@ function resolveMode(input: GoogleMeetModeInput | undefined, config: GoogleMeetC
   return input === "realtime" ? "agent" : (input ?? config.defaultMode);
 }
 
-function resolveSessionAgentId(request: GoogleMeetJoinRequest, config: GoogleMeetConfig): string {
-  return normalizeAgentId(request.agentId ?? config.realtime.agentId);
-}
-
 function withSessionAgentConfig(config: GoogleMeetConfig, agentId: string): GoogleMeetConfig {
   return config.realtime.agentId === agentId
     ? config
@@ -118,6 +115,7 @@ function noteSession(session: GoogleMeetSession, note: string): void {
 
 export class GoogleMeetRuntime {
   readonly #createdBrowserTabs = new Map<string, string>();
+  readonly #agentId: string;
   readonly #voiceCallGateway: VoiceCallGateway;
   readonly #sessions: GoogleMeetSessionRuntime;
 
@@ -129,6 +127,7 @@ export class GoogleMeetRuntime {
       logger: RuntimeLogger;
     },
   ) {
+    this.#agentId = resolveDefaultAgentId(params.fullConfig);
     this.#voiceCallGateway = createVoiceCallGateway(params);
     this.#sessions = new MeetingSessionRuntime({
       logger: params.logger,
@@ -169,7 +168,9 @@ export class GoogleMeetRuntime {
         url: GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request.transport, params.config),
         mode: resolveMode(request.mode, params.config),
-        agentId: resolveSessionAgentId(request, params.config),
+        agentId: normalizeAgentId(
+          request.agentId ?? params.config.realtime.agentId ?? this.#agentId,
+        ),
       }),
       createSession: ({ request: _request, resolved, createdAt }) =>
         createGoogleMeetSession({ config: params.config, resolved, createdAt }),
@@ -305,7 +306,8 @@ export class GoogleMeetRuntime {
   #probeContext(): GoogleMeetRuntimeProbeContext {
     return {
       config: this.params.config,
-      resolveAgentId: (request) => resolveSessionAgentId(request, this.params.config),
+      resolveAgentId: (request) =>
+        normalizeAgentId(request.agentId ?? this.params.config.realtime.agentId ?? this.#agentId),
       list: () => this.list(),
       join: async (request) => await this.join(request),
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),

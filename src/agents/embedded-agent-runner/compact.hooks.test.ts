@@ -1425,7 +1425,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             },
           },
         },
-        agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
       } as never,
     });
 
@@ -1524,7 +1523,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
           },
         },
-        agents: { defaults: { embeddedHarness: { runtime: "openclaw" } } },
       } as never,
     });
 
@@ -1556,10 +1554,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           },
         },
         agents: {
-          defaults: {
-            embeddedHarness: { runtime: "codex" },
-            compaction: { model: "openai/gpt-5.4-mini" },
-          },
+          defaults: { compaction: { model: "openai/gpt-5.4-mini" } },
         },
       } as never,
     });

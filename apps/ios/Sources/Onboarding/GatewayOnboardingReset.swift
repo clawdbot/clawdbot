@@ -3,14 +3,15 @@ import OpenClawKit
 
 enum GatewayOnboardingReset {
     @MainActor
+    @discardableResult
     static func prepareForBootstrapPairing(
         appModel: NodeAppModel,
         instanceId: String,
         gatewayStableID: String,
         disconnectGateway: Bool = true,
-        defaults: UserDefaults = .standard) async
+        defaults: UserDefaults = .standard) async -> Bool
     {
-        _ = await self.prepare(
+        await self.prepare(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: gatewayStableID,
@@ -61,7 +62,10 @@ enum GatewayOnboardingReset {
         disconnectGateway: Bool,
         defaults: UserDefaults) async -> Bool
     {
-        await appModel.purgeChatTranscriptCache(gatewayID: gatewayStableID)
+        guard await appModel.purgeChatTranscriptCache(gatewayID: gatewayStableID) else {
+            appModel.gatewayStatusText = "Could not remove offline data for this gateway"
+            return false
+        }
         return self.preparePairingState(
             appModel: appModel,
             instanceId: instanceId,

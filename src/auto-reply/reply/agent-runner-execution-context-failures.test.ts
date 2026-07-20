@@ -51,7 +51,7 @@ describe("runAgentTurnWithFallback: context failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-      expect(result.payload.text).toContain("reserveTokensFloor");
+      expect(result.payload.text).toContain("fresh session or using a model");
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
@@ -94,7 +94,7 @@ describe("runAgentTurnWithFallback: context failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-      expect(result.payload.text).toContain("reserveTokensFloor");
+      expect(result.payload.text).toContain("fresh session or using a model");
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
@@ -179,7 +179,7 @@ describe("runAgentTurnWithFallback: context failures", () => {
     }
   });
 
-  it("uses the throwing fallback candidate model for compaction failure hints", async () => {
+  it("uses the built-in compaction failure hint when the fallback candidate throws", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params.run("custom", "uncataloged-32k");
@@ -208,9 +208,7 @@ describe("runAgentTurnWithFallback: context failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("reserveTokensFloor");
-      expect(result.payload.text).toContain("20000");
-      expect(result.payload.text).not.toContain("100000");
+      expect(result.payload.text).toContain("fresh session or using a model");
     }
   });
 });

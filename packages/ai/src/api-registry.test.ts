@@ -7,9 +7,9 @@ import {
   type Model,
 } from "./index.js";
 import {
+  defaultApiRegistry,
   getApiProvider,
   streamSimple as streamSimpleDefault,
-  unregisterApiProviders,
 } from "./internal/default-runtime.js";
 
 const TEST_SOURCE_ID = "test:llm-runtime-api-registry";
@@ -30,7 +30,7 @@ const model = {
 
 describe("LLM API registry", () => {
   afterEach(() => {
-    unregisterApiProviders(TEST_SOURCE_ID);
+    defaultApiRegistry.unregisterApiProviders(TEST_SOURCE_ID);
   });
 
   it("rejects mismatched model API calls", () => {
@@ -73,7 +73,7 @@ describe("LLM API registry", () => {
         .href
     )) as typeof import("./internal/default-runtime.js");
     const streamSimple = vi.fn(emptyStream);
-    duplicateRuntime.registerApiProvider(
+    duplicateRuntime.defaultApiRegistry.registerApiProvider(
       {
         api: "test-api",
         stream: emptyStream,

@@ -1,8 +1,12 @@
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { PresenceEntry } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import "./menu-surface.ts";
 import "./tooltip.ts";
+import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 export type PresenceViewer = {
   id: string;
@@ -112,58 +116,39 @@ function avatarColor(userId: string): string {
   return `hsl(${(hash >>> 0) % 360} 48% 42%)`;
 }
 
-type GravatarCacheEntry = string | Promise<string | null> | { failedUntil: number };
-
-// An <img> error cannot distinguish a Gravatar 404 from a transient network or
-// 5xx failure, so negative entries expire instead of poisoning the page lifetime.
-// Accepted tradeoff: re-resolution happens on the next user-prop update (any
-// presence/snapshot event), not on a timer — a fully idle page keeps initials
-// until activity resumes rather than each avatar owning a retry timer.
-const GRAVATAR_NEGATIVE_CACHE_MS = 10 * 60 * 1000;
-const gravatarUrlCache = new Map<string, GravatarCacheEntry>();
-
-function negativeEntry(): GravatarCacheEntry {
-  return { failedUntil: Date.now() + GRAVATAR_NEGATIVE_CACHE_MS };
+function renderAvatarInitials(user: PresenceViewer) {
+  return html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`;
 }
 
-function normalizedEmail(email: string | null | undefined): string | undefined {
-  return normalized(email)?.toLowerCase();
-}
-
-function gravatarUrlForEmail(email: string): string | null | Promise<string | null> {
-  const normalizedValue = normalizedEmail(email);
-  if (!normalizedValue) {
-    return null;
+function resolveViewerAvatar(user: PresenceViewer) {
+  const avatar = resolveAvatar({
+    id: user.email ?? user.id,
+    name: user.name,
+    profileAvatarUrl: user.avatarUrl,
+  });
+  if (avatar.kind === "initials") {
+    return renderAvatarInitials(user);
   }
-  const cached = gravatarUrlCache.get(normalizedValue);
-  if (cached !== undefined) {
-    if (typeof cached === "object" && cached !== null && "failedUntil" in cached) {
-      if (cached.failedUntil > Date.now()) {
-        return null;
-      }
-      gravatarUrlCache.delete(normalizedValue);
-    } else {
-      return cached;
-    }
-  }
-  const pending = Promise.resolve()
-    .then(() =>
-      globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalizedValue)),
-    )
-    .then((digest) => {
-      const hash = [...new Uint8Array(digest)]
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join("");
-      const url = `https://gravatar.com/avatar/${hash}?d=404&s=128`;
-      gravatarUrlCache.set(normalizedValue, url);
-      return url;
-    })
-    .catch(() => {
-      gravatarUrlCache.set(normalizedValue, negativeEntry());
-      return null;
-    });
-  gravatarUrlCache.set(normalizedValue, pending);
-  return pending;
+  return html`<img
+      src=${avatar.url}
+      alt=""
+      referrerpolicy="no-referrer"
+      @error=${(event: Event) => {
+        const image = event.currentTarget;
+        if (image instanceof HTMLImageElement) {
+          image.closest<HTMLElement>(".viewer-avatar")?.classList.add("is-fallback");
+        }
+      }}
+      @load=${(event: Event) => {
+        const image = event.currentTarget;
+        if (image instanceof HTMLImageElement) {
+          image.closest<HTMLElement>(".viewer-avatar")?.classList.remove("is-fallback");
+        }
+      }}
+    />
+    <span class="viewer-avatar__fallback" style=${`background: ${avatarColor(user.id)}`}
+      >${initialsFor(user)}</span
+    >`;
 }
 
 export type ViewerAvatarVariant = "session" | "footer" | "profile";
@@ -172,91 +157,38 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) user: PresenceViewer | null = null;
   @property() variant: ViewerAvatarVariant = "session";
 
-  @state() private gravatar: { email: string; url: string } | null = null;
-
-  private failedImageUrl: string | null = null;
-  private resolutionId = 0;
-
-  protected override willUpdate(changedProperties: PropertyValues<this>) {
-    if (changedProperties.has("user")) {
-      this.failedImageUrl = null;
-    }
-  }
-
-  protected override updated(changedProperties: PropertyValues<this>) {
-    if (!changedProperties.has("user")) {
-      return;
-    }
-    const resolutionId = ++this.resolutionId;
-    const email = this.user?.avatarUrl ? undefined : normalizedEmail(this.user?.email);
-    if (!email) {
-      return;
-    }
-    const applyResolvedUrl = (url: string | null) => {
-      if (
-        resolutionId === this.resolutionId &&
-        !this.user?.avatarUrl &&
-        normalizedEmail(this.user?.email) === email
-      ) {
-        this.gravatar = url ? { email, url } : null;
-      }
-    };
-    const resolved = gravatarUrlForEmail(email);
-    if (typeof resolved === "string") {
-      applyResolvedUrl(resolved);
-      return;
-    }
-    if (resolved) {
-      void resolved.then(applyResolvedUrl);
-    }
-  }
-
-  private readonly handleImageError = (event: Event) => {
-    const imageUrl = (event.currentTarget as HTMLImageElement).getAttribute("src");
-    const user = this.user;
-    if (!imageUrl || !user) {
-      return;
-    }
-    const email = normalizedEmail(user.email);
-    if (
-      !user.avatarUrl &&
-      email &&
-      imageUrl === this.gravatar?.url &&
-      email === this.gravatar.email
-    ) {
-      gravatarUrlCache.set(email, negativeEntry());
-      this.gravatar = null;
-      return;
-    }
-    this.failedImageUrl = imageUrl;
-    this.requestUpdate();
-  };
-
   override render() {
     const user = this.user;
     if (!user) {
       return nothing;
     }
     const label = presenceViewerLabel(user);
-    const email = normalizedEmail(user.email);
-    const gravatarUrl = this.gravatar && this.gravatar.email === email ? this.gravatar.url : null;
-    const imageUrl = user.avatarUrl ?? gravatarUrl;
     return html`<span
       class="viewer-avatar viewer-avatar--${this.variant}"
       data-viewer-id=${user.id}
       aria-label=${label}
     >
-      ${imageUrl && imageUrl !== this.failedImageUrl
-        ? html`<img
-            src=${imageUrl}
-            alt=""
-            referrerpolicy="no-referrer"
-            loading="lazy"
-            @error=${this.handleImageError}
-          />`
-        : html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`}
+      ${resolveViewerAvatar(user)}
     </span>`;
   }
+}
+
+function renderRosterRow(user: PresenceViewer, isSelf: boolean) {
+  const label = presenceViewerLabel(user);
+  // The email doubles as the label when no display name exists; repeating it
+  // as a subtitle would just echo the same line.
+  const subtitle = user.email && user.email !== label ? user.email : undefined;
+  return html`<wa-dropdown-item class="presence-roster-menu__item" data-viewer-id=${user.id}>
+    <openclaw-viewer-avatar slot="icon" .user=${user} variant="footer"></openclaw-viewer-avatar>
+    <span class="presence-roster-menu__text">
+      <span class="presence-roster-menu__name"
+        >${label}${isSelf
+          ? html` <span class="presence-roster-menu__you">(${t("presence.you")})</span>`
+          : nothing}</span
+      >
+      ${subtitle ? html`<span class="presence-roster-menu__email">${subtitle}</span>` : nothing}
+    </span>
+  </wa-dropdown-item>`;
 }
 
 class ViewerFacepile extends OpenClawLightDomContentsElement {
@@ -265,6 +197,87 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey?: string;
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
   @property() variant: "session" | "footer" = "session";
+
+  @state() private rosterPosition: { x: number; y: number } | null = null;
+
+  private openRoster(event: MouseEvent) {
+    const trigger = event.currentTarget;
+    if (!(trigger instanceof HTMLElement)) {
+      return;
+    }
+    const rect = trigger.getBoundingClientRect();
+    this.rosterPosition = { x: rect.left, y: rect.top };
+  }
+
+  private focusRosterTrigger() {
+    this.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.focus();
+  }
+
+  protected override willUpdate() {
+    if (!this.rosterPosition) {
+      return;
+    }
+    // A presence update can unmount the footer facepile (everyone else left)
+    // while the roster is open. The dropdown is then removed without hiding,
+    // so wa-after-hide never fires — clear the open state here or the menu
+    // would remount at stale coordinates when presence returns.
+    const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
+    const available =
+      this.variant === "footer" &&
+      !this.sessionKey &&
+      projection.users.some((user) => user.id !== projection.selfUserId);
+    if (!available) {
+      this.rosterPosition = null;
+    }
+  }
+
+  private renderRosterMenu(roster: readonly PresenceViewer[], selfUserId: string | undefined) {
+    const position = this.rosterPosition;
+    if (!position) {
+      return nothing;
+    }
+    return html`<openclaw-menu-surface>
+      <wa-dropdown
+        class="presence-roster-menu"
+        .open=${true}
+        placement="top-start"
+        .distance=${4}
+        aria-label=${t("presence.rosterTitle")}
+        @wa-select=${(event: CustomEvent) => {
+          // Rows are informational; selecting one just dismisses the menu.
+          // Close explicitly — preventDefault also cancels the dropdown's own
+          // select-and-hide behavior — and hand focus back to the trigger so
+          // a keyboard activation does not strand focus on the body.
+          event.preventDefault();
+          this.rosterPosition = null;
+          this.focusRosterTrigger();
+        }}
+        @keydown=${(event: KeyboardEvent) =>
+          trackDropdownKeyboardDismissal(event, () => this.focusRosterTrigger())}
+        @wa-after-hide=${(event: Event) => {
+          // The dropdown's own trigger is a hidden throwaway anchor, so restore
+          // focus to the visible facepile button on keyboard dismissal.
+          const keyboard = consumeDropdownKeyboardDismissal(event);
+          this.rosterPosition = null;
+          if (keyboard) {
+            this.focusRosterTrigger();
+          }
+        }}
+      >
+        <button
+          slot="trigger"
+          type="button"
+          tabindex="-1"
+          aria-hidden="true"
+          style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+        ></button>
+        <div class="presence-roster-menu__title" role="presentation">
+          ${t("presence.rosterTitle")} · ${roster.length}
+        </div>
+        ${roster.map((user) => renderRosterRow(user, user.id === selfUserId))}
+      </wa-dropdown>
+    </openclaw-menu-surface>`;
+  }
 
   override render() {
     const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
@@ -281,7 +294,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
     }
     const visible = users.slice(0, this.maxVisible);
     const overflow = users.slice(this.maxVisible);
-    return html`<span
+    const facepile = html`<span
       class="viewer-facepile viewer-facepile--${this.variant}"
       data-viewer-count=${users.length}
       aria-label=${users.map(presenceViewerLabel).join(", ")}
@@ -302,6 +315,25 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           </openclaw-tooltip>`
         : nothing}
     </span>`;
+    if (this.variant !== "footer") {
+      return facepile;
+    }
+    // The footer cluster opens the who's-online roster. Self sorts first so
+    // your own row anchors the list; everyone else keeps the projection order.
+    const roster = [...projection.users].toSorted((a, b) =>
+      a.id === projection.selfUserId ? -1 : b.id === projection.selfUserId ? 1 : 0,
+    );
+    return html`<button
+        type="button"
+        class="viewer-facepile-trigger"
+        aria-label=${t("presence.rosterLabel")}
+        aria-haspopup="menu"
+        aria-expanded=${this.rosterPosition !== null}
+        @click=${(event: MouseEvent) => this.openRoster(event)}
+      >
+        ${facepile}
+      </button>
+      ${this.renderRosterMenu(roster, projection.selfUserId)}`;
   }
 }
 

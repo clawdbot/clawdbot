@@ -2,6 +2,12 @@
 import AppKit
 import SwiftUI
 
+extension ChatSessionSidebarModel.Node {
+    fileprivate var outlineChildren: [Self]? {
+        self.children.isEmpty ? nil : self.children
+    }
+}
+
 @MainActor
 struct ChatSessionSidebar: View {
     @Bindable var viewModel: OpenClawChatViewModel
@@ -222,7 +228,9 @@ struct ChatSessionSidebar: View {
         let isCurrentSession = self.viewModel.matchesCurrentSessionKey(
             incoming: node.session.key,
             current: self.viewModel.sessionKey)
-        if node.hasUnreadDescendant || (node.session.unread == true && !isCurrentSession) {
+        if node.children.contains(where: \.badges.hasUnread) ||
+            (node.session.unread == true && !isCurrentSession)
+        {
             Circle()
                 .fill(.tint)
                 .frame(width: 7, height: 7)

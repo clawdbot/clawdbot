@@ -1864,12 +1864,6 @@ html.openclaw-native-macos
   text-decoration: none;
 }
 
-.sidebar-recent-session__state,
-.sidebar-recent-session__unread {
-  order: -1;
-  flex: none;
-}
-
 .sidebar-board-glyph {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1919,6 +1913,18 @@ html.openclaw-native-macos
   height: 100%;
 }
 
+.viewer-avatar__fallback {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > img {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > .viewer-avatar__fallback {
+  display: grid;
+}
+
 .viewer-avatar > img {
   object-fit: cover;
 }
@@ -1952,6 +1958,130 @@ html.openclaw-native-macos
   height: 40px;
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
   font-size: var(--control-ui-text-sm);
+}
+
+.viewer-facepile-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  margin: -2px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  cursor: pointer;
+}
+
+.viewer-facepile-trigger:hover,
+.viewer-facepile-trigger:focus-visible {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+/* Long rosters scroll inside the popup instead of growing past the viewport.
+   Chrome matches the sidebar's other fixed menus (customize/session menus). */
+.presence-roster-menu::part(menu) {
+  min-width: 232px;
+  max-width: 288px;
+  max-height: min(340px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.presence-roster-menu__title {
+  padding: 6px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Rows are informational people entries, not checkbox menu items: drop Web
+   Awesome's checkmark gutter and item metrics so title, avatars, and text
+   share one left edge with the rest of the app's menus. */
+.presence-roster-menu__item {
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+}
+
+.presence-roster-menu__item:hover,
+.presence-roster-menu__item:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.presence-roster-menu__item::part(checkmark) {
+  display: none;
+}
+
+.presence-roster-menu__item::part(label) {
+  display: flex;
+  align-items: center;
+}
+
+/* Roster avatars grow to two-line row scale. The circle clips via the child
+   image/initials instead of the wrapper so the online badge can overflow.
+   The avatar-to-text gap lives here: Web Awesome's icon-slot margin targets
+   the slotted openclaw-viewer-avatar host, which is display:contents and
+   therefore generates no box for the margin to apply to. */
+.presence-roster-menu__item .viewer-avatar {
+  width: 26px;
+  height: 26px;
+  margin-inline-end: 10px;
+  overflow: visible;
+  border: none;
+  font-size: 10px;
+}
+
+.presence-roster-menu__item .viewer-avatar > img,
+.presence-roster-menu__item .viewer-avatar > span {
+  border-radius: var(--radius-full);
+}
+
+/* Everyone listed is online; the dot restates the header at a glance. */
+.presence-roster-menu__item .viewer-avatar::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--bg-elevated);
+  border-radius: var(--radius-full);
+  background: var(--ok);
+}
+
+.presence-roster-menu__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.presence-roster-menu__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.presence-roster-menu__you {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.presence-roster-menu__email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .sidebar-recent-session__name {
@@ -3593,6 +3723,44 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 /* Sidebar sessions redesign: work-session subtitles, agent sections, draft row. */
+.sidebar-session-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.sidebar-session-indicator__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
+}
+
+.sidebar-session-pr-indicator--open {
+  color: var(--ok);
+}
+
+.sidebar-session-pr-indicator--merged {
+  color: #a78bfa;
+}
+
+:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
+  color: #7c3aed;
+}
+
+.sidebar-session-pr-indicator svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-recent-session__text {
   display: flex;
   flex: 1 1 auto;
@@ -3619,6 +3787,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-session-attention__icon--question,
 .sidebar-session-attention__icon--approval {
+  color: var(--warn);
+}
+
+.sidebar-session-attention__icon--agent {
   color: var(--warn);
 }
 

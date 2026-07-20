@@ -12,9 +12,9 @@ import org.robolectric.RuntimeEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 class RoomChatTranscriptCacheTest {
-  private val database: ChatCacheDatabase =
+  private val database: GatewayCacheDatabase =
     Room
-      .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), ChatCacheDatabase::class.java)
+      .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
       .build()
 
   @After

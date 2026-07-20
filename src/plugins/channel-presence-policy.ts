@@ -147,8 +147,20 @@ function listManifestEnvConfiguredChannelSignals(params: {
       continue;
     }
     for (const channelId of record.channels) {
-      const envVars = record.channelEnvVars?.[channelId] ?? [];
-      if (!envVars.some((envVar) => hasNonEmptyEnvValue(params.env, envVar))) {
+      const packageChannel = record.packageChannel;
+      const configuredStateEnv =
+        normalizeOptionalLowercaseString(packageChannel?.id) ===
+        normalizeOptionalLowercaseString(channelId)
+          ? packageChannel?.configuredState?.env
+          : undefined;
+      const allOf = configuredStateEnv?.allOf ?? [];
+      const anyOf = configuredStateEnv?.anyOf ?? [];
+      const hasEnvContract = allOf.length > 0 || anyOf.length > 0;
+      if (
+        !hasEnvContract ||
+        !allOf.every((envVar) => hasNonEmptyEnvValue(params.env, envVar)) ||
+        (anyOf.length > 0 && !anyOf.some((envVar) => hasNonEmptyEnvValue(params.env, envVar)))
+      ) {
         continue;
       }
       if (seen.has(channelId)) {

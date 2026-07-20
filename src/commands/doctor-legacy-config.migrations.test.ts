@@ -58,6 +58,10 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   },
 }));
 
+function legacyConfig(value: unknown): OpenClawConfig {
+  return value as OpenClawConfig;
+}
+
 vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
   applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
     next: cfg,
@@ -1543,25 +1547,27 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("migrates legacy web search provider config to plugin-owned config paths", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        web: {
-          search: {
-            provider: "gemini",
-            maxResults: 5,
-            apiKey: "brave-key",
-            gemini: {
-              apiKey: "gemini-key",
-              model: "gemini-2.5-flash",
-            },
-            firecrawl: {
-              apiKey: "firecrawl-key",
-              baseUrl: "https://api.firecrawl.dev",
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              maxResults: 5,
+              apiKey: "brave-key",
+              gemini: {
+                apiKey: "gemini-key",
+                model: "gemini-2.5-flash",
+              },
+              firecrawl: {
+                apiKey: "firecrawl-key",
+                baseUrl: "https://api.firecrawl.dev",
+              },
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(res.config.tools?.web?.search).toEqual({
       provider: "gemini",
@@ -1601,32 +1607,34 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("merges legacy web search provider config into explicit plugin config without overriding it", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        web: {
-          search: {
-            provider: "gemini",
-            gemini: {
-              apiKey: "legacy-gemini-key",
-              model: "legacy-model",
-            },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          google: {
-            enabled: true,
-            config: {
-              webSearch: {
-                model: "explicit-model",
-                baseUrl: "https://generativelanguage.googleapis.com",
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              gemini: {
+                apiKey: "legacy-gemini-key",
+                model: "legacy-model",
               },
             },
           },
         },
-      },
-    });
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  model: "explicit-model",
+                  baseUrl: "https://generativelanguage.googleapis.com",
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
 
     expect(res.config.tools?.web?.search).toEqual({
       provider: "gemini",

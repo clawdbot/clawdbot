@@ -78,7 +78,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
             }
             const plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan =
               resolved;
-            return {
+            const prepared: Awaited<ReturnType<typeof resolveTurn>> = {
               ...plan,
               runDispatch: async () =>
                 await harness.dispatchReplyWithBufferedBlockDispatcher({
@@ -93,7 +93,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
                   replyOptions: plan.replyOptions,
                   replyResolver: plan.replyResolver,
                 }),
-            } as typeof resolved;
+              // Prepared dispatch owns the outer durable-ingress lifecycle. If
+              // core suppresses dispatch, release that claim instead of orphaning it.
+              runDispatchLifecycle: {
+                turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+                onDispatchSkipped: () => params.turnAdoptionLifecycle?.onAbandoned?.(),
+              },
+            };
+            return prepared;
           },
         },
       });

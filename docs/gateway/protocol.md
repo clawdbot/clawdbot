@@ -12,6 +12,25 @@ OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
 headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
+## npm packages
+
+These packages ship with OpenClaw release trains. During the initial rollout,
+npm may return `E404` until the first package-bearing release is published.
+
+- [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
+  publishes the schemas, validators, TypeScript types, lightweight frame and error
+  helpers, and version constants. Its tarball includes the generated
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  machine-readable contract.
+- [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
+  publishes the reference Node client and a browser-safe entry at
+  `@openclaw/gateway-client/browser`.
+
+For application lifecycle guidance, see
+[Building a Gateway client](https://docs.openclaw.ai/gateway/clients). For apps
+that supervise the Gateway as a child process, see
+[Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+
 ## Transport and framing
 
 - WebSocket, text frames, JSON payloads.
@@ -1147,5 +1166,7 @@ the TypeBox schemas re-exported from `packages/gateway-protocol/src/schema.ts`.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Bridge protocol](/gateway/bridge-protocol)
 - [Gateway runbook](/gateway)

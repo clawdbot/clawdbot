@@ -97,9 +97,6 @@
     "webSearchProviders": ["minimax"],
     "usageProviders": ["minimax"]
   },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
-  },
   "mediaUnderstandingProviderMetadata": {
     "minimax": {
       "capabilities": ["image"],

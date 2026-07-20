@@ -121,7 +121,6 @@ observation-only.
 | `before_model_resolve`          | Override provider or model before session messages load                                  |
 | `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
 | `before_prompt_build`           | Add dynamic context or system-prompt text before the model call                          |
-| `before_agent_start`            | Compatibility-only combined phase; prefer the two hooks above                            |
 | **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
 | **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
 | **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
@@ -239,6 +238,10 @@ provider payloads, start the Gateway with `--raw-stream` and
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
+- optional `ctx.requester`, the host-derived requester that initiated the current
+  message run. It can include `channel`, `accountId`, `senderId`,
+  `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
+  not false assurances; fail closed when policy requires them.
 
 It can return:
 
@@ -277,6 +280,131 @@ Guard behavior for typed lifecycle hooks:
   requested approval.
 - `onResolution` receives the resolved decision: `allow-once`, `allow-always`,
   `deny`, `timeout`, or `cancelled`.
+
+### Sender-aware policy in one file
+
+A standalone plugin file can keep deployment-specific policy in code instead
+of adding another configuration schema. This example gives owners every tool,
+lets configured maintainers use a conservative tool and message-action set,
+and exposes `/fix` to senders already authorized by the channel configuration:
+
+```typescript
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const AGENT_ID = "maintenance-agent";
+const MAINTAINER_SCOPES = [
+  {
+    channel: "discord",
+    accountId: "operations",
+    senderIds: new Set(["maintainer-user-id"]),
+    roleIds: new Set(["maintainer-role-id"]),
+  },
+];
+const MAINTAINER_TOOLS = new Set(["read", "web_fetch", "web_search", "session_status", "message"]);
+const MAINTAINER_MESSAGE_ACTIONS = new Set(["react", "reply", "thread-create", "thread-reply"]);
+
+export default definePluginEntry({
+  id: "maintenance-access",
+  name: "Maintenance access",
+  description: "Apply sender-aware tool policy to the maintenance agent.",
+  register(api) {
+    api.on("before_tool_call", (event, ctx) => {
+      if (ctx.agentId !== AGENT_ID) {
+        return;
+      }
+
+      const requester = ctx.requester;
+      if (requester?.senderIsOwner === true) {
+        return;
+      }
+
+      const maintainerScope = requester
+        ? MAINTAINER_SCOPES.find(
+            (scope) =>
+              scope.channel === requester.channel && scope.accountId === requester.accountId,
+          )
+        : undefined;
+      const isMaintainer =
+        maintainerScope !== undefined &&
+        ((requester?.senderId !== undefined && maintainerScope.senderIds.has(requester.senderId)) ||
+          requester?.roleIds?.some((roleId) => maintainerScope.roleIds.has(roleId)) === true);
+      if (!isMaintainer) {
+        return { block: true, blockReason: "Maintainer access required." };
+      }
+
+      if (event.toolName === "message") {
+        const action = typeof event.params.action === "string" ? event.params.action : "";
+        if (MAINTAINER_MESSAGE_ACTIONS.has(action)) {
+          return;
+        }
+        return { block: true, blockReason: `Owner required for message.${action || "unknown"}.` };
+      }
+
+      if (MAINTAINER_TOOLS.has(event.toolName)) {
+        return;
+      }
+      return { block: true, blockReason: `Owner required for ${event.toolName}.` };
+    });
+
+    api.registerCommand({
+      name: "fix",
+      description: "Ask the maintenance agent to investigate and fix an issue.",
+      acceptsArgs: true,
+      requireAuth: true,
+      handler: async (ctx) =>
+        ctx.agentId === AGENT_ID
+          ? { continueAgent: true }
+          : { text: "This command is only available in the maintenance conversation." },
+    });
+  },
+});
+```
+
+Load the file directly and restart the Gateway:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "maintenance-agent",
+        workspace: "~/.openclaw/workspace-maintenance",
+      },
+    ],
+  },
+  bindings: [
+    {
+      agentId: "maintenance-agent",
+      match: {
+        channel: "discord",
+        accountId: "operations",
+        peer: { kind: "channel", id: "maintenance-channel-id" },
+      },
+    },
+  ],
+  plugins: {
+    load: { paths: ["~/.openclaw/policies/maintenance-access.ts"] },
+  },
+}
+```
+
+`AGENT_ID` must name the agent bound to the maintenance conversation. The
+binding selects that agent for normal messages and `/fix`; the standalone file
+remains the single owner of owner-versus-maintainer tool policy.
+
+`requireAuth: true` reuses each channel's existing sender admission. For
+Discord, a guild or channel `users`/`roles` allowlist can authorize the
+maintenance audience. Other channels can use stable sender ids. The hook then
+applies the finer per-tool decision on every tool call in the run, including
+Codex native `PreToolUse` calls. It can veto a tool the model sees, but cannot
+add a tool omitted by the host. Existing sandbox, exec approval, owner-only
+core-tool, and channel policies still apply; the hook cannot grant past them.
+
+Scope sender and role ids to an exact channel/account pair as shown; both are
+provider-local namespaces. Keep the allowlists conservative. Add write or
+execution tools only when the deployment's sandbox and approval policy make
+that safe. For automated or system runs, decide explicitly whether an absent
+`ctx.requester` should pass; the example denies it for the scoped agent.
 
 See [Plugin permission requests](/plugins/plugin-permission-requests) for
 approval routing, decision behavior, and when to use `requireApproval` instead
@@ -349,9 +477,6 @@ Use the phase-specific hooks for new plugins:
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
 
-`before_agent_start` remains for compatibility. Prefer the explicit hooks
-above so the plugin does not depend on a legacy combined phase.
-
 `before_agent_run` runs after prompt construction and before any model input,
 including prompt-local image loading and `llm_input` observation. It receives
 the current user input as `prompt`, plus loaded session history in `messages`
@@ -368,7 +493,7 @@ excluded from transcript, history, broadcast, log, and diagnostics payloads.
 Observability should use sanitized fields such as blocker id, outcome,
 timestamp, or a safe category.
 
-`before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
+Agent-turn hooks including `agent_end` include `event.runId` when OpenClaw can
 identify the active run; the same value is also on `ctx.runId`. Cron-driven
 runs also expose `ctx.jobId` (the originating cron job id) on the agent-turn
 context so hooks can scope metrics, side effects, or state to a specific
@@ -798,9 +923,6 @@ before the next major release:
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
   [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
-- **`before_agent_start`** remains for compatibility. New plugins should use
-  `before_model_resolve` and `before_prompt_build` instead of the combined
-  phase.
 - **`subagent_spawning`** remains for compatibility with older plugins, but
   new plugins should not return thread routing from it. Core prepares
   `thread: true` subagent bindings through channel session-binding adapters

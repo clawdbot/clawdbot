@@ -50,13 +50,6 @@ describe("createWhatsAppStatusReactionController", () => {
       messages: {
         statusReactions: {
           enabled: true,
-          timing: {
-            debounceMs: 1_000_000,
-            stallSoftMs: 1_000_000,
-            stallHardMs: 1_000_000,
-            doneHoldMs: 0,
-            errorHoldMs: 0,
-          },
         },
       },
       channels: {
@@ -136,13 +129,6 @@ describe("createWhatsAppStatusReactionController", () => {
       messages: {
         statusReactions: {
           enabled: true,
-          timing: {
-            debounceMs: 1_000_000,
-            stallSoftMs: 1_000_000,
-            stallHardMs: 1_000_000,
-            doneHoldMs: 0,
-            errorHoldMs: 0,
-          },
         },
       },
       channels: {
@@ -186,13 +172,6 @@ describe("createWhatsAppStatusReactionController", () => {
       messages: {
         statusReactions: {
           enabled: true,
-          timing: {
-            debounceMs: 1_000_000,
-            stallSoftMs: 1_000_000,
-            stallHardMs: 1_000_000,
-            doneHoldMs: 0,
-            errorHoldMs: 0,
-          },
         },
       },
       channels: {

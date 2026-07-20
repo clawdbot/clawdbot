@@ -1,5 +1,6 @@
-const MAX_PROFILE_AVATAR_EDGE = 256;
+const MAX_PROFILE_AVATAR_EDGE = 512;
 const MAX_PROFILE_AVATAR_BYTES = 512 * 1024;
+const MAX_PROFILE_AVATAR_BASE64_CHARS = 700_000;
 const MAX_PROFILE_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024;
 
 type ProcessedProfileAvatar = {
@@ -19,10 +20,13 @@ function fitAvatarDimensions(width: number, height: number) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new ProfileAvatarError("invalid-image");
   }
-  const scale = Math.min(1, MAX_PROFILE_AVATAR_EDGE / Math.max(width, height));
+  const sourceEdge = Math.min(width, height);
+  const scale = Math.min(1, MAX_PROFILE_AVATAR_EDGE / sourceEdge);
   return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
+    sourceEdge,
+    sourceX: Math.max(0, Math.round((width - sourceEdge) / 2)),
+    sourceY: Math.max(0, Math.round((height - sourceEdge) / 2)),
+    edge: Math.max(1, Math.round(sourceEdge * scale)),
   };
 }
 
@@ -67,7 +71,11 @@ async function encodeAvatarBlob(
     throw new ProfileAvatarError("too-large");
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  return { mime, avatarBase64: bytesToBase64(bytes), byteLength: bytes.byteLength };
+  const avatarBase64 = bytesToBase64(bytes);
+  if (avatarBase64.length > MAX_PROFILE_AVATAR_BASE64_CHARS) {
+    throw new ProfileAvatarError("too-large");
+  }
+  return { mime, avatarBase64, byteLength: bytes.byteLength };
 }
 
 export async function processProfileAvatar(file: File): Promise<ProcessedProfileAvatar> {
@@ -80,13 +88,23 @@ export async function processProfileAvatar(file: File): Promise<ProcessedProfile
   const image = await loadImage(file);
   const dimensions = fitAvatarDimensions(image.naturalWidth, image.naturalHeight);
   const canvas = document.createElement("canvas");
-  canvas.width = dimensions.width;
-  canvas.height = dimensions.height;
+  canvas.width = dimensions.edge;
+  canvas.height = dimensions.edge;
   const context = canvas.getContext("2d");
   if (!context) {
     throw new ProfileAvatarError("invalid-image");
   }
-  context.drawImage(image, 0, 0, dimensions.width, dimensions.height);
+  context.drawImage(
+    image,
+    dimensions.sourceX,
+    dimensions.sourceY,
+    dimensions.sourceEdge,
+    dimensions.sourceEdge,
+    0,
+    0,
+    dimensions.edge,
+    dimensions.edge,
+  );
 
   const preferredMime = file.type === "image/webp" ? "image/webp" : "image/png";
   let mime: ProcessedProfileAvatar["mime"] = preferredMime;

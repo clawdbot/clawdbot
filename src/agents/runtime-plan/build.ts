@@ -133,7 +133,7 @@ export function buildAgentRuntimeDeliveryPlan(
 }
 
 /** Build run-outcome classification hooks for model fallback decisions. */
-export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
+function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   return {
     classifyRunResult: classifyEmbeddedAgentRunResultForModelFallback,
   };

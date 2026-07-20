@@ -20,7 +20,6 @@ import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sd
 import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 
 export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,

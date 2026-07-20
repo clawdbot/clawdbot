@@ -75,6 +75,8 @@ export type IncludeResolver = {
   readFile: (path: string) => string;
   readFileWithGuards?: (params: IncludeFileReadParams) => string;
   parseJson: (raw: string) => unknown;
+  /** Reports lexically contained paths before canonical/open checks for watcher repair flows. */
+  onLexicalPath?: (resolvedPath: string) => void;
 };
 
 type IncludeFileReadParams = {
@@ -278,6 +280,7 @@ class IncludeProcessor {
         includePath,
       );
     }
+    this.resolver.onLexicalPath?.(normalized);
 
     // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass.
     // The realpath may legitimately land in a different allowed root than the

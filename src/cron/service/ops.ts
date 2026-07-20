@@ -4,6 +4,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
+} from "../../agents/agent-lifecycle-registry.js";
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -320,11 +324,12 @@ export function resumeScheduling(state: CronServiceState) {
 export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
+    const sqlitePath = resolveOpenClawStateSqlitePath();
     return {
       enabled: state.deps.cronEnabled,
-      storePath: state.deps.storePath,
+      storePath: sqlitePath,
       storage: "sqlite" as const,
-      sqlitePath: resolveOpenClawStateSqlitePath(),
+      sqlitePath,
       jobs: state.store?.jobs.length ?? 0,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
     };
@@ -386,12 +391,19 @@ function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
   return job.state.lastRunStatus ?? job.state.lastStatus ?? "unknown";
 }
 
-function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
+function resolveEffectiveJobAgentId(
+  job: { agentId?: string | null },
+  defaultAgentId: string | undefined,
+) {
   return (
     normalizeOptionalAgentId(job.agentId) ??
     normalizeOptionalAgentId(defaultAgentId) ??
     DEFAULT_AGENT_ID
   );
+}
+
+function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
 
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
@@ -567,6 +579,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state, { skipRecompute: true });
+    const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
+    if (state.deps.isAgentAvailable?.(agentId) === false) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
       throw new Error("cron job id must not be blank");
@@ -677,6 +693,12 @@ async function updateLoadedJob(params: {
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
   });
+  if (patch.agentId !== undefined) {
+    const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
+    if (state.deps.isAgentAvailable?.(agentId) === false) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
+  }
   finalizeUpdatedJob({
     job,
     nextJob,
@@ -735,6 +757,67 @@ export async function remove(state: CronServiceState, id: string) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
     }
     return { ok: true, removed } as const;
+  });
+}
+
+/** Remove one agent's jobs while holding the cron lock across an external roster commit. */
+export async function removeAgentJobsTransactional<T>(
+  state: CronServiceState,
+  agentId: string,
+  commit: () => Promise<T>,
+): Promise<T> {
+  return await locked(state, async () => {
+    warnIfDisabled(state, "remove agent jobs");
+    await ensureLoaded(state, { skipRecompute: true });
+    const id = normalizeOptionalAgentId(agentId);
+    if (!id || !state.store) {
+      return await commit();
+    }
+    const defaultAgentId = resolveCurrentDefaultAgentId(state);
+    const removedJobs = state.store.jobs.filter(
+      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) === id,
+    );
+    if (removedJobs.length === 0) {
+      return await commit();
+    }
+    const snapshot = snapshotStoreForRollback(state);
+    state.store.jobs = state.store.jobs.filter(
+      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
+    );
+    recomputeNextRunsForMaintenance(state);
+    await persistOrRestore(state, snapshot);
+    let result: T;
+    try {
+      result = await commit();
+    } catch (error) {
+      if (error instanceof AgentDeletionCommitUncertainError) {
+        armTimer(state);
+        for (const job of removedJobs) {
+          emit(state, { jobId: job.id, action: "removed", job });
+        }
+        throw error;
+      }
+      state.store = snapshot.store;
+      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+      try {
+        if (!(await persist(state))) {
+          throw new Error("cron: rollback store write did not complete", { cause: error });
+        }
+        armTimer(state);
+      } catch (rollbackError) {
+        throw new AgentDeletionAuthorityRollbackError(
+          [error, rollbackError],
+          `cron: failed to roll back agent job deletion for ${id}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    armTimer(state);
+    for (const job of removedJobs) {
+      emit(state, { jobId: job.id, action: "removed", job });
+    }
+    return result;
   });
 }
 

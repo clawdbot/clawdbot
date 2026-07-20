@@ -28,7 +28,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "media",
   "mediaUnderstanding",
   "tts",
-  "stt",
   "channel",
   "events",
   "logging",
@@ -256,7 +255,7 @@ export function resolvePluginModuleExport(moduleExport: unknown): {
     }
     if (resolved && typeof resolved === "object") {
       const definition = resolved as OpenClawPluginDefinition;
-      const register = definition.register ?? definition.activate;
+      const register = definition.register;
       if (typeof register === "function") {
         return { definition, register };
       }
@@ -273,7 +272,7 @@ export function resolvePluginModuleExport(moduleExport: unknown): {
   }
   if (resolved && typeof resolved === "object") {
     const definition = resolved as OpenClawPluginDefinition;
-    return { definition, register: definition.register ?? definition.activate };
+    return { definition, register: definition.register };
   }
   return {};
 }

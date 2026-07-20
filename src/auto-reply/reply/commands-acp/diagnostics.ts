@@ -51,7 +51,7 @@ export async function handleAcpDoctorAction(
   const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
-  const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot(params.cfg);
+  const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot();
   const lines = ["ACP doctor:", "-----", `configuredBackend: ${backendId}`];
   lines.push(`activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`);
   lines.push(`runtimeIdleTtlMs: ${managerSnapshot.runtimeCache.idleTtlMs}`);

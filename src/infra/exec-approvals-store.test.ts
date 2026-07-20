@@ -4,6 +4,12 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AgentDeletionCommitUncertainError,
+  beginAgentDeletion,
+  claimCompletedAgentDeletion,
+} from "../agents/agent-lifecycle-registry.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
@@ -27,6 +33,7 @@ let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
 let persistAllowAlwaysDecisionSync: ExecApprovalsModule["persistAllowAlwaysDecision"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
+let withAgentExecApprovalsRemoved: ExecApprovalsModule["withAgentExecApprovalsRemoved"];
 let recordAllowlistMatchesUseSync: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
 let restoreExecApprovalsSnapshotLocked: ExecApprovalsModule["restoreExecApprovalsSnapshotLocked"];
@@ -54,6 +61,7 @@ beforeAll(async () => {
   persistAllowAlwaysDecisionSync = module.persistAllowAlwaysDecision;
   persistAllowAlwaysPatterns = module.persistAllowAlwaysPatterns;
   readExecApprovalsSnapshot = module.readExecApprovalsSnapshot;
+  withAgentExecApprovalsRemoved = module.withAgentExecApprovalsRemoved;
   recordAllowlistMatchesUseSync = module.recordAllowlistMatchesUse;
   requestExecApprovalViaSocket = module.requestExecApprovalViaSocket;
   restoreExecApprovalsSnapshotLocked = module.restoreExecApprovalsSnapshotLocked;
@@ -74,6 +82,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   testEnvSnapshot.restore();
+  closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -486,6 +495,208 @@ describe("exec approvals store helpers", () => {
       }),
     ).resolves.toBeNull();
     expect(fs.readFileSync(approvalsPath, "utf8")).toBe("");
+  });
+
+  it("removes only the deleted agent policy so recreating the id inherits nothing", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "deny", ask: "off" },
+      agents: {
+        "deleted-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/old-tool" }],
+        },
+        "other-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/keep-tool" }],
+        },
+      },
+    });
+
+    await expect(
+      withAgentExecApprovalsRemoved("Deleted-Agent", async () => "committed"),
+    ).resolves.toBe("committed");
+
+    const persisted = readApprovalsFile(dir);
+    expect(persisted.agents?.["deleted-agent"]).toBeUndefined();
+    expect(persisted.agents?.["other-agent"]?.allowlist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/keep-tool" }),
+    ]);
+    const recreatedPolicy = resolveExecApprovalsSync("deleted-agent");
+    expect(recreatedPolicy.agent.security).toBe("deny");
+    expect(recreatedPolicy.allowlist).toEqual([]);
+  });
+
+  it("does not create an approvals file when the deleted agent has no policy", async () => {
+    const dir = createHomeDir();
+
+    await expect(
+      withAgentExecApprovalsRemoved("missing-agent", async () => "committed"),
+    ).resolves.toBe("committed");
+
+    expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+  });
+
+  it("restores the deleted policy when the roster commit fails", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        "deleted-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/old-tool" }],
+        },
+        "other-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/keep-tool" }],
+        },
+      },
+    });
+
+    await expect(
+      withAgentExecApprovalsRemoved("deleted-agent", async () => {
+        expect(readApprovalsFile(dir).agents?.["deleted-agent"]).toBeUndefined();
+        throw new Error("config commit failed");
+      }),
+    ).rejects.toThrow("config commit failed");
+
+    const restored = readApprovalsFile(dir);
+    expect(restored.agents?.["deleted-agent"]?.allowlist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/old-tool" }),
+    ]);
+    expect(restored.agents?.["other-agent"]?.allowlist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/keep-tool" }),
+    ]);
+  });
+
+  it("rejects a late policy write until the deleted id is recreated", async () => {
+    createHomeDir();
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await withAgentExecApprovalsRemoved("deleted-agent", async () => {
+        deletion.commit();
+      });
+
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({
+            ...file,
+            agents: {
+              ...file.agents,
+              "deleted-agent": { security: "allowlist" },
+            },
+          }),
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+
+      deletion.finish();
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({
+            ...file,
+            agents: {
+              ...file.agents,
+              "deleted-agent": { security: "allowlist" },
+            },
+          }),
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+      expect(claimCompletedAgentDeletion("deleted-agent", deletion.entry.operationId)).toBe(true);
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({
+            ...file,
+            agents: {
+              ...file.agents,
+              "deleted-agent": { security: "allowlist" },
+            },
+          }),
+        }),
+      ).resolves.not.toBeNull();
+    } finally {
+      deletion.finish();
+    }
+  });
+
+  it("rejects generic removal of a fenced agent policy", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: { "deleted-agent": { security: "deny" } },
+    });
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({ ...file, agents: {} }),
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+      expect(readApprovalsFile(dir).agents?.["deleted-agent"]?.security).toBe("deny");
+    } finally {
+      deletion.rollback();
+    }
+  });
+
+  it("rejects an in-place update to a fenced agent policy", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: { "deleted-agent": { security: "deny" } },
+    });
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await expect(
+        updateExecApprovals({
+          update: (file) => {
+            file.agents = { "deleted-agent": { security: "full" } };
+            return file;
+          },
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+      expect(readApprovalsFile(dir).agents?.["deleted-agent"]?.security).toBe("deny");
+    } finally {
+      deletion.rollback();
+    }
+  });
+
+  it("does not restore removed policy when roster commit outcome is uncertain", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: { "deleted-agent": { security: "allowlist" } },
+    });
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await expect(
+        withAgentExecApprovalsRemoved("deleted-agent", async () => {
+          throw new AgentDeletionCommitUncertainError(new Error("config outcome unknown"));
+        }),
+      ).rejects.toThrow("config outcome unknown");
+      expect(readApprovalsFile(dir).agents?.["deleted-agent"]).toBeUndefined();
+    } finally {
+      deletion.rollback();
+    }
   });
 
   it("restores a matching real-store snapshot", async () => {

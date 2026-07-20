@@ -7,6 +7,7 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
@@ -16,6 +17,10 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
@@ -36,6 +41,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -52,10 +58,12 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -70,6 +78,94 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
 type RequestedSessionAgentIdResolution =
   | { ok: true; agentId?: string }
   | { ok: false; error: ErrorShape };
+
+async function existingModelSelectionWouldChange(params: {
+  cfg: OpenClawConfig;
+  catalogModel?: string;
+  defaultModel: string;
+  defaultProvider: string;
+  existingEntry: SessionEntry;
+  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  requestedModel?: string;
+  requestedThinkingLevel?: string;
+  subagentModelHint?: string;
+}): Promise<boolean> {
+  if (params.catalogModel) {
+    // Public catalog creates cannot include a key, and the service rejects
+    // catalog targets for existing rows. If a trusted caller reaches this,
+    // keep catalog-owned model/runtime adoption fail-closed.
+    return true;
+  }
+  const requestedThinkingLevel = normalizeOptionalString(params.requestedThinkingLevel);
+  if (
+    requestedThinkingLevel &&
+    requestedThinkingLevel !== normalizeOptionalString(params.existingEntry.thinkingLevel)
+  ) {
+    return true;
+  }
+  const requestedModel = normalizeOptionalString(params.requestedModel);
+  if (!requestedModel) {
+    return false;
+  }
+  if (!params.loadGatewayModelCatalog) {
+    // Public/TUI model selection paths provide the catalog loader used by the
+    // patch resolver. Without it, an existing-row model request cannot prove
+    // it is a no-op, so non-admin callers must not reach the mutation path.
+    return true;
+  }
+  const catalog = await params.loadGatewayModelCatalog();
+  const resolved = resolveSessionPatchModelSelection({
+    cfg: params.cfg,
+    catalog,
+    raw: requestedModel,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+    subagentModelHint: params.subagentModelHint,
+  });
+  if (!resolved.ok) {
+    // Admin callers still receive the precise model error from sessions.patch.
+    // Non-admin existing-row creates fail closed before that mutation path.
+    return true;
+  }
+  let existingProvider =
+    normalizeOptionalString(params.existingEntry.providerOverride) ?? params.defaultProvider;
+  let existingModel =
+    normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
+  if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
+    const resolvedSubagentDefault = resolveSessionPatchModelSelection({
+      cfg: params.cfg,
+      catalog,
+      raw: params.subagentModelHint,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+    });
+    if (!resolvedSubagentDefault.ok) {
+      return true;
+    }
+    if (!normalizeOptionalString(params.existingEntry.providerOverride)) {
+      existingProvider = resolvedSubagentDefault.provider;
+    }
+    existingModel = resolvedSubagentDefault.model;
+  }
+  const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
+  const requestedProfile = normalizeOptionalString(resolved.profile);
+  const profileWouldChange =
+    requestedProfile !== undefined
+      ? requestedProfile !== existingProfile
+      : existingProfile !== undefined &&
+        !shouldPreserveSessionAuthProfileOverride({
+          cfg: params.cfg,
+          currentProvider:
+            params.existingEntry.providerOverride ??
+            params.existingEntry.modelProvider ??
+            params.defaultProvider,
+          entry: params.existingEntry,
+          provider: resolved.provider,
+        });
+  return (
+    resolved.provider !== existingProvider || resolved.model !== existingModel || profileWouldChange
+  );
+}
 
 export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
@@ -187,6 +283,8 @@ export async function createGatewaySession(params: {
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Public callers need admin before reconfiguring an adopted keyed session. */
+  allowExistingModelSelection?: boolean;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
@@ -566,6 +664,39 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        const requestedModel = normalizeOptionalString(params.model);
+        const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
+        if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
+          const gateDefaultModel = resolveDefaultModelForAgent({
+            cfg: params.cfg,
+            agentId: target.agentId,
+          });
+          const modelSelectionWouldChange = await existingModelSelectionWouldChange({
+            cfg: params.cfg,
+            catalogModel,
+            defaultModel: gateDefaultModel.model,
+            defaultProvider: gateDefaultModel.provider,
+            existingEntry,
+            loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+            requestedModel,
+            requestedThinkingLevel,
+            subagentModelHint: isSubagentSessionKey(target.canonicalKey)
+              ? resolveSubagentConfiguredModelSelection({
+                  cfg: params.cfg,
+                  agentId: target.agentId,
+                })
+              : undefined,
+          });
+          if (modelSelectionWouldChange) {
+            return {
+              ok: false,
+              error: missingScopeErrorShape({
+                missingScope: ADMIN_SCOPE,
+                requiredScopes: [ADMIN_SCOPE],
+              }),
+            };
+          }
+        }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
           store: sessionEntries,
@@ -574,8 +705,8 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            model: catalogModel ?? normalizeOptionalString(params.model),
-            thinkingLevel: normalizeOptionalString(params.thinkingLevel),
+            model: catalogModel ?? requestedModel,
+            thinkingLevel: requestedThinkingLevel,
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,

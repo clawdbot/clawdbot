@@ -10869,9 +10869,9 @@
       "translated": "Над чем вы хотите поработать?"
     },
     {
-      "id": "native.apple.4da775013ac9b123",
-      "source": "The thread attaches once the gateway is ready.",
-      "translated": "Ветка подключится, когда Gateway будет готов."
+      "id": "native.apple.ed7f703a8809b564",
+      "source": "The session attaches once the gateway is ready.",
+      "translated": "Сеанс подключится, когда Gateway будет готов."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10919,9 +10919,9 @@
       "translated": "Параметры нового сеанса…"
     },
     {
-      "id": "native.apple.003b25ddafeb18e9",
-      "source": "Threads…",
-      "translated": "Ветки…"
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Сеансы…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11084,14 +11084,14 @@
       "translated": "Создать"
     },
     {
-      "id": "native.apple.31d5c7287cfb3abe",
-      "source": "Delete Thread?",
-      "translated": "Удалить ветку?"
+      "id": "native.apple.e7382c53c7dd48f7",
+      "source": "Delete Session?",
+      "translated": "Удалить сеанс?"
     },
     {
-      "id": "native.apple.d3395564809f1120",
-      "source": "Delete Thread",
-      "translated": "Удалить ветку"
+      "id": "native.apple.702fd8b48da56065",
+      "source": "Delete Session",
+      "translated": "Удалить сеанс"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -11099,9 +11099,9 @@
       "translated": "Отмена"
     },
     {
-      "id": "native.apple.092659256d26cb03",
-      "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Это действие безвозвратно удалит ветку и её расшифровку."
+      "id": "native.apple.61f3f19ea24c6012",
+      "source": "This permanently deletes the session and its transcript.",
+      "translated": "Сеанс и его расшифровка будут удалены без возможности восстановления."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11129,9 +11129,9 @@
       "translated": "Новая группа"
     },
     {
-      "id": "native.apple.683032464c497bbd",
-      "source": "Rename Thread",
-      "translated": "Переименовать ветку"
+      "id": "native.apple.cd368674179237a0",
+      "source": "Rename Session",
+      "translated": "Переименовать сеанс"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -11139,14 +11139,54 @@
       "translated": "Название группы"
     },
     {
-      "id": "native.apple.f887aa956588f237",
-      "source": "Thread name",
-      "translated": "Название ветки"
+      "id": "native.apple.8b54306971cfa8c9",
+      "source": "Session name",
+      "translated": "Название сеанса"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
       "source": "View More",
       "translated": "Показать еще"
+    },
+    {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "Live"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "Непрочитанное"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "Токены"
+    },
+    {
+      "id": "native.apple.bec8b61a3a29b59a",
+      "source": "Opens Sessions",
+      "translated": "Открывает раздел «Сеансы»"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "Ожидающие подтверждения"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "Automation issues"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "31-day usage"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "Opens Usage"
     },
     {
       "id": "native.apple.65fb4d9ce6e5bbda",
@@ -11179,14 +11219,14 @@
       "translated": "Агенты"
     },
     {
-      "id": "native.apple.7c8231b7b1ca480f",
-      "source": "Agent thread",
-      "translated": "Ветка агента"
+      "id": "native.apple.789d5d0790fd18ca",
+      "source": "Agent session",
+      "translated": "Сеанс агента"
     },
     {
-      "id": "native.apple.b3c553614f762a58",
-      "source": "Recent threads",
-      "translated": "Недавние ветки"
+      "id": "native.apple.ee45dce4a2e44737",
+      "source": "Recent sessions",
+      "translated": "Недавние сеансы"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -11194,9 +11234,9 @@
       "translated": "Gateway офлайн"
     },
     {
-      "id": "native.apple.5aa32afda85064ea",
-      "source": "No recent threads",
-      "translated": "Нет недавних веток"
+      "id": "native.apple.c97e0382e578a2f7",
+      "source": "No recent sessions",
+      "translated": "Нет недавних сеансов"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11254,6 +11294,11 @@
       "translated": "Личный чат"
     },
     {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "just now"
+    },
+    {
       "id": "native.apple.dbd48d25920f342b",
       "source": "%@ on %@",
       "translated": "%@ на %@"
@@ -11294,14 +11339,14 @@
       "translated": "Отмена"
     },
     {
-      "id": "native.apple.b6855cf19a50f477",
-      "source": "Threads",
-      "translated": "Ветки"
+      "id": "native.apple.7a6511a467e34f69",
+      "source": "Sessions",
+      "translated": "Сеансы"
     },
     {
-      "id": "native.apple.9b1d0ef27a1333b0",
-      "source": "Archived threads",
-      "translated": "Архивные ветки"
+      "id": "native.apple.e6b8913014b64f0a",
+      "source": "Archived sessions",
+      "translated": "Архивные сеансы"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11309,34 +11354,34 @@
       "translated": "Показать архив"
     },
     {
-      "id": "native.apple.98167401c7267735",
-      "source": "Threads unavailable",
-      "translated": "Ветки недоступны"
+      "id": "native.apple.119433782518f199",
+      "source": "Sessions unavailable",
+      "translated": "Сеансы недоступны"
     },
     {
-      "id": "native.apple.4d28a7def2337b9f",
-      "source": "Loading archived threads",
-      "translated": "Загрузка архивных веток"
+      "id": "native.apple.9882fbadac3bea03",
+      "source": "Loading archived sessions",
+      "translated": "Загрузка архивных сеансов"
     },
     {
-      "id": "native.apple.777d7b706933bd7b",
-      "source": "Loading recent threads",
-      "translated": "Загрузка недавних веток"
+      "id": "native.apple.16dca1cfac8a571b",
+      "source": "Loading recent sessions",
+      "translated": "Загрузка недавних сеансов"
     },
     {
-      "id": "native.apple.22f81ea94bef8410",
-      "source": "^[\\(count) thread](inflect: true)",
-      "translated": "^[\\(count) ветка](inflect: true)"
+      "id": "native.apple.207dad20d09f3160",
+      "source": "^[\\(count) session](inflect: true)",
+      "translated": "^[\\(count) сеанс](inflect: true)"
     },
     {
-      "id": "native.apple.1cad51e14db59bf9",
-      "source": "No archived threads",
-      "translated": "Нет архивных веток"
+      "id": "native.apple.a0b4091bf77d4060",
+      "source": "No archived sessions",
+      "translated": "Нет архивных сеансов"
     },
     {
-      "id": "native.apple.18ef832d3a7ddcf8",
-      "source": "Archived threads will appear here.",
-      "translated": "Архивные ветки появятся здесь."
+      "id": "native.apple.acfdf5c72e289736",
+      "source": "Archived sessions will appear here.",
+      "translated": "Архивные сеансы появятся здесь."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11419,9 +11464,9 @@
       "translated": "Поделиться приемом"
     },
     {
-      "id": "native.apple.21d9208d86a4d1fe",
-      "source": "Loading threads",
-      "translated": "Загрузка веток"
+      "id": "native.apple.4c5b2ecf243cfbbc",
+      "source": "Loading sessions",
+      "translated": "Загрузка сеансов"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11429,19 +11474,19 @@
       "translated": "Получение недавней активности из Gateway."
     },
     {
-      "id": "native.apple.4be1f79aa2b230ff",
-      "source": "Threads unavailable",
-      "translated": "Ветки недоступны"
+      "id": "native.apple.c4479934c65c973c",
+      "source": "Sessions unavailable",
+      "translated": "Сеансы недоступны"
     },
     {
-      "id": "native.apple.98b348873556bc46",
-      "source": "No recent threads",
-      "translated": "Нет недавних веток"
+      "id": "native.apple.6e67b64954ba3002",
+      "source": "No recent sessions",
+      "translated": "Нет недавних сеансов"
     },
     {
-      "id": "native.apple.7396d205574d279f",
-      "source": "Thread activity offline",
-      "translated": "Активность ветки недоступна офлайн"
+      "id": "native.apple.5dce07848bec08b5",
+      "source": "Session activity offline",
+      "translated": "Активность сеансов недоступна"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11899,9 +11944,9 @@
       "translated": "Карточка"
     },
     {
-      "id": "native.apple.c9ec1b0e18074d8a",
-      "source": "Open Thread",
-      "translated": "Открыть ветку"
+      "id": "native.apple.3edbccb7c14b693c",
+      "source": "Open Session",
+      "translated": "Открыть сеанс"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -12100,91 +12145,6 @@
     },
     {
       "id": "native.apple.1fc3cbd16076f75f",
-      "source": "Offline",
-      "translated": "Не в сети"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "Управление"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "Открывает Настройки / Gateway"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "Чат с агентом и недавняя работа."
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "Обзор"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "Экземпляры"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "Файлы"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "Сновидение"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "Использование"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "Автоматизации"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "Агент по умолчанию"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@, %2$@, %3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@, %2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "В сети"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "Подключение"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "Внимание"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
       "translated": "Не в сети"
     },
@@ -12989,6 +12949,16 @@
       "translated": "Система следует настройке оформления этого устройства."
     },
     {
+      "id": "native.apple.6d48137a8f6a5e96",
+      "source": "Sidebar Agents",
+      "translated": "Агенты на боковой панели"
+    },
+    {
+      "id": "native.apple.69cccbdee0bb0b56",
+      "source": "How many agents the sidebar lists before the switcher menu.",
+      "translated": "Количество агентов, отображаемых на боковой панели перед меню переключения."
+    },
+    {
       "id": "native.apple.70eca66c79335a6e",
       "source": "Connection",
       "translated": "Подключение"
@@ -13389,9 +13359,9 @@
       "translated": "По умолчанию"
     },
     {
-      "id": "native.apple.f4ae5664c3eda95d",
-      "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "Используется для новых веток чата и сеансов разговора."
+      "id": "native.apple.6805480889265026",
+      "source": "Used for new Chat and Talk sessions.",
+      "translated": "Используется для новых сеансов чата и разговора."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15624,39 +15594,134 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "Настройки"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "Скрыть боковую панель"
+    },
+    {
+      "id": "native.apple.e779847164babc29",
+      "source": "Selected",
+      "translated": "Выбрано"
+    },
+    {
+      "id": "native.apple.698c71602b569378",
+      "source": "More Agents",
+      "translated": "Другие агенты"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "Search sessions"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "Clear session search"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "Loading sessions"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "No recent sessions"
+    },
+    {
+      "id": "native.apple.01a4c3f6192bb1a3",
+      "source": "Recent",
+      "translated": "Недавние"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "All Sessions…"
+    },
+    {
+      "id": "native.apple.aa7c4ecffd2ba36a",
+      "source": "Edit Pages",
+      "translated": "Изменить страницы"
+    },
+    {
+      "id": "native.apple.4d724d2e5731583d",
+      "source": "Home",
+      "translated": "Главная"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "Непрочитанное"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "Требует внимания"
+    },
+    {
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Новый чат"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "Подключение"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
       "translated": "В сети"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "Подключение"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
       "translated": "Требует внимания"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "Не в сети"
     },
     {
-      "id": "native.apple.a4256b2ab523ee60",
-      "source": "Chat",
-      "translated": "Чат"
+      "id": "native.apple.9fc7dfa0dccea003",
+      "source": "Pinned pages stay in the sidebar. Home is always shown.",
+      "translated": "Закреплённые страницы остаются на боковой панели. Главная отображается всегда."
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Pages"
+    },
+    {
+      "id": "native.apple.422767686f219093",
+      "source": "Done",
+      "translated": "Готово"
+    },
+    {
+      "id": "native.apple.e197e8708ad3b2c8",
+      "source": "Pinned",
+      "translated": "Закреплено"
+    },
+    {
+      "id": "native.apple.098013d7dd8cdfc7",
+      "source": "Not pinned",
+      "translated": "Не закреплено"
     },
     {
       "id": "native.apple.64d7dc062ef4cc81",
@@ -15694,44 +15759,19 @@
       "translated": "Автоматизации"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "Показать боковую панель"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "Назад к %@"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "Скрыть боковую панель"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "Показать боковую панель"
+    },
+    {
       "id": "native.apple.8af43f59602ec0d8",
       "source": "Close canvas",
       "translated": "Закрыть холст"
-    },
-    {
-      "id": "native.apple.a1db6ce0aed1d18e",
-      "source": "Chat, voice active",
-      "translated": "Чат, голос включён"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "Управление"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "Агент"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "Настройки"
     },
     {
       "id": "native.apple.8a4751c86aa6fe77",
@@ -15794,9 +15834,9 @@
       "translated": "Экземпляры"
     },
     {
-      "id": "native.apple.11fe8b9941954dfb",
-      "source": "Threads",
-      "translated": "Ветки"
+      "id": "native.apple.e3e3ce1a79ebbd70",
+      "source": "Sessions",
+      "translated": "Сеансы"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -23477,6 +23517,16 @@
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
       "translated": "Не удалось сохранить изображение виджета."
+    },
+    {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "Элемент списка"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "Элемент"
     },
     {
       "id": "native.apple.769b7dcea4708c40",

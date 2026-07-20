@@ -18,7 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import {
   buildDashboardSessionKey,
   createGatewaySession,
@@ -321,6 +321,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
+    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
+      ADMIN_SCOPE,
+      clientScopes,
+    ).allowed;
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
@@ -328,6 +333,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
+      allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree

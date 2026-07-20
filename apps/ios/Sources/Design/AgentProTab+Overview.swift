@@ -12,8 +12,8 @@ extension AgentProTab {
                 subtitleFont: OpenClawType.subheadMedium,
                 subtitleLineLimit: 1)
             {
-                if let headerLeadingAction {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                if let headerSidebarAction {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                 }
             } accessory: {
                 OpenClawGlassControlGroup {

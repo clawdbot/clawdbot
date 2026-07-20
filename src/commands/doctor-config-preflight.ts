@@ -12,6 +12,7 @@ import {
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveCanonicalConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -80,8 +81,8 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     return changes;
   }
 
-  const targetDir = path.join(home, ".openclaw");
-  const targetPath = path.join(targetDir, "openclaw.json");
+  const targetPath = resolveCanonicalConfigPath();
+  const targetDir = path.dirname(targetPath);
   try {
     await fs.access(targetPath);
     return changes;

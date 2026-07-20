@@ -40,6 +40,13 @@
     },
     "channel": {
       "id": "raft",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "RAFT_PROFILE"
+          ]
+        }
+      },
       "label": "Raft",
       "selectionLabel": "Raft (CLI wake bridge)",
       "docsPath": "/channels/raft",

@@ -133,6 +133,7 @@ const startProxyMock = vi.hoisted(() =>
 );
 const stopProxyMock = vi.hoisted(() => vi.fn<(handle: unknown) => Promise<void>>(async () => {}));
 const flushExitAfterOneShotOutputMock = vi.hoisted(() => vi.fn());
+const requestExitAfterOneShotOutputMock = vi.hoisted(() => vi.fn());
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
@@ -208,6 +209,7 @@ vi.mock("./dotenv.js", () => ({
 
 vi.mock("./one-shot-exit.js", () => ({
   flushExitAfterOneShotOutput: flushExitAfterOneShotOutputMock,
+  requestExitAfterOneShotOutput: requestExitAfterOneShotOutputMock,
 }));
 
 vi.mock("../infra/env.js", async (importOriginal) => ({
@@ -2970,7 +2972,7 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("carries canonical local TLS fingerprint and handshake timeout through bare root", async () => {
+  it("carries the canonical local TLS fingerprint through bare root", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: true,
@@ -2978,7 +2980,6 @@ describe("runCli exit behavior", () => {
         gateway: {
           mode: "local",
           tls: { enabled: true },
-          handshakeTimeoutMs: 30_000,
           auth: { mode: "token", token: "configured-token" },
         },
       },
@@ -2997,7 +2998,6 @@ describe("runCli exit behavior", () => {
       url: "wss://127.0.0.1:18789",
       token: "configured-token",
       tlsFingerprint: "sha256:local-self-signed-fingerprint",
-      preauthHandshakeTimeoutMs: 30_000,
     });
     expect(launchTuiCliMock).toHaveBeenCalledWith(
       { deliver: false, tlsFingerprint: "sha256:local-self-signed-fingerprint" },
@@ -3771,6 +3771,38 @@ describe("runCli exit behavior", () => {
     ]);
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
+  });
+
+  it("requests a flushed one-shot exit after Commander renders help", async () => {
+    const exitCode = process.exitCode;
+    const program = {
+      commands: [{ name: () => "security" }],
+      parseAsync: vi
+        .fn()
+        .mockRejectedValueOnce(new CommanderError(0, "commander.helpDisplayed", "help displayed")),
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(["node", "openclaw", "security", "--help"]);
+
+    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
+    expect(flushExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(0);
+    process.exitCode = exitCode;
+  });
+
+  it("requests a flushed one-shot exit when plugin group help returns normally", async () => {
+    const program = {
+      commands: [{ name: () => "memory" }],
+      parseAsync: vi.fn().mockResolvedValueOnce(undefined),
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+    resolvePluginCliRootOwnerIdsMock.mockReturnValueOnce(["memory-core"]);
+
+    await runCli(["node", "openclaw", "memory", "--help"]);
+
+    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
+    expect(flushExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
   });
 
   it("loads the real primary command before rendering command help", async () => {

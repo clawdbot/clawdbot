@@ -5,6 +5,113 @@ import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 describe("resolveExecWrapperTrustPlan", () => {
   test.each([
     {
+      name: "unwraps command argv carriers before evaluating allowlist policy",
+      enabled: process.platform !== "win32",
+      argv: ["command", "curl", "https://example.invalid"],
+      expected: {
+        argv: ["curl", "https://example.invalid"],
+        policyArgv: ["curl", "https://example.invalid"],
+        wrapperChain: ["command"],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "does not unwrap path-qualified command tokens as shell builtins",
+      enabled: process.platform !== "win32",
+      argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
+      expected: {
+        argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
+        policyArgv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "does not unwrap command tokens on Windows",
+      enabled: true,
+      argv: ["command", "curl", "https://example.invalid"],
+      platform: "win32" as const,
+      expected: {
+        argv: ["command", "curl", "https://example.invalid"],
+        policyArgv: ["command", "curl", "https://example.invalid"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "unwraps command argv carriers through transparent dispatch wrappers",
+      enabled: process.platform !== "win32",
+      argv: ["env", "command", "--", "python3", "/tmp/run.py"],
+      expected: {
+        argv: ["python3", "/tmp/run.py"],
+        policyArgv: ["python3", "/tmp/run.py"],
+        wrapperChain: ["env", "command"],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "unwraps builtin argv carriers before evaluating allowlist policy",
+      enabled: process.platform !== "win32",
+      argv: ["builtin", "printf", "ok"],
+      expected: {
+        argv: ["printf", "ok"],
+        policyArgv: ["printf", "ok"],
+        wrapperChain: ["builtin"],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "unwraps exec argv carriers before evaluating allowlist policy",
+      enabled: process.platform !== "win32",
+      argv: ["exec", "-a", "friendly-name", "bash", "/tmp/run.sh"],
+      expected: {
+        argv: ["bash", "/tmp/run.sh"],
+        policyArgv: ["bash", "/tmp/run.sh"],
+        wrapperChain: ["exec"],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "fails closed for non-executing command argv carrier queries",
+      enabled: process.platform !== "win32",
+      argv: ["command", "-v", "curl"],
+      expected: {
+        argv: ["command", "-v", "curl"],
+        policyArgv: ["command", "-v", "curl"],
+        wrapperChain: [],
+        policyBlocked: true,
+        blockedWrapper: "command",
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "fails closed for command carriers that request default PATH lookup",
+      enabled: process.platform !== "win32",
+      argv: ["command", "-p", "curl", "https://example.invalid"],
+      expected: {
+        argv: ["command", "-p", "curl", "https://example.invalid"],
+        policyArgv: ["command", "-p", "curl", "https://example.invalid"],
+        wrapperChain: [],
+        policyBlocked: true,
+        blockedWrapper: "command",
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
       name: "unwraps transparent caffeinate wrappers before shell policy checks",
       enabled: process.platform !== "win32",
       argv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
@@ -139,10 +246,10 @@ describe("resolveExecWrapperTrustPlan", () => {
         shellInlineCommand: null,
       },
     },
-  ])("$name", ({ enabled, argv, depth, expected }) => {
+  ])("$name", ({ enabled, argv, depth, platform, expected }) => {
     if (!enabled) {
       return;
     }
-    expect(resolveExecWrapperTrustPlan(argv, depth)).toEqual(expected);
+    expect(resolveExecWrapperTrustPlan(argv, depth, platform)).toEqual(expected);
   });
 });

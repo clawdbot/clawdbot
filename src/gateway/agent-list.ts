@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 
 type GatewayAgentListRow = {
   id: string;
@@ -22,7 +23,7 @@ function listExistingAgentIdsFromDisk(): string[] {
     return entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => normalizeAgentId(entry.name))
-      .filter(Boolean);
+      .filter((id) => id && !isReservedSystemAgentId(id));
   } catch {
     return [];
   }

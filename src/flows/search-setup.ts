@@ -280,9 +280,6 @@ export function applySearchKey(
     return config;
   }
   const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
-  if (!providerEntry.setConfiguredCredentialValue) {
-    providerEntry.setCredentialValue(search, key);
-  }
   const nextBase: OpenClawConfig = {
     ...config,
     tools: {

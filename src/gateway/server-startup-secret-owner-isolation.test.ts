@@ -58,7 +58,6 @@ vi.mock("../secrets/runtime-web-tools-manifest.runtime.js", () => ({
     contract === "webSearchProviders" ? ["google"] : [],
   resolveManifestContractOwnerPluginId: ({ value }: { value: string }) =>
     value === "gemini" ? "google" : undefined,
-  resolveManifestContractPluginIdsByCompatibilityRuntimePath: () => [],
 }));
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({

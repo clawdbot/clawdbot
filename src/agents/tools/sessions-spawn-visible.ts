@@ -30,7 +30,8 @@ import { reserveVisibleChildSlot } from "./sessions-spawn-visible-admission.js";
 export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
-      description: "visible: user sees session in UI. Use when user asked or talks via web/app.",
+      description:
+        "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -94,18 +95,30 @@ export async function maybeSpawnVisibleSession(params: {
   const worktreeName = readStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readStringParam(params.raw, "worktreeBaseRef");
   if (params.raw.visible !== true) {
-    if (worktree || worktreeName || worktreeBaseRef) {
-      throw new ToolInputError("worktree options require visible=true");
+    const visibleOnlyParams = [
+      ["worktree", worktree],
+      ["worktreeName", worktreeName],
+      ["worktreeBaseRef", worktreeBaseRef],
+    ] as const;
+    const providedVisibleOnlyParams = visibleOnlyParams
+      .filter(([, value]) => value !== undefined && value !== false)
+      .map(([name]) => name);
+    if (providedVisibleOnlyParams.length > 0) {
+      throw new ToolInputError(
+        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}`,
+      );
     }
     return undefined;
-  }
-  if (params.runtime !== "subagent") {
-    throw new ToolInputError('visible=true supports runtime="subagent" only');
   }
   const modelOverride = normalizeToolModelOverride(readStringParam(params.raw, "model"));
   const requestedCwd = readStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   const unsupported = [
+    [
+      "runtime",
+      params.runtime === "subagent" ? undefined : params.runtime,
+      'supports runtime="subagent" only',
+    ],
     [
       "thinking",
       readStringParam(params.raw, "thinking"),
@@ -133,10 +146,12 @@ export async function maybeSpawnVisibleSession(params: {
       "attachment staging is not wired to the sessions.create path",
     ],
   ] as const;
-  const unsupportedEntry = unsupported.find(([, value]) => value !== undefined);
-  if (unsupportedEntry) {
+  const unsupportedEntries = unsupported.filter(([, value]) => value !== undefined);
+  if (unsupportedEntries.length > 0) {
     throw new ToolInputError(
-      `${unsupportedEntry[0]} unavailable with visible=true: ${unsupportedEntry[2]}`,
+      `Parameters unavailable with visible=true: ${unsupportedEntries
+        .map(([name, , reason]) => `${name}: ${reason}`)
+        .join("; ")}`,
     );
   }
 
@@ -147,7 +162,8 @@ export async function maybeSpawnVisibleSession(params: {
   ) {
     return {
       status: "forbidden",
-      error: "Visible sessions unavailable with inherited tool restrictions.",
+      error:
+        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
     };
   }
   const ownership = resolveSubagentSpawnOwnership({
@@ -245,7 +261,10 @@ export async function maybeSpawnVisibleSession(params: {
   const reservation = reserveVisibleChildSlot({
     controllerSessionKey: requesterKey,
     maxChildren,
-    countActiveRuns: params.options?.countActiveRuns ?? countActiveRunsForSession,
+    countActiveRuns: (sessionKey) =>
+      (params.options?.countActiveRuns ?? countActiveRunsForSession)(sessionKey, {
+        collect: false,
+      }),
   });
   if (!reservation.ok) {
     return {

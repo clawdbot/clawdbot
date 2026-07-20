@@ -42,9 +42,7 @@ export function buildContextEngineBinding(
       contextTokenBudget: params.contextTokenBudget,
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
         contextTokenBudget: params.contextTokenBudget,
-        reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
-          config: params.config,
-        }),
+        reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
       }),
     }),
     projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,

@@ -640,6 +640,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );
@@ -715,6 +722,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );
@@ -2015,7 +2029,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     const context = requireCapturedContext();
-    expect(context.BodyForAgent).toBe("quoted context");
+    expect(context.BodyForAgent).toBe("");
     expect(context.ReplyToBody).toBe("quoted context");
     expect(context.ReplyToSender).toBe("+15550002222");
     expect(context.ReplyToIsQuote).toBe(true);
@@ -2086,8 +2100,8 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.CommandBody).toBe("please inspect this");
     expect(context.BodyForAgent).not.toContain("<media:image>");
     expect(context.MediaPath).toBeUndefined();
+    expect(context.MediaTypes).toEqual(["image/jpeg"]);
   });
-
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
     try {

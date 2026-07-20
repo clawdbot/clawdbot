@@ -41,7 +41,7 @@ function createScan() {
     pluginCompatibility: [
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start",
+        code: "deprecated-memory-embedding-provider-api",
         severity: "warn",
         message: "warn",
       },
@@ -105,7 +105,7 @@ describe("status-json-runtime", () => {
     expect(payloadInput.pluginCompatibility).toStrictEqual([
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start",
+        code: "deprecated-memory-embedding-provider-api",
         severity: "warn",
         message: "warn",
       },

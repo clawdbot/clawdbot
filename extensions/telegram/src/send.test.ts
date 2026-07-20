@@ -853,13 +853,13 @@ describe("sendMessageTelegram", () => {
     expect(botCtorSpy).not.toHaveBeenCalled();
   });
 
-  it("applies timeoutSeconds config precedence", async () => {
+  it("ignores removed timeoutSeconds config", async () => {
     const cases = [
       {
         name: "global telegram timeout",
         cfg: { channels: { telegram: { timeoutSeconds: 60 } } },
         opts: { cfg: TELEGRAM_TEST_CFG, token: "tok" },
-        expectedTimeout: 60,
+        expectedTimeout: undefined,
       },
       {
         name: "per-account timeout override",
@@ -872,7 +872,7 @@ describe("sendMessageTelegram", () => {
           },
         },
         opts: { cfg: TELEGRAM_TEST_CFG, token: "tok", accountId: "foo" },
-        expectedTimeout: 61,
+        expectedTimeout: undefined,
       },
     ] as const;
     for (const testCase of cases) {

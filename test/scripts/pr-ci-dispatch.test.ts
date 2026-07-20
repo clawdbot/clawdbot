@@ -53,6 +53,7 @@ function runDispatch(
   options: {
     mode?: "observed-head-change" | "pending-head-change";
     immediateTimers?: boolean;
+    cwd?: string;
   } = {},
 ) {
   let nodeOptions = process.env.NODE_OPTIONS ?? "";
@@ -65,6 +66,7 @@ function runDispatch(
     process.execPath,
     [dispatchScript, "12345", "contributor/fix-hosted-gates", sha, "false"],
     {
+      cwd: options.cwd,
       encoding: "utf8",
       env: {
         ...process.env,
@@ -82,6 +84,33 @@ function runDispatch(
 }
 
 describePosix("scripts/pr ci-dispatch", () => {
+  it("warns when a same-named local branch points away from the dispatched remote head", () => {
+    const repo = tempDirs.make("openclaw-pr-ci-dispatch-repo-");
+    const git = (...args: string[]) =>
+      spawnSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    git("init", "-q", "-b", "main");
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "x");
+    git("branch", "contributor/fix-hosted-gates");
+
+    const fakeGh = createFakeGh();
+    const result = runDispatch(fakeGh, { cwd: repo });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stderr).toContain("warning: local branch contributor/fix-hosted-gates is at");
+    expect(result.stderr).toContain(`remote head ${sha}`);
+  });
+
+  it("stays silent when no same-named local branch exists", () => {
+    const repo = tempDirs.make("openclaw-pr-ci-dispatch-repo-");
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: repo, encoding: "utf8" });
+
+    const fakeGh = createFakeGh();
+    const result = runDispatch(fakeGh, { cwd: repo });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stderr).not.toContain("warning: local branch");
+  });
+
   it("dispatches the exact CI workflow for the remote PR head", () => {
     const fakeGh = createFakeGh();
     const result = runDispatch(fakeGh);

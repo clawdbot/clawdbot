@@ -148,26 +148,8 @@ afterEach(() => {
   resetLoggerFn();
 });
 
-const makeConfig = (opts?: {
-  fallbacks?: string[];
-  apiKey?: string;
-  overloadedBackoffMs?: number;
-  overloadedProfileRotations?: number;
-}): OpenClawConfig =>
+const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
   ({
-    auth:
-      opts?.overloadedBackoffMs != null || opts?.overloadedProfileRotations != null
-        ? {
-            cooldowns: {
-              ...(opts?.overloadedBackoffMs != null
-                ? { overloadedBackoffMs: opts.overloadedBackoffMs }
-                : {}),
-              ...(opts?.overloadedProfileRotations != null
-                ? { overloadedProfileRotations: opts.overloadedProfileRotations }
-                : {}),
-            },
-          }
-        : undefined,
     agents: {
       defaults: {
         model: {
@@ -991,19 +973,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     } finally {
       releaseMark?.();
     }
-  });
-
-  it("uses configured overload backoff before rotating profiles", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
-      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-      sessionKey: "agent:test:overloaded-configured-backoff",
-      runId: "run:overloaded-configured-backoff",
-      config: makeConfig({ overloadedBackoffMs: 321 }),
-    });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
-    expect(computeBackoffMock).not.toHaveBeenCalled();
-    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {

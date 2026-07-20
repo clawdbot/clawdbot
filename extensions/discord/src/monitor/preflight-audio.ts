@@ -75,7 +75,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   const hasTypedText = Boolean(params.message.content?.trim());
   const needsPreflightTranscription =
     hasAudioAttachment &&
-    // `baseText` includes media placeholders; gate on typed text only.
+    // Caption text suppresses preflight; media-only messages remain eligible.
     !hasTypedText &&
     (params.isDirectMessage || (params.shouldRequireMention && params.mentionRegexes.length > 0));
 

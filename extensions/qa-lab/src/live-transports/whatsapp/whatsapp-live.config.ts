@@ -361,14 +361,6 @@ export function buildWhatsAppQaConfig(
                   statusReactions: {
                     ...baseCfg.messages?.statusReactions,
                     enabled: true,
-                    ...(statusReactionOverride?.timing
-                      ? {
-                          timing: {
-                            ...baseCfg.messages?.statusReactions?.timing,
-                            ...statusReactionOverride.timing,
-                          },
-                        }
-                      : {}),
                   },
                 }
               : {}),

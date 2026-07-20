@@ -62,6 +62,8 @@ export const SystemAgentChatResultSchema = closedObject({
   reply: NonEmptyString,
   /** The next reply is a hosted-wizard secret and clients must mask its input/echo. */
   sensitive: Type.Optional(Type.Boolean()),
+  /** The hosted wizard will consume the next message as its current step answer. */
+  wizardInputPending: Type.Optional(Type.Boolean()),
   action: Type.Union([
     Type.Literal("none"),
     // The user asked to talk to their agent; clients should move to their
@@ -76,6 +78,20 @@ export const SystemAgentChatResultSchema = closedObject({
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
   question: Type.Optional(SystemAgentChatQuestionSchema),
+});
+
+export const SystemAgentChatHistoryParamsSchema = closedObject({
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 100 })),
+});
+
+export const SystemAgentChatHistoryTurnSchema = closedObject({
+  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  text: Type.String(),
+  at: Type.Number(),
+});
+
+export const SystemAgentChatHistoryResultSchema = closedObject({
+  turns: Type.Array(SystemAgentChatHistoryTurnSchema),
 });
 
 export const SystemChangeKindSchema = Type.Union([
@@ -295,6 +311,9 @@ export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
 export type SystemAgentChatQuestion = Static<typeof SystemAgentChatQuestionSchema>;
 export type SystemAgentChatResult = Static<typeof SystemAgentChatResultSchema>;
+export type SystemAgentChatHistoryParams = Static<typeof SystemAgentChatHistoryParamsSchema>;
+export type SystemAgentChatHistoryTurn = Static<typeof SystemAgentChatHistoryTurnSchema>;
+export type SystemAgentChatHistoryResult = Static<typeof SystemAgentChatHistoryResultSchema>;
 export type SystemChangeEntry = Static<typeof SystemChangeEntrySchema>;
 export type SystemChangeKind = Static<typeof SystemChangeKindSchema>;
 export type SystemChangeSource = Static<typeof SystemChangeSourceSchema>;

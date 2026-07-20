@@ -73,7 +73,6 @@ export async function prepareEmbeddedRunRuntime(input: {
   const {
     requestedModelId,
     modelSelectionChangedByHook,
-    beforeAgentStartResult,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     nativeModelOwnedHarnessId,
@@ -468,7 +467,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     provider,
     modelId,
     requestedModelId,
-    beforeAgentStartResult,
     expectedHarnessArtifact,
     nativeModelOwned,
     model,

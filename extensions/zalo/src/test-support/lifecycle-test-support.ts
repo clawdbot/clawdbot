@@ -144,7 +144,12 @@ export function createImageLifecycleCore() {
       };
       reply: { to: string; originatingTo: string };
       message: { body?: string; rawBody: string; bodyForAgent?: string; commandBody?: string };
-      media?: Array<{ path?: string; url?: string; contentType?: string }>;
+      media?: Array<{
+        path?: string;
+        url?: string;
+        contentType?: string;
+        kind?: "audio" | "document" | "image" | "unknown" | "video";
+      }>;
       extra?: Record<string, unknown>;
     }) =>
       finalizeInboundContextMock({
@@ -165,7 +170,7 @@ export function createImageLifecycleCore() {
         MessageSid: params.messageId,
         Timestamp: params.timestamp,
         MediaPath: params.media?.[0]?.path,
-        MediaType: params.media?.[0]?.contentType,
+        MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
         MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,

@@ -924,6 +924,7 @@ describe("scheduleRestartSentinelWake", () => {
         accountId: "acct-2",
         threadId: "fresh-thread",
       },
+      sessionDeliveryAckId: "session-delivery-1",
     });
   });
 
@@ -2528,6 +2529,7 @@ describe("scheduleRestartSentinelWake", () => {
         accountId: "acct-2",
         threadId: "thread-42",
       },
+      sessionDeliveryAckId: "session-delivery-1",
     });
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
@@ -2585,12 +2587,47 @@ describe("scheduleRestartSentinelWake", () => {
         accountId: "acct-2",
         threadId: "thread-42",
       },
+      sessionDeliveryAckId: "session-delivery-2",
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
       "restart continuation skipped: session changed",
       expect.anything(),
     );
+  });
+
+  it("preserves distinct durable identities for identical recovered system events", async () => {
+    const createEntry = (id: string) =>
+      ({
+        id,
+        kind: "systemEvent",
+        sessionKey: "agent:main:main",
+        text: "continue after restart",
+        enqueuedAt: 1,
+        retryCount: 0,
+      }) as const;
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: createEntry("session-delivery-a"),
+      stateDir: "/tmp/restart-delivery-state",
+    });
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: createEntry("session-delivery-b"),
+      stateDir: "/tmp/restart-delivery-state",
+    });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(1, "continue after restart", {
+      sessionKey: "agent:main:main",
+      sessionDeliveryAckId: "session-delivery-a",
+      sessionDeliveryAckStateDir: "/tmp/restart-delivery-state",
+    });
+    expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(2, "continue after restart", {
+      sessionKey: "agent:main:main",
+      sessionDeliveryAckId: "session-delivery-b",
+      sessionDeliveryAckStateDir: "/tmp/restart-delivery-state",
+    });
   });
 
   it("preserves the session chat type for agentTurn continuations", async () => {
@@ -2834,6 +2871,7 @@ describe("scheduleRestartSentinelWake", () => {
         accountId: "acct-2",
         threadId: "thread-42",
       },
+      sessionDeliveryAckId: "session-delivery-2",
     });
     expect(mocks.requestHeartbeat).toHaveBeenNthCalledWith(1, {
       source: "restart-sentinel",
@@ -2881,6 +2919,7 @@ describe("scheduleRestartSentinelWake", () => {
         accountId: "acct-2",
         threadId: "thread-42",
       },
+      sessionDeliveryAckId: "session-delivery-2",
     });
   });
 
@@ -3171,6 +3210,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
+      sessionDeliveryAckId: "session-delivery-1",
     });
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
@@ -3196,6 +3236,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
+      sessionDeliveryAckId: "session-delivery-1",
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn.mock.calls).toEqual([

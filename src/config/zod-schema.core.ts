@@ -189,19 +189,6 @@ export const SecretsConfigSchema = z
       })
       .strict()
       .optional(),
-    resolution: z
-      .object({
-        maxProviderConcurrency: z.number().int().positive().max(16).optional(),
-        maxRefsPerProvider: z.number().int().positive().max(4096).optional(),
-        maxBatchBytes: z
-          .number()
-          .int()
-          .positive()
-          .max(5 * 1024 * 1024)
-          .optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .optional();
@@ -794,23 +781,9 @@ export const HumanDelaySchema = z
 
 const CliBackendWatchdogModeSchema = z
   .object({
-    noOutputTimeoutMs: z.number().int().min(1000).optional(),
     noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
     minMs: z.number().int().min(1000).optional(),
     maxMs: z.number().int().min(1000).optional(),
-  })
-  .strict()
-  .optional();
-
-const CliBackendOutputLimitsSchema = z
-  .object({
-    maxTurnRawChars: z
-      .number()
-      .int()
-      .min(1024)
-      .max(64 * 1024 * 1024)
-      .optional(),
-    maxTurnLines: z.number().int().min(100).max(100_000).optional(),
   })
   .strict()
   .optional();
@@ -854,7 +827,6 @@ export const CliBackendSchema = z
     reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
     reliability: z
       .object({
-        outputLimits: CliBackendOutputLimitsSchema,
         watchdog: z
           .object({
             fresh: CliBackendWatchdogModeSchema,
@@ -943,16 +915,6 @@ export const requireAllowlistAllowFrom = (params: {
 
 export const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
 
-export const RetryConfigSchema = z
-  .object({
-    attempts: z.number().int().min(1).optional(),
-    minDelayMs: z.number().int().min(0).optional(),
-    maxDelayMs: z.number().int().min(0).optional(),
-    jitter: z.number().min(0).max(1).optional(),
-  })
-  .strict()
-  .optional();
-
 const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
@@ -977,7 +939,6 @@ export const QueueSchema = z
   .object({
     mode: QueueModeSchema.optional(),
     byChannel: QueueModeBySurfaceSchema,
-    debounceMs: z.number().int().nonnegative().optional(),
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),

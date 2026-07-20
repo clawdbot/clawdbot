@@ -1,6 +1,8 @@
 // OpenClaw chat engine: transport-agnostic conversation over typed operations.
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
 import {
@@ -18,6 +20,11 @@ import {
 } from "./approval-intent.js";
 import type { SystemAgentAssistantPlanner, SystemAgentAssistantTurn } from "./assistant.js";
 import { approvalQuestion } from "./dialogue.js";
+import type {
+  SystemAgentGreetingFacts,
+  SystemAgentGreetingPlan,
+  SystemAgentGreetingPlanner,
+} from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
@@ -57,12 +64,16 @@ export type SystemAgentChatEngineOptions = {
   yes?: boolean;
   deps?: SystemAgentCommandDeps;
   planWithAssistant?: SystemAgentAssistantPlanner;
+  /** Test seam for the one-shot cached caretaker greeting. */
+  planGreeting?: SystemAgentGreetingPlanner;
   /** Test seam for the embedded agent-loop turn runner. */
   runAgentTurn?: SystemAgentTurnRunner;
   /** Test seam for the approval-intent classifier. */
   classifyApproval?: SystemAgentApprovalClassifier;
   /** Test seam for the audited host operation executor. */
   executeOperation?: typeof executeSystemAgentOperation;
+  /** Test seam for best-effort audit persistence. */
+  appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
@@ -85,6 +96,8 @@ type SystemAgentChatReply = {
   agentDraft?: "hatch";
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
+  /** The hosted wizard will consume the next message as its current step answer. */
+  wizardInputPending?: boolean;
   /** Present when the host must leave chat for an interactive handoff. */
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
@@ -104,6 +117,8 @@ type ActiveWizardBridge = {
 type CaptureRuntime = RuntimeEnv & {
   read: () => string;
 };
+
+const log = createSubsystemLogger("system-agent/chat-engine");
 
 function createHostedWizardRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
@@ -428,6 +443,20 @@ export class SystemAgentChatEngine {
     this.history.push({ role: "assistant", text });
   }
 
+  /** Seed only conversational context; wizard and approval state intentionally stay fresh. */
+  seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
+    this.history.push(...turns.map((turn) => ({ ...turn })));
+  }
+
+  historyLength(): number {
+    return this.history.length;
+  }
+
+  /** Return copies so the server can persist exactly the engine's sanitized commit. */
+  historySince(index: number): SystemAgentAssistantTurn[] {
+    return this.history.slice(index).map((turn) => ({ role: turn.role, text: turn.text }));
+  }
+
   async dispose(): Promise<void> {
     this.wizardBridge?.session.cancel();
     this.wizardBridge = null;
@@ -462,6 +491,7 @@ export class SystemAgentChatEngine {
     return {
       ...reply,
       ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
     };
   }
@@ -969,6 +999,28 @@ export class SystemAgentChatEngine {
     return { ...overview, defaultModel: verifiedRoute.modelLabel };
   }
 
+  async planGreeting(params: {
+    overview: SystemAgentOverview;
+    facts: SystemAgentGreetingFacts;
+    timeoutMs: number;
+  }): Promise<SystemAgentGreetingPlan | null> {
+    const planner = this.opts.planGreeting;
+    const plan = planner
+      ? await planner(params)
+      : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
+          planSystemAgentGreetingWithConfiguredModel({
+            ...params,
+            verifiedInference: this.verifiedInference,
+            deps: this.opts.deps,
+          }),
+        );
+    if (plan) {
+      // Custom planners do not inherit the configured planner's cleanup guard.
+      await this.requireVerifiedInference();
+    }
+    return plan;
+  }
+
   private async requireVerifiedInference() {
     const binding = this.verifiedInference;
     if (this.agentSession.verifiedInference !== binding) {
@@ -1144,12 +1196,19 @@ export class SystemAgentChatEngine {
       this.wizardBridge = null;
       const label = bridge.label;
       if (result.status === "done") {
-        const { appendSystemAgentAuditEntry } = await import("./audit.js");
-        await appendSystemAgentAuditEntry({
-          operation: "channels.setup",
-          summary: `Configured channel ${label} via chat setup`,
-          details: { channel: label },
-        });
+        try {
+          const appendAuditEntry =
+            this.opts.appendAuditEntry ?? (await import("./audit.js")).appendSystemAgentAuditEntry;
+          await appendAuditEntry({
+            operation: "channels.setup",
+            summary: `Configured channel ${label} via chat setup`,
+            details: { channel: label },
+          });
+        } catch (error) {
+          // Channel setup already committed. Audit failure must not turn its
+          // truthful success result into a user-facing setup failure.
+          log.warn(`channel setup completed without audit entry: ${formatErrorMessage(error)}`);
+        }
         const verify = await this.verifyConfigAfterWrite();
         return [
           `Done — ${label} is configured.`,

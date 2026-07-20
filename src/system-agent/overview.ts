@@ -304,13 +304,6 @@ function formatStartupConfigStatus(overview: SystemAgentOverview): string {
   return overview.config.valid ? "valid" : "invalid";
 }
 
-function formatStartupUse(overview: SystemAgentOverview): string {
-  if (overview.defaultModel) {
-    return `Using: ${overview.defaultModel} — just tell me what you want.`;
-  }
-  return "Inference unavailable: run `openclaw onboard` and complete a live model check first.";
-}
-
 function formatStartupGatewayStatus(overview: SystemAgentOverview): string {
   if (overview.gateway.reachable) {
     return `Gateway: reachable at ${overview.gateway.url}.`;
@@ -318,20 +311,14 @@ function formatStartupGatewayStatus(overview: SystemAgentOverview): string {
   return `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`;
 }
 
-function formatStartupAction(overview: SystemAgentOverview): string {
+function formatStartupAction(overview: SystemAgentOverview): string | undefined {
   if (!overview.config.valid) {
-    return "I can start debugging with `validate config` or `doctor`.";
+    return "Config needs attention. Run `doctor` to inspect it.";
   }
   if (!overview.defaultModel) {
-    return "OpenClaw needs working inference before it can help with the rest of setup.";
+    return "Inference is unavailable. Run `openclaw onboard` and complete a live model check.";
   }
-  if (!overview.config.exists) {
-    return "Run `openclaw onboard` to establish inference before starting OpenClaw.";
-  }
-  if (!overview.gateway.reachable) {
-    return "I can start debugging with `gateway status`, or queue `restart gateway` for approval.";
-  }
-  return "Everything basic is reachable. Use `talk to agent` when you want the normal agent.";
+  return undefined;
 }
 
 /**
@@ -357,13 +344,14 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
     ? `${overview.defaultAgentId} (${agent.name})`
     : overview.defaultAgentId;
   return [
-    "## Hi, I'm OpenClaw.",
-    "",
-    "- Start me when setup, config, Gateway, model choice, or agent routing feels off.",
-    `- ${formatStartupUse(overview)}`,
-    `- Config: ${formatStartupConfigStatus(overview)}. Default agent: ${agentLabel}.`,
-    `- ${formatStartupGatewayStatus(overview)}`,
-    "",
+    "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
+    // Inference status stays independent of the recovery action line: with an
+    // invalid config AND no model, both problems must be visible.
+    overview.defaultModel ? `Model: ${overview.defaultModel}.` : "Inference is unavailable.",
+    `Config: ${formatStartupConfigStatus(overview)}. Default agent: ${agentLabel}.`,
+    formatStartupGatewayStatus(overview),
     formatStartupAction(overview),
-  ].join("\n");
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }

@@ -238,16 +238,11 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
   </Accordion>
 
-  <Accordion title="Tune gateway channel health monitoring">
-    Control how aggressively the gateway restarts channels that look stale:
+  <Accordion title="Configure per-channel health monitoring">
+    Disable or enable automatic health restarts for a channel or account:
 
     ```json5
     {
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 30,
-        channelMaxRestartsPerHour: 10,
-      },
       channels: {
         telegram: {
           healthMonitor: { enabled: false },
@@ -261,28 +256,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - Values shown are the defaults. Set `gateway.channelHealthCheckMinutes: 0` to disable health-monitor restarts globally.
-    - `channelStaleEventThresholdMinutes` should be greater than or equal to the check interval.
-    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to disable auto-restarts for one channel or account without disabling the global monitor.
+    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to control auto-restarts for one channel or account.
     - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
-
-  </Accordion>
-
-  <Accordion title="Tune gateway WebSocket handshake timeout">
-    Give local clients more time to complete the pre-auth WebSocket handshake on
-    loaded or low-powered hosts:
-
-    ```json5
-    {
-      gateway: {
-        handshakeTimeoutMs: 30000,
-      },
-    }
-    ```
-
-    - Default is `15000` milliseconds.
-    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
-    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
 
   </Accordion>
 
@@ -420,7 +395,6 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
       },
     }

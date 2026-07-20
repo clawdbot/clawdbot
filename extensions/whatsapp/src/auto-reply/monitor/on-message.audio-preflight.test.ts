@@ -108,7 +108,7 @@ function makeAudioMsg(): WebInboundMessage {
 
 function makeLegacyAudioMsg() {
   return createTestLegacyFlatWebInboundMessage({
-    body: "<media:audio>",
+    body: "",
     mediaPath: "/tmp/voice.ogg",
     mediaType: "audio/ogg; codecs=opus",
   });

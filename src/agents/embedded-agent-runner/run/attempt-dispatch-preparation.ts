@@ -79,7 +79,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runInput.laneController;
   const {
     requestedModelId,
-    beforeAgentStartResult,
     expectedHarnessArtifact,
     nativeModelOwned,
     authStorage,
@@ -201,7 +200,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         : undefined,
       modelRegistry,
       agentId: workspaceResolution.agentId,
-      beforeAgentStartResult,
       thinkLevel: runtime.thinkLevel,
       fastMode: attemptFastMode,
       fastModeStartedAtMs,

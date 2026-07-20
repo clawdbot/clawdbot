@@ -4,7 +4,7 @@ title: "Channel outbound API"
 read_when:
   - You are building or refactoring a messaging channel plugin send path
   - You need durable final reply delivery, receipts, live preview finalization, or receive acknowledgement policy
-  - You are migrating from channel-message, channel-message-runtime, or legacy reply dispatch helpers
+  - You are migrating from channel-message or legacy reply dispatch helpers
 ---
 
 Channel plugins expose outbound message behavior from

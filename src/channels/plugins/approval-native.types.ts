@@ -24,17 +24,17 @@ export type ChannelApprovalNativeTarget = {
 /**
  * Preferred native delivery surface for approval prompts.
  */
-export type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
+type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
 
 /**
  * Approval request shapes supported by native channel approval delivery.
  */
-export type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
 
 /**
  * Capabilities returned by native channel approval delivery inspection.
  */
-export type ChannelApprovalNativeDeliveryCapabilities = {
+type ChannelApprovalNativeDeliveryCapabilities = {
   enabled: boolean;
   preferredSurface: ChannelApprovalNativeDeliveryPreference;
   supportsOriginSurface: boolean;

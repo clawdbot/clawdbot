@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import type { BoardOp, BoardSnapshot } from "../lib/board/view-types.ts";
+import type { BoardOp, BoardSnapshot } from "../lib/board/types.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "../components/board/board-view.ts";
 

@@ -250,11 +250,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
         content: [{ type: "text", text: "email peter@dc.io and key sk-abcdef1234567890xyz ok" }],
       },
       config: {
-        session: {
-          writeLock: {
-            acquireTimeoutMs: 25_000,
-          },
-        },
+        session: {},
       },
     });
 

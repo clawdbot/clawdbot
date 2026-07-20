@@ -120,6 +120,10 @@ export class CronService implements CronServiceContract {
     return await ops.remove(this.state, id);
   }
 
+  async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
+    return await ops.removeAgentJobsTransactional(this.state, agentId, commit);
+  }
+
   async run(
     id: string,
     mode?: "due" | "force",

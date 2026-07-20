@@ -69,8 +69,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both audit.enabled and audit.messages are startup-scoped; restart the Gateway after changing either setting.',
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
-  "diagnostics.memoryPressureSnapshot":
-    "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":
@@ -102,11 +100,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Check for npm updates when the gateway starts, including read-only extended-stable hints (default: true).",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
-  "update.auto.stableDelayHours":
-    "Minimum delay before stable-channel auto-apply starts (default: 6).",
-  "update.auto.stableJitterHours":
-    "Extra stable-channel rollout spread window in hours (default: 12).",
-  "update.auto.betaCheckIntervalHours": "How often beta-channel checks run in hours (default: 1).",
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   "cloudWorkers.profiles":
@@ -162,7 +155,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
     "Automatically approves new browser device identities after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
-    "Maximum scopes granted to auto-approved browser devices. Requested scopes are capped to this list; requests without scopes receive this list. operator.admin is rejected and must be approved manually.",
+    "Maximum scopes granted to auto-approved browser devices. Requested scopes are capped to this list; requests without scopes receive this list. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":
@@ -173,14 +166,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
-  "gateway.handshakeTimeoutMs":
-    "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
-  "gateway.channelHealthCheckMinutes":
-    "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
-  "gateway.channelStaleEventThresholdMinutes":
-    "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
-  "gateway.channelMaxRestartsPerHour":
-    "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
@@ -272,7 +257,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,
-  acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.",
+  acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and selecting streamed turn projection behavior.",
   "acp.enabled":
     "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
   "acp.dispatch.enabled":
@@ -285,28 +270,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
   "acp.allowedAgents":
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
-  "acp.maxConcurrentSessions":
-    "Maximum concurrently active ACP sessions across this gateway process.",
   "acp.stream":
     "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
-  "acp.stream.coalesceIdleMs":
-    "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
-  "acp.stream.maxChunkChars":
-    "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
   "acp.stream.repeatSuppression":
     "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
   "acp.stream.deliveryMode":
     "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
-  "acp.stream.hiddenBoundarySeparator":
-    "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
-  "acp.stream.maxOutputChars":
-    "Maximum assistant output characters projected per ACP turn before truncation notice is emitted.",
-  "acp.stream.maxSessionUpdateChars":
-    "Maximum characters for projected ACP session/update lines (tool/status updates).",
   "acp.stream.tagVisibility":
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
-  "acp.runtime.ttlMinutes":
-    "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
   commitments:

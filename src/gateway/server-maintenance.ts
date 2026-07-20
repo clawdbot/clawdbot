@@ -132,7 +132,7 @@ export function startGatewayMaintenanceTimers(params: {
         // worktree activity so idle GC cannot remove a checkout still used by the session.
         shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
         // Read limits per run so a config edit applies at the next hourly sweep.
-        limits: resolveWorktreeCleanupLimits(cfg.worktrees),
+        limits: resolveWorktreeCleanupLimits(),
       });
     });
   const performWorktreeGc = () =>

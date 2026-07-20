@@ -363,8 +363,6 @@ export async function writeConfigFileFromContext(
   const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
-  const pluginMigration = context.ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
-  let configCommitted = false;
   try {
     const result = await replaceFileAtomic({
       filePath: configPath,
@@ -395,20 +393,16 @@ export async function writeConfigFileFromContext(
         });
       },
     });
-    configCommitted = true;
     try {
       options.assertConfigPathForWrite?.();
     } catch (error) {
       try {
-        const rolledBack = await rollbackConfigFileWriteIfUnchanged({
+        await rollbackConfigFileWriteIfUnchanged({
           configPath,
           previousSnapshot: snapshot,
           committedHash: nextHash,
           fsModule: deps.fs,
         });
-        if (rolledBack) {
-          context.rollbackShippedPluginInstallConfigWriteMigration(pluginMigration);
-        }
       } catch (rollbackError) {
         throw new ConfigRuntimeRefreshError(
           `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
@@ -483,7 +477,6 @@ export async function writeConfigFileFromContext(
           snapshot: priorSnapshotAuditRecord,
           expectedSnapshot: writtenSnapshotAuditRecord,
         });
-        context.rollbackShippedPluginInstallConfigWriteMigration(pluginMigration);
         if (previousWarningFingerprint === undefined) {
           loggedConfigWarningFingerprints.delete(configPath);
         } else {
@@ -496,9 +489,6 @@ export async function writeConfigFileFromContext(
       },
     };
   } catch (error) {
-    if (!configCommitted) {
-      context.rollbackShippedPluginInstallConfigWriteMigration(pluginMigration);
-    }
     await appendWriteAudit("failed", error);
     throw error;
   }

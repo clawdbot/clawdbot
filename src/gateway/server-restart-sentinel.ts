@@ -99,11 +99,15 @@ function enqueueRestartSentinelWake(
     threadId?: string | number;
   },
   traceparent?: string,
+  sessionDeliveryAckId?: string,
+  sessionDeliveryAckStateDir?: string,
 ) {
   enqueueSystemEvent(message, {
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(traceparent ? { traceparent } : {}),
+    ...(sessionDeliveryAckId ? { sessionDeliveryAckId } : {}),
+    ...(sessionDeliveryAckStateDir ? { sessionDeliveryAckStateDir } : {}),
   });
   requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
@@ -204,6 +208,8 @@ export async function deliverQueuedSessionDelivery(params: {
       canonicalKey,
       queuedDeliveryContext,
       params.entry.traceparent,
+      params.entry.id,
+      params.stateDir,
     );
     return;
   }
@@ -223,6 +229,8 @@ export async function deliverQueuedSessionDelivery(params: {
       canonicalKey,
       queuedDeliveryContext,
       params.entry.traceparent,
+      params.entry.id,
+      params.stateDir,
     );
     return;
   }
@@ -233,6 +241,8 @@ export async function deliverQueuedSessionDelivery(params: {
       canonicalKey,
       queuedDeliveryContext,
       params.entry.traceparent,
+      params.entry.id,
+      params.stateDir,
     );
     return;
   }

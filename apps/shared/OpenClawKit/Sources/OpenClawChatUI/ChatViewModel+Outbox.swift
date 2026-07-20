@@ -22,7 +22,7 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 }
 
 /// Durable offline command outbox. Sends made while the gateway is unhealthy
-/// are persisted (per gateway, alongside the transcript cache) and flushed
+/// are persisted in installation-wide client state and flushed
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
@@ -380,8 +380,8 @@ extension OpenClawChatViewModel {
     }
 
     /// Appends bubbles for commands in the current session, adopting rows
-    /// that already carry the command's user idempotency key (cache pre-paint
-    /// or an earlier restore), and refreshes their display states.
+    /// that already carry the command's user idempotency key from an earlier
+    /// restore, and refreshes their display states.
     private func presentOutboxCommands(_ commands: [OpenClawChatOutboxCommand]) {
         self.pruneOutboxMappings()
         guard !commands.isEmpty else { return }
@@ -673,10 +673,9 @@ extension OpenClawChatViewModel {
         // handleSessionMessageEvent, and the post-drain history refresh. Run
         // tracking (typing indicator, streaming, timeouts) stays owned by
         // interactive performSend. chat.send ACK precedes durable user-turn
-        // persistence, so the cache splice keeps the acknowledged turn visible
-        // until canonical history carries its idempotency key.
-        await self.pendingCacheWriteTask?.value
-        await self.spliceSentCommandIntoCachedTranscript(command)
+        // persistence. The durable outbox remains the sole owner of the
+        // optimistic bubble until canonical history carries its key; writing
+        // it into the cache would require cross-database cancellation logic.
         let update = await outbox.markCommandAwaitingConfirmation(id: command.id)
         guard update != .unavailable else {
             self.applyTransportHealth(false)
@@ -824,25 +823,6 @@ extension OpenClawChatViewModel {
             guard !Task.isCancelled else { return }
             self?.flushOutboxIfNeeded()
         }
-    }
-
-    /// Appends a flushed background-session turn to that session's cached
-    /// transcript so a cold offline reopen shows it before live history.
-    private func spliceSentCommandIntoCachedTranscript(_ command: OpenClawChatOutboxCommand) async {
-        guard let transcriptCache else { return }
-        let key = Self.outboxUserIdempotencyKey(command.id)
-        let cacheAgentID = Self.transcriptCacheAgentID(
-            sessionKey: command.sessionKey,
-            agentID: command.agentID)
-        var cached = await transcriptCache.loadTranscript(
-            sessionKey: command.sessionKey,
-            agentID: cacheAgentID)
-        guard !cached.contains(where: { $0.idempotencyKey == key }) else { return }
-        cached.append(Self.outboxUserMessage(for: command))
-        await transcriptCache.storeTranscript(
-            sessionKey: command.sessionKey,
-            agentID: cacheAgentID,
-            messages: cached)
     }
 
     private func recoverInterruptedOutboxSendsIfNeeded() async -> Bool {

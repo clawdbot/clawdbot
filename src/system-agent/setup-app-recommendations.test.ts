@@ -33,6 +33,47 @@ function officialEntry(params: {
 }
 
 describe("setup app recommendation candidates", () => {
+  it("preserves the ClawHub publisher in candidate ids", async () => {
+    const result = await getSetupAppRecommendations({
+      inventorySource: async () => [{ label: "Notes" }],
+      runtime: defaultRuntime,
+      deps: {
+        listPlugins: () => [],
+        listChannels: () => [],
+        listProviders: () => [],
+        searchSkills: async () => [
+          {
+            score: 1,
+            slug: "notes-tools",
+            ownerHandle: "demo-owner",
+            displayName: "Notes Tools",
+          },
+          {
+            score: 0.9,
+            slug: "notes-tools",
+            ownerHandle: "other-owner",
+            displayName: "Other Notes Tools",
+          },
+          {
+            score: 0.8,
+            slug: "legacy-notes-tools",
+            displayName: "Ownerless Notes Tools",
+          },
+        ],
+        complete: completeMatching([{ appLabel: "Notes", candidateId: "@demo-owner/notes-tools" }]),
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.groups[0]?.candidates.map((candidate) => candidate.id)).toEqual([
+        "@demo-owner/notes-tools",
+        "@other-owner/notes-tools",
+      ]);
+      expect(result.matches[0]?.candidate.id).toBe("@demo-owner/notes-tools");
+    }
+  });
+
   it("gathers, dedupes, and sorts official and ClawHub candidates", async () => {
     const channel = officialEntry({
       id: "chat",
@@ -46,8 +87,19 @@ describe("setup app recommendation candidates", () => {
       description: "Notes integration",
     });
     const searchSkills = vi.fn(async () => [
-      { score: 2, slug: "notes", displayName: "Duplicate notes" },
-      { score: 1, slug: "notes-tools", displayName: "Notes Tools", summary: "Work with notes" },
+      {
+        score: 2,
+        slug: "notes-tools",
+        ownerHandle: "demo-owner",
+        displayName: "Duplicate notes",
+      },
+      {
+        score: 1,
+        slug: "notes-tools",
+        ownerHandle: "demo-owner",
+        displayName: "Notes Tools",
+        summary: "Work with notes",
+      },
     ]);
 
     const result = await getSetupAppRecommendations({
@@ -68,7 +120,7 @@ describe("setup app recommendation candidates", () => {
       const notes = result.groups.find((group) => group.app.label === "Notes");
       expect(notes?.candidates.map((candidate) => [candidate.source, candidate.id])).toEqual([
         ["official-plugin", "notes"],
-        ["clawhub-skill", "notes-tools"],
+        ["clawhub-skill", "@demo-owner/notes-tools"],
       ]);
     }
     expect(searchSkills).toHaveBeenCalledTimes(2);
@@ -79,7 +131,7 @@ describe("setup app recommendation candidates", () => {
       if (query === "Broken") {
         throw new Error("offline");
       }
-      return [{ score: 1, slug: "working", displayName: "Working" }];
+      return [{ score: 1, slug: "working", ownerHandle: "demo-owner", displayName: "Working" }];
     });
     const result = await getSetupAppRecommendations({
       inventorySource: async () => [{ label: "Broken" }, { label: "Working" }],
@@ -89,7 +141,7 @@ describe("setup app recommendation candidates", () => {
         listChannels: () => [],
         listProviders: () => [],
         searchSkills,
-        complete: completeMatching([{ appLabel: "Working", candidateId: "working" }]),
+        complete: completeMatching([{ appLabel: "Working", candidateId: "@demo-owner/working" }]),
       },
     });
     expect(result.status).toBe("ok");
@@ -138,7 +190,13 @@ describe("setup app recommendation matcher", () => {
     listChannels: () => [],
     listProviders: () => [],
     searchSkills: async () => [
-      { score: 1, slug: "notes-tools", displayName: "Notes Tools", summary: "Work with notes" },
+      {
+        score: 1,
+        slug: "notes-tools",
+        ownerHandle: "demo-owner",
+        displayName: "Notes Tools",
+        summary: "Work with notes",
+      },
     ],
   };
 
@@ -154,7 +212,7 @@ describe("setup app recommendation matcher", () => {
             matches: [
               {
                 appLabel: "Notes",
-                candidateId: "notes-tools",
+                candidateId: "@demo-owner/notes-tools",
                 tier: "recommended",
                 reason: "Connects directly to your notes",
               },
@@ -165,7 +223,10 @@ describe("setup app recommendation matcher", () => {
     });
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.matches[0]).toMatchObject({ candidateId: "notes-tools", tier: "recommended" });
+      expect(result.matches[0]).toMatchObject({
+        candidateId: "@demo-owner/notes-tools",
+        tier: "recommended",
+      });
     }
   });
 
@@ -185,7 +246,7 @@ describe("setup app recommendation matcher", () => {
               matches: [
                 {
                   appLabel: "Notes",
-                  candidateId: "notes-tools",
+                  candidateId: "@demo-owner/notes-tools",
                   tier: "optional",
                   reason,
                   confidence: "high",
@@ -199,7 +260,7 @@ describe("setup app recommendation matcher", () => {
     });
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.matches[0]?.candidateId).toBe("notes-tools");
+      expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
       expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
       expect(result.matches[0]?.reason.length).toBeLessThanOrEqual(120);
     }

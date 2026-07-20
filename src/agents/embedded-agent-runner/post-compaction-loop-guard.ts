@@ -1,7 +1,6 @@
 /**
  * Guards against repeated tool-loop compactions that never make progress.
  */
-import type { ToolLoopPostCompactionGuardConfig } from "../../config/types.tools.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 /**
@@ -45,21 +44,13 @@ type GuardState = {
   history: PostCompactionGuardObservation[];
 };
 
-function asPositiveInt(value: number | undefined, fallback: number): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return fallback;
-  }
-  return value;
-}
-
 /** Creates a stateful post-compaction loop detector for one embedded run. */
-export function createPostCompactionLoopGuard(
-  config?: ToolLoopPostCompactionGuardConfig,
-  options?: { enabled?: boolean },
-): PostCompactionLoopGuard {
+export function createPostCompactionLoopGuard(options?: {
+  enabled?: boolean;
+}): PostCompactionLoopGuard {
   const state: GuardState = {
     enabled: options?.enabled ?? true,
-    windowSize: asPositiveInt(config?.windowSize, DEFAULT_WINDOW_SIZE),
+    windowSize: DEFAULT_WINDOW_SIZE,
     remainingAttempts: 0,
     history: [],
   };

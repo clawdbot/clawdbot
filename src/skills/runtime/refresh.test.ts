@@ -7,8 +7,9 @@ import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
   shouldRefreshSnapshotForVersion,
-  type SkillsChangeEvent,
 } from "./refresh-state.js";
+
+type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
 type WatchEvent = "add" | "addDir" | "all" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
 type WatchCallback = (...args: unknown[]) => void;

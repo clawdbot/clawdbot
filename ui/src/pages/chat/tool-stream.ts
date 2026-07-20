@@ -1,5 +1,6 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -52,11 +53,7 @@ type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
-  hello?: {
-    snapshot?: {
-      sessionDefaults?: SessionDefaultsSnapshot;
-    };
-  } | null;
+  hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -66,13 +63,10 @@ type ToolStreamHost = {
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
+  knownAgentRunIds?: Set<string>;
+  waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
+  waitingApprovalResolvedIds?: Set<string>;
   sessions: Pick<SessionCapability, "setModelOverride">;
-};
-
-type SessionDefaultsSnapshot = {
-  defaultAgentId?: string;
-  mainKey?: string;
-  mainSessionKey?: string;
 };
 
 function toTrimmedString(value: unknown): string | null {
@@ -330,6 +324,10 @@ export function resetToolStream(host: ToolStreamHost) {
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
   host.planStatus = null;
+  host.knownAgentRunIds?.clear();
+  host.waitingApprovalStatuses?.clear();
+  // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
+  // until snapshot reconciliation observes the approval leaving the queue.
 }
 
 export type CompactionStatus = {
@@ -358,6 +356,70 @@ export type PlanStatus = {
     status: "pending" | "in_progress" | "completed";
   }>;
 };
+
+export type WaitingApprovalStatus = {
+  approvalId: string;
+  toolCallId: string | null;
+  runId: string;
+};
+
+type WaitingApprovalSnapshotHost = Pick<
+  ToolStreamHost,
+  | "sessionKey"
+  | "assistantAgentId"
+  | "agentsList"
+  | "hello"
+  | "knownAgentRunIds"
+  | "waitingApprovalStatuses"
+  | "waitingApprovalResolvedIds"
+>;
+
+export function reconcileWaitingApprovalsFromSnapshot(
+  host: WaitingApprovalSnapshotHost,
+  queue: readonly ExecApprovalRequest[],
+): boolean {
+  const waiting = (host.waitingApprovalStatuses ??= new Map());
+  const resolvedIds = (host.waitingApprovalResolvedIds ??= new Set());
+  const allQueuedIds = new Set(queue.map((approval) => approval.id));
+  for (const approvalId of resolvedIds) {
+    if (!allQueuedIds.has(approvalId)) {
+      resolvedIds.delete(approvalId);
+    }
+  }
+  const matchingApprovals = queue.filter(
+    (approval) =>
+      approval.kind === "exec" &&
+      approval.request.sessionKey &&
+      uiSessionEventMatches(host, approval.request.sessionKey, approval.request.agentId),
+  );
+  const queuedIds = new Set(matchingApprovals.map((approval) => approval.id));
+  let changed = false;
+  for (const approvalId of waiting.keys()) {
+    if (!queuedIds.has(approvalId)) {
+      waiting.delete(approvalId);
+      changed = true;
+    }
+  }
+  if (waiting.size > 0) {
+    return changed;
+  }
+  // On a fresh mount the inline approval card still exposes the parked request in the transcript.
+  // Spinner-label hydration across mounts needs an authoritative Gateway run-state contract and
+  // is deliberately deferred.
+  for (const approval of matchingApprovals) {
+    const runId = toTrimmedString(approval.request.runId);
+    if (!runId || !host.knownAgentRunIds?.has(runId) || resolvedIds.has(approval.id)) {
+      continue;
+    }
+    waiting.set(approval.id, {
+      approvalId: approval.id,
+      toolCallId: null,
+      runId,
+    });
+    changed = true;
+  }
+  return changed;
+}
 
 type PlanHost = ToolStreamHost & {
   planStatus?: PlanStatus | null;
@@ -616,6 +678,31 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
+function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const phase = toTrimmedString(payload.data?.phase);
+  if (phase !== "waiting-approval" && phase !== "approval-resolved") {
+    return false;
+  }
+  const approvalId = toTrimmedString(payload.data?.approvalId);
+  const sessionKey = toTrimmedString(payload.sessionKey);
+  if (!approvalId || !sessionKey) {
+    return true;
+  }
+  if (phase === "waiting-approval") {
+    const waiting = (host.waitingApprovalStatuses ??= new Map());
+    host.waitingApprovalResolvedIds?.delete(approvalId);
+    waiting.set(approvalId, {
+      approvalId,
+      toolCallId: toTrimmedString(payload.data?.toolCallId),
+      runId: payload.runId,
+    });
+    return true;
+  }
+  (host.waitingApprovalResolvedIds ??= new Set()).add(approvalId);
+  host.waitingApprovalStatuses?.delete(approvalId);
+  return true;
+}
+
 function readPreambleProgressEvent(
   payload: AgentEventPayload,
 ): { text: string; itemId?: string } | null {
@@ -764,6 +851,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
     return;
   }
+  if (payload.stream === "lifecycle" || payload.stream === "tool") {
+    const runId = toTrimmedString(payload.runId);
+    if (runId) {
+      (host.knownAgentRunIds ??= new Set()).add(runId);
+    }
+  }
 
   // Handle compaction events
   if (payload.stream === "compaction") {
@@ -772,6 +865,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "lifecycle") {
+    if (handleLifecycleApprovalEvent(host, payload)) {
+      return;
+    }
     handleLifecycleCompactionEvent(host as CompactionHost, payload);
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
     return;

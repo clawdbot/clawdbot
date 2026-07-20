@@ -9,7 +9,7 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
   MigrationSummary,
-} from "../plugins/types.js";
+} from "./plugin-entry.js";
 
 export type {
   MigrationDetection,

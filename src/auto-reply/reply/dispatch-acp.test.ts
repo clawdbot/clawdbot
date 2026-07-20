@@ -959,7 +959,7 @@ describe("tryDispatchAcpReply", () => {
       cfg: createAcpTestConfig({
         acp: {
           enabled: true,
-          stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+          stream: { deliveryMode: "live" },
         },
       }),
       dispatcher,
@@ -989,7 +989,7 @@ describe("tryDispatchAcpReply", () => {
       mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
       "transcript call",
     );
-    expect(transcript.finalText).toBe(deliveredText);
+    expect(transcript.finalText).toBe(deliveredText.trimEnd());
   });
 
   it("keeps caller abort authoritative until completed output settles", async () => {
@@ -2309,8 +2309,6 @@ describe("tryDispatchAcpReply", () => {
         enabled: true,
         stream: {
           deliveryMode: "live",
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
         },
       },
     });
@@ -2347,8 +2345,6 @@ describe("tryDispatchAcpReply", () => {
         enabled: true,
         stream: {
           deliveryMode: "live",
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
         },
       },
     });

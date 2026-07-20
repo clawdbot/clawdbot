@@ -267,7 +267,6 @@ export async function projectInferenceRoute(
     auth: {
       profiles: authProfiles,
       order: authOrder,
-      cooldowns: structuredClone(config.auth?.cooldowns),
     },
     models: {
       mode: config.models?.mode,

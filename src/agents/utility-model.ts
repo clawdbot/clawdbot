@@ -65,14 +65,17 @@ function resolveProviderDefaultUtilityModelRef(params: {
 
 /**
  * The utility model ref to use for the agent, or undefined when utility
- * routing is disabled or no default exists. Derivation uses the agent's
- * primary provider, so usable auth is already established by construction.
+ * routing is disabled or no default exists. Callers with a session-specific
+ * selection pass both primary fields so automatic routing keeps that session's
+ * provider and auth owner.
  */
 export function resolveUtilityModelRefForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   /** Pass when the caller already resolved the primary provider. */
   primaryProvider?: string;
+  /** Pass with primaryProvider to carry a session-specific auth profile. */
+  primaryModelRef?: string;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string | undefined {
   const setting = readUtilityModelSetting(params.cfg, params.agentId);
@@ -99,7 +102,10 @@ export function resolveUtilityModelRefForAgent(params: {
   // The derived default shares the primary's provider, so a trailing auth
   // profile on the primary ref must carry over; otherwise profile-isolated
   // setups would route utility calls through default credentials.
-  const primaryRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ?? "";
+  const primaryRef =
+    params.primaryModelRef?.trim() ||
+    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ||
+    "";
   const primaryProfile = primaryRef ? splitTrailingAuthProfile(primaryRef)?.profile : undefined;
   return primaryProfile ? `${derived}@${primaryProfile}` : derived;
 }

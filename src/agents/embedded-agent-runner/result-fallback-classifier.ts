@@ -58,6 +58,9 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
     meta: {
       ...params.latestResult.meta,
       error: params.preferredResult.meta.error,
+      replayInvalid:
+        params.preferredResult.meta.replayInvalid === true ||
+        params.latestResult.meta.replayInvalid === true,
       ...(traceNeedsNormalization
         ? {
             executionTrace: {

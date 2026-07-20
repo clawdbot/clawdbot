@@ -190,6 +190,10 @@ describe("registerPreActionHooks", () => {
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
     programLocal
+      .command("qa")
+      .command("suite")
+      .action(() => {});
+    programLocal
       .command("agents")
       .command("list")
       .option("--json")
@@ -435,6 +439,16 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["configure"],
       processArgv: ["node", "openclaw", "configure"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps private QA commands isolated from operator config bootstrap", async () => {
+    await runPreAction({
+      parseArgv: ["qa", "suite"],
+      processArgv: ["node", "openclaw", "qa", "suite"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

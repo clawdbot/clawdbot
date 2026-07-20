@@ -21,16 +21,16 @@ describe("telegram error policy", () => {
     vi.useRealTimers();
   });
 
-  it("resolves policy and cooldown from the most specific config", () => {
+  it("resolves policy from the most specific config", () => {
     expect(
       resolveTelegramErrorPolicy({
-        accountConfig: { errorPolicy: "once", errorCooldownMs: 1000 },
-        groupConfig: { errorCooldownMs: 2000 },
+        accountConfig: { errorPolicy: "once" },
+        groupConfig: {},
         topicConfig: { errorPolicy: "silent" },
       }),
     ).toEqual({
       policy: "silent",
-      cooldownMs: 2000,
+      cooldownMs: 14_400_000,
     });
   });
 

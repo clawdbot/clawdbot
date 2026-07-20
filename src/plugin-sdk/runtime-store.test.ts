@@ -3,6 +3,7 @@
  */
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, test } from "vitest";
+import { clearNamedPluginRuntimeStoresForTest } from "./runtime-store-registry.js";
 import { createPluginRuntimeStore } from "./runtime-store.js";
 
 describe("createPluginRuntimeStore", () => {
@@ -117,5 +118,36 @@ describe("createPluginRuntimeStore", () => {
     firstStore.setRuntime({ value: "shared" });
 
     expect(secondStore.getRuntime()).toEqual({ value: "shared" });
+  });
+
+  test("clears and detaches every named runtime slot without changing legacy stores", () => {
+    const firstNamedStore = createPluginRuntimeStore<{ value: string }>({
+      pluginId: "first-reset-plugin",
+      errorMessage: "first runtime not initialized",
+    });
+    const secondNamedStore = createPluginRuntimeStore<{ value: string }>({
+      pluginId: "second-reset-plugin",
+      errorMessage: "second runtime not initialized",
+    });
+    const legacyStore = createPluginRuntimeStore<{ value: string }>(
+      "legacy runtime not initialized",
+    );
+
+    firstNamedStore.setRuntime({ value: "first" });
+    secondNamedStore.setRuntime({ value: "second" });
+    legacyStore.setRuntime({ value: "legacy" });
+
+    clearNamedPluginRuntimeStoresForTest();
+
+    expect(firstNamedStore.tryGetRuntime()).toBeNull();
+    expect(secondNamedStore.tryGetRuntime()).toBeNull();
+    expect(legacyStore.getRuntime()).toEqual({ value: "legacy" });
+
+    const replacementStore = createPluginRuntimeStore<{ value: string }>({
+      pluginId: "first-reset-plugin",
+      errorMessage: "replacement runtime not initialized",
+    });
+    firstNamedStore.setRuntime({ value: "stale" });
+    expect(replacementStore.tryGetRuntime()).toBeNull();
   });
 });

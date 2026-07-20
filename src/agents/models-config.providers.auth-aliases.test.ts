@@ -10,8 +10,8 @@ type MockManifestRegistry = {
     providers: string[];
     cliBackends: string[];
     rootDir: string;
-    providerAuthEnvVars?: Record<string, string[]>;
     providerAuthAliases?: Record<string, string>;
+    setup?: { providers: Array<{ id: string; envVars: string[] }> };
   }>;
   diagnostics: unknown[];
 };
@@ -24,8 +24,8 @@ const createFixtureProviderRegistry = (): MockManifestRegistry => ({
       providers: ["fixture-provider"],
       cliBackends: [],
       rootDir: "/tmp/openclaw-test/fixture-provider",
-      providerAuthEnvVars: {
-        "fixture-provider": ["FIXTURE_PROVIDER_API_KEY"],
+      setup: {
+        providers: [{ id: "fixture-provider", envVars: ["FIXTURE_PROVIDER_API_KEY"] }],
       },
       providerAuthAliases: {
         "fixture-provider-plan": "fixture-provider",
@@ -44,8 +44,8 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
         providers: ["fixture-provider"],
         cliBackends: [],
         rootDir: "/tmp/openclaw-test/fixture-provider",
-        providerAuthEnvVars: {
-          "fixture-provider": ["FIXTURE_PROVIDER_API_KEY"],
+        setup: {
+          providers: [{ id: "fixture-provider", envVars: ["FIXTURE_PROVIDER_API_KEY"] }],
         },
         providerAuthAliases: {
           "fixture-provider-plan": "fixture-provider",
@@ -164,8 +164,8 @@ describe("provider auth aliases", () => {
           providers: ["openai"],
           cliBackends: [],
           rootDir: "/tmp/openclaw-test/openai",
-          providerAuthEnvVars: {
-            openai: ["OPENAI_API_KEY"],
+          setup: {
+            providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
           },
           providerAuthAliases: {},
         },
@@ -222,8 +222,8 @@ describe("provider auth aliases", () => {
           providers: ["openai"],
           cliBackends: [],
           rootDir: "/tmp/openclaw-test/openai",
-          providerAuthEnvVars: {
-            openai: ["OPENAI_API_KEY"],
+          setup: {
+            providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
           },
           providerAuthAliases: {
             "openai-compatible": "openai",

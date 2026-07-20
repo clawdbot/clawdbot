@@ -456,16 +456,9 @@ vi.mock("../../logging/diagnostic.js", () => ({
   isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
     config?.diagnostics?.enabled !== false,
   requestStuckDiagnosticSessionRecovery: diagnosticMocks.requestStuckDiagnosticSessionRecovery,
-  resolveStuckSessionWarnMs: (config?: { diagnostics?: { stuckSessionWarnMs?: number } }) =>
-    config?.diagnostics?.stuckSessionWarnMs ?? 120_000,
-  resolveStuckSessionAbortMs: (
-    config: { diagnostics?: { stuckSessionAbortMs?: number } } | undefined,
-    stuckSessionWarnMs: number,
-  ) =>
-    Math.max(
-      stuckSessionWarnMs,
-      config?.diagnostics?.stuckSessionAbortMs ?? Math.max(300_000, stuckSessionWarnMs * 3),
-    ),
+  resolveStuckSessionWarnMs: () => 120_000,
+  resolveStuckSessionAbortMs: (stuckSessionWarnMs: number) =>
+    Math.max(300_000, stuckSessionWarnMs * 3),
 }));
 vi.mock("../../audit/message-audit-events.js", () => ({
   emitTrustedMessageAuditEvent: messageAuditMocks.emitTrustedMessageAuditEvent,

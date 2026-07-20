@@ -119,6 +119,5 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
     const runner = createHookRunner(registry);
 
     expect(runner.hasHooks("before_agent_reply")).toBe(true);
-    expect(runner.hasHooks("before_agent_start")).toBe(false);
   });
 });

@@ -18,33 +18,22 @@ export function isStoppableCloudWorkerPlacement(
 
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
-  worktreeId?: string;
   hasAutomation: boolean;
   hasApproval?: boolean;
   placementState?: SessionPlacementState;
 }) {
-  const worktreeId = params.isChild ? undefined : params.worktreeId;
   const hasAutomation = !params.isChild && params.hasAutomation;
   const placementState = params.isChild ? undefined : params.placementState;
   const cloudPlacementState = isCloudWorkerPlacementState(placementState)
     ? placementState
     : undefined;
-  if (!worktreeId && !hasAutomation && !params.hasApproval && !cloudPlacementState) {
+  if (!hasAutomation && !params.hasApproval && !cloudPlacementState) {
     return nothing;
   }
   const cloudLabel = cloudPlacementState
     ? t("sessionsView.cloudWorkerPlacement", { state: cloudPlacementState })
     : "";
   return html`<span class="session-row-badges">
-    ${worktreeId
-      ? html`<span
-          class="session-row-badge"
-          role="img"
-          aria-label=${t("sessionsView.worktreeSession")}
-          title=${t("sessionsView.worktreeSession")}
-          >${icons.gitBranch}</span
-        >`
-      : nothing}
     ${hasAutomation
       ? html`<span
           class="session-row-badge"

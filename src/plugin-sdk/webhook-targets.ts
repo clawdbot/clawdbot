@@ -2,7 +2,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
-import { normalizeWebhookPath } from "./webhook-path.js";
 import {
   beginWebhookRequestPipelineOrReject,
   type WebhookInFlightLimiter,
@@ -27,6 +26,36 @@ export type RegisterWebhookTargetOptions<T extends { path: string }> = {
 type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
 
 export { registerPluginHttpRoute };
+
+/** Normalize a webhook path to a leading slash without a trailing slash. */
+export function normalizeWebhookPath(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "/";
+  }
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
+}
+
+/** Resolve a webhook path from explicit config, URL pathname, or a caller default. */
+export function resolveWebhookPath(params: {
+  webhookPath?: string;
+  webhookUrl?: string;
+  defaultPath?: string | null;
+}): string | null {
+  const trimmedPath = params.webhookPath?.trim();
+  if (trimmedPath) {
+    return normalizeWebhookPath(trimmedPath);
+  }
+  if (params.webhookUrl?.trim()) {
+    try {
+      return normalizeWebhookPath(new URL(params.webhookUrl).pathname || "/");
+    } catch {
+      return null;
+    }
+  }
+  return params.defaultPath ?? null;
+}
 
 /** Plugin HTTP route options supplied when webhook paths are registered lazily. */
 export type RegisterWebhookPluginRouteOptions = Omit<

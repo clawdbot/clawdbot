@@ -1,9 +1,5 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.ChatCacheDatabase
-import ai.openclaw.app.chat.RoomChatCommandOutbox
-import ai.openclaw.app.gateway.DeviceAuthStore
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.notifyNativeLocaleChanged
 import ai.openclaw.app.wear.GoogleWearMessageSender
@@ -13,12 +9,10 @@ import ai.openclaw.app.wear.WearRealtimeChannelRegistry
 import android.app.Application
 import android.content.res.Configuration
 import android.os.StrictMode
-import androidx.room.withTransaction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -91,36 +85,10 @@ class NodeApp : Application() {
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val runtime =
       synchronized(runtimeLock) {
-        runtimeInstance?.let { return@synchronized it }
-        // Keep runtime construction blocked through the direct purge: a runtime built from the old
-        // credentials could otherwise reconnect and rewrite device auth after this reset returns.
-        return runCatching { resetGatewaySetupAuthBeforeRuntime(stableId) }.getOrDefault(false)
+        runtimeInstance
+          ?: NodeRuntime.forGatewayAuthReset(this, prefs).also { runtimeInstance = it }
       }
     return runtime.resetGatewaySetupAuth(stableId)
-  }
-
-  private fun resetGatewaySetupAuthBeforeRuntime(stableId: String): Boolean {
-    val gatewayId = stableId.trim().takeIf { it.isNotEmpty() } ?: return false
-    val database = ChatCacheDatabase.open(this)
-    try {
-      runBlocking {
-        database.withTransaction {
-          database.dao().deleteMessages(gatewayId)
-          database.dao().deleteSessionsForGateway(gatewayId)
-          database.dao().deleteGatewayOwner(gatewayId)
-          // The outbox owns command/attachment cascade deletes; nested transactions join this one.
-          RoomChatCommandOutbox(database).clearGateway(gatewayId)
-        }
-      }
-    } finally {
-      database.close()
-    }
-    prefs.clearGatewayCredentials(gatewayId)
-    val deviceId = DeviceIdentityStore.withPrefs(this, prefs).loadOrCreate().deviceId
-    val deviceAuthStore = DeviceAuthStore(prefs)
-    deviceAuthStore.clearToken(gatewayId, deviceId, "node")
-    deviceAuthStore.clearToken(gatewayId, deviceId, "operator")
-    return true
   }
 
   override fun onCreate() {

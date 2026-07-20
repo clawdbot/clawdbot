@@ -61,12 +61,11 @@ describe("session row placement badges", () => {
       renderSessionRowBadges({
         hasAutomation: true,
         placementState: "local",
-        worktreeId: "worktree-1",
       }),
       container,
     );
 
-    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(2);
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
     expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
   });
 
@@ -84,11 +83,10 @@ describe("session row placement badges", () => {
     expect(badge?.querySelector("svg")).not.toBeNull();
   });
 
-  it("keeps child-only worktree and placement badges hidden while showing approval", () => {
+  it("keeps child-only automation and placement badges hidden while showing approval", () => {
     render(
       renderSessionRowBadges({
         isChild: true,
-        worktreeId: "worktree-1",
         hasAutomation: true,
         hasApproval: true,
         placementState: "active",

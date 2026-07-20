@@ -47,12 +47,11 @@ struct RuntimeLocalizationSourceGuardTests {
         let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
         let project = try Self.source("project.yml")
         let dreaming = try Self.source("Sources/Design/AgentProDreamingDestination.swift")
-        let phoneControlHub = try Self.source("Sources/Design/RootTabsPhoneControlHub.swift")
+        let rootSidebar = try Self.source("Sources/RootSidebar.swift")
         let proComponents = try Self.source("Sources/Design/OpenClawProComponents.swift")
         let skillWorkshop = try Self.source("Sources/Design/IPadSkillWorkshopScreen.swift")
         let workboard = try Self.source("Sources/Design/IPadWorkboardScreen.swift")
         let talkManager = try Self.source("Sources/Voice/TalkModeManager.swift")
-        let rootTabs = try Self.source("Sources/RootTabs.swift")
         let rootTabsNavigation = try Self.source("Sources/RootTabsNavigation.swift")
         let watchInbox = try Self.source("WatchApp/Sources/WatchInboxView.swift")
         let chat = try Self.sharedSource("OpenClawChatUI/ChatMessageViews.swift")
@@ -82,7 +81,7 @@ struct RuntimeLocalizationSourceGuardTests {
         #expect(!watchInbox.contains("WatchTextValue: ExpressibleByStringLiteral"))
         #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))
         for status in ["Online", "Connecting", "Needs attention", "Offline"] {
-            #expect(rootTabs.contains("String(localized: \"\(status)\")"))
+            #expect(rootSidebar.contains("String(localized: \"\(status)\")"))
         }
         let destinationTitles = [
             "Chat",
@@ -107,10 +106,9 @@ struct RuntimeLocalizationSourceGuardTests {
         }
         #expect(rootTabsNavigation.contains("case .gateway: String(localized: \"Connection\")"))
         for status in ["Online", "Connecting", "Attention", "Offline"] {
-            #expect(phoneControlHub.contains("String(localized: \"\(status)\")"))
             #expect(proComponents.contains("String(localized: \"\(status)\")"))
         }
-        #expect(phoneControlHub.contains("String(localized: \"Default Agent\")"))
+        #expect(rootSidebar.contains("String(localized: \"New Chat\")"))
         #expect(proComponents.contains("OpenClawStatusBadge(label: .verbatim(self.title)"))
         #expect(
             skillWorkshop.components(separatedBy: "String(localized: \"Default agent\")").count - 1 == 2)
@@ -170,5 +168,5 @@ struct RuntimeLocalizationSourceGuardTests {
         var isDisconnected = false
         var isConnecting = false
         var startedAt = Date(timeIntervalSince1970: 1234)
-        }
     }
+}

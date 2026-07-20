@@ -34,6 +34,7 @@ type ChatPaneHeaderProps = {
   copiedAction: ChatPaneHeaderAction | null;
   canRename: boolean;
   terminalAction: TemplateResult | typeof nothing;
+  discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
@@ -297,7 +298,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           `
         : nothing}
       <div class="chat-pane__actions">
-        ${props.boardDockAction ?? nothing} ${props.terminalAction}
+        ${props.boardDockAction ?? nothing} ${props.terminalAction} ${props.discussionAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}

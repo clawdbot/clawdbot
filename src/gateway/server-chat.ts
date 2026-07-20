@@ -219,19 +219,6 @@ const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "unknown",
 ]);
 
-function buildChatErrorMessage(error: unknown): Record<string, unknown> | undefined {
-  const raw = error ? formatForLog(error).trim() : "";
-  if (!raw) {
-    return undefined;
-  }
-  const text = raw.startsWith("⚠️") || raw.startsWith("Error:") ? raw : `Error: ${raw}`;
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp: Date.now(),
-  };
-}
-
 function readChatErrorKind(value: unknown): ChatErrorKind | undefined {
   return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ChatErrorKind)
     ? (value as ChatErrorKind)
@@ -1120,7 +1107,6 @@ export function createAgentEventHandler({
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
-      message: buildChatErrorMessage(error),
       ...(errorKind && { errorKind }),
       ...(stopReason && { stopReason }),
     };

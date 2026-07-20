@@ -116,6 +116,11 @@ function projectToolResultDetails(
     return undefined;
   }
   const projected: Record<string, unknown> = {};
+  for (const key of ["changed", "created"] as const) {
+    if (typeof record[key] === "boolean") {
+      projected[key] = record[key];
+    }
+  }
   if (typeof record.diff === "string" && record.diff.trim()) {
     projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
   }

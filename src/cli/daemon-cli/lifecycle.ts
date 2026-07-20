@@ -206,12 +206,16 @@ async function handleSystemScopeSystemdGateway(
   };
 }
 
-async function stopGatewayWithoutServiceManager(port: number) {
+async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: number | undefined) {
   const managed = await handleSystemScopeSystemdGateway("stop");
   if (managed) {
     return managed;
   }
-  const pids = resolveVerifiedGatewayListenerPids(port);
+  const listenerPids = resolveVerifiedGatewayListenerPids(port);
+  // Listener discovery needs lsof, which minimal containers omit. The gateway
+  // lock already names the verified owner of this port, so signal it instead of
+  // reporting the gateway as not running while it keeps serving.
+  const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
     return null;
   }
@@ -243,10 +247,7 @@ async function resolveRestartListenerHealthWait(
   } else if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
     drainTimeoutMs = restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
   } else {
-    const config = await readBestEffortConfig().catch(() => undefined);
-    drainTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
-      config?.gateway?.reload?.deferralTimeoutMs,
-    );
+    drainTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
   }
 
   const replacementHealthAttempts = postRestartHealthAttempts();
@@ -520,7 +521,6 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   }
   assertGatewayServiceMutationAllowed("stop the gateway");
   const service = resolveGatewayService();
-  let gatewayPortPromise: Promise<number> | undefined;
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
@@ -540,10 +540,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
           return { result: "stopped" };
         }
       }
-      gatewayPortPromise ??= resolveGatewayLifecyclePort(service).catch(() =>
-        resolveGatewayPortFallback(),
-      );
-      return await stopGatewayWithoutServiceManager(await gatewayPortPromise);
+      // An unmanaged run loop keeps its lock port across config edits, so use it
+      // for discovery the way restart already does; otherwise a valid port
+      // override makes the running gateway look like it is already stopped.
+      const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
+      const port =
+        lockIdentity?.port ??
+        (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
+      return await stopGatewayWithoutServiceManager(port, lockIdentity?.pid);
     },
   });
 }

@@ -36,6 +36,11 @@ export type AgentCommandResultMetaOverrides = {
   fallbackReason?: "gateway_timeout" | "gateway_closed";
   fallbackSessionId?: string;
   fallbackSessionKey?: string;
+  fallback?: {
+    reason: "gateway_timeout" | "gateway_closed";
+    requestedSessionKey: string | null;
+    sessionKey: string;
+  };
 };
 
 /** ACP turn source markers accepted by trusted command callsites. */

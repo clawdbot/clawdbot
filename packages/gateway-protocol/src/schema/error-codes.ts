@@ -15,7 +15,9 @@ export {
   GatewayErrorDetailCodes,
   type ErrorCode,
   type GatewayErrorDetails,
+  type McpAppViewExpiredErrorDetails,
   type MissingScopeErrorDetails,
+  isMcpAppViewExpiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "../gateway-error-details.js";
@@ -27,8 +29,15 @@ export const MissingScopeErrorDetailsSchema = closedObject({
   requiredScopes: Type.Array(NonEmptyString, { minItems: 1 }),
 });
 
+export const McpAppViewExpiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
+});
+
 /** Structured details emitted by method-level authorization failures. */
-export const GatewayErrorDetailsSchema = MissingScopeErrorDetailsSchema;
+export const GatewayErrorDetailsSchema = Type.Union([
+  MissingScopeErrorDetailsSchema,
+  McpAppViewExpiredErrorDetailsSchema,
+]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */
 export function errorShape(

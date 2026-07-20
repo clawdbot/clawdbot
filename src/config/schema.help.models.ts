@@ -153,24 +153,6 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Require @mention in channels before responding (default: true).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
-  "auth.cooldowns":
-    "Cooldown/backoff controls for temporary profile suppression after billing-related failures and retry windows. Use these to prevent rapid re-selection of profiles that are still blocked.",
-  "auth.cooldowns.billingBackoffHours":
-    "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
-  "auth.cooldowns.billingBackoffHoursByProvider":
-    "Optional per-provider overrides for billing backoff (hours).",
-  "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
-  "auth.cooldowns.authPermanentBackoffMinutes":
-    "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
-  "auth.cooldowns.authPermanentMaxMinutes":
-    "Cap (minutes) for auth_permanent backoff (default: 60).",
-  "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
-  "auth.cooldowns.overloadedProfileRotations":
-    "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
-  "auth.cooldowns.overloadedBackoffMs":
-    "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
-  "auth.cooldowns.rateLimitedProfileRotations":
-    "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.skipOptionalBootstrapFiles":
@@ -294,30 +276,16 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Enables the sqlite-vec extension used for vector similarity queries in memory search (default: true). Keep this enabled for normal semantic recall; disable only for debugging or fallback-only operation.",
   "agents.defaults.memorySearch.store.vector.extensionPath":
     "Overrides the auto-discovered sqlite-vec extension library path (`.dylib`, `.so`, or `.dll`). Use this when your runtime cannot find sqlite-vec automatically or you pin a known-good build.",
-  "agents.defaults.memorySearch.chunking.tokens":
-    "Chunk size in tokens used when splitting memory sources before embedding/indexing. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
-  "agents.defaults.memorySearch.chunking.overlap":
-    "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
   "agents.defaults.memorySearch.query.maxResults":
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "agents.defaults.memorySearch.query.minScore":
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
   "agents.defaults.memorySearch.query.hybrid.enabled":
     "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
-  "agents.defaults.memorySearch.query.hybrid.vectorWeight":
-    "Controls how strongly semantic similarity influences hybrid ranking (0-1). Increase when paraphrase matching matters more than exact terms; decrease for stricter keyword emphasis.",
-  "agents.defaults.memorySearch.query.hybrid.textWeight":
-    "Controls how strongly BM25 keyword relevance influences hybrid ranking (0-1). Increase for exact-term matching; decrease when semantic matches should rank higher.",
-  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
-    "Expands the candidate pool before reranking (default: 4). Raise this for better recall on noisy corpora, but expect more compute and slightly slower searches.",
   "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
     "Adds MMR reranking to diversify results and reduce near-duplicate snippets in a single answer window. Enable when recall looks repetitive; keep off for strict score ordering.",
-  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
-    "Sets MMR relevance-vs-diversity balance (0 = most diverse, 1 = most relevant, default: 0.7). Lower values reduce repetition; higher values keep tightly relevant but may duplicate.",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
     "Applies recency decay so newer memory can outrank older memory when scores are close. Enable when timeliness matters; keep off for timeless reference knowledge.",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
-    "Controls how fast older memory loses rank when temporal decay is enabled (half-life in days, default: 30). Lower values prioritize recent context more aggressively.",
   "agents.defaults.memorySearch.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",
@@ -387,16 +355,12 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Sets per-query QMD search timeout in milliseconds (default: 4000). Increase for larger indexes or slower environments, and lower to keep request latency bounded.",
   "memory.qmd.scope":
     "Defines which sessions/channels are eligible for QMD recall using session.sendPolicy-style rules. Keep default direct-only scope unless you intentionally want cross-chat memory sharing.",
-  "agents.defaults.memorySearch.cache.maxEntries":
-    "Sets a best-effort upper bound on cached embeddings kept in SQLite for memory search. Use this when controlling disk growth matters more than peak reindex speed.",
   "agents.defaults.memorySearch.sync.onSessionStart":
     "Triggers a memory index sync when a session starts so early turns see fresh memory content. Keep enabled when startup freshness matters more than initial turn latency.",
   "agents.defaults.memorySearch.sync.onSearch":
     "Uses lazy sync by scheduling reindex on search after content changes are detected. Keep enabled for lower idle overhead, or disable if you require pre-synced indexes before any query.",
   "agents.defaults.memorySearch.sync.watch":
     "Watches memory files and schedules index updates from file-change events (chokidar). Enable for near-real-time freshness; disable on very large workspaces if watch churn is too noisy.",
-  "agents.defaults.memorySearch.sync.watchDebounceMs":
-    "Debounce window in milliseconds for coalescing rapid file-watch events before reindex runs. Increase to reduce churn on frequently-written files, or lower for faster freshness.",
   "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds":
     "Overrides the timeout for inline embedding batches during memory indexing. Leave unset to use provider defaults: 600 seconds for local/self-hosted providers such as local, Ollama, and LM Studio, and 120 seconds for hosted providers.",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes":

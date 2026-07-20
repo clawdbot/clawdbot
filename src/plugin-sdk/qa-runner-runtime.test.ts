@@ -13,11 +13,13 @@ import {
 } from "./qa-runtime.test-helpers.js";
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadBundledPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/manifest-registry.js", () => ({
+  loadBundledPluginManifestRegistry,
   loadPluginManifestRegistry,
 }));
 
@@ -37,10 +39,6 @@ type PublicSurfaceCall = {
   env?: NodeJS.ProcessEnv;
 };
 
-function firstManifestRegistryCall(): ManifestRegistryCall | undefined {
-  return loadPluginManifestRegistry.mock.calls[0]?.[0] as ManifestRegistryCall | undefined;
-}
-
 function firstPublicSurfaceCall(): PublicSurfaceCall | undefined {
   return loadBundledPluginPublicSurfaceModuleSync.mock.calls[0]?.[0] as
     | PublicSurfaceCall
@@ -55,6 +53,10 @@ describe("plugin-sdk qa-runner-runtime", () => {
   beforeEach(() => {
     vi.resetModules();
     loadPluginManifestRegistry.mockReset().mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    loadBundledPluginManifestRegistry.mockReset().mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -232,7 +234,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
 
     const register = vi.fn((qa: Command) => qa);
     const adapterFactory = { id: "example", matches: vi.fn(), create: vi.fn() };
-    loadPluginManifestRegistry.mockReturnValue({
+    loadBundledPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
           id: "qa-example",
@@ -261,7 +263,9 @@ describe("plugin-sdk qa-runner-runtime", () => {
         },
       },
     ]);
-    const manifestCall = firstManifestRegistryCall();
+    const manifestCall = loadBundledPluginManifestRegistry.mock.calls[0]?.[0] as
+      | ManifestRegistryCall
+      | undefined;
     expect(manifestCall?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     expect(manifestCall?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe(
       path.join(sourceRoot, "extensions"),

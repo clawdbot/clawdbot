@@ -596,6 +596,74 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("runs doctor-only repairs after the automatic migration check", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const detectLegacyState = vi.fn(() => ({ preview: ["doctor-only repair"] }));
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["doctor-only repair migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-doctor-only-latch-test",
+          label: "Memory Core doctor-only latch test",
+          doctorOnly: true,
+          detectLegacyState,
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    expect(automatic.changes).not.toContain("doctor-only repair migrated");
+    expect(detectLegacyState).not.toHaveBeenCalled();
+
+    const repaired = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(repaired.changes).toContain("doctor-only repair migrated");
+    expect(detectLegacyState).toHaveBeenCalledTimes(2);
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("checks automatic migrations independently for each state directory", async () => {
+    const root = await createTempDir();
+    const stateDirs = [path.join(root, "state-a"), path.join(root, "state-b")];
+    const detectedStateDirs: string[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-state-dir-latch-test",
+          label: "Memory Core state-dir latch test",
+          detectLegacyState: ({ stateDir }) => {
+            detectedStateDirs.push(stateDir);
+            return null;
+          },
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      },
+    ];
+
+    for (const stateDir of stateDirs) {
+      await autoMigrateLegacyState({
+        cfg: createConfig(),
+        env: createEnv(stateDir),
+        homedir: () => root,
+      });
+    }
+
+    expect(new Set(detectedStateDirs)).toStrictEqual(new Set(stateDirs));
+  });
+
   it("detects legacy sessions, agent files, channel auth, and pairing state", () => {
     expect(detectionCase.targetAgentId).toBe("worker-1");
     expect(detectionCase.targetMainKey).toBe("desk");

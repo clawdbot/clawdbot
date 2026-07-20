@@ -111,20 +111,16 @@ with:
 ```json
 {
   "transcripts": {
-    "enabled": true,
-    "maxUtterances": 2000
+    "enabled": true
   }
 }
 ```
 
 - `enabled` (default `false`): turn the tool on.
-- `maxUtterances` (default `2000`, clamped 1-10000): utterance buffer size per
-  session.
-
-Configure auto-start sources with `transcripts.autoStart`. Each entry is
-enabled by being present; omit an entry to disable that source. `discord-voice`
-is the bundled auto-start-capable source and requires `guildId` and
-`channelId`:
+  Configure auto-start sources with `transcripts.autoStart`. Each entry is
+  enabled by being present; omit an entry to disable that source. `discord-voice`
+  is the bundled auto-start-capable source and requires `guildId` and
+  `channelId`:
 
 ```json
 {

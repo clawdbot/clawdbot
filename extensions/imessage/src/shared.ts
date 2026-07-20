@@ -77,7 +77,7 @@ export function createIMessagePluginBase(params: {
     meta: {
       ...getChatChannelMeta(IMESSAGE_CHANNEL),
       aliases: ["imsg"],
-      showConfigured: false,
+      exposure: { configured: false },
     },
     setupWizard: params.setupWizard,
     capabilities: {

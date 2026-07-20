@@ -1491,7 +1491,7 @@
     {
       "id": "native.android.670121e54dbe286f",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.d38be650b1bce4a0",
@@ -3681,7 +3681,7 @@
     {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.439b324280869527",
@@ -5751,7 +5751,7 @@
     {
       "id": "native.android.57177017a6a93826",
       "source": "Threads",
-      "translated": "İletişim Dizileri"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.43320b54a68b00a1",
@@ -8151,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "İletişim Dizileri"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -10869,9 +10869,9 @@
       "translated": "Ne üzerinde çalışmak istersiniz?"
     },
     {
-      "id": "native.apple.4da775013ac9b123",
-      "source": "The thread attaches once the gateway is ready.",
-      "translated": "Gateway hazır olduğunda iletişim dizisi bağlanır."
+      "id": "native.apple.ed7f703a8809b564",
+      "source": "The session attaches once the gateway is ready.",
+      "translated": "Gateway hazır olduğunda oturum bağlanır."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10919,9 +10919,9 @@
       "translated": "Yeni Oturum Seçenekleri…"
     },
     {
-      "id": "native.apple.003b25ddafeb18e9",
-      "source": "Threads…",
-      "translated": "İletişim Dizileri…"
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Oturumlar…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11084,14 +11084,14 @@
       "translated": "Oluştur"
     },
     {
-      "id": "native.apple.31d5c7287cfb3abe",
-      "source": "Delete Thread?",
-      "translated": "İletişim Dizisi Silinsin mi?"
+      "id": "native.apple.e7382c53c7dd48f7",
+      "source": "Delete Session?",
+      "translated": "Oturum Silinsin mi?"
     },
     {
-      "id": "native.apple.d3395564809f1120",
-      "source": "Delete Thread",
-      "translated": "İş Parçacığını Sil"
+      "id": "native.apple.702fd8b48da56065",
+      "source": "Delete Session",
+      "translated": "Oturumu Sil"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -11099,9 +11099,9 @@
       "translated": "İptal"
     },
     {
-      "id": "native.apple.092659256d26cb03",
-      "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Bu işlem, iş parçacığını ve dökümünü kalıcı olarak siler."
+      "id": "native.apple.61f3f19ea24c6012",
+      "source": "This permanently deletes the session and its transcript.",
+      "translated": "Bu işlem oturumu ve dökümünü kalıcı olarak siler."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11129,9 +11129,9 @@
       "translated": "Yeni Grup"
     },
     {
-      "id": "native.apple.683032464c497bbd",
-      "source": "Rename Thread",
-      "translated": "İş Parçacığını Yeniden Adlandır"
+      "id": "native.apple.cd368674179237a0",
+      "source": "Rename Session",
+      "translated": "Oturumu Yeniden Adlandır"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -11139,14 +11139,54 @@
       "translated": "Grup adı"
     },
     {
-      "id": "native.apple.f887aa956588f237",
-      "source": "Thread name",
-      "translated": "İş parçacığı adı"
+      "id": "native.apple.8b54306971cfa8c9",
+      "source": "Session name",
+      "translated": "Oturum adı"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
       "source": "View More",
       "translated": "Daha Fazla Göster"
+    },
+    {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "Canlı"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "Okunmamış"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "Tokenlar"
+    },
+    {
+      "id": "native.apple.bec8b61a3a29b59a",
+      "source": "Opens Sessions",
+      "translated": "Oturumlar'ı açar"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "Bekleyen onaylar"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "Otomasyon sorunları"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "31 günlük kullanım"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "Kullanımı açar"
     },
     {
       "id": "native.apple.65fb4d9ce6e5bbda",
@@ -11179,14 +11219,14 @@
       "translated": "Aracılar"
     },
     {
-      "id": "native.apple.7c8231b7b1ca480f",
-      "source": "Agent thread",
-      "translated": "Aracı iş parçacığı"
+      "id": "native.apple.789d5d0790fd18ca",
+      "source": "Agent session",
+      "translated": "Aracı oturumu"
     },
     {
-      "id": "native.apple.b3c553614f762a58",
-      "source": "Recent threads",
-      "translated": "Son iş parçacıkları"
+      "id": "native.apple.ee45dce4a2e44737",
+      "source": "Recent sessions",
+      "translated": "Son oturumlar"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -11194,9 +11234,9 @@
       "translated": "Gateway çevrimdışı"
     },
     {
-      "id": "native.apple.5aa32afda85064ea",
-      "source": "No recent threads",
-      "translated": "Son iş parçacığı yok"
+      "id": "native.apple.c97e0382e578a2f7",
+      "source": "No recent sessions",
+      "translated": "Son oturum yok"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11254,6 +11294,11 @@
       "translated": "Doğrudan sohbet"
     },
     {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "az önce"
+    },
+    {
       "id": "native.apple.dbd48d25920f342b",
       "source": "%@ on %@",
       "translated": "%@, %@ üzerinde"
@@ -11294,14 +11339,14 @@
       "translated": "İptal"
     },
     {
-      "id": "native.apple.b6855cf19a50f477",
-      "source": "Threads",
-      "translated": "İş Parçacıkları"
+      "id": "native.apple.7a6511a467e34f69",
+      "source": "Sessions",
+      "translated": "Oturumlar"
     },
     {
-      "id": "native.apple.9b1d0ef27a1333b0",
-      "source": "Archived threads",
-      "translated": "Arşivlenmiş iş parçacıkları"
+      "id": "native.apple.e6b8913014b64f0a",
+      "source": "Archived sessions",
+      "translated": "Arşivlenmiş oturumlar"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11309,34 +11354,34 @@
       "translated": "Arşivlenenleri Göster"
     },
     {
-      "id": "native.apple.98167401c7267735",
-      "source": "Threads unavailable",
-      "translated": "İş parçacıkları kullanılamıyor"
+      "id": "native.apple.119433782518f199",
+      "source": "Sessions unavailable",
+      "translated": "Oturumlar kullanılamıyor"
     },
     {
-      "id": "native.apple.4d28a7def2337b9f",
-      "source": "Loading archived threads",
-      "translated": "Arşivlenmiş iş parçacıkları yükleniyor"
+      "id": "native.apple.9882fbadac3bea03",
+      "source": "Loading archived sessions",
+      "translated": "Arşivlenmiş oturumlar yükleniyor"
     },
     {
-      "id": "native.apple.777d7b706933bd7b",
-      "source": "Loading recent threads",
-      "translated": "Son iş parçacıkları yükleniyor"
+      "id": "native.apple.16dca1cfac8a571b",
+      "source": "Loading recent sessions",
+      "translated": "Son oturumlar yükleniyor"
     },
     {
-      "id": "native.apple.22f81ea94bef8410",
-      "source": "^[\\(count) thread](inflect: true)",
-      "translated": "^[\\(count) iş parçacığı](inflect: true)"
+      "id": "native.apple.207dad20d09f3160",
+      "source": "^[\\(count) session](inflect: true)",
+      "translated": "^[\\(count) oturum](inflect: true)"
     },
     {
-      "id": "native.apple.1cad51e14db59bf9",
-      "source": "No archived threads",
-      "translated": "Arşivlenmiş iş parçacığı yok"
+      "id": "native.apple.a0b4091bf77d4060",
+      "source": "No archived sessions",
+      "translated": "Arşivlenmiş oturum yok"
     },
     {
-      "id": "native.apple.18ef832d3a7ddcf8",
-      "source": "Archived threads will appear here.",
-      "translated": "Arşivlenmiş iş parçacıkları burada görünür."
+      "id": "native.apple.acfdf5c72e289736",
+      "source": "Archived sessions will appear here.",
+      "translated": "Arşivlenmiş oturumlar burada görünür."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11419,9 +11464,9 @@
       "translated": "Paylaşım alımı"
     },
     {
-      "id": "native.apple.21d9208d86a4d1fe",
-      "source": "Loading threads",
-      "translated": "İş parçacıkları yükleniyor"
+      "id": "native.apple.4c5b2ecf243cfbbc",
+      "source": "Loading sessions",
+      "translated": "Oturumlar yükleniyor"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11429,19 +11474,19 @@
       "translated": "Gateway üzerinden son etkinlik alınıyor."
     },
     {
-      "id": "native.apple.4be1f79aa2b230ff",
-      "source": "Threads unavailable",
-      "translated": "İş parçacıkları kullanılamıyor"
+      "id": "native.apple.c4479934c65c973c",
+      "source": "Sessions unavailable",
+      "translated": "Oturumlar kullanılamıyor"
     },
     {
-      "id": "native.apple.98b348873556bc46",
-      "source": "No recent threads",
-      "translated": "Son iş parçacığı yok"
+      "id": "native.apple.6e67b64954ba3002",
+      "source": "No recent sessions",
+      "translated": "Yakın zamanda oturum yok"
     },
     {
-      "id": "native.apple.7396d205574d279f",
-      "source": "Thread activity offline",
-      "translated": "İş parçacığı etkinliği çevrimdışı"
+      "id": "native.apple.5dce07848bec08b5",
+      "source": "Session activity offline",
+      "translated": "Oturum etkinliği çevrimdışı"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11899,9 +11944,9 @@
       "translated": "Kart"
     },
     {
-      "id": "native.apple.c9ec1b0e18074d8a",
-      "source": "Open Thread",
-      "translated": "İş Parçacığını Aç"
+      "id": "native.apple.3edbccb7c14b693c",
+      "source": "Open Session",
+      "translated": "Oturumu Aç"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -12100,91 +12145,6 @@
     },
     {
       "id": "native.apple.1fc3cbd16076f75f",
-      "source": "Offline",
-      "translated": "Çevrimdışı"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "Kontrol"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "Ayarlar / Gateway'i açar"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "Aracı sohbeti ve son çalışmalar."
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "Genel Bakış"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "Örnekler"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "Dosyalar"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "Rüya Görüyor"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "Kullanım"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "Otomasyonlar"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "Varsayılan Temsilci"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@, %2$@, %3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@, %2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "Çevrimiçi"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "Bağlanıyor"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "Dikkat"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
       "translated": "Çevrimdışı"
     },
@@ -12989,6 +12949,16 @@
       "translated": "Sistem, bu aygıtın görünüm ayarını izler."
     },
     {
+      "id": "native.apple.6d48137a8f6a5e96",
+      "source": "Sidebar Agents",
+      "translated": "Kenar Çubuğu Aracıları"
+    },
+    {
+      "id": "native.apple.69cccbdee0bb0b56",
+      "source": "How many agents the sidebar lists before the switcher menu.",
+      "translated": "Kenar çubuğunun, değiştirici menüsünden önce kaç aracı listeleyeceği."
+    },
+    {
       "id": "native.apple.70eca66c79335a6e",
       "source": "Connection",
       "translated": "Bağlantı"
@@ -13389,9 +13359,9 @@
       "translated": "Varsayılan"
     },
     {
-      "id": "native.apple.f4ae5664c3eda95d",
-      "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "Yeni Sohbet dizileri ve Konuşma oturumları için kullanılır."
+      "id": "native.apple.6805480889265026",
+      "source": "Used for new Chat and Talk sessions.",
+      "translated": "Yeni Sohbet ve Konuşma oturumları için kullanılır."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15624,39 +15594,134 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "Ayarlar"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "Kenar Çubuğunu Gizle"
+    },
+    {
+      "id": "native.apple.e779847164babc29",
+      "source": "Selected",
+      "translated": "Seçili"
+    },
+    {
+      "id": "native.apple.698c71602b569378",
+      "source": "More Agents",
+      "translated": "Daha Fazla Aracı"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "Oturumlarda ara"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "Oturum aramasını temizle"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "Oturumlar yükleniyor"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "Son oturum yok"
+    },
+    {
+      "id": "native.apple.01a4c3f6192bb1a3",
+      "source": "Recent",
+      "translated": "Son Kullanılanlar"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "Tüm Oturumlar…"
+    },
+    {
+      "id": "native.apple.aa7c4ecffd2ba36a",
+      "source": "Edit Pages",
+      "translated": "Sayfaları Düzenle"
+    },
+    {
+      "id": "native.apple.4d724d2e5731583d",
+      "source": "Home",
+      "translated": "Ana Sayfa"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "Okunmamış"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "Dikkat"
+    },
+    {
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Yeni Sohbet"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "Bağlantı"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
       "translated": "Çevrimiçi"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "Bağlanıyor"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
-      "translated": "İlgilenilmesi gerekiyor"
+      "translated": "Dikkat gerekiyor"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "Çevrimdışı"
     },
     {
-      "id": "native.apple.a4256b2ab523ee60",
-      "source": "Chat",
-      "translated": "Sohbet"
+      "id": "native.apple.9fc7dfa0dccea003",
+      "source": "Pinned pages stay in the sidebar. Home is always shown.",
+      "translated": "Sabitlenen sayfalar kenar çubuğunda kalır. Ana Sayfa her zaman gösterilir."
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Sayfalar"
+    },
+    {
+      "id": "native.apple.422767686f219093",
+      "source": "Done",
+      "translated": "Bitti"
+    },
+    {
+      "id": "native.apple.e197e8708ad3b2c8",
+      "source": "Pinned",
+      "translated": "Sabitlendi"
+    },
+    {
+      "id": "native.apple.098013d7dd8cdfc7",
+      "source": "Not pinned",
+      "translated": "Sabitlenmedi"
     },
     {
       "id": "native.apple.64d7dc062ef4cc81",
@@ -15694,44 +15759,19 @@
       "translated": "Otomasyonlar"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "Kenar Çubuğunu Göster"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "%@ uygulamasına geri dön"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "Kenar Çubuğunu Gizle"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "Kenar Çubuğunu Göster"
+    },
+    {
       "id": "native.apple.8af43f59602ec0d8",
       "source": "Close canvas",
       "translated": "Tuvali kapat"
-    },
-    {
-      "id": "native.apple.a1db6ce0aed1d18e",
-      "source": "Chat, voice active",
-      "translated": "Sohbet, ses açık"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "Kontrol"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "Aracı"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "Ayarlar"
     },
     {
       "id": "native.apple.8a4751c86aa6fe77",
@@ -15794,9 +15834,9 @@
       "translated": "Örnekler"
     },
     {
-      "id": "native.apple.11fe8b9941954dfb",
-      "source": "Threads",
-      "translated": "Diziler"
+      "id": "native.apple.e3e3ce1a79ebbd70",
+      "source": "Sessions",
+      "translated": "Oturumlar"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -21991,7 +22031,7 @@
     {
       "id": "native.apple.3ec2afcbc298c673",
       "source": "Threads",
-      "translated": "Diziler"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -22086,7 +22126,7 @@
     {
       "id": "native.apple.52e37e3a44ae516c",
       "source": "Threads",
-      "translated": "Diziler"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -23479,6 +23519,16 @@
       "translated": "Widget görüntüsü kaydedilemedi."
     },
     {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "Liste öğesi"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "Öğe"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -24076,7 +24126,7 @@
     {
       "id": "native.apple.c0cc6acc36f413ce",
       "source": "Threads",
-      "translated": "İş Parçacıkları"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.854d3928fe5a557c",
@@ -24451,7 +24501,7 @@
     {
       "id": "native.apple.c0ada47504425f23",
       "source": "Threads",
-      "translated": "İş Parçacıkları"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.c13dbe6b5c01e9bd",

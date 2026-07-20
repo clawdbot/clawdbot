@@ -118,7 +118,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activateGlobalSideEffects: context.shouldActivate,
     });
     const { registry } = registryBuilder;
-    const { manifestRegistry, orderedCandidates, manifestByRoot, provenance } =
+    const { manifestRegistry, orderedCandidates, manifestBySource, provenance } =
       resolvePluginLoadDiscovery({
         options,
         context,
@@ -145,7 +145,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
     const pluginLoadStartMs = performance.now();
     for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestByRoot.get(candidate.rootDir);
+      const manifestRecord = manifestBySource.get(candidate.source);
       if (!manifestRecord) {
         continue;
       }

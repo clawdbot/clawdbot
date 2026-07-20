@@ -69,7 +69,6 @@ const MEMO_RELEVANT_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
-  "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
   "OPENCLAW_HOME",
   "OPENCLAW_NIX_MODE",
   "OPENCLAW_STATE_DIR",
@@ -180,13 +179,7 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   preferPersisted?: boolean;
   stateDir?: string;
 }): Record<string, unknown> {
-  const disabledByEnv = params.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY?.trim().toLowerCase();
-  const disabled =
-    params.preferPersisted === false ||
-    (Boolean(disabledByEnv) &&
-      disabledByEnv !== "0" &&
-      disabledByEnv !== "false" &&
-      disabledByEnv !== "no");
+  const disabled = params.preferPersisted === false;
   if (disabled) {
     return { disabled: true };
   }
@@ -755,4 +748,3 @@ function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,10 +1,12 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolAuthorizationError, ToolInputError } from "./common.js";
 import {
@@ -26,22 +28,41 @@ const GROUP_NAMES_MAX_ITEMS = 200;
 
 const SessionsToolSchema = Type.Object(
   {
-    action: Type.Union(
-      ACTIONS.map((action) => Type.Literal(action)),
-      {
-        description: "Action",
-      },
-    ),
+    action: stringEnum(ACTIONS, { description: "Action" }),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
-    label: Type.Optional(Type.String({ description: "Session label" })),
+    label: Type.Optional(
+      Type.String({ description: "Sidebar title override. Empty string clears it." }),
+    ),
     icon: Type.Optional(
       Type.String({
         description:
           "Sidebar icon: an emoji, name:<curated-id>, or svg:<svg …> you draw yourself (tiny, sanitized). Empty string removes it.",
       }),
     ),
+    statusNote: Type.Optional(
+      Type.String({
+        maxLength: 120,
+        description:
+          "Short sidebar status line. Empty string clears it and declared attention. Clears automatically when the user reads or replies, or when its TTL expires.",
+      }),
+    ),
+    attention: Type.Optional(
+      stringEnum(["clear", ...SESSION_AGENT_ATTENTION_ICON_IDS] as const, {
+        description:
+          "Request user attention with a curated icon; requires an active statusNote. 'clear' clears both attention and statusNote.",
+      }),
+    ),
+    ttlMinutes: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 120,
+        description: "Status/attention lifetime in minutes. Default 30; maximum 120.",
+      }),
+    ),
     pinned: Type.Optional(Type.Boolean({ description: "Pin session" })),
-    archived: Type.Optional(Type.Boolean({ description: "Archive session" })),
+    archived: Type.Optional(
+      Type.Boolean({ description: "True archives without deleting; false restores the session." }),
+    ),
     model: Type.Optional(Type.String({ description: "Model override" })),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
     names: Type.Optional(Type.Array(Type.String(), { description: "Ordered group names" })),
@@ -68,6 +89,17 @@ function readBoolean(params: Record<string, unknown>, key: string): boolean | un
     throw new ToolInputError(`${key} must be boolean`);
   }
   return value;
+}
+
+function readInteger(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value)) {
+    throw new ToolInputError(`${key} must be an integer`);
+  }
+  return value as number;
 }
 
 function readClearableString(params: Record<string, unknown>, key: string): string | null {
@@ -183,10 +215,22 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       );
       const patch = {
         key,
-        ...(params.label !== undefined
-          ? { label: readStringParam(params, "label", { required: true }) }
-          : {}),
+        ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
         ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
+        ...(params.statusNote !== undefined
+          ? { statusNote: readClearableString(params, "statusNote") }
+          : {}),
+        ...(params.attention !== undefined
+          ? {
+              attention:
+                readStringParam(params, "attention", { required: true }) === "clear"
+                  ? null
+                  : readStringParam(params, "attention", { required: true }),
+            }
+          : {}),
+        ...(params.ttlMinutes !== undefined
+          ? { ttlMinutes: readInteger(params, "ttlMinutes") }
+          : {}),
         ...(params.pinned !== undefined ? { pinned: readBoolean(params, "pinned") } : {}),
         ...(params.archived !== undefined ? { archived: readBoolean(params, "archived") } : {}),
         ...(params.model !== undefined

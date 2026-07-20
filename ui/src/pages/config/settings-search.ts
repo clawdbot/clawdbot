@@ -203,12 +203,7 @@ const WORKSPACE_SETTINGS_BLOCKS = {
     routeId: "worktrees",
     labelKey: "worktrees.title",
     hash: "",
-    searchKeys: [
-      "worktrees.subtitle",
-      "worktrees.cleanupTitle",
-      "worktrees.cleanupMaxCount",
-      "worktrees.cleanupMaxSize",
-    ],
+    searchKeys: ["worktrees.subtitle"],
     aliases: "git checkout branch cleanup",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;

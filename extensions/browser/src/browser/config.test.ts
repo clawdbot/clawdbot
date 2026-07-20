@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -179,68 +178,11 @@ describe("browser config", () => {
     });
   });
 
-  it("supports overriding the local CDP auto-allocation range start", () => {
-    const resolved = resolveBrowserConfig({
-      cdpPortRangeStart: 19000,
-    });
-    const openclaw = resolveProfile(resolved, "openclaw");
-    expect(resolved.cdpPortRangeStart).toBe(19000);
-    expect(openclaw?.cdpPort).toBe(19000);
-    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19000");
-  });
-
-  it("rejects cdpPortRangeStart values that overflow the CDP range window", () => {
-    expect(() => resolveBrowserConfig({ cdpPortRangeStart: 65535 })).toThrow(
-      /cdpPortRangeStart .* too high/i,
-    );
-  });
-
   it("normalizes hex colors", () => {
     const resolved = resolveBrowserConfig({
       color: "ff4500",
     });
     expect(resolved.color).toBe("#FF4500");
-  });
-
-  it("supports custom remote CDP timeouts", () => {
-    const resolved = resolveBrowserConfig({
-      remoteCdpTimeoutMs: 2200,
-      remoteCdpHandshakeTimeoutMs: 5000,
-      actionTimeoutMs: 45_000,
-    });
-    expect(resolved.remoteCdpTimeoutMs).toBe(2200);
-    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
-    expect(resolved.actionTimeoutMs).toBe(45_000);
-  });
-
-  it("supports custom browser tab cleanup policy", () => {
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        enabled: false,
-        idleMinutes: 0,
-        maxTabsPerSession: 0,
-        sweepMinutes: 15,
-      },
-    });
-    expect(resolved.tabCleanup).toEqual({
-      enabled: false,
-      idleMinutes: 0,
-      maxTabsPerSession: 0,
-      sweepMinutes: 15,
-    });
-  });
-
-  it("caps browser tab cleanup timer minutes before converting to milliseconds", () => {
-    const maxTimerMinutes = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        idleMinutes: Number.MAX_SAFE_INTEGER,
-        sweepMinutes: Number.MAX_SAFE_INTEGER,
-      },
-    });
-
-    expect(resolved.tabCleanup.idleMinutes).toBe(maxTimerMinutes);
-    expect(resolved.tabCleanup.sweepMinutes).toBe(maxTimerMinutes);
   });
 
   it("expands tilde-prefixed executablePath with the OS home directory", () => {
@@ -298,22 +240,6 @@ describe("browser config", () => {
     });
 
     expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
-  });
-
-  it("normalizes invalid browser tab cleanup numbers to defaults", () => {
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        idleMinutes: -1,
-        maxTabsPerSession: -2,
-        sweepMinutes: 0,
-      },
-    });
-    expect(resolved.tabCleanup).toEqual({
-      enabled: true,
-      idleMinutes: 120,
-      maxTabsPerSession: 8,
-      sweepMinutes: 5,
-    });
   });
 
   it("falls back to default color for invalid hex", () => {
@@ -557,26 +483,6 @@ describe("browser config", () => {
 
       expect(resolved.localLaunchTimeoutMs).toBe(15_000);
       expect(resolved.localCdpReadyTimeoutMs).toBe(8_000);
-    });
-
-    it("accepts custom local startup timeout values", () => {
-      const resolved = resolveBrowserConfig({
-        localLaunchTimeoutMs: 45_000,
-        localCdpReadyTimeoutMs: 30_000,
-      });
-
-      expect(resolved.localLaunchTimeoutMs).toBe(45_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(30_000);
-    });
-
-    it("clamps oversized local startup timeout values", () => {
-      const resolved = resolveBrowserConfig({
-        localLaunchTimeoutMs: 999_999,
-        localCdpReadyTimeoutMs: 999_999,
-      });
-
-      expect(resolved.localLaunchTimeoutMs).toBe(120_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(120_000);
     });
   });
 
@@ -1193,4 +1099,3 @@ describe("browser config", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

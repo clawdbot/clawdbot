@@ -725,6 +725,25 @@ describe("SystemAgentChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
+  it("reports hosted channel setup success when audit persistence fails", async () => {
+    const appendAuditEntry = vi.fn(async () => {
+      throw new Error("audit store is read-only");
+    });
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async () => {},
+      appendAuditEntry,
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    expect(reply.text).toContain("Done — telegram is configured.");
+    expect(reply.text).not.toContain("audit store is read-only");
+    expect(appendAuditEntry).toHaveBeenCalledOnce();
+  });
+
   it("recommends the confirm option matching the initial value", async () => {
     let enabled: boolean | undefined;
     const engine = new SystemAgentChatEngine({
@@ -1003,6 +1022,27 @@ describe("SystemAgentChatEngine", () => {
     expect(tokenStep.text).toContain("Before entering the token");
     expect(tokenStep.text).toContain("Bot token");
     expect(tokenStep.sensitive).toBe(true);
+    expect(tokenStep.wizardInputPending).toBe(true);
+  });
+
+  it("marks a non-card hosted-wizard step as pending input", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot label" });
+      },
+    });
+
+    const textStep = await engine.handle("connect telegram");
+
+    expect(textStep.text).toContain("Bot label");
+    expect(textStep.question).toBeUndefined();
+    expect(textStep.sensitive).toBeUndefined();
+    expect(textStep.wizardInputPending).toBe(true);
   });
 
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {

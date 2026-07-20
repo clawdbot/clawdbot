@@ -13,6 +13,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import {
   formatInboundMediaUnavailableText,
   formatLocationText,
+  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
@@ -72,13 +73,14 @@ import {
   extractExternalAdReplyContext,
   extractLocationData,
   extractContactContext,
-  extractMediaPlaceholder,
+  extractMediaKind,
   extractMentionedJids,
   extractText,
   hasInboundUserContent,
 } from "./extract.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
+import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 import {
   normalizeWebInboundMessage,
@@ -1202,6 +1204,8 @@ export async function attachWebInboxToSocket(
     mediaPath?: string;
     mediaType?: string;
     mediaFileName?: string;
+    mediaKind?: NonNullable<ReturnType<typeof extractMediaKind>>;
+    nativeMedia?: MediaPlaceholderTextFact;
   };
 
   const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
@@ -1209,22 +1213,23 @@ export async function attachWebInboxToSocket(
     const locationText = location ? formatLocationText(location) : undefined;
     const contactContext = extractContactContext(msg.message ?? undefined);
     const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
-    const mediaPlaceholder = extractMediaPlaceholder(msg.message ?? undefined);
+    let mediaKind = extractMediaKind(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
       body = [body, locationText].filter(Boolean).join("\n").trim();
     }
-    if (!body) {
-      body = mediaPlaceholder;
-      if (!body) {
-        return null;
-      }
+    if (!body && !mediaKind) {
+      return null;
     }
+    body = body ?? "";
     const commandBody = body;
     const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
 
     let mediaPath: string | undefined;
-    let mediaType: string | undefined;
+    let mediaType = mediaKind
+      ? resolveInboundMediaMimetype(msg.message as proto.IMessage)
+      : undefined;
+    const nativeMedia = mediaKind ? { contentType: mediaType, kind: mediaKind } : undefined;
     let mediaFileName: string | undefined;
     const maxMb =
       typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
@@ -1246,15 +1251,16 @@ export async function attachWebInboxToSocket(
       logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
       body = formatInboundMediaUnavailableText({
         body,
-        mediaPlaceholder,
         notice: "[whatsapp attachment unavailable]",
       });
     }
-    if (!mediaPath && replyContext) {
+    if (!mediaPath && !mediaKind && replyContext?.media) {
       try {
         await saveInboundMedia(
           await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
         );
+        mediaKind = replyContext.media.kind ?? undefined;
+        mediaType = mediaType ?? replyContext.media.contentType ?? undefined;
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Quoted media download failed: ${String(err)}`);
         body = formatInboundMediaUnavailableText({
@@ -1274,6 +1280,8 @@ export async function attachWebInboxToSocket(
       mediaPath,
       mediaType,
       mediaFileName,
+      mediaKind,
+      nativeMedia,
     };
   };
 
@@ -1338,11 +1346,12 @@ export async function attachWebInboxToSocket(
       "inbound message",
     );
     const media =
-      enriched.mediaPath || enriched.mediaType || enriched.mediaFileName
+      enriched.mediaPath || enriched.mediaType || enriched.mediaFileName || enriched.mediaKind
         ? {
             path: enriched.mediaPath,
             type: enriched.mediaType,
             fileName: enriched.mediaFileName,
+            kind: enriched.mediaKind,
           }
         : undefined;
     const groupMentions = mentionedJids ? { jids: mentionedJids } : undefined;
@@ -1355,6 +1364,16 @@ export async function attachWebInboxToSocket(
           }
         : undefined;
     const untrustedStructuredContext = [
+      ...(enriched.nativeMedia
+        ? [
+            {
+              label: "WhatsApp media",
+              source: "whatsapp",
+              type: "media",
+              payload: enriched.nativeMedia,
+            },
+          ]
+        : []),
       ...(enriched.contactContext
         ? [
             {
@@ -1416,6 +1435,7 @@ export async function attachWebInboxToSocket(
             context: enriched.replyContext,
             id: enriched.replyContext.id,
             body: enriched.replyContext.body,
+            media: enriched.replyContext.media,
             sender: {
               displayName: enriched.replyContext.sender?.label ?? undefined,
               jid: enriched.replyContext.sender?.jid ?? undefined,
@@ -1450,6 +1470,7 @@ export async function attachWebInboxToSocket(
               ? inboundMessage.platform.senderE164
               : undefined,
           body: inboundMessage.payload.body,
+          media: enriched.nativeMedia,
           fromMe: inboundMessage.platform.fromMe,
         },
       );
@@ -1933,7 +1954,7 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
-  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming(options.cfg);
+  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming();
   const recentMessageKeys: WhatsAppBaileysMessageCache = options.recentMessageKeys ?? new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache =
     options.baileysGroupMetaCache ?? new Map();

@@ -415,6 +415,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
           createShowWidgetTool({
             sessionId: options?.sessionId,
             agentId: sessionAgentId,
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           }),
         ]),
     ...collectPresentOpenClawTools([heartbeatTool]),

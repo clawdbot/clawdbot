@@ -101,6 +101,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -1926,6 +1927,7 @@ export function buildGatewaySessionRow(params: {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
   const now = params.now ?? Date.now();
+  const agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
@@ -1935,6 +1937,8 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const parsedAgent = parseAgentSessionKey(key);
+  const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   // A user-assigned label is an explicit rename; it must win over stored
   // channel-derived display names or renames silently vanish on refresh.
@@ -1954,9 +1958,10 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    originLabel;
+    // Dashboard origin labels identify the authenticated sender. Using them as
+    // titles leaks account names into the sidebar while the generated title is pending.
+    (isDashboardSession ? undefined : originLabel);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
-  const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(
     parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
   );
@@ -2235,6 +2240,7 @@ export function buildGatewaySessionRow(params: {
     icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
+    agentStatus,
     lastInteractionAt: entry?.lastInteractionAt,
     lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,

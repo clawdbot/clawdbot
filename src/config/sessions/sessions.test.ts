@@ -27,7 +27,7 @@ import {
   loadSessionStore,
   saveSessionStore,
   updateSessionStore,
-  updateSessionStoreEntry,
+  patchSessionEntryWithKey,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
@@ -833,7 +833,7 @@ describe("session store writer queue", () => {
       );
       writeSpy.mockClear();
 
-      await updateSessionStoreEntry({
+      await patchSessionEntryWithKey({
         storePath,
         sessionKey: key,
         update: async (entry) => ({ displayName: entry.displayName, updatedAt: entry.updatedAt }),

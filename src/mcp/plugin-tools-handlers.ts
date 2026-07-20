@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
@@ -82,7 +83,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
         };
       }
       try {
-        const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {}, signal);
+        const result = await tool.execute(`mcp-${randomUUID()}`, params.arguments ?? {}, signal);
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content

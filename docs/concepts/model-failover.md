@@ -203,7 +203,7 @@ Regular (non-billing, non-auth-permanent) cooldowns scale with the profile's rec
 - 2nd failure: 1 minute
 - 3rd+ failure: 5 minutes (cap)
 
-Counters reset once the profile's failure window has passed (`auth.cooldowns.failureWindowHours`, default 24).
+Counters reset once the profile's built-in failure window has passed.
 
 State is stored in the per-agent SQLite auth state under `usageStats`:
 
@@ -243,19 +243,6 @@ State is stored in the per-agent SQLite auth state:
   }
 }
 ```
-
-Defaults (`auth.cooldowns.*`):
-
-| Key                           | Default | Purpose                                                                     |
-| ----------------------------- | ------- | --------------------------------------------------------------------------- |
-| `billingBackoffHours`         | 5       | Base billing backoff, doubles per billing failure                           |
-| `billingMaxHours`             | 24      | Billing backoff cap                                                         |
-| `authPermanentBackoffMinutes` | 10      | Base backoff for high-confidence permanent-auth failures                    |
-| `authPermanentMaxMinutes`     | 60      | Cap for that backoff                                                        |
-| `failureWindowHours`          | 24      | Failure counters reset if no failures occur in this window                  |
-| `overloadedProfileRotations`  | 1       | Same-provider profile rotations allowed before model fallback on overload   |
-| `overloadedBackoffMs`         | 0       | Fixed delay before an overloaded rotation retry                             |
-| `rateLimitedProfileRotations` | 1       | Same-provider profile rotations allowed before model fallback on rate limit |
 
 Overloaded and rate-limit errors are handled more aggressively than billing cooldowns: by default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting.
 
@@ -363,11 +350,6 @@ That cooldown summary is model-aware:
 See [Gateway configuration](/gateway/configuration) for:
 
 - `auth.profiles` / `auth.order`
-- `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
-- `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
-- `auth.cooldowns.authPermanentBackoffMinutes` / `auth.cooldowns.authPermanentMaxMinutes`
-- `auth.cooldowns.overloadedProfileRotations` / `auth.cooldowns.overloadedBackoffMs`
-- `auth.cooldowns.rateLimitedProfileRotations`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 

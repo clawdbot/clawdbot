@@ -114,7 +114,7 @@ openclaw gateway restart --force
 openclaw gateway restart --wait 30s
 ```
 
-`--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded by `gateway.reload.deferralTimeoutMs` (default: 5 minutes / `300000`); when the budget expires the restart is forced. Set `deferralTimeoutMs: 0` to wait indefinitely (with periodic still-pending warnings) instead of forcing. `--safe` cannot combine with `--force` or `--wait`.
+`--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
 `--skip-deferral` bypasses the active-work deferral gate on a safe restart, so the Gateway restarts immediately even with reported blockers. It requires `--safe` — use it when a deferral is stuck on a runaway task.
 

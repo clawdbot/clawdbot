@@ -313,33 +313,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
   });
 
-  it("passes precomputed before_agent_start result into the attempt", async () => {
-    const beforeAgentStartResult = {
-      modelOverride: "agent-start-model",
-      prependContext: "agent start context",
-    };
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName) => hookName === "before_agent_start",
-    );
-    mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValueOnce(beforeAgentStartResult);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    await runEmbeddedAgent({
-      sessionId: "test-session",
-      sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
-      workspaceDir: "/tmp/workspace",
-      prompt: "hello",
-      timeoutMs: 30000,
-      runId: "run-before-agent-start-pass-through",
-    });
-
-    expect(mockedGlobalHookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
-    expectMockCallFields(mockedRunEmbeddedAttempt, {
-      beforeAgentStartResult,
-    });
-  });
-
   it("reports hook-selected models as normal selected models, not fallbacks", async () => {
     useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(

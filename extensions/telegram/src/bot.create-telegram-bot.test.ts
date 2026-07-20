@@ -325,14 +325,14 @@ describe("createTelegramBot", () => {
       globalThis.fetch = originalFetch;
     }
   });
-  it("applies global and per-account timeoutSeconds", () => {
+  it("ignores removed global and per-account timeoutSeconds", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 60 },
       },
     });
     createTelegramBot({ token: "tok" });
-    expectBotClientFields({ timeoutSeconds: 60 });
+    expectBotClientFields({ timeoutSeconds: undefined });
     botCtorSpy.mockClear();
 
     loadConfig.mockReturnValue({
@@ -348,7 +348,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok", accountId: "foo" });
-    expectBotClientFields({ timeoutSeconds: 61 });
+    expectBotClientFields({ timeoutSeconds: undefined });
   });
 
   it("keeps low timeoutSeconds above the outbound request guard", () => {
@@ -358,7 +358,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok" });
-    expectBotClientFields({ timeoutSeconds: 60 });
+    expectBotClientFields({ timeoutSeconds: undefined });
   });
 
   it("keeps polling client timeout above the outbound request guard", () => {
@@ -368,7 +368,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok", minimumClientTimeoutSeconds: 45 });
-    expectBotClientFields({ timeoutSeconds: 60 });
+    expectBotClientFields({ timeoutSeconds: undefined });
   });
 
   it("passes startup probe botInfo to grammY", () => {

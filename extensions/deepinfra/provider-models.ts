@@ -1,4 +1,6 @@
 // Deepinfra provider module implements model/runtime integration.
+
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   getCachedLiveProviderModelRows,
@@ -8,6 +10,7 @@ import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-c
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -413,6 +416,7 @@ export async function discoverDeepInfraSurfaces(options?: {
       buildRequestHeaders: () => ({ Accept: "application/json" }),
       auditContext: "deepinfra-model-discovery",
       shouldCacheRows: hasDeepInfraSurfaceModelRows,
+      fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
     });
     if (data.length === 0) {
       log.warn("No models found from DeepInfra agent-projection endpoint, using static catalog");

@@ -270,6 +270,7 @@ export type ClawHubPackageSearchResult = {
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
   displayName: string;
   summary?: string;

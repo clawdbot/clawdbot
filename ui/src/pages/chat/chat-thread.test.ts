@@ -85,9 +85,75 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
   return requireRecord(group.messages[index]?.message);
 }
 
+describe("assistant commentary grouping", () => {
+  it("keeps keyed commentary separate from the terminal assistant reply", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "do it", timestamp: 1_000 },
+        {
+          role: "assistant",
+          content: "Checking the workspace.",
+          timestamp: 2_000,
+          openclawStreamFallback: {
+            replacementText: "Checking the workspace.",
+            source: "segment",
+            itemId: "preamble-1",
+          },
+        },
+        {
+          role: "assistant",
+          content: "Inspecting the result.",
+          timestamp: 3_000,
+          openclawStreamFallback: {
+            replacementText: "Inspecting the result.",
+            source: "segment",
+            itemId: "preamble-2",
+          },
+        },
+        { role: "assistant", content: "All done.", timestamp: 4_000 },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(groupAt(groups, 1).messages).toHaveLength(2);
+    expect(groupAt(groups, 2).messages).toHaveLength(1);
+  });
+
+  it("hides durable commentary when the display preference is disabled", () => {
+    const paneId = "commentary-visibility";
+    const messages = [
+      { role: "user", content: "do it", timestamp: 1_000 },
+      {
+        role: "assistant",
+        content: "Checking the workspace.",
+        timestamp: 2_000,
+        openclawStreamFallback: {
+          replacementText: "Checking the workspace.",
+          source: "segment",
+          itemId: "preamble-1",
+        },
+      },
+      { role: "assistant", content: "All done.", timestamp: 3_000 },
+    ];
+
+    const visible = buildCachedChatItems(createProps({ paneId, messages }));
+    const hidden = buildCachedChatItems(
+      createProps({ paneId, messages, persistCommentary: false }),
+    );
+    const restored = buildCachedChatItems(createProps({ paneId, messages }));
+
+    expect(visible.filter((item) => item.kind === "group")).toHaveLength(3);
+    expect(hidden.filter((item) => item.kind === "group")).toHaveLength(2);
+    expect(restored.filter((item) => item.kind === "group")).toHaveLength(3);
+    expect(messages).toHaveLength(3);
+    resetChatThreadState(paneId);
+  });
+});
+
 describe("collapseCompletedTurnWork", () => {
   const collapsedItems = (props: Partial<CachedChatItemsProps>, runWorking = false) =>
     collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
+      sessionKey: "agent:main:dashboard:test-session",
       runWorking,
     });
 
@@ -122,6 +188,31 @@ describe("collapseCompletedTurnWork", () => {
     expect(work.durationMs).toBe(9_000);
     expect(work.hasError).toBe(false);
     expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
+  it.each([
+    "agent:main:main",
+    "agent:main:telegram:direct:42",
+    "agent:main::dashboard:malformed",
+    "agent:main:dashboard:session:extra",
+  ])("keeps completed work expanded for non-dashboard session %s", (sessionKey) => {
+    const items = coalesceStreamRuns(
+      buildCachedChatItems(
+        createProps({
+          sessionKey,
+          messages: [
+            { role: "user", content: "do it", timestamp: 1_000 },
+            { role: "assistant", content: "Checking…", timestamp: 2_000 },
+            toolResult("call-1", 3_000),
+            { role: "assistant", content: "All done.", timestamp: 10_000 },
+          ],
+        }),
+      ),
+    );
+
+    const rendered = collapseCompletedTurnWork(items, { sessionKey, runWorking: false });
+
+    expect(rendered.map((item) => item.kind)).toEqual(["group", "group", "group", "group"]);
   });
 
   it("keeps the trailing turn expanded while the run works", () => {
@@ -251,7 +342,11 @@ describe("collapseCompletedTurnWork", () => {
           }),
         ),
       ),
-      { runWorking: false, searchActive: true },
+      {
+        sessionKey: "agent:main:dashboard:test-session",
+        runWorking: false,
+        searchActive: true,
+      },
     );
 
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
@@ -554,8 +649,10 @@ describe("buildCachedChatItems row identity", () => {
 });
 
 describe("buildCachedChatItems working spark", () => {
+  const readingIndicator = (props: Partial<CachedChatItemsProps>) =>
+    buildCachedChatItems(createProps(props)).find((item) => item.kind === "reading-indicator");
   const hasReadingIndicator = (props: Partial<CachedChatItemsProps>) =>
-    buildCachedChatItems(createProps(props)).some((item) => item.kind === "reading-indicator");
+    readingIndicator(props) !== undefined;
   const liveTool = (resultReceived: boolean) => ({
     role: "assistant",
     runId: "engine-run-1",
@@ -650,6 +747,104 @@ describe("buildCachedChatItems working spark", () => {
     expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 1_000 });
   });
 
+  it("keeps one working row from optimistic send through acknowledgement", () => {
+    resetChatThreadState();
+    const sessionKey = "agent:main:working-row";
+    const pendingItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        queue: [
+          {
+            id: "queued-send-1",
+            text: "keep the row stable",
+            createdAt: 1_000,
+            sendRunId: "run-1",
+            sendState: "sending",
+            sendSubmittedAtMs: 10,
+          },
+        ],
+        runWorking: true,
+      }),
+    );
+    const pendingIndicator = expectDefined(
+      pendingItems.find((item) => item.kind === "reading-indicator"),
+      "pending working indicator",
+    );
+    const pendingRun = expectDefined(
+      coalesceStreamRuns(pendingItems).find((item) => item.kind === "stream-run"),
+      "pending stream run",
+    );
+
+    const acknowledgedItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "run-1",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 2_000,
+      }),
+    );
+    const acknowledgedIndicator = expectDefined(
+      acknowledgedItems.find((item) => item.kind === "reading-indicator"),
+      "acknowledged working indicator",
+    );
+    const acknowledgedRun = expectDefined(
+      coalesceStreamRuns(acknowledgedItems).find((item) => item.kind === "stream-run"),
+      "acknowledged stream run",
+    );
+
+    expect(acknowledgedIndicator).toMatchObject({
+      key: pendingIndicator.key,
+      startedAt: pendingIndicator.startedAt,
+    });
+    expect(acknowledgedRun.key).toBe(pendingRun.key);
+
+    const streamingItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "run-1",
+        runWorking: true,
+        stream: "The reply has started.",
+        streamStartedAt: 2_000,
+      }),
+    );
+    const visibleStream = expectDefined(
+      streamingItems.find((item) => item.kind === "stream" && item.isStreaming),
+      "visible live stream",
+    );
+    const streamingRun = expectDefined(
+      coalesceStreamRuns(streamingItems).find((item) => item.kind === "stream-run"),
+      "streaming run",
+    );
+
+    expect(visibleStream.key).toBe(pendingIndicator.key);
+    expect(streamingRun.key).toBe(pendingRun.key);
+
+    const nextRunIndicator = expectDefined(
+      readingIndicator({
+        sessionKey,
+        runId: "run-2",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 3_000,
+      }),
+      "next run working indicator",
+    );
+    const otherSessionIndicator = expectDefined(
+      readingIndicator({
+        sessionKey: "agent:other:working-row",
+        runId: "run-1",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 2_000,
+      }),
+      "other session working indicator",
+    );
+
+    expect(nextRunIndicator.key).not.toBe(pendingIndicator.key);
+    expect(otherSessionIndicator.key).not.toBe(pendingIndicator.key);
+  });
+
   it("keeps client and engine run identities separate", () => {
     const sessionKey = "agent:main:elapsed-run-namespaces";
     buildCachedChatItems(
@@ -708,6 +903,16 @@ describe("buildCachedChatItems working spark", () => {
 
   it("does not stack the spark under a visible running tool row", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(false);
+  });
+
+  it("keeps the approval status row beside a visible running tool", () => {
+    expect(
+      hasReadingIndicator({
+        runWorking: true,
+        waitingApproval: true,
+        toolMessages: [liveTool(false)],
+      }),
+    ).toBe(true);
   });
 
   it("returns the spark once the running tool resolves", () => {
@@ -1606,10 +1811,9 @@ describe("buildCachedChatItems", () => {
       }),
     );
 
-    expect(items).toEqual([
+    expect(items).toMatchObject([
       {
         kind: "stream",
-        key: "stream:main:1",
         text: "Visible reply",
         startedAt: 1,
         isStreaming: true,
@@ -2672,6 +2876,37 @@ describe("thread item cache", () => {
         messages: [{ role: "assistant", content: "changed" }],
       }),
     ).not.toBe(first);
+  });
+
+  it("rebuilds the live row when active stream identity changes", () => {
+    resetChatThreadState();
+    const first = buildCachedChatItems(
+      createProps({
+        runId: "run-1",
+        stream: "first reply",
+        streamStartedAt: 10,
+      }),
+    );
+    const firstStream = expectDefined(
+      first.find((item) => item.kind === "stream" && item.isStreaming),
+      "first live stream",
+    );
+
+    const second = buildCachedChatItems(
+      createProps({
+        runId: "run-2",
+        stream: "second reply",
+        streamStartedAt: 20,
+      }),
+    );
+    const secondStream = expectDefined(
+      second.find((item) => item.kind === "stream" && item.isStreaming),
+      "second live stream",
+    );
+
+    expect(second).not.toBe(first);
+    expect(secondStream.key).not.toBe(firstStream.key);
+    expect(secondStream).toMatchObject({ kind: "stream", startedAt: 20 });
   });
 
   it("updates the live stream without rescanning retained history", () => {

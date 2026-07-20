@@ -1,3 +1,4 @@
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 // Signal plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
@@ -255,7 +256,7 @@ export async function sendMessageSignal(
     targetAuthorUuid,
   });
   let message = outboundText;
-  let messageFromPlaceholder = false;
+  let outboundMedia: MediaPlaceholderTextFact | undefined;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
   const maxBytes = (() => {
@@ -279,15 +280,13 @@ export async function sendMessageSignal(
       readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
-    const kind = kindFromMime(resolved.contentType ?? undefined);
-    if (!message && kind) {
-      // Avoid sending an empty body when only attachments exist.
-      message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      messageFromPlaceholder = true;
-    }
+    outboundMedia = {
+      contentType: resolved.contentType,
+      kind: kindFromMime(resolved.contentType ?? undefined) ?? "unknown",
+    };
   }
 
-  if (message.trim() && !messageFromPlaceholder) {
+  if (message.trim()) {
     if (textMode === "plain") {
       textStyles = opts.textStyles ?? [];
     } else {
@@ -366,6 +365,7 @@ export async function sendMessageSignal(
       replyToId: messageId,
       author: replyAuthor,
       body: message,
+      media: outboundMedia ? [outboundMedia] : undefined,
       sourceTimestamp: timestamp,
     });
   }

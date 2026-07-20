@@ -6,6 +6,7 @@ import { readFlagValue } from "./lib/arg-utils.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
+  ensureRepoToolNodeModulesLink,
   resolveLocalHeavyCheckEnv,
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForTsgo,
@@ -48,6 +49,7 @@ try {
       process.exitCode = 1;
     }
   } else {
+    ensureRepoToolNodeModulesLink(tsgoPath);
     const tsgo = createManagedCommandInvocation({
       args: finalArgs,
       bin: tsgoPath,

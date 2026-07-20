@@ -478,6 +478,40 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
   });
 
+  it("persists an accepted plugin install after setup returns to an empty selection", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    const installedConfig: OpenClawConfig = {
+      ...config,
+      plugins: {
+        entries: { "external-chat": { enabled: true } },
+        installs: {
+          "external-chat": {
+            source: "npm",
+            spec: "@vendor/external-chat@1.0.0",
+          },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    channelWizardMocks.setupChannels.mockResolvedValueOnce(installedConfig);
+
+    await channelsAddCommand({}, runtime, { hasFlags: false });
+
+    expect(
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+    ).toHaveBeenCalledWith(expect.objectContaining({ nextConfig: installedConfig }));
+    expect(
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+    ).toHaveBeenCalledOnce();
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(installedConfig);
+    expect(channelWizardMocks.prompter.confirm).not.toHaveBeenCalled();
+    expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("Channels updated.");
+  });
+
   it("preselects an installable catalog channel in guided setup", async () => {
     const config: OpenClawConfig = { channels: {} };
     configMocks.readConfigFileSnapshot.mockResolvedValue({

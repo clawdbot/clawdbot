@@ -230,6 +230,11 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
     : applyLocalOxlintPolicy(oxlintArgs, localEnv);
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
+  const oxlintPath = resolveRepoToolBinPath("oxlint");
+  const needsArtifactPreparation =
+    !focusedConfig &&
+    env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
+    shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs);
   if (sparseTargets.skippedTargets.length > 0) {
     console.error(
       `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,
@@ -261,15 +266,10 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
         : () => {};
 
   try {
-    if (
-      !focusedConfig &&
-      env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
-      shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)
-    ) {
+    if (needsArtifactPreparation) {
       await prepareExtensionPackageBoundaryArtifacts(env);
     }
 
-    const oxlintPath = resolveRepoToolBinPath("oxlint");
     const status = await runManagedCommand({
       bin: oxlintPath,
       args: finalArgs,

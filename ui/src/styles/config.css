@@ -715,7 +715,7 @@
  * serves both the MCP settings page and the Plugins inventory. */
 .mcp-server-form {
   display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(140px, 220px) minmax(150px, 190px) minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: end;
   padding: var(--space-3) var(--space-4);

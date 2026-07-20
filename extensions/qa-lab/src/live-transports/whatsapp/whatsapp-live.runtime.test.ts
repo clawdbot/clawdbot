@@ -2177,10 +2177,6 @@ describe("WhatsApp QA live runtime", () => {
         replyToMode: "all",
         statusReactions: {
           removeAckAfterReply: true,
-          timing: {
-            debounceMs: 0,
-            stallSoftMs: 60_000,
-          },
         },
       },
     });
@@ -2193,10 +2189,6 @@ describe("WhatsApp QA live runtime", () => {
     });
     expect(cfg.messages?.removeAckAfterReply).toBe(true);
     expect(cfg.messages?.statusReactions?.enabled).toBe(true);
-    expect(cfg.messages?.statusReactions?.timing).toMatchObject({
-      debounceMs: 0,
-      stallSoftMs: 60_000,
-    });
   });
 
   it("maps WhatsApp broadcast overrides without deleting existing agent defaults", () => {

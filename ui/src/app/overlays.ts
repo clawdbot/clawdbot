@@ -4,6 +4,7 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
+import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
   createDevicePairSetupState,
@@ -39,6 +40,7 @@ type ApplicationOverlaySnapshot = {
   updateRunning: boolean;
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
+  controlUiRefreshRequired: boolean;
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
   approvalErrors: ReadonlyMap<string, string>;
@@ -220,6 +222,7 @@ export function createApplicationOverlays(
     updateRunning: false,
     updateReconciliationPending: false,
     updateStatusBanner: null,
+    controlUiRefreshRequired: false,
     approvalQueue: [],
     approvalBusy: false,
     approvalErrors: new Map(),
@@ -234,9 +237,7 @@ export function createApplicationOverlays(
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
   let activeClient = gateway.snapshot.client;
-  // A Gateway client survives transport retries; the disconnected boundary
-  // still starts a new source epoch whose pending server state must be replayed.
-  let connectedSource: NonNullable<typeof activeClient> | null = null;
+  let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
   let pendingUpdateExpectedVersion: string | null = null;
   let pendingUpdateHandoff = false;
@@ -264,12 +265,10 @@ export function createApplicationOverlays(
 
   const publish = () => {
     snapshot = {
-      updateAvailable: snapshot.updateAvailable,
-      updateRunning: snapshot.updateRunning,
+      ...snapshot,
       // The update RPC can finish before its restart handoff. Keep consumers
       // locked until the replacement Gateway reports the authoritative result.
       updateReconciliationPending: pendingUpdateHandoff || pendingUpdateExpectedVersion !== null,
-      updateStatusBanner: snapshot.updateStatusBanner,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
       approvalErrors: new Map(promptState.execApprovalErrors),
@@ -459,9 +458,8 @@ export function createApplicationOverlays(
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
     const previousClient = activeClient;
-    const previousConnectedSource = connectedSource;
     const nextConnectedSource = next.connected ? next.client : null;
-    const connectedSourceChanged = previousConnectedSource !== nextConnectedSource;
+    const connectedSourceChanged = connectedSource !== nextConnectedSource;
     activeClient = next.client;
     connectedSource = nextConnectedSource;
     promptState.client = next.client;
@@ -482,17 +480,26 @@ export function createApplicationOverlays(
       promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
+      if (!next.client) {
+        connectedEpoch = 0;
+        snapshot = { ...snapshot, controlUiRefreshRequired: false };
+      }
       clearExecApprovalTimers(promptState);
       publish();
       return;
     }
-    snapshot = { ...snapshot, updateAvailable: readUpdateAvailable(next.hello) };
+    snapshot = {
+      ...snapshot,
+      updateAvailable: readUpdateAvailable(next.hello),
+      controlUiRefreshRequired: connectedSourceChanged
+        ? connectedEpoch > 0 && controlUiVersionDiffersFrom(next.hello?.server?.version)
+        : snapshot.controlUiRefreshRequired,
+    };
     publish();
     if (connectedSourceChanged) {
       connectedEpoch += 1;
-      const epoch = connectedEpoch;
-      void refreshApprovals(next.client, epoch);
-      void verifyPendingUpdateVersion(next.client, epoch);
+      void refreshApprovals(next.client, connectedEpoch);
+      void verifyPendingUpdateVersion(next.client, connectedEpoch);
     }
   };
   const stopGateway = gateway.subscribe(synchronizeGateway);

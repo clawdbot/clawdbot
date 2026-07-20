@@ -4,7 +4,10 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
+  handleChatAttachmentDrop,
   handleChatAttachmentPaste,
+  isEditableDropTarget,
+  isFileDrag,
   renderAttachmentPreview,
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
@@ -59,8 +62,69 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onPendingReadsChange: options.onPendingReadsChange,
     readSignal: options.readSignal,
   };
+  const enabled = !options.submitting && !options.messageLocked;
+  // Nested dragenter/dragleave events must stay balanced so crossing composer
+  // children does not flicker the file drop affordance.
+  let attachmentDragDepth = 0;
+  const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (active) {
+      if (!enabled || !isFileDrag(event.dataTransfer)) {
+        return;
+      }
+      attachmentDragDepth += 1;
+    } else {
+      attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
+    }
+    target.toggleAttribute("data-attachment-drop-active", attachmentDragDepth > 0);
+  };
+  const clearAttachmentDropActive = (event: DragEvent) => {
+    attachmentDragDepth = 0;
+    const target = event.currentTarget;
+    if (target instanceof HTMLElement) {
+      target.removeAttribute("data-attachment-drop-active");
+    }
+  };
   return html`
-    <div class="agent-chat__composer-shell new-session-page__composer">
+    <div
+      class="agent-chat__composer-shell new-session-page__composer"
+      @drop=${(event: DragEvent) => {
+        // Text/URL drops stay native only inside the textarea; elsewhere they
+        // are cancelled so a dropped link cannot navigate the app away. File
+        // drops are cancelled even while disabled for the same reason.
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+          }
+          return;
+        }
+        event.preventDefault();
+        clearAttachmentDropActive(event);
+        if (enabled) {
+          handleChatAttachmentDrop(event, attachmentProps);
+        }
+      }}
+      @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
+      @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
+      @dragover=${(event: DragEvent) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "none";
+            }
+          }
+          return;
+        }
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = enabled ? "copy" : "none";
+        }
+      }}
+    >
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">

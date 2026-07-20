@@ -1,3 +1,4 @@
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -28,6 +29,8 @@ export abstract class AppSidebarSessionAttentionElement extends AppSidebarSessio
   private attentionGateway: ApplicationContext<RouteId>["gateway"] | null = null;
   private attentionGatewayClient: GatewayBrowserClient | null = null;
   private attentionGatewayConnected = false;
+  private agentStatusExpiryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private agentStatusExpiryAt: number | null = null;
 
   constructor() {
     super();
@@ -54,6 +57,11 @@ export abstract class AppSidebarSessionAttentionElement extends AppSidebarSessio
     this.attentionGateway = null;
     this.attentionGatewayClient = null;
     this.attentionGatewayConnected = false;
+    if (this.agentStatusExpiryTimer) {
+      globalThis.clearTimeout(this.agentStatusExpiryTimer);
+      this.agentStatusExpiryTimer = null;
+      this.agentStatusExpiryAt = null;
+    }
     disposeQuestionPromptState(this.questionPromptState);
     super.disconnectedCallback();
   }
@@ -97,6 +105,10 @@ export abstract class AppSidebarSessionAttentionElement extends AppSidebarSessio
     if (knownAttention) {
       return knownAttention.attention;
     }
+    const agentStatus = this.resolveSessionAgentStatus(row);
+    if (agentStatus?.attention) {
+      return { kind: "agent", note: agentStatus.note, icon: agentStatus.attention };
+    }
     if (row.status !== "failed" && row.status !== "timeout") {
       return SIDEBAR_SESSION_NO_ATTENTION;
     }
@@ -110,6 +122,35 @@ export abstract class AppSidebarSessionAttentionElement extends AppSidebarSessio
         row.status === "timeout" ? "sessionsView.runErrorTimedOut" : "sessionsView.runErrorUnknown",
       );
     return { kind: "error", reason };
+  }
+
+  protected resolveSessionAgentStatus(row: GatewaySessionRow): SessionAgentStatus | undefined {
+    const status = row.agentStatus;
+    if (!status || status.expiresAt <= Date.now() || !status.note.trim()) {
+      return undefined;
+    }
+    this.scheduleAgentStatusExpiry(status.expiresAt);
+    return status;
+  }
+
+  private scheduleAgentStatusExpiry(expiresAt: number): void {
+    // The gateway owns expiry; this timer only invalidates an otherwise-idle
+    // sidebar so it stops rendering the declaration at the server timestamp.
+    if (this.agentStatusExpiryAt !== null && this.agentStatusExpiryAt <= expiresAt) {
+      return;
+    }
+    if (this.agentStatusExpiryTimer) {
+      globalThis.clearTimeout(this.agentStatusExpiryTimer);
+    }
+    this.agentStatusExpiryAt = expiresAt;
+    this.agentStatusExpiryTimer = globalThis.setTimeout(
+      () => {
+        this.agentStatusExpiryTimer = null;
+        this.agentStatusExpiryAt = null;
+        this.requestUpdate();
+      },
+      Math.max(0, expiresAt - Date.now() + 1),
+    );
   }
 
   protected knownSessionAttention(): readonly SidebarKnownSessionAttention[] {

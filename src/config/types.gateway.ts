@@ -206,8 +206,10 @@ export type GatewayTrustedProxyConfig = {
     /** Enable automatic approval for new browser devices. @default false */
     enabled?: boolean;
     /**
-     * Maximum operator scopes granted by automatic approval. operator.admin
-     * is intentionally forbidden. @default operator.read, operator.write,
+     * Maximum operator scopes granted by automatic approval. Listing
+     * operator.admin explicitly lets every proxy-authenticated user request
+     * automatic full-admin device grants. Requests without scopes receive the
+     * configured maximum. @default operator.read, operator.write,
      * operator.approvals
      */
     scopes?: string[];
@@ -315,16 +317,6 @@ export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */
   mode?: GatewayReloadMode;
-  /** Debounce window for config reloads (ms). Default: 300. */
-  debounceMs?: number;
-  /**
-   * Optional maximum time (ms) to wait for in-flight operations to complete
-   * before forcing a restart. Absent uses the gateway's default bounded wait;
-   * 0 waits indefinitely and logs periodic still-pending warnings.
-   * Lower positive values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/65485
-   */
-  deferralTimeoutMs?: number;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -333,21 +325,6 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/chat/completions`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
-  /**
-   * Max number of `image_url` parts processed from the latest user message.
-   * Default: 8.
-   */
-  maxImageParts?: number;
-  /**
-   * Max cumulative decoded image bytes for all `image_url` parts in one request.
-   * Default: 20MB.
-   */
-  maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
 };
@@ -376,11 +353,6 @@ export type GatewayHttpResponsesConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/responses`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
   /**
    * Max number of URL-based `input_file` + `input_image` parts per request.
    * Default: 8.
@@ -588,27 +560,4 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
-  /**
-   * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
-   * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.
-   */
-  handshakeTimeoutMs?: number;
-  /**
-   * Channel health monitor interval in minutes.
-   * Periodically checks channel health and restarts unhealthy channels.
-   * Set to 0 to disable. Default: 5.
-   */
-  channelHealthCheckMinutes?: number;
-  /**
-   * Stale transport-activity threshold in minutes for the channel health monitor.
-   * A connected channel that reports no provider-proven transport activity for
-   * this duration is treated as a stale socket and restarted. Default: 30.
-   */
-  channelStaleEventThresholdMinutes?: number;
-  /**
-   * Maximum number of health-monitor-initiated channel restarts per hour.
-   * Once this limit is reached, the monitor skips further restarts until
-   * the rolling window expires. Default: 10.
-   */
-  channelMaxRestartsPerHour?: number;
 };

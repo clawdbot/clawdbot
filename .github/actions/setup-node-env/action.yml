@@ -325,13 +325,19 @@ runs:
 
         sticky_marker="$STICKY_ROOT/.openclaw-deps-fingerprint"
         sticky_fingerprint=""
+        sticky_fingerprint_matches="false"
         sticky_snapshot_matches="false"
         if [ "$STICKY_DISK" = "true" ] && [ -f "$sticky_marker" ]; then
           sticky_fingerprint="$(<"$sticky_marker")"
         fi
         if [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ] &&
           [ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]; then
-          sticky_snapshot_matches="true"
+          sticky_fingerprint_matches="true"
+          if bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"; then
+            sticky_snapshot_matches="true"
+          else
+            echo "::warning::Sticky dependency fingerprint matches, but restored importer contents are incomplete; reinstalling"
+          fi
         fi
         if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" != "true" ] &&
           [ "$sticky_snapshot_matches" != "true" ]; then
@@ -345,7 +351,7 @@ runs:
           mkdir -p "$ephemeral_store"
           export PNPM_CONFIG_STORE_DIR="$ephemeral_store"
           echo "PNPM_CONFIG_STORE_DIR=$ephemeral_store" >> "$GITHUB_ENV"
-          echo "Sticky dependency snapshot is stale; using runner-local storage for this read-only run"
+          echo "Sticky dependency snapshot is unusable; using runner-local storage for this read-only run"
         fi
 
         install_args=(
@@ -389,10 +395,11 @@ runs:
           export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
         fi
         if [ "$sticky_snapshot_matches" = "true" ]; then
-          bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"
-          echo "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install"
+          echo "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install"
         else
-          if [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ]; then
+          if [ "$sticky_fingerprint_matches" = "true" ]; then
+            echo "Sticky dependency snapshot importer contents are incomplete; reinstalling"
+          elif [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ]; then
             echo "Sticky dependency snapshot is stale (disk: $sticky_fingerprint, want: $OPENCLAW_STICKY_DEPS_FINGERPRINT); reinstalling"
           fi
           # A stale marker must not survive a mid-install failure: the commit
@@ -435,7 +442,7 @@ runs:
         fi
 
         if [ "$STICKY_DISK" = "true" ]; then
-          # This step already establishes an exact fingerprint match or finishes
+          # This step already establishes a content-validated snapshot or finishes
           # a frozen-lockfile install. pnpm 11's redundant pre-run check treats
           # our intentionally pruned plugin-local node_modules as stale and can
           # launch concurrent implicit installs when later CI steps fan out.

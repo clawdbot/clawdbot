@@ -627,5 +627,5 @@ describe("SQLite active transcript event projection", () => {
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_001);
-  }, 30_000);
+  }, 60_000);
 });

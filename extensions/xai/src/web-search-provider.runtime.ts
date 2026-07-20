@@ -179,7 +179,7 @@ function resolveXaiToolSearchConfig(ctx: {
 function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
   return resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "tools.web.search.grok.apiKey",
+    path: "plugins.entries.xai.config.webSearch.apiKey",
     envVars: ["XAI_API_KEY"],
   });
 }
@@ -189,7 +189,7 @@ function resolveConfiguredXaiWebSearchCredential(
 ): string | undefined {
   return resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "tools.web.search.grok.apiKey",
+    path: "plugins.entries.xai.config.webSearch.apiKey",
     envVars: [],
   });
 }

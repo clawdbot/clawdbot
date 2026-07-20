@@ -8,7 +8,6 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import { isContinuationWrappedRunResult } from "./agent-runner-execution.types.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -76,10 +75,7 @@ export async function settleAgentFallbackCycle(params: {
       }))
     : [];
   if (!fallbackExhausted) {
-    await cycle.clearRecoveredAutoFallbackPrimaryProbe({
-      provider: fallbackProvider,
-      model: fallbackModel,
-    });
+    await fallbackResult.settleSessionOverride();
   }
   const embeddedError = runResult.meta?.error;
   const deferredLifecycleError = settledLifecycleTerminal?.getDeferredError();
@@ -139,7 +135,7 @@ export async function settleAgentFallbackCycle(params: {
       }),
     };
   }
-  const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
+  const terminalMetadata = fallbackResult.terminal.metadata;
   let terminalRunFailed = false;
   if (fallbackExhausted) {
     const exhaustionError = new Error(

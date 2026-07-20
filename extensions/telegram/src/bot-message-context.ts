@@ -610,7 +610,6 @@ export const buildTelegramMessageContext = async ({
           },
           initialEmoji: ackReaction,
           emojis: resolvedStatusReactionEmojis ?? undefined,
-          timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
           },

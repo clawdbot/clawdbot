@@ -462,8 +462,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     OpenClaw may skip a profile in a short **cooldown** (rate limits,
     timeouts, auth failures) or a longer **disabled** state
     (billing/insufficient credits). Inspect with `openclaw models status
-    --json` and check `auth.unusableProfiles`. Tune with
-    `auth.cooldowns.billingBackoffHours*`. Rate-limit cooldowns can be
+    --json` and check `auth.unusableProfiles`. Rate-limit cooldowns can be
     model-scoped — a profile cooling down for one model can still serve a
     sibling model on the same provider; billing/disabled windows block the
     whole profile.

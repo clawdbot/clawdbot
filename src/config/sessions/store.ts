@@ -1285,42 +1285,6 @@ async function persistResolvedSessionEntry(params: {
   return entryUnchanged || params.returnDetached ? cloneSessionEntry(next) : next;
 }
 
-export async function updateSessionStoreEntry(params: {
-  storePath: string;
-  sessionKey: string;
-  update: (
-    entry: SessionEntry,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
-}): Promise<SessionEntry | null> {
-  const { storePath, sessionKey, update } = params;
-  return await runExclusiveSessionStoreWrite(storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey });
-    const existing = resolved.existing;
-    if (!existing) {
-      return null;
-    }
-    const patch = await update(cloneSessionEntry(existing));
-    if (!patch) {
-      return existing;
-    }
-    const next = mergeSessionEntry(existing, patch);
-    return await persistResolvedSessionEntry({
-      storePath,
-      store,
-      resolved,
-      next,
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership ?? true,
-      requireWriteSuccess: params.requireWriteSuccess,
-      returnDetached: params.takeCacheOwnership !== true,
-    });
-  });
-}
-
 type SessionEntryPatchParams = SessionEntryWorkflowOptions & {
   sessionKey: string;
   fallbackEntry?: SessionEntry;

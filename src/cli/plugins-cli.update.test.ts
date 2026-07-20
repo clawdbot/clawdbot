@@ -373,11 +373,21 @@ describe("plugins cli update", () => {
     expect(hookUpdateParams.hookIds).toEqual(["new-hooks"]);
   });
 
-  it("uses resolved shipped install records instead of raw env placeholders", async () => {
-    const cfg = createTrackedPluginConfig({
-      pluginId: "alpha",
-      spec: "@openclaw/alpha@1.0.0",
-    });
+  it("uses persisted install records instead of retired config records", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const persistedRecords = {
+      alpha: {
+        source: "npm",
+        spec: "@openclaw/alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+    } as const;
     primeUpdateConfigSnapshot({
       config: cfg,
       parsed: {
@@ -392,8 +402,15 @@ describe("plugins cli update", () => {
         },
       },
     });
+    setInstalledPluginIndexInstallRecords(persistedRecords);
     updateNpmInstalledPlugins.mockResolvedValue({
-      config: cfg,
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: persistedRecords,
+        },
+      } as OpenClawConfig,
       changed: false,
       outcomes: [],
     });
@@ -401,7 +418,13 @@ describe("plugins cli update", () => {
     await runPluginsCommand(["plugins", "update", "alpha"]);
 
     const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
-    expect(updateParams.config).toEqual(cfg);
+    expect(updateParams.config).toEqual({
+      ...cfg,
+      plugins: {
+        ...cfg.plugins,
+        installs: persistedRecords,
+      },
+    });
   });
 
   it("rejects invalid config snapshots before updater side effects", async () => {
@@ -970,7 +993,7 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("preflights legacy plugin-record cleanup before hook-only updater side effects", async () => {
+  it("ignores retired plugin records during hook-only ownership checks", async () => {
     const cfg = {
       hooks: {
         internal: {
@@ -995,15 +1018,15 @@ describe("plugins cli update", () => {
     } as OpenClawConfig;
     primeBlockedUpdateConfig("plugins", cfg);
 
-    await expect(runPluginsCommand(["plugins", "update", "demo-hooks"])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await runPluginsCommand(["plugins", "update", "demo-hooks"]);
 
-    expect(runtimeErrors.at(-1)).toContain(
-      "Config plugins are stored in an external or unresolved top-level $include",
-    );
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([]);
+    const pluginUpdateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(pluginUpdateParams.config).toEqual({
+      ...cfg,
+      plugins: { installs: {} },
+    });
+    expect(updateNpmInstalledHookPacks).toHaveBeenCalledOnce();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -1070,129 +1093,6 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("preserves an include-owned plugins section during legacy-record cleanup", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-"));
-    const configPath = path.join(tempRoot, "openclaw.json5");
-    const pluginsPath = path.join(tempRoot, "plugins.json5");
-    const cfg = createTrackedPluginConfig({
-      pluginId: "alpha",
-      spec: "@openclaw/alpha@1.0.0",
-    });
-    const pluginsRaw = `${JSON.stringify(cfg.plugins, null, 2)}\n`;
-    const nextConfig = createTrackedPluginConfig({
-      pluginId: "alpha",
-      spec: "@openclaw/alpha@1.1.0",
-    });
-    fs.writeFileSync(pluginsPath, pluginsRaw);
-    primeUpdateConfigSnapshot({
-      config: cfg,
-      configPath,
-      parsed: { plugins: { $include: "./plugins.json5" } },
-      includeFileHashesForWrite: {
-        [pluginsPath]: hashConfigIncludeRaw(pluginsRaw),
-      },
-      includeFileTargetsForWrite: {
-        [pluginsPath]: fs.realpathSync(pluginsPath),
-      },
-    });
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: nextConfig,
-      changed: true,
-      outcomes: [{ pluginId: "alpha", status: "updated", message: "Updated alpha." }],
-    });
-
-    try {
-      await runPluginsCommand(["plugins", "update", "alpha"]);
-
-      expect(runtimeErrors).toEqual([]);
-      expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-      expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
-        nextConfig.plugins?.installs,
-      );
-      expect(writeConfigFile).toHaveBeenCalledWith({ plugins: {} });
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("migrates included legacy install records while updating another indexed plugin", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-"));
-    const configPath = path.join(tempRoot, "openclaw.json5");
-    const pluginsPath = path.join(tempRoot, "plugins.json5");
-    const legacyRecord = {
-      source: "npm",
-      spec: "@openclaw/legacy@1.0.0",
-      installPath: "/tmp/legacy",
-    } as const;
-    const indexedRecord = {
-      source: "npm",
-      spec: "@openclaw/alpha@1.0.0",
-      installPath: "/tmp/alpha",
-    } as const;
-    const updatedIndexedRecord = {
-      ...indexedRecord,
-      spec: "@openclaw/alpha@1.1.0",
-    } as const;
-    const cfg = {
-      plugins: {
-        installs: {
-          legacy: legacyRecord,
-        },
-      },
-    } as OpenClawConfig;
-    const pluginsRaw = `${JSON.stringify(cfg.plugins, null, 2)}\n`;
-    const nextInstallRecords = {
-      alpha: updatedIndexedRecord,
-      legacy: legacyRecord,
-    };
-    fs.writeFileSync(pluginsPath, pluginsRaw);
-    primeUpdateConfigSnapshot({
-      config: cfg,
-      configPath,
-      parsed: { plugins: { $include: "./plugins.json5" } },
-      includeFileHashesForWrite: {
-        [pluginsPath]: hashConfigIncludeRaw(pluginsRaw),
-      },
-      includeFileTargetsForWrite: {
-        [pluginsPath]: fs.realpathSync(pluginsPath),
-      },
-    });
-    setInstalledPluginIndexInstallRecords({
-      alpha: indexedRecord,
-    });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: {
-        plugins: {
-          installs: nextInstallRecords,
-        },
-      } as OpenClawConfig,
-      changed: true,
-      outcomes: [{ pluginId: "alpha", status: "updated", message: "Updated alpha." }],
-    });
-
-    try {
-      await runPluginsCommand(["plugins", "update", "alpha"]);
-
-      expect(runtimeErrors).toEqual([]);
-      const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
-      expect(updateParams.config).toEqual({
-        plugins: {
-          installs: {
-            alpha: indexedRecord,
-            legacy: legacyRecord,
-          },
-        },
-      });
-      expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
-        nextInstallRecords,
-      );
-      expect(writeConfigFile).toHaveBeenCalledWith({ plugins: {} });
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
   it("blocks combined plugin and hook updates when either config section uses an include", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-"));
     const configPath = path.join(tempRoot, "openclaw.json5");
@@ -1212,11 +1112,9 @@ describe("plugins cli update", () => {
         },
       },
       plugins: {
-        installs: {
-          alpha: {
-            source: "npm",
-            spec: "@openclaw/alpha@1.0.0",
-            installPath: "/tmp/alpha",
+        entries: {
+          "voice-call": {
+            enabled: true,
           },
         },
       },
@@ -1235,7 +1133,13 @@ describe("plugins cli update", () => {
         [pluginsPath]: fs.realpathSync(pluginsPath),
       },
     });
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
+    setInstalledPluginIndexInstallRecords({
+      "voice-call": {
+        source: "npm",
+        spec: "@openclaw/voice-call@1.0.0",
+        installPath: "/tmp/voice-call",
+      },
+    });
 
     try {
       await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow("__exit__:1");

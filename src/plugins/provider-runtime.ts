@@ -4,11 +4,7 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  sortUniqueStrings,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
@@ -21,7 +17,6 @@ import type { ProviderSystemPromptContribution } from "../agents/system-prompt-c
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -50,7 +45,6 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
   resolveCatalogHookProviderPluginIds,
-  resolveExternalAuthProfileCompatFallbackPluginIds,
   resolveExternalAuthProfileProviderPluginIds,
   resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForProviderRef,
@@ -95,14 +89,10 @@ import type {
   ProviderResolveTransportTurnStateContext,
   ProviderSystemPromptContributionContext,
   ProviderTransformSystemPromptContext,
-  ProviderThinkingPolicyContext,
   ProviderTransportTurnState,
   ProviderValidateReplayTurnsContext,
   PluginTextTransforms,
 } from "./types.js";
-
-const log = createSubsystemLogger("plugins/provider-runtime");
-const warnedExternalAuthFallbackPluginIds = new Set<string>();
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -177,9 +167,7 @@ export {
   wrapProviderStreamFn,
 };
 
-function resetExternalAuthFallbackWarningCacheForTest(): void {
-  warnedExternalAuthFallbackPluginIds.clear();
-}
+function resetExternalAuthFallbackWarningCacheForTest(): void {}
 
 export const testing = {
   clearProviderRuntimePluginCacheForTest,
@@ -871,26 +859,6 @@ export function resolveProviderCacheTtlEligibility(params: {
   return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
 }
 
-export function resolveProviderBinaryThinking(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderThinkingPolicyContext;
-}) {
-  return resolveProviderRuntimePlugin(params)?.isBinaryThinking?.(params.context);
-}
-
-export function resolveProviderXHighThinking(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderThinkingPolicyContext;
-}) {
-  return resolveProviderRuntimePlugin(params)?.supportsXHighThinking?.(params.context);
-}
-
 export function resolveProviderThinkingProfile(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -903,16 +871,6 @@ export function resolveProviderThinkingProfile(params: {
     return bundledSurface.resolveThinkingProfile(params.context) ?? undefined;
   }
   return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
-}
-
-export function resolveProviderDefaultThinkingLevel(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderDefaultThinkingPolicyContext;
-}) {
-  return resolveProviderRuntimePlugin(params)?.resolveDefaultThinkingLevel?.(params.context);
 }
 
 export function applyProviderConfigDefaultsWithPlugin(params: {
@@ -1054,16 +1012,7 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     env,
     manifestRegistry,
   });
-  const declaredPluginIds = new Set(externalAuthPluginIds);
-  const fallbackPluginIds = resolveExternalAuthProfileCompatFallbackPluginIds({
-    config: params.config,
-    workspaceDir,
-    env,
-    declaredPluginIds,
-    manifestRegistry,
-  });
-  const pluginIds = sortUniqueStrings([...externalAuthPluginIds, ...fallbackPluginIds]);
-  if (pluginIds.length === 0) {
+  if (externalAuthPluginIds.length === 0) {
     return [];
   }
   const matches: ProviderExternalAuthProfile[] = [];
@@ -1071,20 +1020,11 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     ...params,
     workspaceDir,
     env,
-    onlyPluginIds: pluginIds,
+    onlyPluginIds: externalAuthPluginIds,
   })) {
-    const profiles =
-      plugin.resolveExternalAuthProfiles?.(params.context) ??
-      plugin.resolveExternalOAuthProfiles?.(params.context);
+    const profiles = plugin.resolveExternalAuthProfiles?.(params.context);
     if (!profiles || profiles.length === 0) {
       continue;
-    }
-    const pluginId = plugin.pluginId ?? plugin.id;
-    if (!declaredPluginIds.has(pluginId) && !warnedExternalAuthFallbackPluginIds.has(pluginId)) {
-      warnedExternalAuthFallbackPluginIds.add(pluginId);
-      log.warn(
-        `Provider plugin "${sanitizeForLog(pluginId)}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
-      );
     }
     matches.push(...profiles);
   }

@@ -382,7 +382,7 @@ describe("memory index", () => {
       enabled: boolean;
       vectorWeight?: number;
       textWeight?: number;
-      temporalDecay?: { enabled: boolean; halfLifeDays: number };
+      temporalDecay?: { enabled: boolean };
     };
   }): TestCfg {
     return {
@@ -395,8 +395,6 @@ describe("memory index", () => {
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
             store: { vector: { enabled: params.vectorEnabled ?? false } },
-            // Perf: keep test indexes to a single chunk to reduce sqlite work.
-            chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
             remote: params.batchEnabled
               ? {
@@ -2583,7 +2581,7 @@ describe("memory index", () => {
     await fs.writeFile(freshFooPath, "Unrelated fresh candidate.");
     await fs.writeFile(staleBarPath, "bar md bar md bar md strongest stale body");
     await fs.writeFile(path.join(freshDir, "bar.md"), "bar md fresh body");
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     await Promise.all([
       fs.utimes(staleFooPath, staleMtime, staleMtime),
       fs.utimes(staleBarPath, staleMtime, staleMtime),
@@ -2593,7 +2591,7 @@ describe("memory index", () => {
       minScore: 0,
       hybrid: {
         enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
+        temporalDecay: { enabled: true },
       },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
@@ -2615,7 +2613,7 @@ describe("memory index", () => {
 
   it("applies temporal decay after the exact-path candidate cap", async () => {
     forceNoProvider = true;
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     const extraPaths: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
@@ -2634,7 +2632,7 @@ describe("memory index", () => {
       minScore: 0,
       hybrid: {
         enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
+        temporalDecay: { enabled: true },
       },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
@@ -2653,7 +2651,7 @@ describe("memory index", () => {
   });
 
   it("applies hybrid temporal decay beyond the content candidate cap", async () => {
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     const extraPaths: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
@@ -2672,7 +2670,7 @@ describe("memory index", () => {
       minScore: 0,
       hybrid: {
         enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
+        temporalDecay: { enabled: true },
       },
     });
     const manager = await getPersistentManager(cfg);
@@ -2685,7 +2683,7 @@ describe("memory index", () => {
   });
 
   it("keeps temporal decay when degraded hybrid search becomes keyword-only", async () => {
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     const extraPaths: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
@@ -2704,7 +2702,7 @@ describe("memory index", () => {
       minScore: 0,
       hybrid: {
         enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
+        temporalDecay: { enabled: true },
       },
     });
     const manager = await getPersistentManager(cfg);
@@ -2835,7 +2833,7 @@ describe("memory index", () => {
       minScore: 0.35,
       hybrid: {
         enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
+        temporalDecay: { enabled: true },
       },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });

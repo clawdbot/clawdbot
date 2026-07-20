@@ -25,6 +25,10 @@ export function createHarness(
     destroyFails?: boolean;
     claimOnDrain?: boolean;
     reconcileFails?: boolean;
+    reconcileFailureCount?: number;
+    reconcileChanged?: boolean;
+    reconcileCommitsManifest?: boolean;
+    reconcileCommitsManifestOnApply?: boolean;
     verifyFails?: boolean;
     leaseFails?: boolean;
     localVerifyFails?: boolean;
@@ -35,6 +39,7 @@ export function createHarness(
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
+  let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
@@ -57,8 +62,11 @@ export function createHarness(
     recordWorkspaceResultConflict: (claim, conflict) =>
       placementStore.recordWorkspaceResultConflict(claim, conflict),
     claimTurn: (params) => placementStore.claimTurn(params),
+    claimReclaimWorkspaceResult: (params) => placementStore.claimReclaimWorkspaceResult(params),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
+    cancelWorkspaceResultAndReleaseTurn: (claim) =>
+      placementStore.cancelWorkspaceResultAndReleaseTurn(claim),
     completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) => {
       const completed = placementStore.completeWorkspaceResultAndReleaseTurn(
         claim,
@@ -159,16 +167,19 @@ export function createHarness(
     }),
     reconcileWorkspace: vi.fn(async (request) => {
       log.push("workspace:reconcile");
-      if (options.reconcileFails) {
+      if (options.reconcileFails || remainingReconcileFailures > 0) {
+        remainingReconcileFailures -= 1;
         throw new Error("workspace conflict");
       }
-      request.journal.commit(reconciledManifestRef);
+      if (options.reconcileCommitsManifest !== false) {
+        request.journal.commit(reconciledManifestRef);
+      }
       if (options.reconcileConflictPaths?.length && request.stagedResult) {
         request.stagedResult.record(request.stagedResult.ref);
       }
       return {
         manifestRef: reconciledManifestRef,
-        changed: true,
+        changed: options.reconcileChanged ?? true,
         verifyStable: async () => {
           log.push("workspace:verify");
           if (options.verifyFails) {
@@ -189,6 +200,15 @@ export function createHarness(
               verifyLocalStable: async () => {},
             })
           : undefined,
+        ...(options.reconcileCommitsManifestOnApply
+          ? {
+              applyPreparedStagedResult: async () => {
+                log.push("workspace:apply-prepared");
+                request.journal.commit(reconciledManifestRef);
+              },
+              publishStagedResult: async () => {},
+            }
+          : {}),
       };
     }),
     runWorkspaceCommand: vi.fn(async () => ({

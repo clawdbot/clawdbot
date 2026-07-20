@@ -5,14 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import { renderSideChatPanel } from "./components/chat-side-chat.ts";
 
-vi.mock("../../components/icons.ts", () => ({
-  icons: {},
-}));
-
-vi.mock("../../components/markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
-}));
-
 function turn(overrides: Partial<ChatSideResult> = {}): ChatSideResult {
   return {
     kind: "btw",

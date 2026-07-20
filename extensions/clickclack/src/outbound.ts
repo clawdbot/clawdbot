@@ -143,7 +143,7 @@ function createOutboundContext(params: {
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createClickClackClient({
-    baseUrl: account.baseUrl,
+    baseUrl: account.apiEndpoint,
     token: account.token,
     correlationId: params.correlationId,
   });

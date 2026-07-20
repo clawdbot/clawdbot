@@ -517,6 +517,68 @@ describe("loadPluginManifestRegistry", () => {
     expect(manifestChangeCase.secondName).toBe("After");
   });
 
+  it("synthesizes an empty manifest for explicitly configured standalone files", () => {
+    const dir = makeTempDir();
+    const source = path.join(dir, "maintenance-access.ts");
+    writeTextFile(dir, "maintenance-access.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [source] } } },
+      candidates: [
+        createPluginCandidate({
+          idHint: "maintenance-access",
+          rootDir: dir,
+          sourceName: "maintenance-access.ts",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins).toEqual([
+      expect.objectContaining({
+        id: "maintenance-access",
+        source,
+        manifestPath: source,
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    ]);
+  });
+
+  it("keeps core-reserved ids unavailable to configured standalone files", () => {
+    const dir = makeTempDir();
+    const source = path.join(dir, "node-mcp.ts");
+    writeTextFile(dir, "node-mcp.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [source] } } },
+      candidates: [
+        createPluginCandidate({
+          idHint: "node-mcp",
+          rootDir: dir,
+          sourceName: "node-mcp.ts",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toStrictEqual([]);
+    expectRegistryDiagnosticContains(registry, 'plugin manifest id "node-mcp" is reserved');
+  });
+
+  it("still requires manifests for explicitly configured directories", () => {
+    const dir = makeTempDir();
+    writeTextFile(dir, "index.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [dir] } } },
+      env: hermeticEnv(),
+    });
+
+    expect(registry.plugins.filter((plugin) => plugin.origin === "config")).toStrictEqual([]);
+    expectRegistryDiagnosticContains(registry, "plugin manifest not found");
+  });
+
   it("preserves optional manifest icon URLs on registry records", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -1122,15 +1184,15 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
-  it("preserves provider auth env metadata from plugin manifests", () => {
+  it("normalizes provider metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
       enabledByDefault: true,
       enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
       providers: ["openai", "openai"],
-      providerAuthEnvVars: {
-        openai: ["OPENAI_API_KEY"],
+      setup: {
+        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
       },
       providerEndpoints: [
         {
@@ -1208,9 +1270,6 @@ describe("loadPluginManifestRegistry", () => {
       origin: "bundled",
     });
 
-    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
-      openai: ["OPENAI_API_KEY"],
-    });
     expect(registry.plugins[0]?.providerEndpoints).toEqual([
       {
         endpointClass: "openai-public",
@@ -1597,88 +1656,6 @@ describe("loadPluginManifestRegistry", () => {
         },
       },
     ]);
-  });
-
-  it("reports non-bundled providerAuthEnvVars as deprecated compat metadata", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-openai",
-      providers: ["openai"],
-      providerAuthEnvVars: {
-        openai: ["OPENAI_API_KEY"],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "external-openai",
-      rootDir: dir,
-      origin: "global",
-    });
-
-    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
-      openai: ["OPENAI_API_KEY"],
-    });
-    expectDiagnosticFields(registry, {
-      level: "warn",
-      pluginId: "external-openai",
-      source: path.join(dir, "openclaw.plugin.json"),
-      messageIncludes: "providerAuthEnvVars is deprecated compatibility metadata",
-    });
-  });
-
-  it("does not report deprecated providerAuthEnvVars when setup providers mirror env vars", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-openai",
-      providers: ["openai"],
-      setup: {
-        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
-      },
-      providerAuthEnvVars: {
-        openai: ["OPENAI_API_KEY"],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "external-openai",
-      rootDir: dir,
-      origin: "global",
-    });
-
-    expectNoRegistryDiagnosticContains(
-      registry,
-      "providerAuthEnvVars is deprecated compatibility metadata",
-    );
-  });
-
-  it("sanitizes manifest-controlled fields in provider auth compatibility diagnostics", () => {
-    const dir = makeTempDir();
-    const lineBreak = String.fromCharCode(10);
-    const ansiRed = `${String.fromCharCode(27)}[31m`;
-    writeManifest(dir, {
-      id: `external${lineBreak}openai${ansiRed}`,
-      providers: ["openai"],
-      providerAuthEnvVars: {
-        [`openai${lineBreak}${ansiRed}`]: ["OPENAI_API_KEY"],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "external-openai",
-      rootDir: dir,
-      origin: "global",
-    });
-    const diagnostic = registry.diagnostics.find((entry) =>
-      entry.message.includes("providerAuthEnvVars is deprecated compatibility metadata"),
-    );
-
-    expect(diagnostic?.pluginId).toBe("externalopenai");
-    expect(diagnostic?.message).toContain("openai");
-    expect(diagnostic?.message).not.toContain(lineBreak);
-    expect(diagnostic?.message).not.toContain(ansiRed);
   });
 
   it("reports non-bundled channel manifests without channel config descriptors", () => {
@@ -2459,28 +2436,6 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("preserves channel env metadata from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "slack",
-      channels: ["slack"],
-      channelEnvVars: {
-        slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "slack",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.channelEnvVars).toEqual({
-      slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
-    });
-  });
-
   it("preserves qa runner descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -2597,7 +2552,7 @@ describe("loadPluginManifestRegistry", () => {
       configSchema: { type: "object" },
       configContracts: {
         compatibilityMigrationPaths: ["models.bedrockDiscovery"],
-        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+        compatibilityRuntimePaths: ["legacyProvider.webhook"],
         dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
         secretInputs: {
           bundledDefaultEnabled: false,
@@ -2614,7 +2569,7 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.configContracts).toEqual({
       compatibilityMigrationPaths: ["models.bedrockDiscovery"],
-      compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      compatibilityRuntimePaths: ["legacyProvider.webhook"],
       dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
       secretInputs: {
         bundledDefaultEnabled: false,
@@ -2632,7 +2587,7 @@ describe("loadPluginManifestRegistry", () => {
         webSearchProviders: ["brave"],
       },
       configContracts: {
-        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+        compatibilityRuntimePaths: ["legacyProvider.webhook"],
       },
     });
 
@@ -2664,7 +2619,7 @@ describe("loadPluginManifestRegistry", () => {
           (plugin) =>
             (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
             (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(
-              "tools.web.search.apiKey",
+              "legacyProvider.webhook",
             ),
         )
         .map((plugin) => plugin.id),

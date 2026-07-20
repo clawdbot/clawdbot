@@ -47,7 +47,6 @@ const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
 ]);
 const DEPRECATED_TEST_ALIAS_SPECIFIERS = new Set(["openclaw/plugin-sdk/test-utils"]);
 const DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES = new Set([
-  "src/plugin-sdk/test-utils.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
 ]);
@@ -785,7 +784,8 @@ describe("plugin-sdk package contract guardrails", () => {
     const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unknownLocalOnly = [...localOnly].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
-      (entrypoint) => !reserved.has(entrypoint) && !supported.has(entrypoint),
+      (entrypoint) =>
+        !reserved.has(entrypoint) && !supported.has(entrypoint) && !localOnly.has(entrypoint),
     );
     const unreservedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
       (entrypoint) => !reserved.has(entrypoint) && !localOnly.has(entrypoint),

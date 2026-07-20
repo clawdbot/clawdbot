@@ -23,9 +23,7 @@ import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 export type {
   ChannelOutboundAdapter,
-  ChannelOutboundChunkContext,
   ChannelOutboundContext,
-  ChannelOutboundFormattedContext,
   ChannelOutboundPayloadContext,
   ChannelOutboundPayloadHint,
   ChannelOutboundTargetRef,
@@ -47,16 +45,13 @@ import type {
 export type { ChannelPairingAdapter } from "./pairing.types.js";
 
 type ConfiguredBindingRule = AgentBinding;
-export type { ChannelApprovalKind } from "../../infra/approval-types.js";
 
-export type ChannelActionAvailabilityState =
+type ChannelActionAvailabilityState =
   | { kind: "enabled" }
   | { kind: "disabled" }
   | { kind: "unsupported" };
 
-export type ChannelApprovalInitiatingSurfaceState = ChannelActionAvailabilityState;
-
-export type ChannelApprovalForwardTarget = {
+type ChannelApprovalForwardTarget = {
   channel: string;
   to: string;
   accountId?: string | null;
@@ -64,7 +59,7 @@ export type ChannelApprovalForwardTarget = {
   source?: "session" | "target";
 };
 
-export type ChannelCapabilitiesDisplayTone = "default" | "muted" | "success" | "warn" | "error";
+type ChannelCapabilitiesDisplayTone = "default" | "muted" | "success" | "warn" | "error";
 
 export type ChannelCapabilitiesDisplayLine = {
   text: string;
@@ -319,25 +314,25 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   channelRuntime?: ChannelRuntimeSurface;
 };
 
-export type ChannelLogoutResult = {
+type ChannelLogoutResult = {
   cleared: boolean;
   loggedOut?: boolean;
   [key: string]: unknown;
 };
 
-export type ChannelLoginWithQrStartResult = {
+type ChannelLoginWithQrStartResult = {
   qrDataUrl?: string;
   message: string;
   connected?: boolean;
 };
 
-export type ChannelLoginWithQrWaitResult = {
+type ChannelLoginWithQrWaitResult = {
   connected: boolean;
   message: string;
   qrDataUrl?: string;
 };
 
-export type ChannelLogoutContext<ResolvedAccount = unknown> = {
+type ChannelLogoutContext<ResolvedAccount = unknown> = {
   cfg: OpenClawConfig;
   accountId: string;
   account: ResolvedAccount;
@@ -580,7 +575,7 @@ export type ChannelLifecycleAdapter = {
   }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
-export type ChannelApprovalDeliveryAdapter = {
+type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
     cfg: OpenClawConfig;
@@ -589,21 +584,14 @@ export type ChannelApprovalDeliveryAdapter = {
     request: ExecApprovalRequest | PluginApprovalRequest;
   }) => boolean;
 };
-export type ChannelApproveCommandBehavior =
+type ChannelApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
   | { kind: "reply"; text: string };
 
-export type {
-  ChannelApprovalNativeAdapter,
-  ChannelApprovalNativeDeliveryCapabilities,
-  ChannelApprovalNativeDeliveryPreference,
-  ChannelApprovalNativeRequest,
-  ChannelApprovalNativeSurface,
-  ChannelApprovalNativeTarget,
-} from "./approval-native.types.js";
+export type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 
-export type ChannelApprovalRenderAdapter = {
+type ChannelApprovalRenderAdapter = {
   exec?: {
     buildPendingPayload?: (params: {
       cfg: OpenClawConfig;

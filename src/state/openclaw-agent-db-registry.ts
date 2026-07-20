@@ -10,6 +10,10 @@ import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  assertAgentDeletionPathFence,
+  prepareAgentDeletionPathFence,
+} from "./agent-deletion-journal.js";
+import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
@@ -30,6 +34,10 @@ export function registerOpenClawAgentDatabase(params: {
   path: string;
   env?: NodeJS.ProcessEnv;
 }): void {
+  const deletionFence = prepareAgentDeletionPathFence(
+    { agentId: params.agentId, path: params.path },
+    { env: params.env },
+  );
   let sizeBytes: number | null = null;
   try {
     sizeBytes = statSync(params.path).size;
@@ -39,6 +47,7 @@ export function registerOpenClawAgentDatabase(params: {
   const lastSeenAt = Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
+      assertAgentDeletionPathFence(database.db, deletionFence);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,

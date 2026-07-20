@@ -181,7 +181,6 @@ describe("discordOutbound", () => {
             channels: {
               discord: {
                 token: "test-token",
-                retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
               },
             },
           },

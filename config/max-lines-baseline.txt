@@ -19,7 +19,6 @@ extensions/browser/src/browser/chrome-mcp.ts
 extensions/browser/src/browser/chrome.executables.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
-extensions/browser/src/browser/config.test.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/pw-session.ts
@@ -92,7 +91,6 @@ extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
-extensions/discord/src/monitor/message-utils.test.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command-model-picker-interaction.ts
@@ -545,7 +543,6 @@ src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
 src/agents/tool-loop-detection.test.ts
-src/agents/tool-loop-detection.ts
 src/agents/tool-search.test.ts
 src/agents/tool-search.ts
 src/agents/tools/computer-tool.ts
@@ -633,7 +630,6 @@ src/channels/turn/kernel.test.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
-src/cli/command-secret-targets.test.ts
 src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
 src/cli/config-cli.ts
@@ -1009,7 +1005,6 @@ src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
 src/plugins/official-external-plugin-catalog.ts
-src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts

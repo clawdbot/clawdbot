@@ -11,12 +11,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allows macOS hosts to import cookies from a local Chrome-family system profile into a managed OpenClaw browser profile. Disable this to prevent browser profile cookie import and its macOS Keychain consent prompt.",
   "browser.cdpUrl":
     "CDP/DevTools endpoint URL used to attach to an externally managed browser instance. Use this for centralized browser hosts, tunnels, or existing-session attachment, and keep URL access restricted to trusted network paths.",
-  "browser.actionTimeoutMs":
-    "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
-  "browser.localLaunchTimeoutMs":
-    "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
-  "browser.localCdpReadyTimeoutMs":
-    "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
   "browser.color":
     "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
   "browser.executablePath":
@@ -27,8 +21,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
   "browser.attachOnly":
     "Restricts browser mode to attach-only behavior without starting local browser processes. Use this when all browser sessions are externally managed by a remote CDP provider.",
-  "browser.cdpPortRangeStart":
-    "Starting local CDP port used for auto-allocated browser profile ports. Increase this when host-level port defaults conflict with other local services.",
   "browser.defaultProfile":
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
@@ -63,12 +55,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
   "browser.tabCleanup.enabled":
     "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
-  "browser.tabCleanup.idleMinutes":
-    "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
-  "browser.tabCleanup.maxTabsPerSession":
-    "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
-  "browser.tabCleanup.sweepMinutes":
-    "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
@@ -77,10 +63,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":
     "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
-  "browser.remoteCdpTimeoutMs":
-    "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. The larger of this value and remoteCdpHandshakeTimeoutMs also bounds persistent remote tab enumeration. Increase for high-latency tunnels, or lower for faster failure detection.",
-  "browser.remoteCdpHandshakeTimeoutMs":
-    "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. The larger of this value and remoteCdpTimeoutMs also bounds persistent remote tab enumeration. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   discovery:
@@ -186,31 +168,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Tool policy wrapper for sandboxed agent executions so sandbox runs can have distinct capability boundaries. Use this to enforce stronger safety in sandbox contexts.",
   "tools.sandbox.tools":
     "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
-  web: "Web channel runtime settings for heartbeat and reconnect behavior when operating web-based chat surfaces. Use reconnect values tuned to your network reliability profile and expected uptime needs.",
+  web: "Web channel runtime settings for operating web-based chat surfaces. Use this section to control the built-in web channel.",
   "web.enabled":
     "Enables the web channel runtime and related websocket lifecycle behavior. Keep disabled when web chat is unused to reduce active connection management overhead.",
-  "web.heartbeatSeconds":
-    "Heartbeat interval in seconds for web channel connectivity and liveness maintenance. Use shorter intervals for faster detection, or longer intervals to reduce keepalive chatter.",
-  "web.reconnect":
-    "Reconnect backoff policy for web channel reconnect attempts after transport failure. Keep bounded retries and jitter tuned to avoid thundering-herd reconnect behavior.",
-  "web.reconnect.initialMs":
-    "Initial reconnect delay in milliseconds before the first retry after disconnection. Use modest delays to recover quickly without immediate retry storms.",
-  "web.reconnect.maxMs":
-    "Maximum reconnect backoff cap in milliseconds to bound retry delay growth over repeated failures. Use a reasonable cap so recovery remains timely after prolonged outages.",
-  "web.reconnect.factor":
-    "Exponential backoff multiplier used between reconnect attempts in web channel retry loops. Keep factor above 1 and tune with jitter for stable large-fleet reconnect behavior.",
-  "web.reconnect.jitter":
-    "Randomization factor (0-1) applied to reconnect delays to desynchronize clients after outage events. Keep non-zero jitter in multi-client deployments to reduce synchronized spikes.",
-  "web.reconnect.maxAttempts":
-    "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
-  "web.whatsapp":
-    "WhatsApp Web socket timing controls used by Baileys and OpenClaw's local outbound and inbound read-receipt operation bounds. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
-  "web.whatsapp.keepAliveIntervalMs":
-    "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
-  "web.whatsapp.connectTimeoutMs":
-    "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
-  "web.whatsapp.defaultQueryTimeoutMs":
-    "Default Baileys query timeout and OpenClaw outbound send/presence and inbound read-receipt operation bound in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows socket operations need longer.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
@@ -270,12 +230,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Timeout in milliseconds for relay send requests from the gateway to the APNs relay (default: 10000). Increase for slower relays or networks, or lower to fail wake attempts faster.",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
-  "gateway.http.endpoints.chatCompletions.maxBodyBytes":
-    "Max request body size in bytes for `/v1/chat/completions` (default: 20MB).",
-  "gateway.http.endpoints.chatCompletions.maxImageParts":
-    "Max number of `image_url` parts accepted from the latest user message (default: 8).",
-  "gateway.http.endpoints.chatCompletions.maxTotalImageBytes":
-    "Max cumulative decoded bytes across all `image_url` parts in one request (default: 20MB).",
   "gateway.http.endpoints.chatCompletions.images":
     "Image fetch/validation controls for OpenAI-compatible `image_url` parts.",
   "gateway.http.endpoints.chatCompletions.images.allowUrl":
@@ -292,9 +246,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Timeout in milliseconds for `image_url` URL fetches (default: 10000).",
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
-  "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
-  "gateway.reload.deferralTimeoutMs":
-    "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
@@ -383,10 +334,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.enabled":
     "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
-  "diagnostics.stuckSessionWarnMs":
-    "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
-  "diagnostics.stuckSessionAbortMs":
-    "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
   "diagnostics.otel.enabled":
     "Enables OpenTelemetry export pipeline for traces, metrics, and logs based on configured endpoint/protocol settings. Keep disabled unless your collector endpoint and auth are fully configured.",
   "diagnostics.otel.endpoint":
@@ -447,22 +394,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
     "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
-  "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
-  "tools.loopDetection.warningThreshold":
-    "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
-  "tools.loopDetection.unknownToolThreshold":
-    "Block repeated calls to the same unavailable tool after this many misses (default: 10).",
-  "tools.loopDetection.criticalThreshold":
-    "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
-  "tools.loopDetection.globalCircuitBreakerThreshold":
-    "Global no-progress breaker threshold (default: 30).",
-  "tools.loopDetection.detectors.genericRepeat":
-    "Enable generic repeated same-tool/same-params loop detection (default: true).",
-  "tools.loopDetection.detectors.knownPollNoProgress":
-    "Enable known poll tool no-progress loop detection (default: true).",
-  "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
-  "tools.loopDetection.postCompactionGuard.windowSize":
-    "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":
@@ -641,8 +572,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Approximate city sent to native Codex web search.",
   "tools.web.search.openaiCodex.userLocation.timezone":
     "Approximate timezone sent to native Codex web search.",
-  "tools.web.search.brave.mode":
-    'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":

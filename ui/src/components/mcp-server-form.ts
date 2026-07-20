@@ -1,8 +1,10 @@
 import { html, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import type { McpServerTransport } from "../lib/config/mcp-servers.ts";
 
 export type McpServerForm = {
   name: string;
+  transport: McpServerTransport;
   target: string;
 };
 
@@ -19,9 +21,11 @@ export function renderMcpServerForm(props: {
     const form = event.currentTarget as HTMLFormElement;
     const data = new FormData(form);
     const name = data.get("mcp-name");
+    const transport = data.get("mcp-transport");
     const target = data.get("mcp-target");
     props.onSubmit({
       name: typeof name === "string" ? name.trim() : "",
+      transport: transport === "sse" || transport === "stdio" ? transport : "streamable-http",
       target: typeof target === "string" ? target.trim() : "",
     });
   };
@@ -39,6 +43,19 @@ export function renderMcpServerForm(props: {
           title=${props.blockedReason ?? ""}
           ?disabled=${disabled}
         />
+      </label>
+      <label>
+        <span>${t("mcpServers.transportLabel")}</span>
+        <select
+          name="mcp-transport"
+          class="settings-select"
+          title=${props.blockedReason ?? ""}
+          ?disabled=${disabled}
+        >
+          <option value="streamable-http">${t("mcpServers.transportStreamableHttp")}</option>
+          <option value="sse">${t("mcpServers.transportSse")}</option>
+          <option value="stdio">${t("mcpServers.transportStdio")}</option>
+        </select>
       </label>
       <label class="mcp-server-form__target">
         <span>${t("mcpServers.targetLabel")}</span>

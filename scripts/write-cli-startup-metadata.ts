@@ -778,6 +778,8 @@ export async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableBrowserHelpText =
     reusableExisting &&
+    bundleIdentity &&
+    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.browserHelpSourceSignature === browserHelpSourceSignature &&
     typeof reusableExisting.browserHelpText === "string" &&
     reusableExisting.browserHelpText.length > 0
@@ -785,6 +787,8 @@ export async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSecretsHelpText =
     reusableExisting &&
+    bundleIdentity &&
+    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.secretsHelpSourceSignature === secretsHelpSourceSignature &&
     typeof reusableExisting.secretsHelpText === "string" &&
     reusableExisting.secretsHelpText.length > 0
@@ -792,6 +796,8 @@ export async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableNodesHelpText =
     reusableExisting &&
+    bundleIdentity &&
+    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.nodesHelpSourceSignature === nodesHelpSourceSignature &&
     typeof reusableExisting.nodesHelpText === "string" &&
     reusableExisting.nodesHelpText.length > 0
@@ -799,6 +805,8 @@ export async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSubcommandHelpText =
     reusableExisting &&
+    bundleIdentity &&
+    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.subcommandHelpSourceSignature === subcommandHelpSourceSignature &&
     hasAllPrecomputedSubcommandHelpText(reusableExisting.subcommandHelpText)
       ? (reusableExisting.subcommandHelpText as PrecomputedSubcommandHelpText)

@@ -1,5 +1,12 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gatewayRelayTransport from "./realtime-talk-gateway-relay.ts";
+import * as googleLiveTransport from "./realtime-talk-google-live.ts";
+import type {
+  RealtimeTalkTransport,
+  RealtimeTalkTransportContext,
+} from "./realtime-talk-shared.ts";
+import * as webRtcTransport from "./realtime-talk-webrtc.ts";
 
 const {
   googleStart,
@@ -12,10 +19,7 @@ const {
   webRtcSetVideoEnabled,
   googleSwitchCamera,
   webRtcSwitchCamera,
-  googleCtor,
-  relayCtor,
-  webRtcCtor,
-} = vi.hoisted(() => ({
+} = {
   googleStart: vi.fn(async () => undefined),
   googleStop: vi.fn(),
   relayStart: vi.fn(async () => undefined),
@@ -26,40 +30,22 @@ const {
   webRtcSetVideoEnabled: vi.fn(async () => undefined),
   googleSwitchCamera: vi.fn(async () => undefined),
   webRtcSwitchCamera: vi.fn(async () => undefined),
-  googleCtor: vi.fn(function (_session: unknown, _ctx: unknown) {
-    return {
-      start: googleStart,
-      stop: googleStop,
-      setVideoEnabled: googleSetVideoEnabled,
-      switchCamera: googleSwitchCamera,
-    };
-  }),
-  relayCtor: vi.fn(function (_session: unknown, _ctx: unknown) {
-    return { start: relayStart, stop: relayStop };
-  }),
-  webRtcCtor: vi.fn(function (_session: unknown, _ctx: unknown) {
-    return {
-      start: webRtcStart,
-      stop: webRtcStop,
-      setVideoEnabled: webRtcSetVideoEnabled,
-      switchCamera: webRtcSwitchCamera,
-    };
-  }),
-}));
-
-vi.mock("./realtime-talk-google-live.ts", () => ({
-  GoogleLiveRealtimeTalkTransport: googleCtor,
-}));
-
-vi.mock("./realtime-talk-gateway-relay.ts", () => ({
-  GatewayRelayRealtimeTalkTransport: relayCtor,
-}));
-
-vi.mock("./realtime-talk-webrtc.ts", () => ({
-  WebRtcSdpRealtimeTalkTransport: webRtcCtor,
-}));
+};
 
 import { RealtimeTalkSession, switchActiveRealtimeTalkCameras } from "./realtime-talk.ts";
+
+type MockTransport = RealtimeTalkTransport & { ctx: RealtimeTalkTransportContext };
+
+const googleInstances: MockTransport[] = [];
+const relayInstances: MockTransport[] = [];
+const webRtcInstances: MockTransport[] = [];
+
+function transportContext(transport: object | undefined): RealtimeTalkTransportContext {
+  if (!transport) {
+    throw new Error("Expected realtime transport instance");
+  }
+  return (transport as { ctx: RealtimeTalkTransportContext }).ctx;
+}
 
 describe("RealtimeTalkSession", () => {
   beforeEach(() => {
@@ -73,9 +59,46 @@ describe("RealtimeTalkSession", () => {
     webRtcSetVideoEnabled.mockClear();
     googleSwitchCamera.mockClear();
     webRtcSwitchCamera.mockClear();
-    googleCtor.mockClear();
-    relayCtor.mockClear();
-    webRtcCtor.mockClear();
+    googleInstances.length = 0;
+    relayInstances.length = 0;
+    webRtcInstances.length = 0;
+    vi.spyOn(googleLiveTransport, "GoogleLiveRealtimeTalkTransport").mockImplementation(
+      function (_session, ctx) {
+        const transport: MockTransport = {
+          ctx,
+          start: googleStart,
+          stop: googleStop,
+          setVideoEnabled: googleSetVideoEnabled,
+          switchCamera: googleSwitchCamera,
+        };
+        googleInstances.push(transport);
+        return transport as unknown as googleLiveTransport.GoogleLiveRealtimeTalkTransport;
+      },
+    );
+    vi.spyOn(gatewayRelayTransport, "GatewayRelayRealtimeTalkTransport").mockImplementation(
+      function (_session, ctx) {
+        const transport: MockTransport = { ctx, start: relayStart, stop: relayStop };
+        relayInstances.push(transport);
+        return transport as unknown as gatewayRelayTransport.GatewayRelayRealtimeTalkTransport;
+      },
+    );
+    vi.spyOn(webRtcTransport, "WebRtcSdpRealtimeTalkTransport").mockImplementation(
+      function (_session, ctx) {
+        const transport: MockTransport = {
+          ctx,
+          start: webRtcStart,
+          stop: webRtcStop,
+          setVideoEnabled: webRtcSetVideoEnabled,
+          switchCamera: webRtcSwitchCamera,
+        };
+        webRtcInstances.push(transport);
+        return transport as unknown as webRtcTransport.WebRtcSdpRealtimeTalkTransport;
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("starts the Google Live WebSocket transport from a generic session result", async () => {
@@ -102,10 +125,10 @@ describe("RealtimeTalkSession", () => {
       sessionKey: "main",
       capabilities: ["voice-transcript"],
     });
-    expect(googleCtor).toHaveBeenCalledTimes(1);
+    expect(googleInstances).toHaveLength(1);
     expect(googleStart).toHaveBeenCalledTimes(1);
-    expect(webRtcCtor).not.toHaveBeenCalled();
-    expect(relayCtor).not.toHaveBeenCalled();
+    expect(webRtcInstances).toHaveLength(0);
+    expect(relayInstances).toHaveLength(0);
     expect(onStatus).toHaveBeenCalledWith("connecting");
   });
 
@@ -119,9 +142,9 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(webRtcCtor).toHaveBeenCalledTimes(1);
+    expect(webRtcInstances).toHaveLength(1);
     expect(webRtcStart).toHaveBeenCalledTimes(1);
-    expect(googleCtor).not.toHaveBeenCalled();
+    expect(googleInstances).toHaveLength(0);
   });
 
   it("accepts legacy WebRTC transport names", async () => {
@@ -135,8 +158,8 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(webRtcCtor).toHaveBeenCalledTimes(1);
-    expect(googleCtor).not.toHaveBeenCalled();
+    expect(webRtcInstances).toHaveLength(1);
+    expect(googleInstances).toHaveLength(0);
   });
 
   it("accepts legacy provider WebSocket transport names", async () => {
@@ -158,8 +181,8 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(webRtcCtor).not.toHaveBeenCalled();
-    expect(googleCtor).toHaveBeenCalledTimes(1);
+    expect(webRtcInstances).toHaveLength(0);
+    expect(googleInstances).toHaveLength(1);
   });
 
   it("starts the Gateway relay transport for backend-only realtime providers", async () => {
@@ -179,11 +202,11 @@ describe("RealtimeTalkSession", () => {
     await session.start();
     session.stop();
 
-    expect(relayCtor).toHaveBeenCalledTimes(1);
+    expect(relayInstances).toHaveLength(1);
     expect(relayStart).toHaveBeenCalledTimes(1);
     expect(relayStop).toHaveBeenCalledTimes(1);
-    expect(googleCtor).not.toHaveBeenCalled();
-    expect(webRtcCtor).not.toHaveBeenCalled();
+    expect(googleInstances).toHaveLength(0);
+    expect(webRtcInstances).toHaveLength(0);
   });
 
   it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {
@@ -225,7 +248,7 @@ describe("RealtimeTalkSession", () => {
       mode: "realtime",
       brain: "agent-consult",
     });
-    expect(relayCtor).toHaveBeenCalledTimes(1);
+    expect(relayInstances).toHaveLength(1);
     expect(relayStart).toHaveBeenCalledTimes(1);
   });
 
@@ -282,7 +305,7 @@ describe("RealtimeTalkSession", () => {
     });
     expect(onVideoCapability).toHaveBeenCalledOnce();
     expect(onVideoCapability).toHaveBeenCalledWith(false);
-    expect(relayCtor).toHaveBeenCalledTimes(1);
+    expect(relayInstances).toHaveLength(1);
   });
 
   it("starts the WebRTC transport for canonical WebRTC sessions", async () => {
@@ -297,11 +320,11 @@ describe("RealtimeTalkSession", () => {
     await session.start();
     session.stop();
 
-    expect(webRtcCtor).toHaveBeenCalledTimes(1);
+    expect(webRtcInstances).toHaveLength(1);
     expect(webRtcStart).toHaveBeenCalledTimes(1);
     expect(webRtcStop).toHaveBeenCalledTimes(1);
-    expect(googleCtor).not.toHaveBeenCalled();
-    expect(relayCtor).not.toHaveBeenCalled();
+    expect(googleInstances).toHaveLength(0);
+    expect(relayInstances).toHaveLength(0);
   });
 
   it("passes launch options to client-owned realtime session creation", async () => {
@@ -342,8 +365,7 @@ describe("RealtimeTalkSession", () => {
       reasoningEffort: "low",
       capabilities: ["voice-transcript"],
     });
-    expect(webRtcCtor).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(transportContext(webRtcInstances[0])).toEqual(
       expect.objectContaining({ inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" }),
     );
   });
@@ -378,8 +400,7 @@ describe("RealtimeTalkSession", () => {
       capabilities: ["voice-transcript", "camera-frame"],
     });
     expect(onVideoCapability).toHaveBeenCalledWith(true);
-    expect(webRtcCtor).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(transportContext(webRtcInstances[0])).toEqual(
       expect.not.objectContaining({ videoEnabled: expect.anything() }),
     );
 
@@ -516,7 +537,7 @@ describe("RealtimeTalkSession", () => {
       ["talk.client.create", { sessionKey: "main", capabilities: ["voice-transcript"] }],
       ["talk.config", {}],
     ]);
-    expect(relayCtor).not.toHaveBeenCalled();
+    expect(relayInstances).toHaveLength(0);
   });
 
   it("falls back to Gateway relay when config selects Gateway relay", async () => {
@@ -558,7 +579,7 @@ describe("RealtimeTalkSession", () => {
       transport: "gateway-relay",
       brain: "agent-consult",
     });
-    expect(relayCtor).toHaveBeenCalledTimes(1);
+    expect(relayInstances).toHaveLength(1);
     expect(relayStart).toHaveBeenCalledTimes(1);
   });
 
@@ -595,7 +616,7 @@ describe("RealtimeTalkSession", () => {
       transport: "gateway-relay",
       brain: "agent-consult",
     });
-    expect(relayCtor).toHaveBeenCalledTimes(1);
+    expect(relayInstances).toHaveLength(1);
   });
 
   it("does not fall back when the effective config cannot be read", async () => {
@@ -617,7 +638,7 @@ describe("RealtimeTalkSession", () => {
       ["talk.client.create", { sessionKey: "main", capabilities: ["voice-transcript"] }],
       ["talk.config", {}],
     ]);
-    expect(relayCtor).not.toHaveBeenCalled();
+    expect(relayInstances).toHaveLength(0);
   });
 
   it("does not fall back when the effective config payload is missing", async () => {
@@ -639,7 +660,7 @@ describe("RealtimeTalkSession", () => {
       ["talk.client.create", { sessionKey: "main", capabilities: ["voice-transcript"] }],
       ["talk.config", {}],
     ]);
-    expect(relayCtor).not.toHaveBeenCalled();
+    expect(relayInstances).toHaveLength(0);
   });
 
   it("retries finalized transcript writes in order", async () => {
@@ -668,7 +689,7 @@ describe("RealtimeTalkSession", () => {
       });
       const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
       await session.start();
-      const context = webRtcCtor.mock.calls[0]?.[1] as {
+      const context = transportContext(webRtcInstances[0]) as {
         callbacks: {
           onTranscript?: (entry: {
             role: "user" | "assistant";
@@ -708,7 +729,7 @@ describe("RealtimeTalkSession", () => {
     const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {});
 
     await session.start();
-    const firstContext = webRtcCtor.mock.calls[0]?.[1] as {
+    const firstContext = transportContext(webRtcInstances[0]) as {
       callbacks: {
         onTranscript?: (entry: {
           role: "user" | "assistant";
@@ -722,7 +743,7 @@ describe("RealtimeTalkSession", () => {
     await firstContext.flushTranscriptWrites?.();
 
     await session.start();
-    const secondContext = webRtcCtor.mock.calls[1]?.[1] as typeof firstContext;
+    const secondContext = transportContext(webRtcInstances[1]) as typeof firstContext;
     secondContext.callbacks.onTranscript?.({ role: "assistant", text: "second", final: true });
     await secondContext.flushTranscriptWrites?.();
 
@@ -765,7 +786,7 @@ describe("RealtimeTalkSession", () => {
         onStatus,
       });
       await session.start();
-      const context = webRtcCtor.mock.calls[0]?.[1] as {
+      const context = transportContext(webRtcInstances[0]) as {
         callbacks: {
           onTranscript?: (entry: {
             role: "user" | "assistant";
@@ -875,7 +896,7 @@ describe("RealtimeTalkSession", () => {
     });
     const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
     await session.start();
-    const context = webRtcCtor.mock.calls[0]?.[1] as {
+    const context = transportContext(webRtcInstances[0]) as {
       callbacks: {
         onTranscript?: (entry: {
           role: "user" | "assistant";
@@ -911,7 +932,7 @@ describe("RealtimeTalkSession", () => {
       onTranscript,
     });
     await session.start();
-    const previousContext = webRtcCtor.mock.calls[0]?.[1] as {
+    const previousContext = transportContext(webRtcInstances[0]) as {
       callbacks: {
         onTranscript?: (entry: {
           role: "user" | "assistant";
@@ -953,7 +974,7 @@ describe("RealtimeTalkSession", () => {
     });
     const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
     await session.start();
-    const context = relayCtor.mock.calls[0]?.[1] as {
+    const context = transportContext(relayInstances[0]) as {
       callbacks: {
         onTranscript?: (entry: {
           role: "user" | "assistant";

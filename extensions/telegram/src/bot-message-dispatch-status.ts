@@ -15,7 +15,7 @@ export function createTelegramDispatchStatus(params: {
   const { context } = params;
   const controller =
     context.ctxPayload.InboundEventKind === "room_event" ? null : context.statusReactionController;
-  const timing = { ...DEFAULT_TIMING, ...params.cfg.messages?.statusReactions?.timing };
+  const timing = DEFAULT_TIMING;
 
   const clear = async () => {
     if (!context.msg.message_id || !context.reactionApi) {

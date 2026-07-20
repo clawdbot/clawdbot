@@ -306,7 +306,11 @@ describe("gateway sessions patch", () => {
   });
 
   test("marks archived sessions unread and clears the marker when read", async () => {
-    const store = mainStoreEntry({ archivedAt: 10, lastReadAt: 20 });
+    const store = mainStoreEntry({
+      archivedAt: 10,
+      lastReadAt: 20,
+      agentStatus: { note: "Waiting", attention: "hand", expiresAt: Date.now() + 60_000 },
+    });
     const unread = expectPatchOk(
       await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
     );
@@ -321,6 +325,47 @@ describe("gateway sessions patch", () => {
     expect(read.lastReadAt).toEqual(expect.any(Number));
     expect(read.lastReadAt).toBeGreaterThanOrEqual(unread.markedUnreadAt ?? 0);
     expect(read.markedUnreadAt).toBeUndefined();
+    expect(read.agentStatus).toBeUndefined();
+  });
+
+  test("stores sanitized agent status with attention and a bounded TTL", async () => {
+    const before = Date.now();
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          statusNote: "  Blocked:\n need the staging password  ",
+          attention: "key",
+        },
+      }),
+    );
+    expect(entry.agentStatus).toMatchObject({
+      note: "Blocked: need the staging password",
+      attention: "key",
+    });
+    expect(entry.agentStatus?.expiresAt).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(entry.agentStatus?.expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, statusNote: "Waiting", ttlMinutes: 121 },
+      }),
+      "use 1-120",
+    );
+  });
+
+  test("clears the whole agent status explicitly", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          agentStatus: { note: "Waiting", attention: "flag", expiresAt: Date.now() + 60_000 },
+        }),
+        patch: { key: MAIN_SESSION_KEY, attention: null },
+      }),
+    );
+    expect(entry.agentStatus).toBeUndefined();
   });
 
   test("persists thinkingLevel=off (does not clear)", async () => {

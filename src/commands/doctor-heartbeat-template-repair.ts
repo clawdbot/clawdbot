@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveWorkspaceTemplateDir } from "../agents/workspace-templates.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -128,6 +128,8 @@ async function readCleanHeartbeatTemplate(): Promise<string> {
 }
 
 function heartbeatTemplateAnalysisToHealthFinding(
+  agentId: string,
+  labelAgent: boolean,
   heartbeatPath: string,
   analysis: Exclude<HeartbeatTemplateRepairAnalysis, { status: "clean" }>,
 ): HealthFinding {
@@ -135,9 +137,9 @@ function heartbeatTemplateAnalysisToHealthFinding(
     return {
       checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
       severity: "warning",
-      message:
-        "HEARTBEAT.md contains an older heartbeat template wrapper plus custom or unrecognized content.",
+      message: `${labelAgent ? `Agent "${agentId}": ` : ""}HEARTBEAT.md contains an older heartbeat template wrapper plus custom or unrecognized content.`,
       path: heartbeatPath,
+      ...(labelAgent ? { target: agentId } : {}),
       requirement: "legacy-template-with-custom-content",
       fixHint: "Remove the fenced template and Related lines manually if they are not intentional.",
     };
@@ -145,8 +147,9 @@ function heartbeatTemplateAnalysisToHealthFinding(
   return {
     checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
     severity: "warning",
-    message: "HEARTBEAT.md contains an older heartbeat documentation template.",
+    message: `${labelAgent ? `Agent "${agentId}": ` : ""}HEARTBEAT.md contains an older heartbeat documentation template.`,
     path: heartbeatPath,
+    ...(labelAgent ? { target: agentId } : {}),
     requirement: "legacy-template",
     fixHint: 'Run "openclaw doctor --fix" to replace it with the clean heartbeat template.',
   };
@@ -159,33 +162,42 @@ export async function collectHeartbeatTemplateHealthFindings(
     readFile?: (filePath: string) => Promise<string>;
   },
 ): Promise<readonly HealthFinding[]> {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const agentIds = listAgentIds(cfg);
+  const labelAgents = agentIds.length > 1;
+  const targets = agentIds.map((agentId) => ({
+    agentId,
+    heartbeatPath: path.join(resolveAgentWorkspaceDir(cfg, agentId), DEFAULT_HEARTBEAT_FILENAME),
+  }));
   const readFile = deps?.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf-8"));
-  let content: string;
-  try {
-    content = await readFile(heartbeatPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return [];
-    }
-    return [
-      {
+  const findings: HealthFinding[] = [];
+  for (const { agentId, heartbeatPath } of targets) {
+    let content: string;
+    try {
+      content = await readFile(heartbeatPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        continue;
+      }
+      findings.push({
         checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
         severity: "warning",
-        message: `Could not inspect HEARTBEAT.md: ${formatErrorMessage(error)}`,
+        message: `${labelAgents ? `Agent "${agentId}": ` : ""}Could not inspect HEARTBEAT.md: ${formatErrorMessage(error)}`,
         path: heartbeatPath,
+        ...(labelAgents ? { target: agentId } : {}),
         requirement: "inspect-failed",
         fixHint: "Check file permissions, then rerun doctor.",
-      },
-    ];
-  }
+      });
+      continue;
+    }
 
-  const analysis = analyzeHeartbeatTemplateForRepair(content);
-  if (analysis.status === "clean") {
-    return [];
+    const analysis = analyzeHeartbeatTemplateForRepair(content);
+    if (analysis.status !== "clean") {
+      findings.push(
+        heartbeatTemplateAnalysisToHealthFinding(agentId, labelAgents, heartbeatPath, analysis),
+      );
+    }
   }
-  return [heartbeatTemplateAnalysisToHealthFinding(heartbeatPath, analysis)];
+  return findings;
 }
 
 /** Replaces known dirty heartbeat templates with the clean runtime template when repair is enabled. */
@@ -193,58 +205,68 @@ export async function maybeRepairHeartbeatTemplate(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
 }): Promise<void> {
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
-  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
-  let content: string;
-  try {
-    content = await fs.readFile(heartbeatPath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return;
+  const agentIds = listAgentIds(params.cfg);
+  const labelAgents = agentIds.length > 1;
+  const targets = agentIds.map((agentId) => ({
+    agentId,
+    heartbeatPath: path.join(
+      resolveAgentWorkspaceDir(params.cfg, agentId),
+      DEFAULT_HEARTBEAT_FILENAME,
+    ),
+  }));
+  for (const { agentId, heartbeatPath } of targets) {
+    const prefix = labelAgents ? `Agent "${agentId}": ` : "";
+    let content: string;
+    try {
+      content = await fs.readFile(heartbeatPath, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        continue;
+      }
+      note(
+        `${prefix}Could not inspect ${shortenHomePath(heartbeatPath)}: ${formatErrorMessage(error)}`,
+        "Heartbeat template",
+      );
+      continue;
     }
-    note(
-      `Could not inspect ${shortenHomePath(heartbeatPath)}: ${formatErrorMessage(error)}`,
-      "Heartbeat template",
-    );
-    return;
-  }
 
-  const analysis = analyzeHeartbeatTemplateForRepair(content);
-  if (analysis.status === "clean") {
-    return;
-  }
-  if (analysis.status === "dirty-template-with-custom-content") {
-    note(
-      [
-        `${shortenHomePath(heartbeatPath)} contains an older heartbeat template wrapper plus custom or unrecognized content.`,
-        "Doctor left it unchanged so it does not delete user tasks. Remove the fenced template and Related lines manually if they are not intentional.",
-      ].join("\n"),
-      "Heartbeat template",
-    );
-    return;
-  }
-  if (!params.shouldRepair) {
-    note(
-      [
-        `${shortenHomePath(heartbeatPath)} contains an older heartbeat documentation template.`,
-        'Run "openclaw doctor --fix" to replace it with the clean heartbeat template.',
-      ].join("\n"),
-      "Heartbeat template",
-    );
-    return;
-  }
+    const analysis = analyzeHeartbeatTemplateForRepair(content);
+    if (analysis.status === "clean") {
+      continue;
+    }
+    if (analysis.status === "dirty-template-with-custom-content") {
+      note(
+        [
+          `${prefix}${shortenHomePath(heartbeatPath)} contains an older heartbeat template wrapper plus custom or unrecognized content.`,
+          "Doctor left it unchanged so it does not delete user tasks. Remove the fenced template and Related lines manually if they are not intentional.",
+        ].join("\n"),
+        "Heartbeat template",
+      );
+      continue;
+    }
+    if (!params.shouldRepair) {
+      note(
+        [
+          `${prefix}${shortenHomePath(heartbeatPath)} contains an older heartbeat documentation template.`,
+          'Run "openclaw doctor --fix" to replace it with the clean heartbeat template.',
+        ].join("\n"),
+        "Heartbeat template",
+      );
+      continue;
+    }
 
-  try {
-    const cleanTemplate = await readCleanHeartbeatTemplate();
-    await writeTextAtomic(heartbeatPath, cleanTemplate, { mode: 0o600 });
-    note(
-      `Replaced ${shortenHomePath(heartbeatPath)} with the clean heartbeat template.`,
-      "Doctor changes",
-    );
-  } catch (error) {
-    note(
-      `Could not repair ${shortenHomePath(heartbeatPath)}: ${formatErrorMessage(error)}`,
-      "Heartbeat template",
-    );
+    try {
+      const cleanTemplate = await readCleanHeartbeatTemplate();
+      await writeTextAtomic(heartbeatPath, cleanTemplate, { mode: 0o600 });
+      note(
+        `${prefix}Replaced ${shortenHomePath(heartbeatPath)} with the clean heartbeat template.`,
+        "Doctor changes",
+      );
+    } catch (error) {
+      note(
+        `${prefix}Could not repair ${shortenHomePath(heartbeatPath)}: ${formatErrorMessage(error)}`,
+        "Heartbeat template",
+      );
+    }
   }
 }

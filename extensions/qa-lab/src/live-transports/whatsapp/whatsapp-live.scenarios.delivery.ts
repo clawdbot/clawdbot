@@ -132,13 +132,7 @@ export const WHATSAPP_QA_DELIVERY_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     title: "WhatsApp status reaction lifecycle updates the triggering message",
     timeoutMs: 90_000,
     configOverrides: {
-      statusReactions: {
-        timing: {
-          debounceMs: 0,
-          stallSoftMs: 60_000,
-          stallHardMs: 120_000,
-        },
-      },
+      statusReactions: true,
     },
     buildRun: () => {
       const token = `WHATSAPP_QA_STATUS_LIFECYCLE_${randomUUID().slice(0, 8).toUpperCase()}`;

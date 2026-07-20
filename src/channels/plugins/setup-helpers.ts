@@ -425,7 +425,9 @@ function moveSingleAccountKeysIntoAccount(params: {
 }): OpenClawConfig {
   const nextAccount: Record<string, unknown> = { ...params.baseAccount };
   for (const key of params.keysToMove) {
-    nextAccount[key] = cloneIfObject(params.channel[key]);
+    if (!(key in nextAccount)) {
+      nextAccount[key] = cloneIfObject(params.channel[key]);
+    }
   }
   const nextChannel: ChannelSectionRecord = { ...params.channel };
   for (const key of params.keysToMove) {

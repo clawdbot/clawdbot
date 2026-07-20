@@ -118,3 +118,80 @@ it("applies vi.mock factories after a sibling file fails during collection", asy
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+it("clears named plugin runtime slots between files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-store-runner-"));
+  try {
+    const write = (name: string, content: string) =>
+      fs.writeFile(path.join(root, name), content, "utf-8");
+    const runtimeStorePath = JSON.stringify(
+      path.join(repoRoot, "src", "plugin-sdk", "runtime-store.ts"),
+    );
+    await fs.symlink(
+      path.join(repoRoot, "node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+    await write(
+      "a-seed.test.ts",
+      [
+        `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
+        'import { expect, it } from "vitest";',
+        'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
+        'it("seeds a named runtime slot", () => {',
+        '  store.setRuntime({ source: "first-file" });',
+        '  expect(store.getRuntime()).toEqual({ source: "first-file" });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    await write(
+      "b-observe.test.ts",
+      [
+        `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
+        'import { expect, it } from "vitest";',
+        'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
+        'it("starts without a runtime from the previous file", () => {',
+        "  expect(store.tryGetRuntime()).toBeNull();",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    await write(
+      "vitest.config.ts",
+      [
+        'import { defineConfig } from "vitest/config";',
+        'import { BaseSequencer } from "vitest/node";',
+        "class AlphabeticalSequencer extends BaseSequencer {",
+        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
+        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
+        "  }",
+        "}",
+        "export default defineConfig({",
+        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
+        "  test: {",
+        "    isolate: false,",
+        "    fileParallelism: false,",
+        "    maxWorkers: 1,",
+        "    sequence: { sequencer: AlphabeticalSequencer },",
+        `    runner: ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))},`,
+        "  },",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
+    const result = await execFileAsync(
+      process.execPath,
+      [vitestEntry, "run", "--root", root, "--config", path.join(root, "vitest.config.ts")],
+      { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
+    ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+
+    expect(output).toContain("2 passed");
+    expect(output).not.toContain("first-file");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

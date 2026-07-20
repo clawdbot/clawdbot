@@ -21,7 +21,92 @@ function applyAll(raw: Record<string, unknown>) {
   return { raw, changes };
 }
 
+function configWithPath(path: string): Record<string, unknown> {
+  return path
+    .split(".")
+    .reduceRight<unknown>(
+      (value, segment) => (segment === "0" ? [value] : { [segment]: value }),
+      1,
+    ) as Record<string, unknown>;
+}
+
+function getPath(value: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((current, segment) => {
+    if (Array.isArray(current)) {
+      return current[Number(segment)];
+    }
+    return current && typeof current === "object"
+      ? (current as Record<string, unknown>)[segment]
+      : undefined;
+  }, value);
+}
+
 describe("retired runtime config migrations", () => {
+  it.each([
+    "auth.cooldowns",
+    "secrets.resolution",
+    "browser.remoteCdpTimeoutMs",
+    "browser.tabCleanup.idleMinutes",
+    "tools.loopDetection.warningThreshold",
+    "tools.loopDetection.detectors",
+    "agents.defaults.compaction.reserveTokens",
+    "agents.defaults.compaction.reserveTokensFloor",
+    "agents.defaults.compaction.maxHistoryShare",
+    "agents.defaults.contextPruning.softTrim",
+    "agents.defaults.memorySearch.chunking",
+    "agents.defaults.memorySearch.sync.watchDebounceMs",
+    "agents.defaults.memorySearch.sync.intervalMinutes",
+    "agents.defaults.memorySearch.query.hybrid.vectorWeight",
+    "agents.defaults.memorySearch.query.hybrid.mmr.lambda",
+    "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays",
+    "agents.defaults.memorySearch.cache.maxEntries",
+    "agents.defaults.cliBackends.codex.reliability.outputLimits",
+    "agents.defaults.cliBackends.codex.reliability.watchdog.fresh.noOutputTimeoutMs",
+    "agents.defaults.runRetries",
+    "agents.list.0.compaction.reserveTokens",
+    "agents.list.0.contextPruning.softTrimRatio",
+    "agents.list.0.memorySearch.chunking",
+    "agents.list.0.cliBackends.codex.reliability.outputLimits",
+    "agents.list.0.runRetries",
+    "agents.list.0.tools.loopDetection.warningThreshold",
+    "agents.list.0.tools.loopDetection.detectors",
+    "gateway.handshakeTimeoutMs",
+    "gateway.channelHealthCheckMinutes",
+    "gateway.reload.debounceMs",
+    "gateway.reload.deferralTimeoutMs",
+    "gateway.http.endpoints.chatCompletions.maxBodyBytes",
+    "gateway.http.endpoints.responses.maxBodyBytes",
+    "session.typingIntervalSeconds",
+    "session.writeLock",
+    "session.agentToAgent.maxPingPongTurns",
+    "cron.maxConcurrentRuns",
+    "cron.triggers.minIntervalMs",
+    "cron.retry",
+    "diagnostics.stuckSessionWarnMs",
+    "diagnostics.memoryPressureSnapshot",
+    "diagnostics.memoryPressureBundle",
+    "web.heartbeatSeconds",
+    "web.reconnect",
+    "web.whatsapp",
+    "messages.queue.debounceMs",
+    "messages.statusReactions.timing",
+    "acp.stream.coalesceIdleMs",
+    "acp.stream.hiddenBoundarySeparator",
+    "acp.maxConcurrentSessions",
+    "acp.runtime.ttlMinutes",
+    "mcp.sessionIdleTtlMs",
+    "worktrees",
+    "transcripts.maxUtterances",
+    "hooks.maxBodyBytes",
+    "update.auto.stableDelayHours",
+  ] as const)("strips retired tuning knob %s", (path) => {
+    const result = applyAll(configWithPath(path));
+    expect(getPath(result.raw, path)).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
+  });
+
   it("moves aliases and strips dead keys", () => {
     const result = applyAll({
       tui: { footer: { showRemoteHost: true } },

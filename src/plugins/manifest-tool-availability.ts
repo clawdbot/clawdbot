@@ -210,11 +210,7 @@ export function manifestPluginSetupProviderEnvVars(
   plugin: PluginManifestRecord,
   providerId: string,
 ): readonly string[] {
-  const direct = plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars;
-  if (direct && direct.length > 0) {
-    return direct;
-  }
-  return plugin.providerAuthEnvVars?.[providerId] ?? [];
+  return plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars ?? [];
 }
 
 export function hasNonEmptyManifestEnvCandidate(

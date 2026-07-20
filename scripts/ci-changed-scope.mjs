@@ -61,10 +61,18 @@ const CONTROL_UI_HARD_GENERATED_I18N_RE =
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 
 export class ControlUiGeneratedArtifactsMixedError extends Error {}
+export class NativeGeneratedArtifactsMixedError extends Error {}
 const CONTROL_UI_TEST_SCOPE_RE =
   /^(ui\/|test\/vitest\/vitest\.shared\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
+// Android base resources are co-owned: source PRs edit their English content,
+// while the generator rewrites managed sections. Treat them as generated only
+// alongside a hard-generated artifact so neither ownership path blocks the other.
+const NATIVE_COOWNED_GENERATED_I18N_RE =
+  /^apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml$/;
+const NATIVE_HARD_GENERATED_I18N_RE =
+  /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/\.i18n\/apple-translation-contradictions\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings)$/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
@@ -221,6 +229,50 @@ export function shouldStrictControlUiI18n(changedPaths) {
   return (
     changedPaths === null ||
     changedPaths.some((filePath) => CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath))
+  );
+}
+
+/**
+ * Native translations and platform resources are committed by one serialized
+ * automation PR. Source PRs own only source plus the stable-ID inventory.
+ * @param {string[]} changedPaths
+ */
+export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName = "") {
+  if (branchName === "main" || RELEASE_BRANCH_RE.test(branchName)) {
+    return;
+  }
+  const generatedPaths = changedPaths.filter((filePath) =>
+    NATIVE_HARD_GENERATED_I18N_RE.test(filePath),
+  );
+  if (generatedPaths.length === 0) {
+    return;
+  }
+  const generatedCompanionPaths = changedPaths.filter((filePath) =>
+    NATIVE_COOWNED_GENERATED_I18N_RE.test(filePath),
+  );
+  const sourcePaths = changedPaths.filter(
+    (filePath) =>
+      !NATIVE_HARD_GENERATED_I18N_RE.test(filePath) &&
+      !NATIVE_COOWNED_GENERATED_I18N_RE.test(filePath),
+  );
+  if (sourcePaths.length === 0) {
+    return;
+  }
+  throw new NativeGeneratedArtifactsMixedError(
+    [
+      "Native generated locale artifacts must be isolated from source changes.",
+      "Commit native source changes and apps/.i18n/native-source.json only; the native locale refresh workflow owns translated and platform-generated artifacts.",
+      ...generatedPaths.map((filePath) => `- generated: ${filePath}`),
+      ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
+      ...sourcePaths.map((filePath) => `- source: ${filePath}`),
+    ].join("\n"),
+  );
+}
+
+export function shouldStrictNativeI18n(changedPaths) {
+  return (
+    changedPaths === null ||
+    changedPaths.some((filePath) => NATIVE_HARD_GENERATED_I18N_RE.test(filePath))
   );
 }
 
@@ -435,6 +487,11 @@ export function writeGitHubOutput(
   );
   appendFileSync(outputPath, `run_ui_tests=${scope.runUiTests}\n`, "utf8");
   appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
+  appendFileSync(
+    outputPath,
+    `strict_native_i18n=${shouldStrictNativeI18n(changedPaths)}\n`,
+    "utf8",
+  );
   const changedPathsJson = JSON.stringify(changedPaths);
   appendFileSync(
     outputPath,
@@ -490,7 +547,9 @@ if (isDirectRun()) {
       writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false, []);
       process.exit(0);
     }
-    assertControlUiGeneratedArtifactsIsolated(changedPaths, resolveAllowedGeneratedMixBranch());
+    const allowedGeneratedMixBranch = resolveAllowedGeneratedMixBranch();
+    assertControlUiGeneratedArtifactsIsolated(changedPaths, allowedGeneratedMixBranch);
+    assertNativeGeneratedArtifactsIsolated(changedPaths, allowedGeneratedMixBranch);
     writeGitHubOutput(
       detectChangedScope(changedPaths),
       process.env.GITHUB_OUTPUT,
@@ -500,7 +559,10 @@ if (isDirectRun()) {
       changedPaths,
     );
   } catch (error) {
-    if (error instanceof ControlUiGeneratedArtifactsMixedError) {
+    if (
+      error instanceof ControlUiGeneratedArtifactsMixedError ||
+      error instanceof NativeGeneratedArtifactsMixedError
+    ) {
       console.error(error.message);
       process.exitCode = 1;
     } else {

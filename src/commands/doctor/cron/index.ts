@@ -51,9 +51,8 @@ function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
 }
 
 // Fixed advisory threshold: three failures in a row is a clear chronic signal on
-// its own. It coincides with the scheduler's default transient-retry budget, but
-// `cron.retry.maxAttempts` is per-job configurable and doctor deliberately does
-// not mirror retry config or exhaustion semantics (`consecutiveErrors > maxAttempts`).
+// its own. It coincides with the scheduler's built-in transient-retry budget, but
+// doctor deliberately does not mirror retry exhaustion semantics.
 const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
 // Count enabled jobs stuck in repeated run failures. `state.consecutiveErrors`

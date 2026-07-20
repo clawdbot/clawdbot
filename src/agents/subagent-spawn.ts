@@ -1203,57 +1203,56 @@ export async function spawnSubagentDirect(
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   const configuredAgentIds = resolveConfiguredAgentIds(cfg);
-  const resolveAdmission = () =>
-    resolveSpawnAdmission({
+  const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
+  const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
+  const swarmGroupId = params.collect
+    ? (explicitSwarmGroupId ??
+      (requesterRunId ? `swarm:${requesterInternalKey}:${requesterRunId}` : undefined))
+    : undefined;
+  const swarmSchedulerGroupKey = swarmGroupId
+    ? JSON.stringify([requesterInternalKey, swarmGroupId])
+    : undefined;
+  const resolveAdmission = () => {
+    const collectorRuns = params.collect
+      ? swarmGroupId
+        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey)
+        : []
+      : undefined;
+    return resolveSpawnAdmission({
       cfg,
+      collector: collectorRuns
+        ? {
+            liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
+            totalChildren: collectorRuns.length,
+            maxChildrenPerGroup: swarmConfig.maxChildrenPerGroup,
+            maxTotalPerGroup: swarmConfig.maxTotalPerGroup,
+          }
+        : undefined,
       requesterSessionKey: requesterInternalKey,
       requesterAgentId,
       targetAgentId,
       requestedAgentId,
       configuredAgentIds,
     });
+  };
   const admission = resolveAdmission();
   if (!admission.ok) {
     return {
       status: "forbidden",
-      error: usingDefaultAgentId
-        ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
-        : admission.error,
+      error:
+        usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
+          ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
+          : admission.error,
     };
   }
-  const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
-  const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
-  const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
-  const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
-  if (params.collect && !explicitSwarmGroupId && !requesterRunId) {
+  if (params.collect && !swarmGroupId) {
     return {
       status: "error",
       error: "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
     };
   }
-  const swarmGroupId = params.collect
-    ? (explicitSwarmGroupId ?? `swarm:${requesterInternalKey}:${requesterRunId}`)
-    : undefined;
-  const swarmSchedulerGroupKey = swarmGroupId
-    ? JSON.stringify([requesterInternalKey, swarmGroupId])
-    : undefined;
-  const resolveSwarmCapError = () => {
-    if (!swarmGroupId) {
-      return undefined;
-    }
-    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
-    if (groupRuns.length >= swarmConfig.maxTotalPerGroup) {
-      return `sessions_spawn reached tools.swarm.maxTotalPerGroup (${groupRuns.length}/${swarmConfig.maxTotalPerGroup}).`;
-    }
-    const liveRuns = groupRuns.filter((entry) => !entry.collectorCompletion);
-    return liveRuns.length >= swarmConfig.maxChildrenPerGroup
-      ? `sessions_spawn reached tools.swarm.maxChildrenPerGroup (${liveRuns.length}/${swarmConfig.maxChildrenPerGroup}).`
-      : undefined;
-  };
-  const initialSwarmCapError = resolveSwarmCapError();
-  if (initialSwarmCapError) {
-    return { status: "forbidden", error: initialSwarmCapError };
-  }
+  const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
+  const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   const childIdem = params.continuationDelegateFlowId
     ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
@@ -1856,10 +1855,10 @@ export async function spawnSubagentDirect(
       buildRegistration: (_state, runId) => {
         if (params.collect) {
           const latestAdmission = resolveAdmission();
-          const latestCapError =
-            (latestAdmission.ok ? undefined : latestAdmission.error) ?? resolveSwarmCapError();
-          if (latestCapError) {
-            throw Object.assign(new Error(latestCapError), { spawnStatus: "forbidden" as const });
+          if (!latestAdmission.ok) {
+            throw Object.assign(new Error(latestAdmission.error), {
+              spawnStatus: "forbidden" as const,
+            });
           }
         }
         return {

@@ -210,8 +210,9 @@ export function createWebOnMessageHandler(params: {
     // undefined = preflight was not attempted (non-audio message).
     let preflightAudioTranscript: string | null | undefined;
     const hasAudioBody =
-      msg.payload.media?.type?.startsWith("audio/") === true &&
-      msg.payload.body === "<media:audio>";
+      (msg.payload.media?.kind === "audio" ||
+        msg.payload.media?.type?.startsWith("audio/") === true) &&
+      !msg.payload.body.trim();
     const canRunEarlyAudioPreflight =
       conversationKind === "group" || canRunDirectEarlyAudioPreflight;
     let ackAlreadySent = false;

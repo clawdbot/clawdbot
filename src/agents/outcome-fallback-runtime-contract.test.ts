@@ -209,6 +209,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
           model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
         },
+        replayInvalid: true,
         error: {
           kind: "incomplete_turn",
           message: "Primary incomplete",
@@ -227,6 +228,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
           model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
         },
+        replayInvalid: false,
         executionTrace: {
           winnerProvider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
           winnerModel: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
@@ -268,6 +270,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(result.outcome).toBe("exhausted");
     expect(result.result.payloads).toBe(primary.payloads);
     expect(result.result.meta.error).toBe(primary.meta.error);
+    expect(result.result.meta.replayInvalid).toBe(true);
     expect(result.result.meta.agentMeta).toBe(fallback.meta.agentMeta);
     expect(result.result.meta.executionTrace).toEqual({
       winnerProvider: undefined,
@@ -279,6 +282,43 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(result.provider).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider);
     expect(result.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel);
     expect(result.attempts).toHaveLength(2);
+  });
+
+  it("keeps replay invalidity from a later fallback attempt", () => {
+    const preferredResult = createContractRunResult({
+      payloads: [{ text: "Primary terminal summary", isError: true }],
+      meta: {
+        durationMs: 1,
+        replayInvalid: false,
+        error: {
+          kind: "incomplete_turn",
+          message: "Primary incomplete",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+    });
+    const latestResult = createContractRunResult({
+      payloads: [{ text: "Generic fallback incomplete", isError: true }],
+      meta: {
+        durationMs: 1,
+        replayInvalid: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "Fallback incomplete",
+          fallbackSafe: true,
+        },
+      },
+    });
+
+    const result = mergeEmbeddedAgentRunResultForModelFallbackExhaustion({
+      latestResult,
+      preferredResult,
+    });
+
+    expect(result.payloads).toBe(preferredResult.payloads);
+    expect(result.meta.error).toBe(preferredResult.meta.error);
+    expect(result.meta.replayInvalid).toBe(true);
   });
 
   it("rethrows an unrecognized final failure instead of hiding it behind an earlier summary", async () => {

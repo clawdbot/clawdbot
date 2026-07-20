@@ -37,6 +37,7 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     profileId: string;
     displayName: string | null;
     hasAvatar: boolean;
+    updatedAt: number;
   };
   clientIp?: string;
   internal?: {

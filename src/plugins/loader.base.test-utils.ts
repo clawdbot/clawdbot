@@ -629,6 +629,32 @@ describe("loadOpenClawPlugins", () => {
     ]);
   });
 
+  it("loads multiple manifestless standalone files from one configured directory", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const alpha = path.join(pluginDir, "alpha.cjs");
+    const beta = path.join(pluginDir, "beta.cjs");
+    fs.writeFileSync(alpha, `module.exports = { id: "alpha", register() {} };`, "utf-8");
+    fs.writeFileSync(beta, `module.exports = { id: "beta", register() {} };`, "utf-8");
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [alpha, beta] },
+          allow: ["alpha", "beta"],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins
+        .filter((entry) => entry.status === "loaded")
+        .map((entry) => entry.id)
+        .toSorted(),
+    ).toEqual(["alpha", "beta"]);
+  });
+
   it.each([
     {
       name: "loads bundled telegram plugin when enabled",

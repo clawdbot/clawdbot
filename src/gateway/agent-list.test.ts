@@ -1,11 +1,28 @@
 /**
  * Gateway agent-list RPC regression tests.
  */
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 
 describe("listGatewayAgentsBasic", () => {
+  it("omits reserved system-agent state directories from the discovered roster", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
+      await Promise.all(
+        ["openclaw", "crestodian", "research"].map((id) =>
+          fs.mkdir(path.join(stateDir, "agents", id), { recursive: true }),
+        ),
+      );
+
+      const result = listGatewayAgentsBasic({});
+
+      expect(result.agents.map((agent) => agent.id)).toEqual(["main", "research"]);
+    });
+  });
+
   it("falls back to identity.name when the configured agent name is missing", () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },

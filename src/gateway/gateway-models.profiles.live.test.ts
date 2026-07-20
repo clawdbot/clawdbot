@@ -4439,7 +4439,7 @@ async function sanitizeAuthConfig(params: {
     }
   }
 
-  if (!profiles && !order && !auth.cooldowns) {
+  if (!profiles && !order) {
     return undefined;
   }
   return {

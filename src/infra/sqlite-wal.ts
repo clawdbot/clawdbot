@@ -34,7 +34,7 @@ type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
-  close: () => boolean;
+  close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
 /** Options controlling WAL autocheckpoint and periodic checkpoint behavior. */
@@ -508,12 +508,15 @@ export function configureSqliteWalMaintenance(
 
   return {
     checkpoint,
-    close: () => {
+    close: (closeOptions) => {
       if (timer) {
         clearInterval(timer);
         timer = null;
       }
-      return checkpoint();
+      // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
+      // readers and has starved the event loop for seconds under fleet churn.
+      // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
+      return runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode);
     },
   };
 }

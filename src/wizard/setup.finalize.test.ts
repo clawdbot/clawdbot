@@ -539,13 +539,6 @@ describe("finalizeSetupWizard", () => {
               },
             },
           },
-          tools: {
-            web: {
-              search: {
-                apiKey: "",
-              },
-            },
-          },
         },
         workspaceDir: "/tmp",
         settings: {

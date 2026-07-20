@@ -156,6 +156,7 @@ export async function deliverWebReply(params: {
       participant:
         cached?.participant ?? (isGroupConversation ? msg.platform.senderJid : undefined),
       messageText: cached?.body ?? "",
+      media: cached?.media,
     });
   };
 

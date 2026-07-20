@@ -182,6 +182,28 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("reports the SQLite database for the store and SQLite-backed sessionFile", async () => {
+    const store = await writeStore({
+      main: {
+        sessionId: "abc123",
+        sessionFile: "sqlite:main:abc123:/tmp/openclaw/agents/main/sessions/sessions.json",
+        updatedAt: Date.now() - 10 * 60_000,
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      path?: string;
+      sessions?: Array<{ key: string; sessionFile?: string }>;
+    }>(sessionsCommand, store);
+
+    expect(payload.path).toMatch(/openclaw-agent\.sqlite$/u);
+    expect(payload.path).not.toContain("sessions.json");
+    expect(payload.sessions?.find((row) => row.key === "main")?.sessionFile).toBe(
+      "sqlite:main:abc123:/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
+    );
+  });
+
   it("exports subagent lineage metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:child:main": {

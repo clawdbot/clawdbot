@@ -38,6 +38,14 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+For media-only inbound events, keep the message body and command text empty and
+pass one `ChannelInboundMediaInput` fact per native attachment. When an ambient
+history line or another text-only carrier must describe those facts, use
+`formatMediaPlaceholderText(media)`. It classifies each fact from `kind`, MIME
+type, then path or URL extension; undownloaded native attachments should still
+contribute one type-only fact each. Do not use the formatter to synthesize the
+primary inbound body.
+
 Bundled/native channels that already receive the injected plugin runtime
 object can call the same helpers under `runtime.channel.inbound.*` instead of
 importing this subpath directly:

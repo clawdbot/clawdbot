@@ -41,14 +41,13 @@ describe("processDiscordMessage session routing", () => {
           },
         ],
       },
-      baseText: "<media:audio>",
-      messageText: "<media:audio>",
+      baseText: "",
+      messageText: "",
       preflightAudioTranscript: "hello from discord voice",
       preparedMedia: [
         {
           path: "/tmp/openclaw-discord-test/voice.ogg",
           contentType: "audio/ogg",
-          placeholder: "<media:audio>",
         },
       ],
     });
@@ -91,7 +90,6 @@ describe("processDiscordMessage session routing", () => {
         {
           path: "/tmp/openclaw-discord-test/photo.png",
           contentType: "image/png",
-          placeholder: "<media:image>",
         },
       ],
       discordRestFetch: fetchImpl,

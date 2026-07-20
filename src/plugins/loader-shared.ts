@@ -35,6 +35,7 @@ import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artif
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+import { clearSessionDiscussionProvider } from "./session-discussion-registry.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -174,6 +175,7 @@ export function clearActivatedPluginRuntimeState(): void {
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
+  clearSessionDiscussionProvider();
 }
 
 class PluginLoadFailureError extends Error {

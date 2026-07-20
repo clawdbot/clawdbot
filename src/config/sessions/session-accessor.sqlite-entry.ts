@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   executeSqliteQuerySync,
@@ -131,6 +132,26 @@ export function listSqliteSessionEntries(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return listSqliteSessionEntriesFromDatabase(database);
+}
+
+/**
+ * Lists session entries without opening the agent database writable.
+ * Transient lock errors propagate: only the caller knows whether "empty" is an
+ * acceptable degradation (health snapshots) or hides real state (migration detection).
+ */
+export function listSqliteSessionEntriesReadOnly(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => listSqliteSessionEntriesFromDatabase(database),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : [];
+}
+
+function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,

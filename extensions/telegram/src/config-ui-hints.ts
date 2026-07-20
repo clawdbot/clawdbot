@@ -73,7 +73,6 @@ export const telegramChannelConfigUiHints = {
   ...createChannelConfigUiHints({
     channelLabel: "Telegram",
     progress: { includeCommentary: true, commentaryOrder: "after-command" },
-    retry: true,
   }),
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
@@ -82,18 +81,6 @@ export const telegramChannelConfigUiHints = {
   "network.dangerouslyAllowPrivateNetwork": {
     label: "Telegram Dangerously Allow Private Network",
     help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
-  },
-  timeoutSeconds: {
-    label: "Telegram API Timeout (seconds)",
-    help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
-  },
-  mediaGroupFlushMs: {
-    label: "Telegram Media Group Flush (ms)",
-    help: "Milliseconds to buffer Telegram albums/media groups before dispatching them as one inbound message. Default: 500.",
-  },
-  pollingStallThresholdMs: {
-    label: "Telegram Polling Stall Threshold (ms)",
-    help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
   },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",

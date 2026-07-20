@@ -20,22 +20,6 @@ type AgentSettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 
-/** Resolves the configured reserve-token floor for agent compaction. */
-function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
-}
-
-function toNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 function toPositiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -57,9 +41,8 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
 
-  const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  let reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
   let maxReserveTokens: number | undefined;
 
   // Cap the floor to a safe fraction of the context window so that
@@ -77,10 +60,7 @@ export function applyAgentCompactionSettingsFromConfig(params: {
     reserveTokensFloor = Math.min(reserveTokensFloor, maxReserveTokens);
   }
 
-  let targetReserveTokens = Math.max(
-    configuredReserveTokens ?? currentReserveTokens,
-    reserveTokensFloor,
-  );
+  let targetReserveTokens = Math.max(currentReserveTokens, reserveTokensFloor);
   if (maxReserveTokens !== undefined) {
     // Cap the effective value too: the harness default or explicit config can otherwise
     // undo the floor cap and make shouldCompact() true from the first token.

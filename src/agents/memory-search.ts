@@ -136,6 +136,7 @@ const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
+const DEFAULT_CACHE_MAX_ENTRIES = undefined;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
@@ -330,8 +331,8 @@ function mergeConfig(
     vector,
   };
   const chunking = {
-    tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
-    overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+    tokens: DEFAULT_CHUNK_TOKENS,
+    overlap: DEFAULT_CHUNK_OVERLAP,
   };
   const sync = resolveSyncConfig(defaults, overrides);
   const query = {
@@ -343,42 +344,27 @@ function mergeConfig(
       overrides?.query?.hybrid?.enabled ??
       defaults?.query?.hybrid?.enabled ??
       DEFAULT_HYBRID_ENABLED,
-    vectorWeight:
-      overrides?.query?.hybrid?.vectorWeight ??
-      defaults?.query?.hybrid?.vectorWeight ??
-      DEFAULT_HYBRID_VECTOR_WEIGHT,
-    textWeight:
-      overrides?.query?.hybrid?.textWeight ??
-      defaults?.query?.hybrid?.textWeight ??
-      DEFAULT_HYBRID_TEXT_WEIGHT,
-    candidateMultiplier:
-      overrides?.query?.hybrid?.candidateMultiplier ??
-      defaults?.query?.hybrid?.candidateMultiplier ??
-      DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    vectorWeight: DEFAULT_HYBRID_VECTOR_WEIGHT,
+    textWeight: DEFAULT_HYBRID_TEXT_WEIGHT,
+    candidateMultiplier: DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
     mmr: {
       enabled:
         overrides?.query?.hybrid?.mmr?.enabled ??
         defaults?.query?.hybrid?.mmr?.enabled ??
         DEFAULT_MMR_ENABLED,
-      lambda:
-        overrides?.query?.hybrid?.mmr?.lambda ??
-        defaults?.query?.hybrid?.mmr?.lambda ??
-        DEFAULT_MMR_LAMBDA,
+      lambda: DEFAULT_MMR_LAMBDA,
     },
     temporalDecay: {
       enabled:
         overrides?.query?.hybrid?.temporalDecay?.enabled ??
         defaults?.query?.hybrid?.temporalDecay?.enabled ??
         DEFAULT_TEMPORAL_DECAY_ENABLED,
-      halfLifeDays:
-        overrides?.query?.hybrid?.temporalDecay?.halfLifeDays ??
-        defaults?.query?.hybrid?.temporalDecay?.halfLifeDays ??
-        DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+      halfLifeDays: DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
     },
   };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
-    maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
+    maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
   };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
@@ -467,11 +453,8 @@ function resolveSyncConfig(
     onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
     onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
     watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
-    watchDebounceMs:
-      overrides?.sync?.watchDebounceMs ??
-      defaults?.sync?.watchDebounceMs ??
-      DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    watchDebounceMs: DEFAULT_WATCH_DEBOUNCE_MS,
+    intervalMinutes: 0,
     embeddingBatchTimeoutSeconds:
       overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
     sessions: {

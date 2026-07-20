@@ -229,20 +229,17 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
     channel: "stable",
     auto: {
       enabled: true,
-      stableDelayHours: 6,
-      stableJitterHours: 12,
-      betaCheckIntervalHours: 1,
     },
   },
 }
 ```
 
-| Channel           | Behavior                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stable`          | Waits `stableDelayHours` (default: 6), then applies with deterministic jitter across `stableJitterHours` (default: 12) for a spread rollout. |
-| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                |
-| `beta`            | Checks every `betaCheckIntervalHours` (default: 1) and applies immediately.                                                                  |
-| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                                          |
+| Channel           | Behavior                                                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `stable`          | Applies after a built-in delay with deterministic jitter for a spread rollout.                                                |
+| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically. |
+| `beta`            | Checks on a built-in interval and applies immediately.                                                                        |
+| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                           |
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this

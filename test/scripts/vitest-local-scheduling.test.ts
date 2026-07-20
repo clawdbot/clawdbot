@@ -18,15 +18,20 @@ describe("vitest local full-suite profile", () => {
     });
   });
 
-  it("keeps local-check disablement for CI Vitest runs", () => {
+  it.each([
+    ["CI", "1"],
+    ["CI", "true"],
+    ["GITHUB_ACTIONS", "yes"],
+    ["GITHUB_ACTIONS", "on"],
+  ] as const)("keeps local-check disablement for %s=%s Vitest runs", (name, value) => {
     expect(
       resolveLocalVitestEnv({
-        CI: "true",
+        [name]: value,
         OPENCLAW_LOCAL_CHECK: "0",
         PATH: "/usr/bin",
       }),
     ).toEqual({
-      CI: "true",
+      [name]: value,
       OPENCLAW_LOCAL_CHECK: "0",
       PATH: "/usr/bin",
     });

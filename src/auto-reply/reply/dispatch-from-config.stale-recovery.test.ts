@@ -35,12 +35,7 @@ function createVisibleDispatchParams(replyResolver: () => Promise<ReplyPayload>)
       MessageThreadId: "501.000",
       BodyForAgent: "second telegram direct turn",
     }),
-    cfg: {
-      diagnostics: {
-        stuckSessionWarnMs: 1_000,
-        stuckSessionAbortMs: 1_000,
-      },
-    } as OpenClawConfig,
+    cfg: {} as OpenClawConfig,
     dispatcher: createDispatcher(),
     replyResolver,
   };
@@ -95,7 +90,7 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
       return result;
     });
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(120_000);
 
     expect(settled).toBe(false);
     expect(waitChanges).toEqual([true]);

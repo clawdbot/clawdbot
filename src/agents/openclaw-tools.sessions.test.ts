@@ -6,10 +6,12 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -26,7 +28,6 @@ vi.mock("../config/config.js", () => ({
     session: {
       mainKey: "main",
       scope: "per-sender",
-      agentToAgent: { maxPingPongTurns: 2 },
     },
     tools: {
       // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
@@ -54,7 +55,6 @@ const TEST_CONFIG = {
   session: {
     mainKey: "main",
     scope: "per-sender",
-    agentToAgent: { maxPingPongTurns: 2 },
   },
   tools: {
     sessions: { visibility: "all" },
@@ -1182,6 +1182,72 @@ describe("sessions tools", () => {
     expect(sendCallCount).toBe(0);
   });
 
+  it("keeps scoped sends from creating post-return work or durable watches", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-scoped-session-send-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const requesterSessionKey = "agent:main:clickclack:discussion-proof";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "scoped-main-incarnation";
+    fs.writeFileSync(
+      storePath,
+      `${JSON.stringify({
+        [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+      })}\n`,
+      "utf8",
+    );
+    clearSessionStoreCacheForTest();
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
+      request.requesterSessionKey === requesterSessionKey &&
+      request.targetSessionKey === targetSessionKey
+        ? { expectedSessionId }
+        : undefined,
+    );
+    const calls: GatewayCall[] = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-scoped", status: "accepted", acceptedAt: 1 };
+      }
+      return {};
+    });
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath, mainKey: "main", scope: "per-sender" },
+          tools: { sessions: { visibility: "self" }, agentToAgent: { enabled: false } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("scoped-send", {
+        sessionKey: targetSessionKey,
+        message: "Please check the main session",
+        timeoutSeconds: 0,
+        watch: true,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        delivery: { status: "skipped", mode: "announce" },
+        watched: false,
+      });
+      expect(calls.map((call) => call.method)).toEqual([
+        "sessions.list",
+        "sessions.resolve",
+        "agent",
+      ]);
+    } finally {
+      unregister();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("sessions_send returns pending agent error diagnostics on timeout", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1370,13 +1436,13 @@ describe("sessions tools", () => {
     expect(waitedDetails.reply).toBe("initial");
     await vi.waitFor(
       () => {
-        expect(countMatching(calls, (call) => call.method === "agent")).toBe(3);
+        expect(countMatching(calls, (call) => call.method === "agent")).toBe(6);
       },
       { timeout: 2_000, interval: 5 },
     );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(3);
+    expect(agentCalls).toHaveLength(6);
     for (const call of agentCalls) {
       const params = agentParams(call);
       expect(params.lane).toMatch(/^nested(?::|$)/);
@@ -1392,7 +1458,7 @@ describe("sessions tools", () => {
           "Agent-to-agent reply step",
         ),
     );
-    expect(replySteps).toHaveLength(2);
+    expect(replySteps).toHaveLength(5);
     expect(sendParams.to).toBe("group:target");
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.message).toBe("announce now");
@@ -1463,7 +1529,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 1 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1552,7 +1617,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1616,7 +1680,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1672,7 +1735,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1749,7 +1811,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1827,7 +1888,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");

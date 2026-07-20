@@ -1,17 +1,22 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import { toCssPlacement } from "../../lib/board/grid.ts";
+import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
-  BoardTab,
-  BoardWidget,
+  BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { getBuiltinWidgetRenderer } from "../../lib/board/widgets/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
+import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
+import { renderBoardWidgetFrame } from "./board-widget-frame.ts";
 import "../web-awesome.ts";
 
 const BOARD_SIZE_PRESETS = {
@@ -20,27 +25,32 @@ const BOARD_SIZE_PRESETS = {
   lg: { w: 8, h: 6 },
   xl: { w: 12, h: 8 },
 } as const;
+const MAX_FRAME_REFRESH_ATTEMPTS = 3;
+const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
-  movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
-  resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
-  moveToTab: (widget: BoardWidget, tabId: string) => Promise<void>;
-  resizeTo: (widget: BoardWidget, w: number, h: number) => Promise<void>;
-  remove: (widget: BoardWidget) => Promise<void>;
-  nudge: (widget: BoardWidget, direction: BoardGridDirection) => Promise<void>;
-  focus: (widget: BoardWidget, direction: BoardGridDirection) => void;
+  movePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
+  resizePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
+  moveToTab: (widget: BoardViewWidget, tabId: string) => Promise<void>;
+  resizeTo: (widget: BoardViewWidget, w: number, h: number) => Promise<void>;
+  remove: (widget: BoardViewWidget) => Promise<void>;
+  nudge: (widget: BoardViewWidget, direction: BoardGridDirection) => Promise<void>;
+  focus: (widget: BoardViewWidget, direction: BoardGridDirection) => void;
   focusChanged: (name: string) => void;
+  frameLoadFailed: (name: string) => Promise<void>;
+  widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
+  refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
 
 class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
-  @property({ attribute: false }) widget?: BoardWidget;
+  @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
+  @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
   @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
-  @property({ type: String }) sessionKey = "";
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -49,12 +59,70 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   @state() private actionError = "";
   @state() private actionPending = false;
+  @state() private frameError = "";
+  private frameFailureKey = "";
+  private frameRefreshAttempts = 0;
+  private frameProbeGeneration = 0;
+  private lastFrameUrl = "";
+  private readonly appView = new BoardMcpAppLifecycle({
+    connected: () => this.isConnected,
+    requestUpdate: () => this.requestUpdate(),
+    sessionKey: () => this.sessionKey,
+    widget: () => this.widget,
+  });
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.requestUpdate();
+  }
 
   override willUpdate(changed: PropertyValues<this>): void {
     const previousWidget = changed.get("widget");
     if (previousWidget && previousWidget !== this.widget) {
       this.actionError = "";
+      if (
+        previousWidget.name !== this.widget?.name ||
+        previousWidget.revision !== this.widget?.revision
+      ) {
+        this.resetFrameFailures();
+      } else if (this.widget && this.frameError) {
+        const nextFrameUrl = this.widgetFrameUrl?.(this.widget.name, this.widget.revision) ?? "";
+        if (nextFrameUrl && nextFrameUrl !== this.lastFrameUrl) {
+          // A newly minted ticket gets one authorization probe, but keeps the
+          // existing remint budget until that probe proves the frame healthy.
+          this.frameError = "";
+        }
+      }
     }
+    this.appView.update(this.widget, this.callbacks);
+  }
+
+  override updated(): void {
+    if (!this.isConnected) {
+      this.appView.observe(null, false);
+      return;
+    }
+    this.appView.observe(
+      this.querySelector(".board-widget"),
+      this.widget?.contentKind === "mcp-app",
+    );
+    queueMicrotask(() => {
+      if (this.isConnected) {
+        this.appView.sync();
+      }
+    });
+  }
+
+  override disconnectedCallback(): void {
+    this.appView.disconnect();
+    super.disconnectedCallback();
+  }
+
+  private resetFrameFailures(): void {
+    this.frameProbeGeneration += 1;
+    this.frameFailureKey = "";
+    this.frameRefreshAttempts = 0;
+    this.frameError = "";
   }
 
   private closeMenu(): void {
@@ -82,7 +150,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleMenuSelect(
     event: CustomEvent<{ item: { value?: string } }>,
-    widget: BoardWidget,
+    widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
     const value = event.detail.item.value;
@@ -103,7 +171,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
   }
 
-  private renderMenu(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderMenu(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     const otherTabs = this.tabs.filter((tab) => tab.tabId !== widget.tabId);
     return html`
       <wa-dropdown
@@ -159,12 +227,19 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderPending(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderPending(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
     return html`
       <div class="board-widget__grant board-widget__grant--pending" data-test-id="board-pending">
         <div class="board-widget__grant-mark" aria-hidden="true">!</div>
         <strong>${t("board.widget.needsApproval")}</strong>
-        <span>${t("board.widget.needsApprovalDetail")}</span>
+        ${widget.declaredSummary?.length
+          ? html`<ul class="board-widget__grant-summary">
+              ${widget.declaredSummary.map((summary) => html`<li>${summary}</li>`)}
+            </ul>`
+          : html`<span>${t("board.widget.needsApprovalDetail")}</span>`}
         <div class="board-widget__grant-actions">
           <button
             class="btn btn--small btn--primary"
@@ -190,7 +265,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderRejected(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderRejected(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
     return html`
       <div class="board-widget__grant board-widget__grant--rejected" data-test-id="board-rejected">
         <strong>${t("board.widget.rejected")}</strong>
@@ -207,24 +285,105 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderFrame(widget: BoardWidget): TemplateResult {
-    if (!this.widgetFrameUrl) {
-      throw new Error(t("board.widget.frameResolverMissing"));
+  private refreshFailedFrame(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): void {
+    this.frameProbeGeneration += 1;
+    const failureKey = `${widget.name}:${widget.revision}`;
+    if (this.frameFailureKey !== failureKey) {
+      this.resetFrameFailures();
+      this.frameFailureKey = failureKey;
     }
-    const src = this.widgetFrameUrl(widget.name, widget.revision);
-    return html`
-      <iframe
-        class="board-widget__frame"
-        sandbox="allow-scripts"
-        referrerpolicy="no-referrer"
-        loading="lazy"
-        title=${widget.title || widget.name}
-        src=${src}
-      ></iframe>
-    `;
+    if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
+      this.frameError = t("board.widget.frameAuthorizationFailed");
+      return;
+    }
+    this.frameRefreshAttempts += 1;
+    void callbacks.frameLoadFailed(widget.name).catch((error: unknown) => {
+      this.frameError = error instanceof Error ? error.message : String(error);
+    });
   }
 
-  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private verifyFrameAuthorization(
+    event: Event,
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): void {
+    const frame = event.currentTarget;
+    const src = frame instanceof HTMLIFrameElement ? (frame.getAttribute("src") ?? "") : "";
+    if (!src.startsWith("/__openclaw__/board/")) {
+      return;
+    }
+    const probeGeneration = this.frameProbeGeneration + 1;
+    this.frameProbeGeneration = probeGeneration;
+    const isCurrentProbe = () =>
+      frame instanceof HTMLIFrameElement &&
+      frame.isConnected &&
+      frame.getAttribute("src") === src &&
+      this.frameProbeGeneration === probeGeneration &&
+      this.widget?.name === widget.name &&
+      this.widget.revision === widget.revision;
+    // View tickets are reusable HMAC bindings until expiry. Iframe load events
+    // hide HTTP status, so a credentialed probe is the only 401 signal.
+    void fetch(src, { cache: "no-store" })
+      .then((response) => {
+        if (!isCurrentProbe()) {
+          return;
+        }
+        if (response.status === 401) {
+          this.refreshFailedFrame(widget, callbacks);
+        } else if (response.ok) {
+          this.resetFrameFailures();
+        }
+      })
+      .catch(() => {
+        if (isCurrentProbe()) {
+          this.refreshFailedFrame(widget, callbacks);
+        }
+      });
+  }
+
+  private renderFrame(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
+    return renderBoardWidgetFrame(
+      widget,
+      this.widgetFrameUrl,
+      (src) => (this.lastFrameUrl = src),
+      () => this.refreshFailedFrame(widget, callbacks),
+      (event) => this.verifyFrameAuthorization(event, widget, callbacks),
+    );
+  }
+
+  private renderMcpApp(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
+    void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+    const accessNotice =
+      widget.grantState === "pending"
+        ? this.renderPending(widget, callbacks)
+        : widget.grantState === "rejected"
+          ? this.renderRejected(widget, callbacks)
+          : nothing;
+    return renderBoardMcpAppContent({
+      accessNotice,
+      appView: this.appView.state,
+      busy: this.busy || this.actionPending,
+      loading: this.appView.loading,
+      nearVisible: this.appView.nearVisible,
+      rectHeight: this.rect?.h ?? 4,
+      sessionKey: this.sessionKey,
+      widget,
+      expired: () => this.appView.expire(),
+      remove: () => void this.runAction(() => callbacks.remove(widget)),
+      retry: () => this.appView.retry(),
+    });
+  }
+
+  private renderBody(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+    if (widget.contentKind === "mcp-app") {
+      return this.renderMcpApp(widget, callbacks);
+    }
     if (widget.grantState === "pending") {
       return this.renderPending(widget, callbacks);
     }
@@ -238,7 +397,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
       return renderer({ sessions: this.sessions, sessionKey: this.sessionKey });
     }
-    return this.renderFrame(widget);
+    return this.renderFrame(widget, callbacks);
   }
 
   private renderError(error: unknown): TemplateResult {
@@ -274,7 +433,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleKeyDown(
     event: KeyboardEvent,
-    widget: BoardWidget,
+    widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
     if (event.target !== event.currentTarget || widget.readOnly) {
@@ -309,9 +468,12 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       return nothing;
     }
     let body: TemplateResult;
-    let bodyErrored = false;
+    let bodyErrored: boolean;
     try {
-      body = this.renderBody(widget, callbacks);
+      body = this.frameError
+        ? this.renderError(this.frameError)
+        : this.renderBody(widget, callbacks);
+      bodyErrored = Boolean(this.frameError);
     } catch (error) {
       body = this.renderError(error);
       bodyErrored = true;
@@ -323,6 +485,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       this.actionError !== "" ||
       widget.grantState === "pending" ||
       widget.grantState === "rejected";
+    const contentScrollable = bodyScrollable || widget.contentKind === "mcp-app";
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""}`}
@@ -359,7 +522,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           ${readOnly ? nothing : this.renderMenu(widget, callbacks)}
         </header>
         <div
-          class=${`board-widget__body ${bodyScrollable ? "board-widget__body--scrollable" : ""}`}
+          class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""}`}
         >
           ${body}
           ${this.actionError && widget.grantState !== "pending"

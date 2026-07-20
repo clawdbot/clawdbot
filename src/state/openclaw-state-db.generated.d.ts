@@ -47,12 +47,34 @@ export interface AcpSessions {
   updated_at: number;
 }
 
+export interface AgentDatabaseLeases {
+  agent_id: string;
+  lease_id: string;
+  opened_at: number;
+  owner_pid: number;
+  owner_start_time: number | null;
+  path: string;
+}
+
 export interface AgentDatabases {
   agent_id: string;
   last_seen_at: number;
   path: string;
   schema_version: number;
   size_bytes: number | null;
+}
+
+export interface AgentDeletionJournal {
+  agent_dir: string;
+  agent_id: string;
+  cleanup_completed: Generated<number>;
+  cleanup_paths_json: Generated<string>;
+  created_at: number;
+  database_paths_json: Generated<string>;
+  delete_files: Generated<number>;
+  operation_id: Generated<string>;
+  sessions_dir: string;
+  workspace_dir: string;
 }
 
 export interface AgentModelCatalogs {
@@ -1317,7 +1339,9 @@ export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
   acp_sessions: AcpSessions;
+  agent_database_leases: AgentDatabaseLeases;
   agent_databases: AgentDatabases;
+  agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;

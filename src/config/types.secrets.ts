@@ -353,9 +353,4 @@ export type SecretsConfig = {
     file?: string;
     exec?: string;
   };
-  resolution?: {
-    maxProviderConcurrency?: number;
-    maxRefsPerProvider?: number;
-    maxBatchBytes?: number;
-  };
 };

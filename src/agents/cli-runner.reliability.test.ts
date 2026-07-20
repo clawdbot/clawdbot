@@ -4353,7 +4353,6 @@ describe("runCliAgent reliability", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
-      runBeforeAgentStart: vi.fn(async () => undefined),
     };
     setHookRunnerForTest(hookRunner);
 
@@ -4381,24 +4380,6 @@ describe("runCliAgent reliability", () => {
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
-  it("uses backend-configured resume watchdog override", () => {
-    const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: {
-        command: "codex",
-        reliability: {
-          watchdog: {
-            resume: {
-              noOutputTimeoutMs: 42_000,
-            },
-          },
-        },
-      },
-      timeoutMs: 120_000,
-      useResume: true,
-    });
-    expect(timeoutMs).toBe(42_000);
-  });
-
   it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },

@@ -172,6 +172,7 @@ async function buildResponsesPayload(
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -188,7 +189,6 @@ async function buildResponsesPayload(
   const blockStreamingMarkers =
     extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
     extractBlockStreamingMarkerDirectives(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);

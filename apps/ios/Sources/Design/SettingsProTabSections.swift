@@ -55,6 +55,7 @@ private struct AppearanceSettingsRow: View {
 private struct AppearanceSettingsScreen: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(RootSidebar.visibleAgentCountKey) private var sidebarVisibleAgentCount: Int = 1
 
     var body: some View {
         List {
@@ -84,6 +85,23 @@ private struct AppearanceSettingsScreen: View {
                 }
             } footer: {
                 Text("System follows this device’s appearance setting.")
+                    .font(OpenClawType.footnote)
+            }
+
+            Section {
+                Stepper(value: self.$sidebarVisibleAgentCount, in: 1...3) {
+                    HStack {
+                        Text("Sidebar Agents")
+                            .font(OpenClawType.body)
+                        Spacer()
+                        Text(verbatim: self.sidebarVisibleAgentCount.formatted())
+                            .font(OpenClawType.body)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityIdentifier("settings-appearance-sidebar-agents")
+            } footer: {
+                Text("How many agents the sidebar lists before the switcher menu.")
                     .font(OpenClawType.footnote)
             }
         }
@@ -272,11 +290,6 @@ extension SettingsProTab {
                 await self.appModel.refreshWatchMessagingStatus()
             }
             .toolbar {
-                if let headerLeadingAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-                    }
-                }
                 ToolbarItem(placement: .principal) {
                     Text(title(for: route))
                         .font(OpenClawType.headline)
@@ -292,6 +305,11 @@ extension SettingsProTab {
                         }
                         .disabled(self.connectingGateway != nil)
                         .accessibilityLabel("Scan QR")
+                    }
+                }
+                if let headerSidebarAction {
+                    ToolbarItem(placement: .topBarLeading) {
+                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                     }
                 }
             }
@@ -1045,7 +1063,7 @@ extension SettingsProTab {
             }
             .font(OpenClawType.body)
         } footer: {
-            Text("Used for new Chat threads and Talk sessions.")
+            Text("Used for new Chat and Talk sessions.")
                 .font(OpenClawType.footnote)
         }
     }

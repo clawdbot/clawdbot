@@ -164,7 +164,15 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
       abortSignal: params.preflight.abortSignal,
     },
   );
-  return toInboundMediaFacts(mediaList, { kind: "image", messageId: params.message.id });
+  const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
+  return toInboundMediaFacts(mediaList, { messageId: params.message.id }).map((media, index) => ({
+    path: media.path,
+    url: media.url,
+    contentType: media.contentType,
+    kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
+    transcribed: media.transcribed,
+    messageId: media.messageId,
+  }));
 }
 
 async function recordDiscordPendingHistoryEntry(params: {
@@ -752,7 +760,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  if (!messageText) {
+  const hasNativeMedia =
+    (message.attachments?.length ?? 0) > 0 || resolveDiscordMessageStickers(message).length > 0;
+  if (!messageText && !hasNativeMedia) {
     logDebug(`[discord-preflight] drop: empty content`);
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return null;

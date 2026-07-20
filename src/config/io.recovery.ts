@@ -5,7 +5,6 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "./io.read-helpers.js";
-import { stripShippedPluginInstallConfigRecords } from "./plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -94,10 +93,10 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
     context.deps.env,
     context.deps.lowerPrecedenceEnv,
   );
-  const validated = validateConfigObjectWithPlugins(
-    stripShippedPluginInstallConfigRecords(resolution.resolvedConfigRaw),
-    { env: context.deps.env, sourceRaw: suffixRecovery.parsed },
-  );
+  const validated = validateConfigObjectWithPlugins(resolution.resolvedConfigRaw, {
+    env: context.deps.env,
+    sourceRaw: suffixRecovery.parsed,
+  });
   if (!validated.ok) {
     return false;
   }

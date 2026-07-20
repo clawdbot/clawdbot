@@ -147,12 +147,12 @@ function isRetryableError(status: number, errorText: string): boolean {
 function resolveHttpRetryDelayMs(response: Response, attempt: number): number {
   const fallbackMs = BASE_DELAY_MS * 2 ** attempt;
   const retryAfterMs = response.headers.get("retry-after-ms");
-  if (retryAfterMs !== null) {
+  if (retryAfterMs) {
     const trimmed = retryAfterMs.trim();
     const millis = Number(trimmed);
-    return /^\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(millis)
-      ? (clampTimerTimeoutMs(millis, 0) ?? fallbackMs)
-      : fallbackMs;
+    if (/^\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(millis)) {
+      return clampTimerTimeoutMs(millis, 0) ?? fallbackMs;
+    }
   }
 
   const retryAfter = response.headers.get("retry-after");

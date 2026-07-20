@@ -1,5 +1,6 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
@@ -507,6 +508,7 @@ export type GatewaySessionRow = {
   updatedAt: number | null;
   unread?: boolean;
   lastReadAt?: number;
+  agentStatus?: SessionAgentStatus;
   lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;

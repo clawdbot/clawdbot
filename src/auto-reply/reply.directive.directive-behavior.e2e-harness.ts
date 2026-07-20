@@ -67,8 +67,17 @@ function createThinkingPolicyProvider(
     id: providerId,
     label: providerId,
     auth: [],
-    supportsXHighThinking: ({ modelId }) =>
-      xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId)),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId))
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
   };
 }
 

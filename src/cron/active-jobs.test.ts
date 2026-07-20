@@ -25,7 +25,7 @@ describe("hasActiveCronJobsExceptMarker", () => {
     markCronJobActive("different-job");
 
     // The owning job must not be waved through while another run holds a marker:
-    // cron executes jobs concurrently (cron.maxConcurrentRuns).
+    // Cron executes jobs up to the built-in concurrency limit.
     expect(hasActiveCronJobsExceptMarker(marker!)).toBe(true);
   });
 

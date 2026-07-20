@@ -7,13 +7,16 @@ import WebKit
 /// WKWebView, authenticated with the stored gateway credentials.
 struct TerminalHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
 
     init(
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         gatewayAction: (() -> Void)? = nil)
     {
+        self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
     }
@@ -41,7 +44,9 @@ struct TerminalHubScreen: View {
         }
         .navigationTitle("Terminal")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar(
+            self.usesNativeNavigationChrome || self.headerSidebarAction != nil ? .visible : .hidden,
+            for: .navigationBar)
         .toolbar {
             if self.usesNativeNavigationChrome, let gatewayAction {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -50,6 +55,11 @@ struct TerminalHubScreen: View {
                             .font(OpenClawType.subheadSemiBold)
                     }
                     .accessibilityLabel("Gateway settings")
+                }
+            }
+            if let headerSidebarAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarRevealButton(action: headerSidebarAction)
                 }
             }
         }

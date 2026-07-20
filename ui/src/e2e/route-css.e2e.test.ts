@@ -73,18 +73,27 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
       const cronStyles = await page.evaluate(() => {
         const probe = document.createElement("div");
         probe.innerHTML = `
-          <div class="chat-text"><ul><li>Item</li></ul><pre><code>code</code></pre></div>
+          <div class="chat-text"><ul><li>First</li><li>Second</li></ul><pre><code>code</code></pre></div>
           <a class="session-link">session</a>
         `;
         document.body.append(probe);
         const list = probe.querySelector("ul");
+        const secondListItem = probe.querySelector("li + li");
         const pre = probe.querySelector("pre");
         const link = probe.querySelector(".session-link");
-        if (!(list instanceof HTMLElement) || !(pre instanceof HTMLElement) || !link) {
+        if (
+          !(list instanceof HTMLElement) ||
+          !(secondListItem instanceof HTMLElement) ||
+          !(pre instanceof HTMLElement) ||
+          !link
+        ) {
           throw new Error("Cron style probe did not render");
         }
+        const listItemStyle = getComputedStyle(secondListItem);
         const result = {
           listPadding: Number.parseFloat(getComputedStyle(list).paddingLeft),
+          listItemGap: Number.parseFloat(listItemStyle.marginTop),
+          listItemFontSize: Number.parseFloat(listItemStyle.fontSize),
           preBorderStyle: getComputedStyle(pre).borderTopStyle,
           preOverflow: getComputedStyle(pre).overflowX,
           sessionFontWeight: getComputedStyle(link).fontWeight,
@@ -94,6 +103,7 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
         return result;
       });
       expect(cronStyles.listPadding).toBeGreaterThan(0);
+      expect(cronStyles.listItemGap / cronStyles.listItemFontSize).toBeCloseTo(0.4, 2);
       expect(cronStyles.preBorderStyle).toBe("solid");
       expect(cronStyles.preOverflow).toBe("auto");
       expect(cronStyles.sessionFontWeight).toBe("500");

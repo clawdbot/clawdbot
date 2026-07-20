@@ -4,15 +4,6 @@ import Testing
 @testable import OpenClaw
 
 struct RootTabsSourceGuardTests {
-    @Test func `unified chat voice tab icon cache follows appearance`() {
-        let light = UnifiedChatVoiceTabIcon.CacheKey(state: .active, colorScheme: .light)
-        let sameLight = UnifiedChatVoiceTabIcon.CacheKey(state: .active, colorScheme: .light)
-        let dark = UnifiedChatVoiceTabIcon.CacheKey(state: .active, colorScheme: .dark)
-
-        #expect(light == sameLight)
-        #expect(light != dark)
-    }
-
     @Test func `app applies initial scene phase before gateway admission`() throws {
         let source = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let startupTask = try Self.extract(
@@ -32,13 +23,14 @@ struct RootTabsSourceGuardTests {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let componentSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
 
-        #expect(source.contains("sidebarHeaderLeadingAction"))
+        #expect(source.contains("sidebarHeaderAction"))
         #expect(source.contains("Hide Sidebar"))
         #expect(source.contains("Show Sidebar"))
         #expect(source.contains("shouldShowSidebarRevealInDestinationHeader"))
         #expect(source.contains("layoutMode: self.isSidebarDrawerLayout ? .drawer : .split"))
         #expect(componentSource.contains("OpenClawSidebarHeaderLeadingSlot"))
         #expect(componentSource.contains(".frame(width: 44, height: 44, alignment: .center)"))
+        #expect(componentSource.contains(".frame(width: 44, height: 44)"))
         #expect(source.contains(".safeAreaPadding(.top, 8)"))
         #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
         #expect(source.contains("Self.sidebarHideButtonAccessibilityIdentifier"))
@@ -57,22 +49,22 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("safeAreaInset(edge: .top"))
         #expect(!source.contains("thinMaterial, in: Circle"))
         #expect(!source.contains("sidebarRevealInset"))
-        #expect(source.contains("Color.black.opacity(0.28)"))
-        #expect(source.contains(".background(Color(uiColor: .systemBackground))"))
+        #expect(source.contains(".background(OpenClawSidebarPalette.background)"))
+        #expect(!source.contains("Color.black.opacity(0.35)"))
         #expect(!source.contains("sidebarRevealCornerButton"))
         #expect(!source.contains("shouldShowSidebarRevealOverlay"))
         #expect(!source.contains("shouldShowOverviewHeaderSidebarReveal"))
     }
 
-    @Test func `i pad split uses sliding sidebar while portrait keeps drawer overlay`() throws {
+    @Test func `i pad split stays integrated while compact drawer uses push reveal`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let splitContent = try Self.extract(
             source,
             from: "private func sidebarNavigationSplitContent(sidebarWidth: CGFloat) -> some View",
-            to: "private func sidebarDrawerContent(sidebarWidth: CGFloat) -> some View")
+            to: "private func sidebarDrawerContent(")
         let drawerContent = try Self.extract(
             source,
-            from: "private func sidebarDrawerContent(sidebarWidth: CGFloat) -> some View",
+            from: "private func sidebarDrawerContent(",
             to: "private var sidebarDetailShell: some View")
 
         #expect(!source.contains("@State private var splitColumnVisibility: NavigationSplitViewVisibility"))
@@ -87,46 +79,34 @@ struct RootTabsSourceGuardTests {
         #expect(!splitContent.contains("NavigationSplitView"))
         #expect(!splitContent.contains("self.collapsedSidebarRail"))
         #expect(!source.contains("Self.sidebarCollapsedRailWidth"))
-        #expect(drawerContent.contains("ZStack(alignment: .topLeading)"))
-        #expect(drawerContent.contains("Color.black.opacity(0.28)"))
-        #expect(drawerContent.contains(".transition(.move(edge: .leading).combined(with: .opacity))"))
+        #expect(drawerContent.contains("ZStack(alignment: .leading)"))
+        #expect(drawerContent.contains("self.sidebarDrawerLayer"))
+        #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
+        #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
+        #expect(drawerContent.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
+        #expect(drawerContent.contains(".allowsHitTesting(!self.isSidebarVisible)"))
+        #expect(drawerContent.contains(".clipShape(RoundedRectangle("))
+        #expect(drawerContent.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
+        #expect(drawerContent.contains(".offset(x: Self.sidebarContentOffset("))
+        #expect(drawerContent.contains(".shadow("))
+        #expect(drawerContent.contains(".fill(Color(uiColor: .systemGroupedBackground))"))
+        #expect(drawerContent.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
+        #expect(!drawerContent.contains("UnevenRoundedRectangle"))
+        #expect(!drawerContent.contains("sidebarDrawerShape"))
         #expect(!drawerContent.contains("NavigationSplitView"))
     }
 
-    @Test func `phone tab bar keeps chat control agent and settings in product order`() throws {
-        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let phoneTabContent = try Self.extract(
-            source,
-            from: "private var phoneTabContent: some View",
-            to: "extension RootTabs {\n    private func updateCanvasState")
-
-        let chatRange = try #require(phoneTabContent.range(of: "ChatProTab("))
-        let controlRange = try #require(phoneTabContent.range(of: "RootTabsPhoneControlHub("))
-        let agentRange = try #require(phoneTabContent.range(of: "AgentProTab("))
-        let settingsRange = try #require(phoneTabContent.range(of: "SettingsProTab("))
-
-        #expect(chatRange.lowerBound < controlRange.lowerBound)
-        #expect(controlRange.lowerBound < agentRange.lowerBound)
-        #expect(agentRange.lowerBound < settingsRange.lowerBound)
-        #expect(!phoneTabContent.contains("TalkProTab("))
-        #expect(!phoneTabContent.contains(".tag(AppTab.talk)"))
-        #expect(phoneTabContent.contains("UnifiedChatVoiceTabIcon.image("))
-        #expect(phoneTabContent.contains("state: self.phoneChatVoiceIconState"))
-        #expect(!phoneTabContent.contains("micLevel"))
-        #expect(!phoneTabContent.contains("playbackLevel"))
-        #expect(phoneTabContent.contains("self.appModel.talkMode.isEnabled ? \"Chat, voice active\" : \"Chat\""))
-        #expect(!phoneTabContent.contains("Label(\"Chat\", systemImage: \"bubble.left.fill\")"))
-        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 2)
-    }
-
-    @Test func `phone chat keeps one composer voice control without a tab bar accessory`() throws {
+    @Test func `unified root shell removes phone tab chrome`() throws {
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let chromeSource = try String(contentsOf: Self.rootTabsPhoneChromeSourceURL(), encoding: .utf8)
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
 
+        #expect(!rootSource.contains("TabView("))
+        #expect(!rootSource.contains("AppTab"))
+        #expect(!rootSource.contains("RootTabsPhoneControlHub"))
+        #expect(!rootSource.contains("PhoneTabSettingsHost"))
         #expect(!rootSource.contains("tabViewBottomAccessory"))
         #expect(!rootSource.contains("PhoneVoiceTabAccessory"))
-        #expect(!chromeSource.contains("PhoneVoiceTabAccessory"))
         #expect(chatSource.contains("talkControl: Self.shouldExposeCaptureControl("))
         #expect(chatSource.contains("private var talkControl: OpenClawChatTalkControl"))
         #expect(chatSource.contains("self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)"))
@@ -151,50 +131,133 @@ struct RootTabsSourceGuardTests {
     }
 
     @Test func `sidebar keeps navigation model destination only`() throws {
-        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let source = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
         let navigationSource = try String(contentsOf: Self.rootTabsNavigationSourceURL(), encoding: .utf8)
-        let sidebarColumn = try Self.extract(
-            source,
-            from: "private var sidebarColumn: some View",
-            to: "private var sidebarList: some View")
 
-        #expect(source.contains("ForEach(Self.sidebarGroups)"))
-        #expect(!source.contains("Section(\"Context\")"))
-        #expect(!source.contains("sidebarAgentMenu"))
-        #expect(!source.contains("sidebarDeviceMenu"))
-        #expect(sidebarColumn.contains("self.sidebarIdentityHeader"))
-        #expect(source.contains("private var sidebarIdentityHeader: some View"))
-        #expect(source.contains("OpenClawProMark(size: 30"))
-        #expect(source.contains("Text(\"OpenClaw\")"))
-        #expect(source.contains("private var sidebarGatewayStatusTitle: String"))
-        #expect(source.contains("private var sidebarGatewayStatusColor: Color"))
-        #expect(!sidebarColumn.contains("activeAgent"))
-        #expect(!source.contains("shouldShowSidebarColumnHeader"))
-        #expect(!source.contains("private var sidebarColumnHeader: some View"))
-        #expect(sidebarColumn.contains(".safeAreaPadding(.top, 8)"))
-        #expect(source.contains(".scrollContentBackground(.hidden)"))
-        #expect(source.contains(".listStyle(.sidebar)"))
-        #expect(source.contains("private var sidebarHorizontalSeparator: some View"))
-        #expect(source.contains("private var sidebarVerticalSeparator: some View"))
-        #expect(source.contains("1 / UIScreen.main.scale"))
-        #expect(!source.contains("geometry.size.height >= Self.sidebarListNonScrollingMinimumHeight"))
-        #expect(!source.contains("private var sidebarListContent: some View"))
-        #expect(source.contains(".listRowSeparator(.hidden, edges: .all)"))
-        #expect(source.contains(".listSectionSeparator(.hidden, edges: .all)"))
-        #expect(source.contains("if self.isSidebarDrawerLayout {"))
-        #expect(!source.contains("private var sidebarFooter: some View"))
-        #expect(!source.contains("LabeledContent(\"Version\""))
-        #expect(navigationSource.contains("SidebarGroup(title: \"CHAT\", destinations: [.chat])"))
+        #expect(rootSource.contains("RootSidebar("))
+        #expect(source.contains("ForEach(self.pinnedPages)"))
+        #expect(source.contains("ForEach(RootTabs.pinnableSidebarPages)"))
+        #expect(source.contains("private var brandHeader: some View"))
+        #expect(source.contains("private var agentsSection: some View"))
+        #expect(source.contains("static func shownAgentCount(configured: Int, total: Int) -> Int"))
+        #expect(source.contains("ChatSessionSidebarModel.workSubtitle(for: session)"))
+        #expect(source.contains("private var homeRow: some View"))
+        #expect(source.contains("RootTabs.pinnedSidebarPages(from: self.pinnedPagesStorage)"))
+        #expect(source.contains("struct RootSidebarPagesEditor: View"))
+        #expect(source.contains("private var gatewayStatusTitle: String"))
+        #expect(source.contains("private var gatewayStatusColor: Color"))
+        #expect(source.contains("private var sessionsSection: some View"))
+        #expect(source.contains("private var pagesSection: some View"))
+        #expect(!source.contains("attentionSection"))
+        #expect(source.contains("private func badgeCount(for destination: RootTabs.SidebarDestination) -> Int"))
+        #expect(source.contains("private var footer: some View"))
+        #expect(source.contains("TextField(\"\", text: self.$searchText)"))
+        #expect(source.contains("commandSessionActions("))
+        #expect(source.contains("1 / self.displayScale"))
+        #expect(!source.contains("UIScreen.main.scale"))
+        #expect(navigationSource.contains("static let sidebarDestinations"))
+        #expect(!navigationSource.contains("SidebarGroup"))
         #expect(!navigationSource.contains("title: \"AGENT\""))
         #expect(navigationSource.contains("case settings"))
         #expect(!navigationSource.contains("case settingsChannels"))
         #expect(!navigationSource.contains("case settingsApprovals"))
         #expect(!navigationSource.contains("case settingsPrivacy"))
-        #expect(navigationSource.contains("SidebarGroup(\n            title: \"SETTINGS\""))
-        #expect(navigationSource.contains("destinations: [.settings]"))
-        #expect(!navigationSource.contains("destinations: [.gateway"))
-        #expect(!navigationSource.contains("SidebarGroup(title: \"REFERENCE\", destinations: [.settings"))
-        #expect(navigationSource.contains("SidebarGroup(title: \"REFERENCE\", destinations: [.docs])"))
+        #expect(!navigationSource.contains("phoneControlGroups"))
+    }
+
+    @Test func `sidebar refresh generations keep dashboard independent from roster replacements`() throws {
+        let source = try String(contentsOf: Self.rootSidebarModelSourceURL(), encoding: .utf8)
+        let refresh = try Self.extract(
+            source,
+            from: "func refresh(appModel: NodeAppModel) async {",
+            to: "func refreshSessions(appModel: NodeAppModel) async {")
+        let refreshSessions = try Self.extract(
+            source,
+            from: "func refreshSessions(appModel: NodeAppModel) async {",
+            to: "func reportSessionError(_ error: any Error) {")
+        let rosterCommit = try #require(refresh.range(of: "self.sessions = loadedRoster.sessions"))
+        let dashboardWait = try #require(refresh.range(of: "let loadedDashboard = await dashboard"))
+
+        #expect(source.contains("private var rosterGeneration = 0"))
+        #expect(source.contains("private var dashboardGeneration = 0"))
+        #expect(source.matches(of: /self\.rosterGeneration &\+= 1/).count == 2)
+        #expect(source.matches(of: /self\.dashboardGeneration &\+= 1/).count == 1)
+        #expect(refresh.contains("if rosterGeneration == self.rosterGeneration"))
+        #expect(refresh.contains(
+            "guard !Task.isCancelled, dashboardGeneration == self.dashboardGeneration else { return }"))
+        #expect(refreshSessions.contains(
+            "guard !Task.isCancelled, rosterGeneration == self.rosterGeneration else { return }"))
+        #expect(!refreshSessions.contains("dashboardGeneration"))
+        #expect(source.contains("catch is CancellationError"))
+        #expect(source.contains("case .cancelled:\n            return"))
+        #expect(rosterCommit.lowerBound < dashboardWait.lowerBound)
+        #expect(source.contains("allowCachedFallback: false"))
+    }
+
+    @Test func `sidebar refresh owner tracks sessions and periodically refreshes attention`() throws {
+        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let refreshTask = try Self.extract(
+            source,
+            from: "private var sidebarSplitContent: some View",
+            to: "private var sidebarRefreshID: String")
+        let refreshID = try Self.extract(
+            source,
+            from: "private var sidebarRefreshID: String",
+            to: "private func sidebarNavigationSplitContent(")
+
+        #expect(refreshTask.contains(".task(id: self.sidebarRefreshID)"))
+        #expect(refreshTask.contains("try? await Task.sleep(for: .seconds(600))"))
+        #expect(refreshTask.contains("while !Task.isCancelled"))
+        #expect(refreshTask.contains("guard !Task.isCancelled else { return }"))
+        #expect(refreshID.contains("self.appModel.chatViewModelIdentityID"))
+        #expect(refreshID.contains("self.appModel.chatSessionKey"))
+        #expect(refreshID.contains("self.scenePhase == .active"))
+    }
+
+    @Test func `sidebar dashboard keeps per field last known good values and drains cron pages`() throws {
+        let source = try String(contentsOf: Self.rootSidebarModelSourceURL(), encoding: .utf8)
+        let dashboardCommit = try Self.extract(
+            source,
+            from: "let loadedDashboard = await dashboard",
+            to: "func refreshSessions(appModel: NodeAppModel) async {")
+        let cronLoad = try Self.extract(
+            source,
+            from: "private func loadCronJobs(appModel: NodeAppModel) async -> [CronJob]? {",
+            to: "private func request<T: Decodable>(")
+
+        #expect(dashboardCommit.contains("if let usage = loadedDashboard.usage"))
+        #expect(dashboardCommit.contains("if let cronJobs = loadedDashboard.cronJobs"))
+        #expect(cronLoad.contains("let pageLimit = 5"))
+        #expect(cronLoad.contains("let jobLimit = 1000"))
+        #expect(cronLoad.contains("cronJobsSnapshotIdentity"))
+        #expect(cronLoad.contains("nextCronJobsListOffset"))
+        #expect(source.contains("return job.enabled &&"))
+    }
+
+    @Test func `sidebar session selections use resolved keys groups and eligibility`() throws {
+        let source = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.commandCenterSupportSourceURL(), encoding: .utf8)
+        let commandCenterSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
+        let defaultSession = try Self.extract(
+            commandCenterSource,
+            from: "private var effectiveDefaultChatSessionEntry: OpenClawChatSessionEntry?",
+            to: "private var effectiveRecentChatSessions:")
+
+        #expect(source.contains("private var resolvedSelectedSessionKey: String"))
+        #expect(source.contains("private var resolvedMainSessionKey: String"))
+        #expect(source.contains("groups: self.sessionGroups"))
+        #expect(source.contains("let isSelected = session.key == selectedSessionKey"))
+        #expect(source.contains("self.appModel.openChat(sessionKey: mainKey"))
+        #expect(source.contains("self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey)"))
+        #expect(source.contains("canArchive: ChatSessionSidebarModel.canArchiveSession("))
+        #expect(source.contains("canDelete: ChatSessionSidebarModel.canDeleteSession("))
+        #expect(actionsSource.contains("if self.canArchive"))
+        #expect(actionsSource.contains("if self.canDelete"))
+        #expect(source.contains("private func selectSidebarDestination("))
+        #expect(source.contains("self.isSearchFocused = false"))
+        #expect(defaultSession.contains("ChatSessionSidebarModel.selectedSessionKey("))
+        #expect(defaultSession.contains("sessions.first { $0.key == mainKey }"))
     }
 
     @Test func `sidebar routes use destination headers instead of repeated product branding`() throws {
@@ -206,7 +269,8 @@ struct RootTabsSourceGuardTests {
             from: "private var sidebarDetail: some View",
             to: "private var sidebarDetailNavigationShell: some View")
 
-        #expect(sidebarDetail.contains("headerTitle: \"Chat\""))
+        #expect(!sidebarDetail.contains("headerTitle: \"Chat\""))
+        #expect(!sidebarDetail.contains("showsAgentBadge: false"))
         #expect(sidebarDetail.contains("headerTitle: \"Overview\""))
         #expect(sidebarDetail.contains("headerTitle: \"Agents\""))
         #expect(sidebarDetail.contains("headerTitle: \"Instances\""))
@@ -238,18 +302,18 @@ struct RootTabsSourceGuardTests {
         let dreamingSource = try String(contentsOf: Self.agentProDreamingDestinationSourceURL(), encoding: .utf8)
 
         #expect(source
-            .contains("route != .agents && self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible"))
+            .contains("route != .agents && self.directHeaderSidebarAction(for: route) != nil ? .hidden : .visible"))
         #expect(destinationsSource.contains(".navigationTitle(self.headerTitle)"))
         #expect(destinationsSource.contains(".searchable(text: self.$agentSearchText"))
         #expect(destinationsSource.contains("ToolbarItemGroup(placement: .topBarTrailing)"))
         #expect(!destinationsSource.contains(".toolbar(.hidden, for: .navigationBar)"))
-        #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .instances)"))
-        #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .dreaming)"))
+        #expect(destinationsSource.contains("self.directHeaderSidebarAction(for: .instances)"))
+        #expect(destinationsSource.contains("self.directHeaderSidebarAction(for: .dreaming)"))
         #expect(destinationsSource.contains("self.directHeader(\n                        for: .usage"))
         #expect(destinationsSource.contains("self.directHeader(\n                        for: .cron"))
-        #expect(destinationsSource.contains("self.directRoute == route ? self.headerLeadingAction : nil"))
-        #expect(nodesSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)"))
-        #expect(dreamingSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)"))
+        #expect(destinationsSource.contains("self.directRoute == route ? self.headerSidebarAction : nil"))
+        #expect(nodesSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
+        #expect(dreamingSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
     }
 
     @Test func `iOS 26 chrome uses native glass while content cards stay quiet`() throws {
@@ -261,10 +325,11 @@ struct RootTabsSourceGuardTests {
             from: "private struct ProPanelSurfaceModifier: ViewModifier",
             to: "struct ProIconBadge: View")
 
-        #expect(rootSource.contains(".openClawTabBarBehavior()"))
+        #expect(!rootSource.contains(".openClawTabBarBehavior()"))
+        #expect(!rootSource.contains("TabView("))
         #expect(appSource.contains(".preferredColorScheme(self.appearanceModel.preference.colorScheme)"))
         #expect(!appSource.contains("overrideUserInterfaceStyle"))
-        #expect(componentsSource.contains("content.tabBarMinimizeBehavior(.onScrollDown)"))
+        #expect(!componentsSource.contains("tabBarMinimizeBehavior"))
         #expect(componentsSource.contains(".buttonStyle(.glassProminent)"))
         #expect(componentsSource.contains(".buttonStyle(.glass)"))
         #expect(componentsSource.contains("GlassEffectContainer(spacing: 8)"))
@@ -404,7 +469,7 @@ struct RootTabsSourceGuardTests {
         let overviewSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
         let agentOverviewSource = try String(contentsOf: Self.agentProTabOverviewSourceURL(), encoding: .utf8)
-        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let settingsSource = try String(contentsOf: Self.settingsProTabSourceURL(), encoding: .utf8)
 
         #expect(componentsSource.contains("struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View"))
         #expect(componentsSource.contains("ViewThatFits(in: .horizontal)"))
@@ -413,7 +478,7 @@ struct RootTabsSourceGuardTests {
         #expect(componentsSource.contains(".fixedSize(horizontal: true, vertical: false)"))
         #expect(featureChromeSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(featureChromeSource.contains("if !self.usesNativeNavigationChrome"))
-        #expect(!featureChromeSource.contains("if self.headerLeadingAction != nil"))
+        #expect(!featureChromeSource.contains("if self.headerSidebarAction != nil"))
         #expect(docsSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(docsSource.contains("if !self.usesNativeNavigationChrome"))
         #expect(overviewSource.contains("OpenClawAdaptiveHeaderRow("))
@@ -422,10 +487,11 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.contains("self.headerAgentIdentity"))
         #expect(!chatSource.contains("headerAgentModelPicker"))
         #expect(chatSource.contains(".sharedBackgroundVisibility(.hidden)"))
-        #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerLeadingAction)"))
+        #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerSidebarAction)"))
         #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
+        #expect(!settingsSource.contains("ToolbarItem(placement: .topBarTrailing)"))
     }
 
     @Test func `chat keeps layered canvas behind soft native scroll edges`() throws {
@@ -436,21 +502,11 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains(".background(Color(uiColor: .systemBackground))"))
     }
 
-    @Test func `phone hub keeps docs as destination only`() throws {
-        let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("case .docs:"))
-        #expect(source.contains("OpenClawDocsScreen("))
-        #expect(source.contains("gatewayAction: { self.openGatewayDetail() }"))
-        #expect(!source.contains("phoneDetailBackAction"))
-        #expect(!source.contains("Label(\"Docs\", systemImage: \"book\")"))
-        #expect(!source.contains("https://docs.openclaw.ai"))
-    }
-
     @Test func `root shell preview matrix covers phone and I pad states`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
 
         #expect(source.contains("#Preview(\n    \"Shell iPhone portrait\""))
+        #expect(source.contains("#Preview(\n    \"Shell iPhone drawer open\""))
         #expect(source.contains("#Preview(\n    \"Shell iPhone landscape\""))
         #expect(source.contains("#Preview(\n    \"Shell iPhone connected\""))
         #expect(source.contains("#Preview(\n    \"Shell iPhone gateway error\""))
@@ -473,62 +529,6 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("case loading"))
         #expect(source.contains("case error"))
         #expect(source.contains("Gateway not connected. Check Tailscale and retry."))
-    }
-
-    @Test func `phone hub lets the native list respect the floating tab bar`() throws {
-        let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("List {"))
-        #expect(source.contains(".listStyle(.insetGrouped)"))
-        #expect(!source.contains("bottomScrollInset"))
-        #expect(!source.contains("safeAreaPadding(.bottom"))
-    }
-
-    @Test func `phone hub promotes unified chat while filtering root tabs from its destination list`() throws {
-        let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("private var gatewayHeader: some View"))
-        #expect(source.contains("private var gatewayIdentityTitle: some View"))
-        #expect(source.contains("Text(verbatim: gatewayDisplayLabel)"))
-        #expect(source.contains("Text(\"Gateway\")"))
-        #expect(source.contains(".accessibilityLabel(self.gatewayAccessibilityLabel)"))
-        #expect(source.contains("private var chatShortcut: some View"))
-        #expect(source.contains(
-            ".listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))"))
-        #expect(source.contains("self.prominentDestinationCard(\n            .chat,"))
-        #expect(source.contains("Agent chat and recent work."))
-        #expect(!source.contains("TalkProTab("))
-        #expect(source.contains("private var phoneDestinations: [RootTabs.SidebarDestination]"))
-        #expect(source.contains("self.groups.flatMap(\\.destinations).filter { !self.opensRootTab($0) }"))
-        #expect(source.contains("private struct ControlCircleIcon: View"))
-        #expect(source.contains(".foregroundStyle(self.iconForegroundStyle)"))
-        #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
-        #expect(!source.contains("destination.subtitle"))
-        #expect(source.contains("self.openGatewayDetail()"))
-        #expect(!source.contains("self.openPhoneRootDestination(.gateway)"))
-        #expect(!source.contains("phoneDetailBackAction"))
-        #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
-        #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
-        #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 7)
-        #expect(!source.contains("directRoute: .agents"))
-        #expect(source.contains("Image(systemName: \"slider.horizontal.3\")"))
-        #expect(!source.contains("self.metric(label:"))
-        #expect(!source.contains("private func metric(label:"))
-    }
-
-    @Test func `phone hub clears detail path before root tab handoff`() throws {
-        let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
-        let handoff = try Self.extract(
-            source,
-            from: "private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination)",
-            to: "private func opensRootTab(_ destination: RootTabs.SidebarDestination)")
-        let clearRange = try #require(handoff.range(of: "self.navigationPath.removeAll()"))
-        let openRange = try #require(handoff.range(of: "self.openRootDestination(destination)"))
-
-        #expect(source.contains("NavigationStack(path: self.$navigationPath)"))
-        #expect(!source.contains("self.openRootDestination(.gateway)"))
-        #expect(source.contains("self.navigationPath.append(.gateway)"))
-        #expect(clearRange.lowerBound < openRange.lowerBound)
     }
 }
 
@@ -716,9 +716,9 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("self.previewHeader(\"Loading\")"))
         #expect(source.contains("self.previewHeader(\"Empty\")"))
         #expect(source.contains("self.previewHeader(\"Error\")"))
-        #expect(source.contains("title: \"Threads unavailable\""))
-        #expect(source.contains("title: \"No recent threads\""))
-        #expect(source.contains("title: \"Loading threads\""))
+        #expect(source.contains("title: \"Sessions unavailable\""))
+        #expect(source.contains("title: \"No recent sessions\""))
+        #expect(source.contains("title: \"Loading sessions\""))
     }
 
     @Test func `routed feature screens reuse shared pro components`() throws {
@@ -763,7 +763,7 @@ extension RootTabsSourceGuardTests {
         let projectSource = try String(contentsOf: Self.xcodeProjectSourceURL(), encoding: .utf8)
 
         #expect(chromeSource.contains("struct IPadSidebarScreenChrome<Content: View>: View"))
-        #expect(chromeSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)"))
+        #expect(chromeSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
         #expect(chromeSource.contains("OpenClawGatewayCompactPill()"))
         #expect(!taskSource.contains("struct IPadSidebarScreenChrome"))
         #expect(projectSource.contains("IPadSidebarScreenChrome.swift in Sources"))
@@ -801,7 +801,7 @@ extension RootTabsSourceGuardTests {
             encoding: .utf8)
         let settingsRoutePattern = try Regex(
             #"case \.settings:[\s\S]*?SettingsProTab\("#
-                + #"[\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,"#
+                + #"[\s\S]*?headerSidebarAction: self\.sidebarHeaderAction,"#
                 + #"[\s\S]*?ownsNavigationStack: false"#
                 + #"[\s\S]*?onRouteChange: handleSettingsRouteChange"#)
         let approvalSuppression = try Self.extract(
@@ -811,7 +811,7 @@ extension RootTabsSourceGuardTests {
         let sidebarNavigationShell = try Self.extract(
             rootSource,
             from: "private var sidebarDetailNavigationShell: some View",
-            to: "private var usesSidebarTabs: Bool")
+            to: "private var sidebarDetailShellID: String")
         let settingsRoutePropagation = try Self.extract(
             rootSource,
             from: "private func handleSettingsRouteChange(_ route: SettingsRoute?)",
@@ -863,8 +863,7 @@ extension RootTabsSourceGuardTests {
         #expect(rootSource.contains("@State private var sidebarNavigationPath: [SettingsRoute] = []"))
         #expect(rootSource.contains("NavigationStack(path: self.$sidebarNavigationPath)"))
         #expect(rootSource.contains("self.sidebarNavigationPath.removeAll()"))
-        #expect(rootSource.matches(of: /SettingsProTab\(\s*initialRoute: self\.selectedSettingsRoute,/).count == 1)
-        #expect(rootSource.contains(".id(self.settingsTabViewID)"))
+        #expect(rootSource.contains("directRoute: selectedSettingsRoute"))
         #expect(rootSource.contains("@State private var selectedSettingsRouteRequestID: Int = 0"))
         #expect(rootSource.contains("@State private var activeSettingsRoute: SettingsRoute?"))
         #expect(rootSource.contains("self.selectedSettingsRouteRequestID &+= 1"))
@@ -889,7 +888,7 @@ extension RootTabsSourceGuardTests {
         #expect(rootSource.contains(
             "self.suppressedExecApprovalForNotificationSettings = NodeAppModel.execApprovalInboxKey(prompt)"))
         #expect(rootSource.contains(
-            "onApprovalNotificationsRoute: self.suppressExecApprovalPromptForNotificationSettings"))
+            "onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings"))
         #expect(rootSource.contains("private func suppressExecApprovalPromptForNotificationSettings("))
         #expect(rootSource.contains("onRouteChange: handleSettingsRouteChange"))
         #expect(rootSource.contains("navigateToRoute: pushSidebarSettingsRoute"))
@@ -1275,7 +1274,7 @@ extension RootTabsSourceGuardTests {
         let onboardingContent = try #require(onboardingScannerSheet.range(of: "content: {"))
 
         #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
-        #expect(appSource.contains("func application(\n        _ app: UIApplication,\n        open url: URL,"))
+        #expect(appSource.contains("func application(\n        _: UIApplication,\n        open url: URL,"))
         #expect(appSource.contains("self.pendingOpenURLs.append(url)"))
         #expect(appSource.contains("model.stageGatewaySetupLink(link)"))
         #expect(appSource.contains(".onOpenURL"))
@@ -1520,12 +1519,12 @@ extension RootTabsSourceGuardTests {
     }
 
     @Test func `approval inbox stays reopenable and modal isolates accessibility`() throws {
-        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let rootSource = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
         let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
         let dialogSource = try String(contentsOf: Self.execApprovalPromptDialogSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
 
-        #expect(rootSource.contains(".badge(self.appModel.pendingExecApprovalCount)"))
+        #expect(rootSource.contains("case .overview: self.appModel.pendingExecApprovalCount"))
         #expect(modelSource.contains("var pendingExecApprovalInboxItems: [ExecApprovalInboxItem]"))
         #expect(modelSource.contains("self.dismissedExecApprovalPresentationKeys.insert(inboxKey)"))
         #expect(modelSource.contains("func presentPendingExecApprovalFromInbox("))
@@ -1543,6 +1542,20 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/RootTabs.swift")
+    }
+
+    private static func rootSidebarSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/RootSidebar.swift")
+    }
+
+    private static func rootSidebarModelSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/RootSidebarModel.swift")
     }
 
     static func nodeAppModelSourceURL() -> URL {
@@ -1564,13 +1577,6 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Chat/IOSGatewayChatTransport.swift")
-    }
-
-    private static func phoneHubSourceURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Design/RootTabsPhoneControlHub.swift")
     }
 
     private static func proComponentsSourceURL() -> URL {
@@ -1693,13 +1699,6 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/ChatProTab.swift")
-    }
-
-    private static func rootTabsPhoneChromeSourceURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Design/RootTabsPhoneChrome.swift")
     }
 
     private static func docsSourceURL() -> URL {

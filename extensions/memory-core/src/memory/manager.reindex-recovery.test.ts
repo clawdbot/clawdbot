@@ -70,7 +70,6 @@ describe("memory manager reindex recovery", () => {
             provider: params.provider ?? "openai",
             model: "mock-embed",
             store: { vector: { enabled: false } },
-            chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
             remote: { nonBatchConcurrency: 1 },
             cache: { enabled: false },

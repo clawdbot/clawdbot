@@ -30,6 +30,13 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "nostr",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "NOSTR_PRIVATE_KEY"
+          ]
+        }
+      },
       "label": "Nostr",
       "selectionLabel": "Nostr (NIP-04 DMs)",
       "docsPath": "/channels/nostr",

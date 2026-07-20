@@ -99,7 +99,7 @@ COPY --from=functional-deps --chown=appuser:appuser /tmp/openclaw-deps/node_modu
 # cycle through the link.
 RUN tar -xzf /tmp/openclaw-current.tgz -C /app --strip-components=1 \
  && chmod +x /app/openclaw.mjs \
- && OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 node /app/scripts/postinstall-bundled-plugins.mjs \
+ && node /app/scripts/postinstall-bundled-plugins.mjs \
  && ln -sfn /app /app/node_modules/openclaw \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \

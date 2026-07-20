@@ -294,25 +294,6 @@ describe("Zoom meetings plugin surface", () => {
     });
   });
 
-  it("accepts timeoutMs on testListen and reports a bounded caption timeout", async () => {
-    const { invoke } = authorizationHarness();
-    const response = await invoke("zoommeetings.testListen", {
-      mode: "transcribe",
-      timeoutMs: 1,
-      url: MEETING_URL,
-    });
-
-    expect(response).toMatchObject({
-      ok: true,
-      payload: {
-        captioning: undefined,
-        createdSession: true,
-        listenTimedOut: true,
-        listenVerified: false,
-      },
-    });
-  });
-
   it.each([
     ["zoommeetings.testSpeech", "transcribe", "test_speech requires mode: agent or bidi"],
     ["zoommeetings.testListen", "agent", "test_listen requires mode: transcribe"],

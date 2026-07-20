@@ -52,7 +52,7 @@ Use `followup` or `collect` when you want messages to queue by default instead o
 
 ## Debounce
 
-`messages.queue.debounceMs` applies to queued `followup` and `collect` delivery. In `steer` mode with the native Codex harness, it also sets the quiet window before sending batched `turn/steer`. For OpenClaw, active steering itself does not use the debounce timer because OpenClaw naturally batches messages until the next model boundary.
+The built-in queue debounce applies to queued `followup` and `collect` delivery. In `steer` mode with the native Codex harness, it also sets the quiet window before sending batched `turn/steer`. For OpenClaw, active steering itself does not use the debounce timer because OpenClaw naturally batches messages until the next model boundary.
 
 ## Related
 

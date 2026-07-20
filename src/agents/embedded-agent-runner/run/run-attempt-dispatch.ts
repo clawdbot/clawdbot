@@ -55,7 +55,6 @@ type AttemptRuntime = {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: EmbeddedRunAttemptParams["modelRegistry"];
   agentId: string;
-  beforeAgentStartResult: EmbeddedRunAttemptParams["beforeAgentStartResult"];
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"];
   fastMode: EmbeddedRunAttemptParams["fastMode"];
   fastModeStartedAtMs?: number;
@@ -270,7 +269,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
     toolAuthProfileStore: runtime.toolAuthProfileStore,
     modelRegistry: runtime.modelRegistry,
     agentId: runtime.agentId,
-    beforeAgentStartResult: runtime.beforeAgentStartResult,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,

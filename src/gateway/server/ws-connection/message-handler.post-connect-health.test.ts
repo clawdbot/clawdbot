@@ -617,6 +617,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         id: profileId,
         email: "alice@example.com",
         name: "alice",
+        // Published route carries the profile revision (?v=<updatedAt>) so a
+        // reconnecting viewer's <img> refetches after an avatar upload instead
+        // of reusing the stale cached image for an unchanged URL.
+        avatarUrl: expect.stringMatching(
+          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
+        ),
       });
       expect(first.harness.client).toMatchObject({
         authenticatedUserId: "alice@example.com",
@@ -633,7 +639,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         id: profileId,
         email: "alice@example.com",
         name: "alice",
-        avatarUrl: `/api/users/${profileId}/avatar`,
+        avatarUrl: expect.stringMatching(
+          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
+        ),
       });
       expect(second.harness.client).toMatchObject({
         authenticatedUserProfile: { profileId, hasAvatar: true },

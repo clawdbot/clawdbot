@@ -18,15 +18,20 @@ export function resolveSidebarSessionSubtitle(params: {
 }): SidebarSessionSubtitle {
   const { session } = params;
   const attention = sessionAttentionSubtitle(session.attention);
+  // Agent-declared status (sessions tool) outranks live narration: it is an
+  // explicit message to the user, not ambient activity.
+  const agentStatus = session.agentStatusNote || undefined;
   const running = session.hasActiveRun || session.status === "running";
   const narration =
-    attention || !params.sidebarLiveActivity || !running ? undefined : params.narrationLine;
+    attention || agentStatus || !params.sidebarLiveActivity || !running
+      ? undefined
+      : params.narrationLine;
   const workSubtitle = params.hasDisplay
     ? params.displaySubtitle
     : session.subtitle && session.workSession && session.subtitle !== session.label
       ? session.subtitle
       : undefined;
-  return { subtitle: attention ?? narration ?? workSubtitle, narration };
+  return { subtitle: attention ?? agentStatus ?? narration ?? workSubtitle, narration };
 }
 
 export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle) {

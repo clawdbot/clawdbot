@@ -166,11 +166,7 @@ export async function runPreparedEmbeddedLoop(
   const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
-  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
-    profileCandidates.length,
-    params.config,
-    sessionAgentId,
-  );
+  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
@@ -195,10 +191,9 @@ export async function runPreparedEmbeddedLoop(
     cfg: params.config,
     agentId: sessionAgentId,
   });
-  const postCompactionGuard = createPostCompactionLoopGuard(
-    resolvedLoopDetectionConfig?.postCompactionGuard,
-    { enabled: resolvedLoopDetectionConfig?.enabled !== false },
-  );
+  const postCompactionGuard = createPostCompactionLoopGuard({
+    enabled: resolvedLoopDetectionConfig?.enabled !== false,
+  });
   let postCompactionAbortController: AbortController | undefined;
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
   const attemptTerminalToolPresentation = {

@@ -30,6 +30,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "line",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "LINE_CHANNEL_ACCESS_TOKEN",
+            "LINE_CHANNEL_SECRET"
+          ]
+        }
+      },
       "label": "LINE",
       "selectionLabel": "LINE (Messaging API)",
       "detailLabel": "LINE Bot",

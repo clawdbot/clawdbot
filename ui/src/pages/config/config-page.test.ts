@@ -10,15 +10,13 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as realtimeTalk from "../chat/realtime-talk.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
-const { switchActiveRealtimeTalkCameras } = vi.hoisted(() => ({
-  switchActiveRealtimeTalkCameras: vi.fn<() => Promise<void>>(),
-}));
-
-vi.mock("../chat/realtime-talk.ts", () => ({ switchActiveRealtimeTalkCameras }));
+const switchActiveRealtimeTalkCameras =
+  vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,6 +29,9 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
+    switchActiveRealtimeTalkCameras,
+  );
   localStorageMock = createStorageMock();
   vi.stubGlobal("localStorage", localStorageMock);
   switchActiveRealtimeTalkCameras.mockReset();

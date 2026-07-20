@@ -86,7 +86,9 @@ describe.each([
       revision: 2,
       widgets: [{ sizeW: 8, sizeH: 6, revision: 1 }],
     });
-    expect(store.grant("agent:main:board", "weather", "granted", 1)).toMatchObject({
+    expect(
+      store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId),
+    ).toMatchObject({
       revision: 3,
       widgets: [{ grantState: "granted" }],
     });
@@ -101,6 +103,7 @@ describe.each([
       widgets: [{ revision: 2, grantState: "granted", sizeW: 8, sizeH: 6 }],
     });
     expect(updated.widgets[0]).not.toHaveProperty("declaredSummary");
+    expect(store.getSnapshot("agent:main:board").widgets[0]).not.toHaveProperty("declaredSummary");
   });
 
   it("keeps content-kind semantics and normalized ordering", () => {
@@ -123,9 +126,9 @@ describe.each([
           serverName: "server",
           toolName: "tool",
           uiResourceUri: "ui://resource",
-          originSessionKey: "agent:main:origin",
           toolCallId: "call",
         },
+        interactive: true,
       },
       placement: { tabId: "notes" },
     });
@@ -133,21 +136,24 @@ describe.each([
       expect.objectContaining({ name: "first", tabId: "main", position: 0 }),
       expect.objectContaining({ name: "app", tabId: "notes", position: 0 }),
     ]);
-    expect(store.readWidgetHtml("agent:main:board", "app")).toEqual({
+    expect(store.readWidgetHtml("agent:main:board", "app")).toBeUndefined();
+    expect(store.readWidgetMcpApp("agent:main:board", "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
         uiResourceUri: "ui://resource",
-        originSessionKey: "agent:main:origin",
         toolCallId: "call",
       },
       revision: 1,
+      instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      interactive: true,
     });
+    expect(store.getSnapshot("agent:main:board").widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
   it("preserves grants only for equal or narrower declarations", () => {
     const store = createStore();
-    store.putWidget({
+    const first = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
       content: { kind: "html", html: "one" },
@@ -156,7 +162,7 @@ describe.each([
         tools: ["weather.read", "weather.refresh"],
       },
     });
-    store.grant("agent:main:board", "scoped", "granted", 1);
+    store.grant("agent:main:board", "scoped", "granted", 1, first.widgets[0]?.instanceId);
 
     const equal = store.putWidget({
       sessionKey: "agent:main:board",
@@ -196,9 +202,110 @@ describe.each([
     expect(wider.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
   });
 
+  it("requires a fresh grant when an MCP app widget changes servers", () => {
+    const store = createStore();
+    const descriptor = {
+      serverName: "server-a",
+      toolName: "weather",
+      uiResourceUri: "ui://weather",
+      toolCallId: "call-a",
+    };
+    const first = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "weather",
+      content: { kind: "mcp-app", descriptor, interactive: true },
+      declared: { tools: ["refresh"] },
+    });
+    store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId);
+
+    const differentServer = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "weather",
+      content: {
+        kind: "mcp-app",
+        descriptor: { ...descriptor, serverName: "server-b", toolCallId: "call-b" },
+        interactive: true,
+      },
+      declared: { tools: ["refresh"] },
+    });
+    expect(differentServer.widgets[0]).toMatchObject({ revision: 2, grantState: "pending" });
+
+    store.grant(
+      "agent:main:board",
+      "weather",
+      "granted",
+      2,
+      differentServer.widgets[0]?.instanceId,
+    );
+    const sameServer = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "weather",
+      content: {
+        kind: "mcp-app",
+        descriptor: { ...descriptor, serverName: "server-b", toolCallId: "call-c" },
+        interactive: true,
+      },
+      declared: { tools: ["refresh"] },
+    });
+    expect(sameServer.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
+  });
+
+  it("rejects a delayed MCP App grant after remove and same-name replacement", () => {
+    const store = createStore();
+    const putApp = (serverName: string) =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "app",
+        content: {
+          kind: "mcp-app",
+          descriptor: {
+            serverName,
+            toolName: "tool",
+            uiResourceUri: `ui://${serverName}`,
+            toolCallId: `call-${serverName}`,
+          },
+          interactive: true,
+        },
+        declared: { tools: ["refresh"] },
+      });
+    const original = putApp("server-a");
+    store.applyOps("agent:main:board", [{ kind: "widget_remove", name: "app" }]);
+    const replacement = putApp("server-b");
+
+    expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
+    expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
+    expect(() =>
+      store.grant("agent:main:board", "app", "granted", 1, original.widgets[0]?.instanceId),
+    ).toThrow("instance changed");
+    expect(
+      store.grant("agent:main:board", "app", "granted", 1, replacement.widgets[0]?.instanceId)
+        .widgets[0],
+    ).toMatchObject({ grantState: "granted" });
+  });
+
+  it("rejects a delayed HTML grant after remove and same-name replacement", () => {
+    const store = createStore();
+    const putHtml = (html: string) =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "app",
+        content: { kind: "html", html },
+        declared: { tools: ["refresh"] },
+      });
+    const original = putHtml("original");
+    store.applyOps("agent:main:board", [{ kind: "widget_remove", name: "app" }]);
+    const replacement = putHtml("replacement");
+
+    expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
+    expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
+    expect(() =>
+      store.grant("agent:main:board", "app", "granted", 1, original.widgets[0]?.instanceId),
+    ).toThrow("instance changed");
+  });
+
   it("rejects stale grant revisions before accepting the current one", () => {
     const store = createStore();
-    store.putWidget({
+    const first = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
       content: { kind: "html", html: "one" },
@@ -207,7 +314,10 @@ describe.each([
     expect(() => store.grant("agent:main:board", "scoped", "granted", 2)).toThrow(
       "revision changed",
     );
-    expect(store.grant("agent:main:board", "scoped", "granted", 1).widgets[0]).toMatchObject({
+    expect(
+      store.grant("agent:main:board", "scoped", "granted", 1, first.widgets[0]?.instanceId)
+        .widgets[0],
+    ).toMatchObject({
       revision: 1,
       grantState: "granted",
     });
@@ -225,6 +335,40 @@ describe.each([
 });
 
 describe("SqliteBoardStore persistence", () => {
+  it("drops MCP App rows without canonical authority provenance", () => {
+    const stateDir = tempDirs.make("openclaw-board-noncanonical-app-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:board";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "legacy-app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          toolCallId: "call",
+        },
+        interactive: true,
+      },
+      declared: { tools: ["refresh"] },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE board_widgets SET manifest = '{}' WHERE session_key = ? AND name = ?")
+      .run(sessionKey, "legacy-app");
+
+    expect(store.getSnapshot(sessionKey).widgets).toEqual([]);
+    expect(store.readWidgetMcpApp(sessionKey, "legacy-app")).toBeUndefined();
+  });
+
   it("lazily creates board tables for an existing v13 database", () => {
     const stateDir = tempDirs.make("openclaw-board-lazy-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -256,6 +400,10 @@ describe("SqliteBoardStore persistence", () => {
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
+    // Reads before any write must see "no boards", not "no such table".
+    expect(store.getSnapshot(sessionKey)).toMatchObject({ revision: 0, tabs: [], widgets: [] });
+    expect(store.readWidgetHtml(sessionKey, "status")).toBeUndefined();
+    expect(store.listSessionsWithBoards()).toEqual([]);
     expect(() =>
       store.putWidget({
         sessionKey,
@@ -436,13 +584,13 @@ describe("SqliteBoardStore persistence", () => {
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
-    store.putWidget({
+    const first = store.putWidget({
       sessionKey,
       name: "status",
       content: { kind: "html", html: "one" },
       declared: { tools: ["status.read", "status.refresh"] },
     });
-    store.grant(sessionKey, "status", "granted", 1);
+    store.grant(sessionKey, "status", "granted", 1, first.widgets[0]?.instanceId);
     store.putWidget({
       sessionKey,
       name: "status",

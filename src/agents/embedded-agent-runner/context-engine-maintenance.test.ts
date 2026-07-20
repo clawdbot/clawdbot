@@ -281,7 +281,7 @@ describe("runContextEngineMaintenance", () => {
       reason: "turn",
       executionMode: "background",
       sessionManager,
-      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
+      config: {},
     });
 
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
@@ -303,7 +303,7 @@ describe("runContextEngineMaintenance", () => {
           },
         ],
       },
-      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
+      config: {},
     });
   });
 
@@ -436,7 +436,7 @@ describe("runContextEngineMaintenance", () => {
             tokenBudget: 2048,
             currentTokenCount: 1536,
           },
-          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+          config: {},
         });
 
         expect(result).toBeUndefined();
@@ -460,7 +460,7 @@ describe("runContextEngineMaintenance", () => {
                 },
               ],
             },
-            config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+            config: {},
           }),
         );
 

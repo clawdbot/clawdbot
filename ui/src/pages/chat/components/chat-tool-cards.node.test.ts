@@ -1,15 +1,11 @@
 // @vitest-environment node
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractToolCardsCached as extractToolCards } from "../../../lib/chat/tool-cards.ts";
+import * as toolDisplay from "../../../lib/chat/tool-display.ts";
 
-vi.mock("../../../components/icons.ts", () => ({
-  icons: {},
-}));
-
-vi.mock("../../../lib/chat/tool-display.ts", () => ({
-  formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name }: { name: string }) => ({
+function resolveToolDisplay({ name = "" }: Parameters<typeof toolDisplay.resolveToolDisplay>[0]) {
+  return {
     name,
     label:
       {
@@ -22,8 +18,17 @@ vi.mock("../../../lib/chat/tool-display.ts", () => ({
         .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
         .join(" "),
     icon: "zap",
-  }),
-}));
+  } as ReturnType<typeof toolDisplay.resolveToolDisplay>;
+}
+
+beforeEach(() => {
+  vi.spyOn(toolDisplay, "formatToolDetail").mockReturnValue(undefined);
+  vi.spyOn(toolDisplay, "resolveToolDisplay").mockImplementation(resolveToolDisplay);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("tool-card extraction", () => {
   it("pretty-prints structured args and pairs tool output onto the same card", () => {

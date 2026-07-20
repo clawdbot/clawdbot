@@ -82,6 +82,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     userTurnTranscriptRecorder,
     fallbackTrajectoryRecorder,
     lifecycle,
+    terminal,
     lifecycleGeneration,
   } = params.attempt;
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
@@ -345,9 +346,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     }
 
     if (fallbackExhausted || lifecycle.resolveResultError(result, false)) {
-      lifecycle.emitResultError(result, fallbackExhausted);
+      lifecycle.emitResultError(result, fallbackExhausted, terminal);
     } else {
-      lifecycle.emitEnd(result);
+      lifecycle.emitEnd(terminal);
     }
     return {
       deliveryResult,

@@ -461,32 +461,6 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.configPath).toBe("/tmp/openclaw-daemon/openclaw.json");
   });
 
-  it("uses configured handshake timeout as the default daemon probe budget", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        handshakeTimeoutMs: 30_000,
-        auth: { token: "daemon-token" },
-      },
-    };
-
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
-
-    const probeInput = callArg(callGatewayStatusProbe) as {
-      config?: unknown;
-      preauthHandshakeTimeoutMs?: number;
-      timeoutMs?: number;
-    };
-    expect(probeInput.config).toBe(daemonLoadedConfig);
-    expect(probeInput.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(probeInput.timeoutMs).toBe(30_000);
-  });
-
   it("reuses the shared CLI config snapshot when the daemon uses the same config path", async () => {
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],

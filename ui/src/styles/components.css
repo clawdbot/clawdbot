@@ -1400,7 +1400,8 @@
   position: relative;
 }
 
-.callout--dismissible {
+.callout--dismissible,
+.callout--action {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -2668,6 +2669,24 @@ td.data-table-key-col {
 
 .chat-queue__item--failed .chat-queue__icon {
   color: var(--danger);
+}
+
+/* Reconnect rows mirror the connection pill's amber status dot so the queue
+   reads as quiet auto-retry status, not a failure needing action. */
+.chat-queue__dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin: 0 3.5px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+.chat-queue__item--reconnect .chat-queue__badge {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
 }
 
 .chat-queue__badge {
@@ -5184,7 +5203,7 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* Attribute badges (worktree fork, attached automation, cloud placement):
+/* Attribute badges (attached automation, approval, cloud placement):
    muted metadata that sits after the title inside the row link, outside the
    trail/action overlap cell, so touch devices (which hide the trail) and
    hovered rows keep them. */

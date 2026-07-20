@@ -578,22 +578,25 @@ describe("test-projects args", () => {
     );
   });
 
-  it("preserves explicit Vitest filesystem module cache paths", () => {
-    const specs = [
+  it("splits an explicit Vitest filesystem module cache root", () => {
+    const [spec] = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: {},
+        },
+      ],
       {
-        config: "test/vitest/vitest.gateway.config.ts",
-        env: {},
-      },
-    ];
-
-    expect(
-      applyParallelVitestCachePaths(specs, {
         cwd: "/repo",
         env: {
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache",
         },
-      }),
-    ).toBe(specs);
+      },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/tmp/cache/0-test-vitest-vitest.gateway.config.ts",
+    );
   });
 
   it("routes cli targets to the cli config", () => {

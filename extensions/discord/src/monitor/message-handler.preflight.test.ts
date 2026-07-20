@@ -605,7 +605,6 @@ describe("preflightDiscordMessage", () => {
       {
         path: "/tmp/openclaw-discord-test/photo.png",
         contentType: "image/png",
-        placeholder: "<media:image>",
       },
     ]);
   });
@@ -1744,7 +1743,7 @@ describe("preflightDiscordMessage", () => {
     expect(entries).toHaveLength(1);
     expect(entries?.[0]).toMatchObject({
       sender: "Alice",
-      body: "<media:image> (1 image)",
+      body: "<media:image>",
       messageId: "m-history-image",
       media: [
         {
@@ -1814,7 +1813,7 @@ describe("preflightDiscordMessage", () => {
     expect(guildHistories.get(channelId)).toEqual([
       expect.objectContaining({
         sender: "Alice",
-        body: "<media:document> (1 file)",
+        body: "<media:document>",
         messageId: "m-history-doc",
       }),
     ]);
@@ -1883,13 +1882,13 @@ describe("preflightDiscordMessage", () => {
     expect(guildHistories.get(channelId)).toEqual([
       expect.objectContaining({
         sender: "Alice",
-        body: "<media:sticker> (1 sticker)",
+        body: "<media:sticker>",
         messageId: "m-history-sticker",
         media: [
           {
             path: "/tmp/openclaw-discord-test/sticker.png",
             contentType: "image/png",
-            kind: "image",
+            kind: "sticker",
             messageId: "m-history-sticker",
           },
         ],

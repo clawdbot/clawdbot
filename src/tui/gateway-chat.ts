@@ -445,7 +445,6 @@ function resolveBoundGatewayConnection(
     token: explicitAuth.token,
     password: explicitAuth.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: opts.config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi: false,
   };
 }
@@ -499,7 +498,6 @@ async function resolveGatewayConnection(
       token: explicitAuth.token,
       password: explicitAuth.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -522,7 +520,6 @@ async function resolveGatewayConnection(
       ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
         ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
         : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
   }
@@ -539,7 +536,6 @@ async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -565,7 +561,6 @@ async function resolveGatewayConnection(
     token: resolved.token,
     password: resolved.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };
 }

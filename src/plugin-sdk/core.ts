@@ -98,7 +98,6 @@ export type {
   ProviderCatalogContext,
   ProviderCatalogResult,
   ProviderDefaultThinkingPolicyContext,
-  ProviderDiscoveryContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeResolvedModelContext,

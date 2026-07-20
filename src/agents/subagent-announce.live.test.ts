@@ -295,7 +295,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
@@ -304,7 +303,7 @@ describeLive("subagent announce live", () => {
       });
       await state.writeConfig(
         liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
-          queue: { mode: "collect", debounceMs: 2_500 },
+          queue: { mode: "collect" },
           toolAllow: ["sessions_spawn", "bash"],
         }),
       );
@@ -489,7 +488,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
@@ -685,7 +683,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,

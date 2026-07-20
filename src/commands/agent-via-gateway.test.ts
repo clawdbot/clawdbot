@@ -1737,7 +1737,7 @@ describe("agentCliCommand", () => {
       expect(
         mockMessages(runtime.error).some((message) =>
           message.includes(
-            "Gateway agent connection closed; running embedded agent with fresh session",
+            "Gateway agent connection closed; continuity was intentionally not preserved",
           ),
         ),
       ).toBe(true);
@@ -1900,7 +1900,7 @@ describe("agentCliCommand", () => {
       expect(resultMetaOverrides.fallbackSessionKey).toBe(fallbackSessionKey);
       expect(
         mockMessages(runtime.error).some((message) =>
-          message.includes("Gateway agent timed out; running embedded agent with fresh session"),
+          message.includes("Gateway agent timed out; continuity was intentionally not preserved"),
         ),
       ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
@@ -1990,16 +1990,25 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("passes fallback metadata into JSON embedded fallback output", async () => {
+  it.each([
+    {
+      label: "connection-closed",
+      createError: createGatewayClosedError,
+      reason: "gateway_closed" as const,
+    },
+    {
+      label: "timeout",
+      createError: createGatewayTimeoutError,
+      reason: "gateway_timeout" as const,
+    },
+  ])("surfaces $label session divergence in JSON fallback output", async (testCase) => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayClosedError());
+      const requestedSessionKey = "agent:main:incident-42";
+      callGateway.mockRejectedValue(testCase.createError());
       agentCommand.mockImplementationOnce(async (opts, rt) => {
         expect(loggingState.forceConsoleToStderr).toBe(true);
-        const resultMetaOverrides = (
-          opts as {
-            resultMetaOverrides?: { transport?: string; fallbackFrom?: string };
-          }
-        ).resultMetaOverrides;
+        const resultMetaOverrides = (opts as { resultMetaOverrides?: Record<string, unknown> })
+          .resultMetaOverrides;
         const meta = {
           durationMs: 1,
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
@@ -2021,7 +2030,10 @@ describe("agentCliCommand", () => {
         } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
       });
 
-      const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
+      const result = await agentCliCommand(
+        { message: "hi", sessionKey: requestedSessionKey, json: true },
+        jsonRuntime,
+      );
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = requireRecord(
@@ -2032,11 +2044,19 @@ describe("agentCliCommand", () => {
         fallbackOpts.resultMetaOverrides,
         "fallback metadata",
       );
+      const fallbackSessionKey = String(fallbackOpts.sessionKey);
       expect(resultMetaOverrides.transport).toBe("embedded");
       expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
+      expect(resultMetaOverrides.fallback).toEqual({
+        reason: testCase.reason,
+        requestedSessionKey,
+        sessionKey: fallbackSessionKey,
+      });
       expect(
         mockMessages(jsonRuntime.error).some((message) =>
-          message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
+          message.includes(
+            "continuity was intentionally not preserved. Running embedded agent with fresh session",
+          ),
         ),
       ).toBe(true);
       expect(loggingState.forceConsoleToStderr).toBe(true);
@@ -2048,11 +2068,21 @@ describe("agentCliCommand", () => {
       expect(payloadMeta.durationMs).toBe(1);
       expect(payloadMeta.transport).toBe("embedded");
       expect(payloadMeta.fallbackFrom).toBe("gateway");
+      expect(payloadMeta.fallback).toEqual({
+        reason: testCase.reason,
+        requestedSessionKey,
+        sessionKey: fallbackSessionKey,
+      });
       const resultRecord = requireRecord(result, "command result");
       const resultMeta = requireRecord(resultRecord.meta, "command result metadata");
       expect(resultMeta.durationMs).toBe(1);
       expect(resultMeta.transport).toBe("embedded");
       expect(resultMeta.fallbackFrom).toBe("gateway");
+      expect(resultMeta.fallback).toEqual({
+        reason: testCase.reason,
+        requestedSessionKey,
+        sessionKey: fallbackSessionKey,
+      });
     });
   });
 

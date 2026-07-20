@@ -11,7 +11,8 @@ import {
 } from "../scripts/lib/package-dist-inventory.ts";
 import {
   listPluginSdkDistArtifacts,
-  listPrivateLocalOnlyPluginSdkDistArtifacts,
+  listPackagedPrivatePluginSdkRuntimeArtifacts,
+  listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -58,8 +59,9 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
   return withEnv(env, callback);
 }
 
-const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
-const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
+const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
+const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
+const unpackagedPrivatePluginSdkPaths = listUnpackagedPrivatePluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -529,6 +531,7 @@ describe("collectForbiddenPackPaths", () => {
         "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
       ]),
     ).toEqual([
+      "dist/plugin-sdk/index.d.ts",
       "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
       "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
     ]);
@@ -563,17 +566,27 @@ describe("collectForbiddenPackPaths", () => {
     expect(pkg.files).toContain("!dist/plugin-sdk/src/**");
   });
 
-  it("blocks private local-only plugin SDK artifacts from npm pack output", () => {
+  it("blocks private declarations and non-production SDK artifacts from npm pack output", () => {
     expect(
-      collectForbiddenPackPaths(["dist/index.js", ...privateLocalOnlyPluginSdkPackPaths]),
-    ).toEqual([...privateLocalOnlyPluginSdkPackPaths].toSorted());
+      collectForbiddenPackPaths(["dist/index.js", ...unpackagedPrivatePluginSdkPaths]),
+    ).toEqual([...unpackagedPrivatePluginSdkPaths].toSorted());
   });
 
-  it("keeps private local-only plugin SDK artifacts excluded by package files", () => {
+  it("keeps private declarations and non-production SDK artifacts excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
 
-    for (const entry of privateLocalOnlyPluginSdkPackPaths) {
+    for (const entry of unpackagedPrivatePluginSdkPaths) {
       expect(pkg.files).toContain(`!${entry}`);
+    }
+  });
+
+  it("keeps production-private plugin SDK runtime facades inside package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+
+    expect(packagedPrivatePluginSdkRuntimePaths.length).toBeGreaterThan(0);
+    for (const entry of packagedPrivatePluginSdkRuntimePaths) {
+      expect(pkg.files).not.toContain(`!${entry}`);
+      expect(collectForbiddenPackPaths([entry])).toEqual([]);
     }
   });
 
@@ -687,10 +700,6 @@ describe("collectMissingPackPaths", () => {
     const missing = collectMissingPackPaths([
       "dist/index.js",
       "dist/entry.js",
-      "dist/plugin-sdk/compat.js",
-      "dist/plugin-sdk/index.js",
-      "dist/plugin-sdk/index.d.ts",
-      "dist/plugin-sdk/root-alias.cjs",
       "dist/build-info.json",
     ]);
 
@@ -735,6 +744,7 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-proxy.mjs",
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
+        ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/prepare-git-hooks.mjs",
@@ -745,7 +755,6 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/recommended-tool-installs.json",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
-        "dist/plugin-sdk/root-alias.cjs",
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
         "dist/audit/audit-event-writer.worker.js",
@@ -795,34 +804,6 @@ describe("collectMissingPackPaths", () => {
         "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
         "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
       ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects packed plugin SDK root aliases that depend on minified export letters", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-check-packed-root-alias-"));
-    try {
-      const packageRoot = join(root, "openclaw");
-      const pluginSdkDir = join(packageRoot, "dist", "plugin-sdk");
-      mkdirSync(pluginSdkDir, { recursive: true });
-      writeFileSync(
-        join(packageRoot, "package.json"),
-        `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
-      );
-      writeFileSync(
-        join(pluginSdkDir, "root-alias.cjs"),
-        "module.exports = { onDiagnosticEvent: mod.r };\n",
-      );
-
-      expect(
-        collectPackedInstalledPackageVerificationErrors({
-          expectedVersion: "2026.5.14-beta.3",
-          packageRoot,
-        }),
-      ).toContain(
-        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
-      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -892,8 +873,8 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
-      expect(source).toContain('"openclaw/plugin-sdk"');
-      expect(source).toContain('"openclaw/plugin-sdk/provider-entry"');
+      expect(source).toContain('"openclaw/plugin-sdk/core"');
+      expect(source).toContain('"openclaw/plugin-sdk/plugin-entry"');
       expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
       expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
       expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');

@@ -1,5 +1,10 @@
 export * from "./clawhub-trust-error-details.js";
-export { readMissingScopeError, readMissingScopeErrorDetails } from "./gateway-error-details.js";
+export * from "./system-agent-error-details.js";
+export {
+  isMcpAppViewExpiredError,
+  readMissingScopeError,
+  readMissingScopeErrorDetails,
+} from "./gateway-error-details.js";
 export * from "./session-icon.js";
 export * from "./terminal-validators.js";
 export {
@@ -14,7 +19,11 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
-export type { GatewayErrorDetails, MissingScopeErrorDetails } from "./schema/error-codes.js";
+export type {
+  GatewayErrorDetails,
+  McpAppViewExpiredErrorDetails,
+  MissingScopeErrorDetails,
+} from "./schema/error-codes.js";
 export * from "./schema/board.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
@@ -22,6 +31,8 @@ import {
   BoardEventParamsSchema,
   BoardGetParamsSchema,
   BoardUpdateParamsSchema,
+  BoardWidgetContentSchema,
+  BoardWidgetAppViewParamsSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetPutParamsSchema,
   AgentEventSchema,
@@ -465,6 +476,12 @@ import {
   SessionsSearchResultSchema,
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
+  SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResultSchema,
+  SessionDiscussionInfoSchema,
+  SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResultSchema,
+  SessionDiscussionStateSchema,
   TaskSuggestionEventSchema,
   TaskSuggestionResolutionSchema,
   TaskSuggestionSchema,
@@ -529,6 +546,9 @@ import {
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
+  SystemAgentChatHistoryParamsSchema,
+  SystemAgentChatHistoryResultSchema,
+  SystemAgentChatHistoryTurnSchema,
   SystemChangeEntrySchema,
   SystemChangeKindSchema,
   SystemChangeSourceSchema,
@@ -659,6 +679,8 @@ export const validateAgentsListParams = lazyCompile(AgentsListParamsSchema);
 export const validateWorktreesListParams = lazyCompile(WorktreesListParamsSchema);
 export const validateBoardGetParams = lazyCompile(BoardGetParamsSchema);
 export const validateBoardUpdateParams = lazyCompile(BoardUpdateParamsSchema);
+export const validateBoardWidgetContent = lazyCompile(BoardWidgetContentSchema);
+export const validateBoardWidgetAppViewParams = lazyCompile(BoardWidgetAppViewParamsSchema);
 export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
 export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
 export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);
@@ -766,6 +788,10 @@ export const validateSessionsBranchesSwitchParams = lazyCompile(SessionsBranches
 export const validateSessionsRewindParams = lazyCompile(SessionsRewindParamsSchema);
 export const validateSessionsForkParams = lazyCompile(SessionsForkParamsSchema);
 export const validateSessionsUsageParams = lazyCompile(SessionsUsageParamsSchema);
+export const validateSessionDiscussionInfoParams = lazyCompile(SessionDiscussionInfoParamsSchema);
+export const validateSessionDiscussionInfoResult = lazyCompile(SessionDiscussionInfoResultSchema);
+export const validateSessionDiscussionOpenParams = lazyCompile(SessionDiscussionOpenParamsSchema);
+export const validateSessionDiscussionOpenResult = lazyCompile(SessionDiscussionOpenResultSchema);
 export const validateTaskSuggestionsListParams = lazyCompile(TaskSuggestionsListParamsSchema);
 export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCreateParamsSchema);
 export const validateTaskSuggestionsAcceptParams = lazyCompile(TaskSuggestionsAcceptParamsSchema);
@@ -781,6 +807,7 @@ export const validateConfigSchemaParams = lazyCompile(ConfigSchemaParamsSchema);
 export const validateConfigSchemaLookupParams = lazyCompile(ConfigSchemaLookupParamsSchema);
 export const validateConfigSchemaLookupResult = lazyCompile(ConfigSchemaLookupResultSchema);
 export const validateSystemAgentChatParams = lazyCompile(SystemAgentChatParamsSchema);
+export const validateSystemAgentChatHistoryParams = lazyCompile(SystemAgentChatHistoryParamsSchema);
 export const validateSystemChangesListParams = lazyCompile(SystemChangesListParamsSchema);
 export const validateSystemAgentSetupDetectParams = lazyCompile(SystemAgentSetupDetectParamsSchema);
 export const validateSystemAgentSetupVerifyParams = lazyCompile(SystemAgentSetupVerifyParamsSchema);
@@ -1118,6 +1145,12 @@ export {
   SessionsGroupsMutationResultSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  SessionDiscussionStateSchema,
+  SessionDiscussionInfoSchema,
+  SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResultSchema,
+  SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResultSchema,
   ArtifactSummarySchema,
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
@@ -1173,6 +1206,9 @@ export {
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
+  SystemAgentChatHistoryParamsSchema,
+  SystemAgentChatHistoryResultSchema,
+  SystemAgentChatHistoryTurnSchema,
   SystemChangeEntrySchema,
   SystemChangeKindSchema,
   SystemChangeSourceSchema,
@@ -1508,6 +1544,9 @@ export type {
   SystemAgentChatParams,
   SystemAgentChatQuestion,
   SystemAgentChatResult,
+  SystemAgentChatHistoryParams,
+  SystemAgentChatHistoryResult,
+  SystemAgentChatHistoryTurn,
   SystemChangeEntry,
   SystemChangeKind,
   SystemChangeSource,
@@ -1605,6 +1644,12 @@ export type {
   SessionDiffFileStatus,
   SessionsDiffParams,
   SessionsDiffResult,
+  SessionDiscussionState,
+  SessionDiscussionInfo,
+  SessionDiscussionInfoParams,
+  SessionDiscussionInfoResult,
+  SessionDiscussionOpenParams,
+  SessionDiscussionOpenResult,
   ArtifactSummary,
   ArtifactsListParams,
   ArtifactsListResult,

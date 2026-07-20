@@ -6,18 +6,6 @@
     "onStartup": false
   },
   "channels": ["sms"],
-  "channelEnvVars": {
-    "sms": [
-      "TWILIO_ACCOUNT_SID",
-      "TWILIO_AUTH_TOKEN",
-      "TWILIO_PHONE_NUMBER",
-      "TWILIO_SMS_FROM",
-      "TWILIO_MESSAGING_SERVICE_SID",
-      "SMS_PUBLIC_WEBHOOK_URL",
-      "SMS_WEBHOOK_PATH",
-      "SMS_ALLOWED_USERS"
-    ]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

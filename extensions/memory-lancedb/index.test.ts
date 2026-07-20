@@ -147,10 +147,6 @@ function expectHookRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
   expect(hookHandler(on, hookName)).toBeTypeOf("function");
 }
 
-function expectHookNotRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
-  expect(on.mock.calls.map(([name]) => name)).not.toContain(hookName);
-}
-
 function expectToolExecute(tool: unknown, name?: string) {
   const record = tool as { execute?: unknown; name?: unknown };
   if (name) {
@@ -409,7 +405,6 @@ describe("memory plugin e2e", () => {
     registerTestPlugin(memoryPlugin, mockApi);
 
     expectHookRegistered(on, "before_prompt_build");
-    expectHookNotRegistered(on, "before_agent_start");
   });
 
   test("registers memory public artifact provider for memory-wiki bridge parity", async () => {

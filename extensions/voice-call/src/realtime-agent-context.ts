@@ -61,6 +61,7 @@ export async function buildRealtimeVoiceInstructions(params: {
   config: VoiceCallConfig;
   coreConfig: OpenClawConfig;
   agentRuntime: CoreAgentDeps;
+  agentId: string;
 }): Promise<string> {
   const { config } = params;
   const sections: string[] = [params.baseInstructions];
@@ -74,7 +75,7 @@ export async function buildRealtimeVoiceInstructions(params: {
     return sections.filter(Boolean).join("\n\n");
   }
 
-  const agentId = config.agentId ?? "main";
+  const { agentId } = params;
   const capsule: string[] = [
     "OpenClaw agent voice context:",
     `- Agent id: ${agentId}`,

@@ -3,8 +3,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { areUiSessionKeysEquivalentForHost } from "../../lib/sessions/session-key.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
-import { isDefaultChatLanding, startModelSetupFirstRunRedirect } from "./first-run.ts";
+import {
+  isDefaultChatLanding,
+  locationsMatch,
+  startModelSetupFirstRunRedirect,
+} from "./first-run.ts";
 
 describe("model setup first-run redirect", () => {
   it("recognizes only the implicit chat landing without a session deep link", () => {
@@ -33,6 +38,36 @@ describe("model setup first-run redirect", () => {
         { pathname: "/settings/general", search: "", hash: "" },
         "",
         routeIdFromPath,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the default landing eligible when the gateway canonicalizes its session key", () => {
+    const expected = { pathname: "/chat", search: "?session=main", hash: "" };
+    const host = {
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+    };
+
+    expect(
+      locationsMatch(
+        { pathname: "/chat", search: "?session=agent%3Amain%3Amain", hash: "" },
+        expected,
+        (left, right) => areUiSessionKeysEquivalentForHost(host, left, right),
+      ),
+    ).toBe(true);
+    expect(
+      locationsMatch(
+        { pathname: "/chat", search: "?session=agent%3Aother%3Amain", hash: "" },
+        expected,
+        (left, right) => areUiSessionKeysEquivalentForHost(host, left, right),
       ),
     ).toBe(false);
   });

@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
+  reconcileWaitingApprovalsFromSnapshot,
   resetToolStream,
   type FallbackStatus,
   type PlanStatus,
@@ -253,6 +254,124 @@ describe("app-tool-stream plan snapshots", () => {
     resetToolStream(host);
 
     expect(host.planStatus).toBeNull();
+  });
+});
+
+describe("app-tool-stream approval lifecycle", () => {
+  const approval = (runId: string | undefined, sessionKey = "main") => ({
+    id: "approval-1",
+    kind: "exec" as const,
+    request: { command: "echo test", sessionKey, runId },
+    createdAtMs: 1,
+    expiresAtMs: 2,
+  });
+
+  const learnRun = (host: MutableHost, runId: string) => {
+    handleAgentEvent(host, agentEvent(runId, 1, "lifecycle", { phase: "start" }));
+  };
+
+  it("hydrates a parked run only when the approval matches a learned engine run id", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
+    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: null,
+      runId: "run-1",
+    });
+  });
+
+  it("does not hydrate absent or mismatched run ids even while a run is active", () => {
+    const host = createHost({
+      chatRunId: "client-active-run",
+      waitingApprovalStatuses: new Map(),
+    });
+    learnRun(host, "foreground-engine-run");
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval(undefined)])).toBe(false);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("other-engine-run")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("does not label foreground work for an unrelated heartbeat approval", () => {
+    const host = createHost({
+      chatRunId: "foreground-client-run",
+      waitingApprovalStatuses: new Map(),
+    });
+    learnRun(host, "foreground-engine-run");
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("heartbeat-run")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("clears only parked runs whose approvals leave the queue snapshot", () => {
+    const host = createHost({
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "run-1" }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: "run-2" }],
+      ]),
+    });
+
+    expect(
+      reconcileWaitingApprovalsFromSnapshot(host, [{ ...approval("run-2"), id: "approval-2" }]),
+    ).toBe(true);
+    expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
+  });
+
+  it("clears hydrated state when the lifecycle resolution arrives", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "approval-resolved",
+        approvalId: "approval-1",
+      }),
+    );
+
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    resetToolStream(host);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    reconcileWaitingApprovalsFromSnapshot(host, []);
+    learnRun(host, "run-1");
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
+  });
+
+  it("replaces hydrated state with the authoritative lifecycle payload", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "waiting-approval",
+        approvalId: "approval-1",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: "tool-1",
+      runId: "run-1",
+    });
+  });
+
+  it("does not synthesize waiting state after a reset without a new run event", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
+
+    resetToolStream(host);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
   });
 });
 

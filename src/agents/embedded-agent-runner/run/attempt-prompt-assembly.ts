@@ -127,7 +127,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         messages: promptBuildMessages,
         hookCtx,
         hookRunner: input.hookRunner,
-        beforeAgentStartResult: attempt.beforeAgentStartResult,
         bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       });
   const promptBeforePromptBuildHooks = effectivePrompt;

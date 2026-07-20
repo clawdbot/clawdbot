@@ -1049,6 +1049,7 @@ describe("detectChangedScope", () => {
       strict_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
+      strict_native_i18n: "false",
       changed_paths_json: "[]",
     });
   });

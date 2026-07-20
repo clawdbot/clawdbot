@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
+  migrateLegacyOnboardingRecommendationsScope: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
   maybeRepairOpenAICodexAuthConfig: vi.fn(),
   maybeRepairOpenAICodexAuthProfileStores: vi.fn(),
@@ -40,6 +41,10 @@ vi.mock("../doctor-plugin-registry.js", () => ({
 
 vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
+}));
+
+vi.mock("../../infra/state-migrations.onboarding-recommendations.js", () => ({
+  migrateLegacyOnboardingRecommendationsScope: mocks.migrateLegacyOnboardingRecommendationsScope,
 }));
 
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
@@ -246,6 +251,10 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
+      changes: [],
+      warnings: [],
+    });
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
       detected: [],
       changes: [],
@@ -284,6 +293,33 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       changes: [],
     }));
+  });
+
+  it("runs the doctor-only onboarding recommendation scope migration", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
+    const candidate = {} as OpenClawConfig;
+    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
+      changes: ["Migrated onboarding recommendation state."],
+      warnings: ["Migration warning."],
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: candidate,
+        candidate,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(mocks.migrateLegacyOnboardingRecommendationsScope).toHaveBeenCalledWith({
+      cfg: candidate,
+      env,
+    });
+    expect(result.changeNotes).toContain("Migrated onboarding recommendation state.");
+    expect(result.warningNotes).toContain("Migration warning.");
   });
 
   it("applies ordered repairs and sanitizes empty-allowlist warnings", async () => {

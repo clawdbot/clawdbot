@@ -87,21 +87,9 @@ type ManagedWorktreeGcParams = {
   limits?: WorktreeCleanupLimits;
 };
 
-/**
- * Maps `worktrees.cleanup` config into enforceable byte/count limits.
- * 0 and unset both mean "no limit", so gc callers can pass the result verbatim.
- */
-export function resolveWorktreeCleanupLimits(config?: {
-  cleanup?: { maxCount?: number; maxTotalSizeGb?: number };
-}): WorktreeCleanupLimits {
-  const maxCount = config?.cleanup?.maxCount;
-  const maxTotalSizeGb = config?.cleanup?.maxTotalSizeGb;
-  return {
-    ...(typeof maxCount === "number" && maxCount > 0 ? { maxCount: Math.floor(maxCount) } : {}),
-    ...(typeof maxTotalSizeGb === "number" && maxTotalSizeGb > 0
-      ? { maxTotalSizeBytes: Math.round(maxTotalSizeGb * 1024 ** 3) }
-      : {}),
-  };
+/** Returns the default no-limit policy for age-based managed-worktree cleanup. */
+export function resolveWorktreeCleanupLimits(): WorktreeCleanupLimits {
+  return {};
 }
 
 function resultMessage(result: GitResult): string {
@@ -994,7 +982,7 @@ export class ManagedWorktreeService {
   }
 
   /**
-   * Enforces configured count/size retention across all live managed worktrees.
+   * Enforces optional count/size retention across all live managed worktrees.
    * Manual worktrees count toward the totals but are never limit-evicted, so a
    * limit can stay exceeded when only protected worktrees remain.
    */

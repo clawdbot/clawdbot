@@ -147,7 +147,9 @@ export function normalizeHistoryMediaEntries(params: {
     out.push({
       path,
       contentType: entry.contentType,
-      kind: "image",
+      // Stickers are image-compatible for history reattachment, but their native kind drives
+      // text-only history rendering and must survive this normalization boundary.
+      kind: entry.kind === "sticker" ? "sticker" : "image",
       messageId: entry.messageId ?? params.messageId,
     });
     if (out.length >= limit) {

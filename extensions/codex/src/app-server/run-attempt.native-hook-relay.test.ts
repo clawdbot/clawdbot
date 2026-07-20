@@ -204,7 +204,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
+    params.agentAccountId = "operations";
     params.currentChannelId = "channel:target";
+    params.memberRoleIds = ["maintainer-role"];
+    params.senderId = "maintainer-user";
+    params.senderIsOwner = false;
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
@@ -251,6 +255,13 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
       channelId: "target",
+      requester: {
+        channel: "discord",
+        accountId: "operations",
+        senderId: "maintainer-user",
+        senderIsOwner: false,
+        roleIds: ["maintainer-role"],
+      },
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });

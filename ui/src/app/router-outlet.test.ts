@@ -172,7 +172,7 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("schedules stale-chunk recovery and falls back to revalidation while offline", async () => {
+  it("waits out a restarting gateway before falling back to revalidation", async () => {
     vi.useFakeTimers();
     let loadCount = 0;
     const fetchMock = vi.fn<typeof fetch>(
@@ -214,15 +214,27 @@ describe("openclaw-router-outlet", () => {
     expect(alert?.textContent).toContain("Reload to get the latest panel");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(loadCount).toBe(1);
-    outlet.querySelector<HTMLButtonElement>("button")?.click();
+    const button = outlet.querySelector<HTMLButtonElement>("button");
+    button?.click();
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The gateway restart is what stranded the chunk, so one failed probe must
+    // not end the retry: the click keeps waiting (and shows it) rather than
+    // silently degrading to a revalidation that cannot fix a replaced chunk.
     await vi.advanceTimersByTimeAsync(3_000);
     vi.runAllTicks();
     await settleOutlet(outlet);
-    expect(loadCount).toBe(2);
+    expect(loadCount).toBe(1);
+    expect(button?.disabled).toBe(true);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Past the bounded wait it still degrades to revalidation instead of
+    // navigating into a fatal error page against an unreachable gateway.
+    await vi.advanceTimersByTimeAsync(35_000);
+    vi.runAllTicks();
+    await settleOutlet(outlet);
+    expect(loadCount).toBe(2);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
     outlet.remove();
     router.stop();
   });

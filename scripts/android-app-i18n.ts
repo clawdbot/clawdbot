@@ -1273,13 +1273,35 @@ export async function syncAndroidAppI18n(options: { check?: boolean } = {}) {
   return catalog;
 }
 
-export async function checkAndroidAppI18n() {
-  const [sourceFiles, localeStrings, referenceSource] = await Promise.all([
+export async function verifyAndroidAppI18n() {
+  const [sourceFiles, base, referenceSource] = await Promise.all([
     readAndroidSource(),
-    Promise.all(LOCALES.map(readStrings)),
+    readStrings("values"),
     readAndroidResourceReferences(),
   ]);
+  const baseKeys = new Set(base.keys());
+  const problems: Array<readonly [string, string[]]> = [
+    ["English syntax", findInvalidResourceSyntax(base)],
+  ];
+  const manualBaseKeys = [...baseKeys].filter((key) => !key.startsWith(MANAGED_PREFIX));
+  problems.push(["English unused", findUnusedAndroidResourceKeys(manualBaseKeys, referenceSource)]);
+  const uiFindings = sourceFiles.flatMap((file) =>
+    findUnlocalizedAndroidUiLiterals(file.source, file.path),
+  );
+  problems.push([
+    "Unlocalized UI literals",
+    uiFindings.map((finding) => `${finding.path}:${finding.line}:${finding.source}`),
+  ]);
+  if (problems.some(([, keys]) => keys.length)) {
+    throw new Error(formatProblems(problems));
+  }
+  process.stdout.write(`android-app-i18n: sourceKeys=${baseKeys.size}\n`);
+}
+
+export async function checkAndroidAppI18n() {
+  await verifyAndroidAppI18n();
   await syncAndroidAppI18n({ check: true });
+  const localeStrings = await Promise.all(LOCALES.map(readStrings));
   const base = expectDefined(localeStrings[0], "English Android string resources");
   const translations = localeStrings.slice(1);
   const baseKeys = new Set(base.keys());
@@ -1306,16 +1328,6 @@ export async function checkAndroidAppI18n() {
       [`${locale} syntax`, findInvalidResourceSyntax(strings)],
     ] as const;
   });
-  problems.push(["English syntax", findInvalidResourceSyntax(base)]);
-  const manualBaseKeys = [...baseKeys].filter((key) => !key.startsWith(MANAGED_PREFIX));
-  problems.push(["English unused", findUnusedAndroidResourceKeys(manualBaseKeys, referenceSource)]);
-  const uiFindings = sourceFiles.flatMap((file) =>
-    findUnlocalizedAndroidUiLiterals(file.source, file.path),
-  );
-  problems.push([
-    "Unlocalized UI literals",
-    uiFindings.map((finding) => `${finding.path}:${finding.line}:${finding.source}`),
-  ]);
   if (problems.some(([, keys]) => keys.length)) {
     throw new Error(formatProblems(problems));
   }

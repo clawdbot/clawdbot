@@ -3,12 +3,48 @@ import { describe, expect, it } from "vitest";
 import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import {
   buildChannelInboundMediaPayload,
+  formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
   toHistoryMediaEntries,
   toInboundMediaFacts,
 } from "./media.js";
 
 describe("channel inbound media facts", () => {
+  it("formats media placeholder text with kind precedence and normalized MIME fallback", () => {
+    expect(
+      formatMediaPlaceholderText([
+        { kind: "document", contentType: "image/png", path: "/tmp/photo.jpg" },
+      ]),
+    ).toBe("<media:document>");
+    expect(formatMediaPlaceholderText([{ contentType: " IMAGE/PNG; charset=binary " }])).toBe(
+      "<media:image>",
+    );
+    expect(
+      formatMediaPlaceholderText([{ url: "https://example.test/uploads/clip.MP4?download=1" }]),
+    ).toBe("<media:video>");
+  });
+
+  it("counts homogeneous media and collapses mixed kinds deterministically", () => {
+    expect(formatMediaPlaceholderText([{ kind: "image" }, { contentType: "image/jpeg" }])).toBe(
+      "<media:image> (2 images)",
+    );
+    expect(formatMediaPlaceholderText([{ kind: "image" }, { path: "/tmp/voice-note.mp3" }])).toBe(
+      "<media:document> (2 files)",
+    );
+    expect(formatMediaPlaceholderText([{ kind: "image" }, {}])).toBe(
+      "<media:attachment> (2 attachments)",
+    );
+    expect(formatMediaPlaceholderText([{ kind: "sticker" }])).toBe("<media:sticker>");
+    expect(formatMediaPlaceholderText([{ kind: "sticker" }, { kind: "sticker" }])).toBe(
+      "<media:sticker> (2 stickers)",
+    );
+  });
+
+  it("formats type-only attachment facts without filenames or a count side channel", () => {
+    expect(formatMediaPlaceholderText([{}, {}, {}])).toBe("<media:attachment> (3 attachments)");
+    expect(formatMediaPlaceholderText([])).toBe("");
+  });
+
   it("replaces optimistic media placeholders and preserves real captions", () => {
     expect(
       formatInboundMediaUnavailableText({

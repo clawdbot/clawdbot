@@ -4,16 +4,16 @@ struct OpenClawDocsScreen: View {
     private let docsURL = URL(string: "https://docs.openclaw.ai")!
     private let gatewayURL = URL(string: "https://docs.openclaw.ai/gateway")!
     private let pairingURL = URL(string: "https://docs.openclaw.ai/channels/pairing")!
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         gatewayAction: (() -> Void)? = nil)
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
     }
@@ -45,6 +45,11 @@ struct OpenClawDocsScreen: View {
                     .accessibilityLabel("Gateway settings")
                 }
             }
+            if self.usesNativeNavigationChrome, let headerSidebarAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarRevealButton(action: headerSidebarAction)
+                }
+            }
         }
     }
 
@@ -56,9 +61,9 @@ struct OpenClawDocsScreen: View {
                 titleFont: OpenClawType.headline,
                 subtitleFont: OpenClawType.caption)
             {
-                HStack(alignment: .top, spacing: 12) {
-                    if let headerLeadingAction {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                HStack(spacing: 10) {
+                    if let headerSidebarAction {
+                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                     }
                     ProIconBadge(systemName: "book", color: OpenClawBrand.accent)
                 }

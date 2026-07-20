@@ -404,9 +404,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     readLastGatewayErrorLineMock.mockClear();
   });
 
-  it("preserves existing agents.list and bindings on onboard rerun (openclaw#84692)", async () => {
+  it("preserves existing config on onboard rerun (openclaw#84692)", async () => {
     await withStateDir("state-preserve-agents-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
+      const passwordRef = { source: "env" as const, provider: "default", id: "GATEWAY_PASSWORD" };
       const seededAgents = [
         { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
         { id: "beta", model: "openai/gpt-4o" },
@@ -432,7 +433,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       testConfigStore.set(resolveTestConfigPath(), {
         agents: { list: seededAgents, defaults: { workspace } },
         bindings: seededBindings,
-        gateway: { mode: "local", port: 18789, auth: { mode: "token", token: "seed_tok" } },
+        gateway: {
+          mode: "local",
+          port: 24680,
+          bind: "loopback",
+          auth: { mode: "password", password: passwordRef },
+          tailscale: { mode: "serve", resetOnExit: true },
+        },
       } as OpenClawConfig);
 
       await runNonInteractiveSetup(
@@ -444,9 +451,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           skipSkills: true,
           skipHealth: true,
           installDaemon: false,
-          gatewayBind: "loopback",
-          gatewayAuth: "token",
-          gatewayToken: "seed_tok",
         },
         runtime,
       );
@@ -454,6 +458,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
       expect(cfg.bindings).toEqual(seededBindings);
+      expect(cfg.gateway).toEqual({
+        mode: "local",
+        port: 24680,
+        bind: "loopback",
+        auth: { mode: "password", password: passwordRef },
+        tailscale: { mode: "serve", resetOnExit: true },
+      });
 
       const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
       expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
@@ -506,6 +517,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
       const token = "tok_test_123";
       const workspace = path.join(stateDir, "openclaw");
+      testConfigStore.set(resolveTestConfigPath(), {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "password", password: "test-password" },
+          tailscale: { mode: "serve", resetOnExit: true },
+        },
+      } as OpenClawConfig);
 
       await runNonInteractiveSetup(
         {
@@ -519,12 +537,19 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           gatewayBind: "loopback",
           gatewayAuth: "token",
           gatewayToken: token,
+          tailscale: "off",
+          tailscaleResetOnExit: false,
         },
         runtime,
       );
 
       const cfg = readTestConfig<{
-        gateway?: { mode?: string; auth?: { mode?: string; token?: string } };
+        gateway?: {
+          mode?: string;
+          bind?: string;
+          auth?: { mode?: string; token?: string };
+          tailscale?: { mode?: string; resetOnExit?: boolean };
+        };
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
         hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
@@ -532,9 +557,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.mode).toBe("local");
+      expect(cfg?.gateway?.bind).toBe("loopback");
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+      expect(cfg?.gateway?.tailscale).toEqual({ mode: "off", resetOnExit: false });
       expect(cfg?.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);
@@ -542,6 +569,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("does not auto-enable default hooks when skipHooks is set", async () => {
     await withStateDir("state-skip-hooks-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
+      testConfigStore.set(resolveTestConfigPath(), {
+        gateway: { mode: "local", bind: "lan" },
+      } as OpenClawConfig);
 
       await runNonInteractiveSetup(
         {
@@ -553,13 +583,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           skipSkills: true,
           skipHealth: true,
           installDaemon: false,
-          gatewayBind: "loopback",
         },
         runtime,
       );
 
       const cfg = readTestConfig();
       expect(cfg.hooks).toBeUndefined();
+      expect(cfg.gateway?.bind).toBe("lan");
     });
   }, 60_000);
 
@@ -678,6 +708,21 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     await withStateDir("state-remote-", async (_stateDir) => {
       const port = getPseudoPort(30_000);
       const token = "tok_remote_123";
+      testConfigStore.set(resolveTestConfigPath(), {
+        gateway: {
+          remote: {
+            url: "wss://old.example.test",
+            transport: "ssh",
+            remotePort: 24680,
+            sshTarget: "operator@old.example.test",
+            sshIdentity: "/tmp/old-identity",
+            sshHostKeyPolicy: "openssh",
+            token: "test-token",
+            password: { source: "env", provider: "default", id: "REMOTE_PASSWORD" },
+            tlsFingerprint: "sha256:test-fingerprint",
+          },
+        },
+      } as OpenClawConfig);
       await runNonInteractiveSetup(
         {
           nonInteractive: true,
@@ -690,14 +735,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const cfg = readTestConfig<{
-        gateway?: { mode?: string; remote?: { url?: string; token?: string } };
-        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
-      }>();
+      const cfg = readTestConfig();
 
       expect(cfg.gateway?.mode).toBe("remote");
-      expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
-      expect(cfg.gateway?.remote?.token).toBe(token);
+      expect(cfg.gateway?.remote).toEqual({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+      });
       expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);
@@ -705,7 +749,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("preserves existing agents.list and bindings on remote onboard rerun (openclaw#84692)", async () => {
     await withStateDir("state-remote-preserve-agents-", async (_stateDir) => {
       const port = getPseudoPort(30_000);
-      const token = "tok_remote_seed";
+      const passwordRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "OPENCLAW_REMOTE_GATEWAY_PASSWORD",
+      };
+      const tokenRef = { source: "env" as const, provider: "default", id: "REMOTE_TOKEN" };
       const seededAgents = [
         { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
         { id: "beta", model: "openai/gpt-4o" },
@@ -725,7 +774,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         bindings: seededBindings,
         gateway: {
           mode: "remote",
-          remote: { url: `ws://127.0.0.1:${port}`, token },
+          remote: {
+            url: `ws://127.0.0.1:${port}`,
+            token: tokenRef,
+            password: passwordRef,
+            tlsFingerprint: "sha256:test-fingerprint",
+          },
         },
       } as OpenClawConfig);
 
@@ -734,7 +788,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           nonInteractive: true,
           mode: "remote",
           remoteUrl: `ws://127.0.0.1:${port}`,
-          remoteToken: token,
           authChoice: "skip",
           json: true,
         },
@@ -744,6 +797,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
       expect(cfg.bindings).toEqual(seededBindings);
+      expect(cfg.gateway?.remote).toEqual({
+        url: `ws://127.0.0.1:${port}`,
+        token: tokenRef,
+        password: passwordRef,
+        tlsFingerprint: "sha256:test-fingerprint",
+      });
 
       const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
       expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);

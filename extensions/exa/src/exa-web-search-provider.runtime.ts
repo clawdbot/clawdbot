@@ -112,7 +112,7 @@ function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig {
 
 function resolveExaApiKey(exa?: ExaConfig): string | undefined {
   return (
-    readConfiguredSecretString(exa?.apiKey, "tools.web.search.exa.apiKey") ??
+    readConfiguredSecretString(exa?.apiKey, "plugins.entries.exa.config.webSearch.apiKey") ??
     readProviderEnvValue(["EXA_API_KEY"])
   );
 }
@@ -438,7 +438,7 @@ function missingExaKeyPayload() {
   return {
     error: "missing_exa_api_key",
     message:
-      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure tools.web.search.exa.apiKey.",
+      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure plugins.entries.exa.config.webSearch.apiKey.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }

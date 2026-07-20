@@ -104,7 +104,7 @@ async function processDiscordMessageInner(
     return;
   }
   const text = messageText;
-  if (!text) {
+  if (!text && mediaList.length === 0) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
   }
@@ -128,8 +128,7 @@ async function processDiscordMessageInner(
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const configuredTypingMode = cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
-  const configuredTypingInterval =
-    cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  const configuredTypingInterval = cfg.agents?.defaults?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
     sourceRepliesAreToolOnly &&
     configuredTypingMode === undefined &&

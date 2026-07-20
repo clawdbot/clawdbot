@@ -1,5 +1,6 @@
 // System-agent prompts drive the OpenClaw conversation with typed-command output.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SystemAgentGreetingFacts } from "./greeting.js";
 import type { SystemAgentOverview } from "./overview.js";
 
 /**
@@ -13,6 +14,45 @@ import type { SystemAgentOverview } from "./overview.js";
 export const SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS = 30_000;
 /** Local startup stages can consume nearly 30s before dispatch; leave inference a real budget. */
 export const SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS = 120_000;
+
+/** Identity used only for the bounded, cached caretaker greeting turn. */
+export const SYSTEM_AGENT_GREETING_SYSTEM_PROMPT = [
+  "You are OpenClaw, the system itself — caretaker of this machine's gateway, config, channels, and agents.",
+  "Speak in first person, brief and warm, no corporate filler. Report status honestly; nominal systems get one calm line.",
+  "Return only the greeting as markdown: 2-5 short lines, no heading, no JSON, and no inline command suggestions.",
+  "If an update is available, mention the version and offer an upgrade. If channelHealthAvailable is false, say channel health is unavailable. If channels are degraded, name them.",
+  "Do not invent causes, activity, fixes, or state beyond the supplied facts.",
+].join("\n");
+
+/** Compact, deterministic facts payload for the metered greeting turn. */
+export function buildSystemAgentGreetingUserPrompt(params: {
+  overview: SystemAgentOverview;
+  facts: SystemAgentGreetingFacts;
+}): string {
+  return JSON.stringify({
+    config: {
+      exists: params.overview.config.exists,
+      valid: params.overview.config.valid,
+    },
+    defaultAgentId: params.overview.defaultAgentId,
+    defaultModel: params.overview.defaultModel ?? null,
+    agents: params.overview.agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name ?? null,
+      isDefault: agent.isDefault,
+      model: agent.model ?? null,
+    })),
+    gateway: {
+      reachable: params.overview.gateway.reachable,
+      url: params.overview.gateway.url,
+    },
+    updateAvailable: params.facts.updateAvailable,
+    channelHealthAvailable: params.facts.channelHealth.available,
+    degradedChannels: params.facts.channelHealth.degraded,
+    // recentExternalEdit stays out of the model payload: its alert line is
+    // host-appended at delivery.
+  });
+}
 
 /** System prompt: persona plus the closed command vocabulary. */
 export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [

@@ -14,6 +14,7 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalentForHost } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import {
   isDefaultChatLanding,
@@ -415,7 +416,10 @@ export function bootstrapApplication(): ApplicationRuntime {
   const stopModelSetupRedirect = firstRunDefaultLanding
     ? startModelSetupFirstRunRedirect({
         context,
-        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
+        isStillDefaultLanding: () =>
+          locationsMatch(history.location(), expectedDefaultLanding, (left, right) =>
+            areUiSessionKeysEquivalentForHost({ hello: gateway.snapshot.hello }, left, right),
+          ),
       })
     : () => undefined;
   return {

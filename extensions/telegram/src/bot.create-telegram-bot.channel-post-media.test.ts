@@ -103,11 +103,6 @@ function getChannelPostHandler() {
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
-function getChannelPostHandlerWithRuntimeTimings() {
-  createTelegramBot({ token: "tok" });
-  return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
-}
-
 function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   return resolveFlushTimerForDelay(setTimeoutSpy, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
 }
@@ -286,45 +281,6 @@ describe("createTelegramBot channel_post media", () => {
       await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
       const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("album caption");
-    } finally {
-      setTimeoutSpy.mockRestore();
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("honors configured mediaGroupFlushMs for channel_post albums", async () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          mediaGroupFlushMs: 75,
-          groups: {
-            "-100777111222": {
-              enabled: true,
-              requireMention: false,
-            },
-          },
-        },
-      },
-    });
-
-    const fetchSpy = createImageFetchSpy();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const handler = getChannelPostHandlerWithRuntimeTimings();
-      await queueChannelPostAlbum(handler, {
-        caption: "configured album",
-        mediaGroupId: "channel-album-configured",
-        firstMessageId: 211,
-        secondMessageId: 212,
-      });
-      expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroupForDelay(setTimeoutSpy, 75);
-      await waitForMockCalls(replySpy, 1);
-
-      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-      const payload = replyPayload() as { Body?: string };
-      expect(payload.Body).toContain("configured album");
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();

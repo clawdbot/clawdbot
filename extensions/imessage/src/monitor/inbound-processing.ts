@@ -2,6 +2,7 @@
 import {
   buildMentionRegexes,
   buildChannelInboundEventContext,
+  formatMediaPlaceholderText,
   type EnvelopeFormatOptions,
   filterChannelInboundQuoteContext,
   formatInboundEnvelope,
@@ -12,6 +13,8 @@ import {
   resolveInboundMentionDecision,
   resolveInboundSupplementalSenderAllowed,
   toInboundMediaFacts,
+  type ChannelInboundMediaInput,
+  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelIngressResolver,
@@ -250,12 +253,13 @@ function hasIMessageEchoMatch(params: {
   echoCache: {
     has: (
       scope: string,
-      lookup: { text?: string; messageId?: string },
+      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
       options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
     ) => boolean;
   };
   scope: string | readonly string[];
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageIds: string[];
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
@@ -279,13 +283,13 @@ function hasIMessageEchoMatch(params: {
       }
     }
     const fallbackMessageId = params.messageIds[0];
-    if (!params.text && !fallbackMessageId) {
+    if (!params.text && !params.media && !fallbackMessageId) {
       continue;
     }
     if (
       params.echoCache.has(
         scope,
-        { text: params.text, messageId: fallbackMessageId },
+        { text: params.text, media: params.media, messageId: fallbackMessageId },
         {
           skipIdShortCircuit: params.skipIdShortCircuit,
           includePendingText: params.includePendingText,
@@ -396,6 +400,7 @@ export async function resolveIMessageInboundDecision(params: {
   opts?: Pick<MonitorIMessageOpts, "requireMention">;
   messageText: string;
   bodyText: string;
+  mediaFacts?: readonly MediaPlaceholderTextFact[];
   allowFrom: string[];
   groupAllowFrom: string[];
   allowLegacyConversationAllowFromForGroup?: boolean;
@@ -407,7 +412,7 @@ export async function resolveIMessageInboundDecision(params: {
   echoCache?: {
     has: (
       scope: string,
-      lookup: { text?: string; messageId?: string },
+      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
       options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
     ) => boolean;
   };
@@ -429,6 +434,7 @@ export async function resolveIMessageInboundDecision(params: {
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
+  const mediaFacts = params.mediaFacts ?? [];
   const reactionContext = resolveIMessageReactionContext(params.message, bodyText || messageText);
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
@@ -505,11 +511,12 @@ export async function resolveIMessageInboundDecision(params: {
       });
       if (
         params.echoCache &&
-        (bodyText || inboundMessageId) &&
+        (bodyText || inboundMessageId || mediaFacts.length > 0) &&
         hasIMessageEchoMatch({
           echoCache: params.echoCache,
           scope: echoScope,
           text: bodyText || undefined,
+          media: mediaFacts[0],
           messageIds: inboundMessageIds,
           skipIdShortCircuit: !hasInboundGuid,
           includePendingText: true,
@@ -676,7 +683,7 @@ export async function resolveIMessageInboundDecision(params: {
     };
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
-  if (!bodyText) {
+  if (!bodyText && mediaFacts.length === 0) {
     return { kind: "drop", reason: "empty body" };
   }
 
@@ -694,7 +701,7 @@ export async function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
-  if (params.echoCache && (messageText || inboundMessageId)) {
+  if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
       isGroup,
@@ -708,6 +715,7 @@ export async function resolveIMessageInboundDecision(params: {
         echoCache: params.echoCache,
         scope: echoScope,
         text: bodyText || undefined,
+        media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
       })
@@ -827,7 +835,7 @@ export async function resolveIMessageInboundDecision(params: {
       entry: historyKey
         ? {
             sender: senderNormalized,
-            body: bodyText,
+            body: [bodyText, formatMediaPlaceholderText(mediaFacts)].filter(Boolean).join("\n"),
             timestamp: createdAt,
             messageId: params.message.id ? String(params.message.id) : undefined,
           }
@@ -878,10 +886,7 @@ export async function buildIMessageInboundContext(params: {
   previousTimestamp?: number;
   remoteHost?: string;
   media?: {
-    path?: string;
-    type?: string;
-    paths?: string[];
-    types?: Array<string | undefined>;
+    facts?: readonly ChannelInboundMediaInput[];
   };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
@@ -988,17 +993,9 @@ export async function buildIMessageInboundContext(params: {
           })
         : undefined;
 
-  const mediaInput =
-    params.media?.paths && params.media.paths.length > 0
-      ? params.media.paths.map((path, index) => ({
-          path,
-          url: path,
-          contentType: params.media?.types?.[index],
-        }))
-      : params.media?.path
-        ? [{ path: params.media.path, url: params.media.path, contentType: params.media.type }]
-        : undefined;
-  const media = toInboundMediaFacts(mediaInput);
+  const media = toInboundMediaFacts(
+    params.media?.facts?.map((entry) => ({ ...entry, url: entry.url ?? entry.path })),
+  );
   const ctxPayload = buildChannelInboundEventContext({
     channel: "imessage",
     supplemental: {

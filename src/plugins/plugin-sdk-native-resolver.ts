@@ -124,9 +124,7 @@ function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolver
 }
 
 function isPluginSdkAliasSpecifier(specifier: string): boolean {
-  return PLUGIN_SDK_PACKAGE_PREFIXES.some(
-    (prefix) => specifier === prefix || specifier.startsWith(`${prefix}/`),
-  );
+  return PLUGIN_SDK_PACKAGE_PREFIXES.some((prefix) => specifier.startsWith(`${prefix}/`));
 }
 
 function isNativeLoadableSdkTarget(targetPath: string): boolean {

@@ -2451,12 +2451,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(talkMode: talkMode)
         let barrier = TalkPreparationBarrier()
         let stableID = "talk-routing-restore-\(UUID().uuidString)"
-        let databaseURL = try #require(NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID))
+        let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+        let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "restored-main",
             defaultAgentID: "main"))
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: stableID)
+        let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
         appModel._test_setChatSessionRoutingRestoreHandler {
@@ -2465,7 +2466,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer {
             barrier.release()
             appModel._test_setChatSessionRoutingRestoreHandler(nil)
-            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            try? databases.removeGatewayData(gatewayID: stableID)
             appModel.voiceWake.stop()
         }
 
@@ -2489,12 +2490,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel()
         let barrier = TalkPreparationBarrier()
         let stableID = "cancelled-routing-restore-\(UUID().uuidString)"
-        let databaseURL = try #require(NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID))
+        let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+        let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "stale-main",
             defaultAgentID: "main"))
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: stableID)
+        let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
         appModel._test_setConnectedGatewayID(stableID)
@@ -2504,7 +2506,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer {
             barrier.release()
             appModel._test_setChatSessionRoutingRestoreHandler(nil)
-            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            try? databases.removeGatewayData(gatewayID: stableID)
             appModel.voiceWake.stop()
         }
 

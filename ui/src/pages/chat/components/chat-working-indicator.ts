@@ -29,7 +29,10 @@ function punchStanceClass(key: string): string {
   return "";
 }
 
-export function renderChatWorkingIndicator(part: Extract<ChatItem, { kind: "reading-indicator" }>) {
+export function renderChatWorkingIndicator(
+  part: Extract<ChatItem, { kind: "reading-indicator" }>,
+  waitingApproval = false,
+) {
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   return html`
@@ -41,11 +44,15 @@ export function renderChatWorkingIndicator(part: Extract<ChatItem, { kind: "read
         ${icons.claw}
       </div>
       <span class="chat-working-indicator__status">
-        <span class="agent-chat__sr-only">${t("common.working")}</span>
-        <openclaw-elapsed-time
-          class="chat-working-indicator__elapsed"
-          .startMs=${part.startedAt}
-        ></openclaw-elapsed-time>
+        ${waitingApproval
+          ? html`<span>${t("chat.waitingForApproval")}</span>`
+          : html`
+              <span class="agent-chat__sr-only">${t("common.working")}</span>
+              <openclaw-elapsed-time
+                class="chat-working-indicator__elapsed"
+                .startMs=${part.startedAt}
+              ></openclaw-elapsed-time>
+            `}
       </span>
     </div>
   `;

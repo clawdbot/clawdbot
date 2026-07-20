@@ -5,7 +5,8 @@ import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
 export type BoardChatDockSize = {
   height: number;
@@ -13,7 +14,7 @@ export type BoardChatDockSize = {
 };
 
 type BoardSessionSurfaceProps = {
-  snapshot: BoardSnapshot;
+  snapshot: BoardViewSnapshot;
   sessions: readonly GatewaySessionRow[];
   activeTabId: string;
   dock: BoardTab["chatDock"];
@@ -22,6 +23,7 @@ type BoardSessionSurfaceProps = {
   chat: TemplateResult;
   divider: TemplateResult;
   callbacks: BoardViewCallbacks;
+  widgetFrameUrl: BoardWidgetFrameUrl;
   onDockChange: (dock: BoardTab["chatDock"]) => void;
 };
 
@@ -129,14 +131,12 @@ export function renderBoardDockMenu(
 }
 
 function renderBoardView(props: BoardSessionSurfaceProps) {
-  const widgetFrameUrl = (name: string, revision: number) =>
-    `about:blank#board-widget=${encodeURIComponent(name)}&revision=${revision}`;
   return html`
     <div class="board-session-surface__board">
       <openclaw-board-view
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}
-        .widgetFrameUrl=${widgetFrameUrl}
+        .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
         .sessions=${props.sessions}
       ></openclaw-board-view>

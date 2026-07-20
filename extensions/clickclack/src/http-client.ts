@@ -69,8 +69,25 @@ const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 // Without this, gateway.ts waits forever for close/error when TCP accepts but
 // never upgrades, pinning the monitor reconnect loop.
 const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
+const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
+const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
+const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
 
-class ClickClackHttpError extends Error {
+type ClickClackMessagePage = {
+  messages: ClickClackMessage[];
+  oldest_seq: number;
+  has_older: boolean;
+};
+
+function compareMessages(left: ClickClackMessage, right: ClickClackMessage): number {
+  return left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id);
+}
+
+function keepLatestMessages(messages: ClickClackMessage[], limit: number): ClickClackMessage[] {
+  return messages.toSorted(compareMessages).slice(-limit);
+}
+
+export class ClickClackHttpError extends Error {
   constructor(
     readonly status: number,
     detail: string,
@@ -78,6 +95,19 @@ class ClickClackHttpError extends Error {
   ) {
     super(`ClickClack ${status}: ${detail}`);
   }
+}
+
+/** Matches the workspace/name uniqueness error returned by current ClickClack servers. */
+export function isClickClackChannelNameConflict(error: unknown): boolean {
+  if (!(error instanceof ClickClackHttpError) || (error.status !== 400 && error.status !== 409)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    (message.includes("unique") || message.includes("duplicate")) &&
+    message.includes("channel") &&
+    /workspace.*name|name.*workspace/u.test(message)
+  );
 }
 
 /** Accepts the same bounded request-correlation shape as the ClickClack API. */
@@ -183,6 +213,40 @@ export function createClickClackClient(options: ClientOptions) {
       );
       return data.channels;
     },
+    createChannel: async (
+      workspaceId: string,
+      channel: {
+        name: string;
+        kind: "public";
+        external_managed: boolean;
+        external_ref: string;
+        external_url?: string;
+        sidebar_section: string;
+      },
+    ): Promise<ClickClackChannel> => {
+      const data = await request<{ channel: ClickClackChannel }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`,
+        { method: "POST", body: JSON.stringify(channel) },
+      );
+      return data.channel;
+    },
+    updateChannel: async (
+      channelId: string,
+      patch: {
+        name?: string;
+        archived?: boolean;
+        external_managed?: boolean;
+        external_ref?: string;
+        external_url?: string;
+        sidebar_section?: string;
+      },
+    ): Promise<ClickClackChannel> => {
+      const data = await request<{ channel: ClickClackChannel }>(
+        `/api/channels/${encodeURIComponent(channelId)}`,
+        { method: "PATCH", body: JSON.stringify(patch) },
+      );
+      return data.channel;
+    },
     channelMessages: async (
       channelId: string,
       afterSeq: number,
@@ -192,6 +256,78 @@ export function createClickClackClient(options: ClientOptions) {
         `/api/channels/${encodeURIComponent(channelId)}/messages?after_seq=${afterSeq}&limit=${limit}`,
       );
       return data.messages;
+    },
+    latestChannelMessages: async (
+      channelId: string,
+      limit = 30,
+    ): Promise<{ messages: ClickClackMessage[]; truncated: boolean }> => {
+      const boundedLimit = Math.max(1, Math.min(CLICKCLACK_MESSAGE_PAGE_LIMIT, limit));
+      let beforeSeq: number | undefined;
+      let latest: ClickClackMessage[] = [];
+      let rootPageCount = 0;
+      let threadRequestCount = 0;
+      let truncated = false;
+
+      // Channel pages contain roots only. Scan their lightweight thread metadata so
+      // an old root with a recent reply can enter the global latest-N window. The
+      // explicit request budgets keep one agent-tool call from walking an unbounded
+      // channel; callers surface truncation rather than implying complete history.
+      while (true) {
+        rootPageCount += 1;
+        const query = new URLSearchParams({ limit: String(CLICKCLACK_MESSAGE_PAGE_LIMIT) });
+        if (beforeSeq !== undefined) {
+          query.set("before_seq", String(beforeSeq));
+        }
+        const page = await request<ClickClackMessagePage>(
+          `/api/channels/${encodeURIComponent(channelId)}/messages?${query.toString()}`,
+        );
+
+        for (const root of page.messages) {
+          latest = keepLatestMessages([...latest, root], boundedLimit);
+          const lastReplyAt = root.thread_state?.last_reply_at;
+          const cutoff = latest.length === boundedLimit ? latest[0]?.created_at : undefined;
+          if (
+            !root.thread_state?.reply_count ||
+            (lastReplyAt !== undefined && cutoff !== undefined && lastReplyAt < cutoff)
+          ) {
+            continue;
+          }
+          if (threadRequestCount >= CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT) {
+            truncated = true;
+            continue;
+          }
+          threadRequestCount += 1;
+          const threadQuery = new URLSearchParams({
+            limit: String(CLICKCLACK_MESSAGE_PAGE_LIMIT),
+          });
+          const thread = await request<{ replies: ClickClackMessage[] }>(
+            `/api/messages/${encodeURIComponent(root.id)}/thread?${threadQuery.toString()}`,
+          );
+          if (thread.replies.length < root.thread_state.reply_count) {
+            // The portable ClickClack contract returns the oldest capped replies.
+            // Omit an incomplete thread rather than presenting that prefix as latest.
+            truncated = true;
+            continue;
+          }
+          latest = keepLatestMessages([...latest, ...thread.replies], boundedLimit);
+        }
+
+        if (!page.has_older) {
+          return { messages: latest, truncated };
+        }
+        if (rootPageCount >= CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT) {
+          return { messages: latest, truncated: true };
+        }
+        if (
+          page.messages.length === 0 ||
+          !Number.isSafeInteger(page.oldest_seq) ||
+          page.oldest_seq < 0 ||
+          page.oldest_seq === beforeSeq
+        ) {
+          throw new Error("ClickClack message pagination did not advance");
+        }
+        beforeSeq = page.oldest_seq;
+      }
     },
     directMessages: async (
       conversationId: string,

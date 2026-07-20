@@ -726,6 +726,18 @@ export async function startGatewayServer(
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
   }
+  // prepareGatewayStartupConfig has already applied startupAuthOverride to cfgAtStart,
+  // so this warning follows the effective auth mode rather than dormant file config.
+  const trustedProxyDeviceAutoApprove = cfgAtStart.gateway?.auth?.trustedProxy?.deviceAutoApprove;
+  if (
+    cfgAtStart.gateway?.auth?.mode === "trusted-proxy" &&
+    trustedProxyDeviceAutoApprove?.enabled === true &&
+    trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
+  ) {
+    log.warn(
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+    );
+  }
   const resolvedStartupAuthOverride = startupAuthOverride
     ? (Object.fromEntries(
         (
@@ -1085,8 +1097,7 @@ export async function startGatewayServer(
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   };
-  const preauthHandshakeTimeoutMs =
-    cfgAtStart.gateway?.handshakeTimeoutMs ?? getRuntimeConfig().gateway?.handshakeTimeoutMs;
+  const preauthHandshakeTimeoutMs = undefined;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
@@ -2297,6 +2308,7 @@ export async function startGatewayServer(
         ? (startupLastGoodSnapshot.hash ?? null)
         : null,
       initialAuthoredConfig: startupLastGoodSnapshot.parsed,
+      initialIncludedPaths: startupLastGoodSnapshot.includedPaths ?? [],
       initialSnapshotValid: startupLastGoodSnapshot.valid,
       initialSnapshotIssues: startupLastGoodSnapshot.issues,
       initialInternalWriteHash: startupInternalWriteHash,

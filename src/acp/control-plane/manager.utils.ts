@@ -114,13 +114,7 @@ export function createUnsupportedControlError(params: {
   );
 }
 
-export function resolveRuntimeIdleTtlMs(cfg: OpenClawConfig): number {
-  const ttlMinutes = cfg.acp?.runtime?.ttlMinutes;
-  if (typeof ttlMinutes !== "number" || !Number.isFinite(ttlMinutes) || ttlMinutes <= 0) {
-    return 0;
-  }
-  return Math.round(ttlMinutes * 60 * 1000);
-}
+export const DEFAULT_ACP_RUNTIME_IDLE_TTL_MS = 0;
 
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
   const raw = meta as Record<string, unknown>;

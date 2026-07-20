@@ -1,18 +1,35 @@
+import type {
+  BoardChangedEvent,
+  BoardCommand,
+  BoardCommandEvent,
+  BoardOp,
+  BoardSnapshot,
+  BoardWidgetAppViewResult,
+} from "@openclaw/gateway-protocol";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   buildAgentMainSessionKey,
   normalizeSessionKeyForUiComparison,
 } from "../sessions/session-key.ts";
-import type { BoardOp, BoardSnapshot, BoardTab } from "./types.ts";
+import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
+import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import type { BoardWidgetAppViewState } from "./view-types.ts";
+export type { BoardCommandEvent };
+export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
 
-type BoardCommand =
-  | { kind: "focus_tab"; tabId: string }
-  | { kind: "set_chat_dock"; dock: BoardTab["chatDock"] };
+type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
-export type BoardCommandEvent = {
-  sessionKey: string;
-  command: BoardCommand;
+type BoardPinPlacement = {
+  title?: string;
+  name?: string;
+  tabId?: string;
+  size?: "sm" | "md" | "lg" | "xl" | "full";
+  after?: string;
 };
+
+type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
+type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
 
 type BoardSnapshotSignal = {
   readonly value: BoardSnapshot;
@@ -24,18 +41,42 @@ type BoardEventStream = {
 };
 
 export type BoardProvider = {
+  readonly sessionKey: string;
+  readonly canPinWidgets: boolean;
+  readonly canPinMcpApps: boolean;
   readonly snapshot$: BoardSnapshotSignal;
   applyOps(ops: BoardOp[]): Promise<void>;
   grant(name: string, decision: "granted" | "rejected"): Promise<void>;
+  pinWidget(input: BoardPinWidgetInput): Promise<void>;
+  pinMcpApp(input: BoardPinMcpAppInput): Promise<void>;
+  widgetFrameUrl(name: string, revision: number): string;
+  refreshWidgetFrame(name: string): Promise<void>;
+  widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
+  refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
   readonly events: BoardEventStream;
 };
 
-export type BoardViewCallbacks = {
-  applyOps(ops: BoardOp[]): Promise<void>;
-  grant(name: string, decision: "granted" | "rejected"): Promise<void>;
-  selectTab(tabId: string): void;
-  pinRequest?: never;
-};
+function hashWidgetIdentity(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+export function canvasWidgetNameForDocument(docId: string): string {
+  const name = `canvas-${docId.toLowerCase().replace(/[^a-z0-9._-]/gu, "-")}`;
+  if (name === `canvas-${docId}` && name.length <= 64) {
+    return name;
+  }
+  const prefix = name.slice(0, 47).replace(/[._-]+$/gu, "") || "canvas-widget";
+  return `${prefix}-${hashWidgetIdentity(docId)}`;
+}
+
+export function mcpAppWidgetNameForViewId(viewId: string): string {
+  return `mcp-app-${hashWidgetIdentity(viewId)}`;
+}
 
 class ValueSignal<T> {
   private readonly listeners = new Set<() => void>();
@@ -72,6 +113,11 @@ class EventStream<T> {
 
 function emptySnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };
+}
+
+function boardWidgetTitle(title: string | undefined): string | undefined {
+  const normalized = title?.trim() ?? "";
+  return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
 }
 
 function mockSnapshot(sessionKey: string): BoardSnapshot {
@@ -130,19 +176,45 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 }
 
 class NullProvider implements BoardProvider {
+  readonly canPinWidgets = false;
+  readonly canPinMcpApps = false;
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream = new EventStream<BoardCommandEvent>();
 
-  constructor(sessionKey = "") {
+  constructor(readonly sessionKey = "") {
     this.snapshot$ = new ValueSignal(emptySnapshot(sessionKey));
   }
 
   async applyOps(_ops: BoardOp[]): Promise<void> {}
 
   async grant(_name: string, _decision: "granted" | "rejected"): Promise<void> {}
+
+  async pinWidget(_input: BoardPinWidgetInput): Promise<void> {
+    throw new Error("Session dashboard unavailable");
+  }
+
+  async pinMcpApp(_input: BoardPinMcpAppInput): Promise<void> {
+    throw new Error("Session dashboard unavailable");
+  }
+
+  widgetFrameUrl(_name: string, _revision: number): string {
+    return "";
+  }
+
+  async refreshWidgetFrame(_name: string): Promise<void> {}
+
+  async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Session dashboard unavailable" };
+  }
+
+  async refreshWidgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Session dashboard unavailable" };
+  }
 }
 
 class MockBoardProvider implements BoardProvider {
+  readonly canPinWidgets = true;
+  readonly canPinMcpApps = true;
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
@@ -157,7 +229,7 @@ class MockBoardProvider implements BoardProvider {
   async applyOps(ops: BoardOp[]): Promise<void> {
     let snapshot = this.snapshotSignal.value;
     for (const op of ops) {
-      snapshot = normalizeMockSnapshot(applyMockOp(snapshot, op));
+      snapshot = normalizeMockBoardSnapshot(applyMockBoardOp(snapshot, op));
     }
     this.snapshotSignal.set({ ...snapshot, revision: snapshot.revision + 1 });
   }
@@ -177,170 +249,444 @@ class MockBoardProvider implements BoardProvider {
     });
   }
 
+  async pinWidget(input: BoardPinWidgetInput): Promise<void> {
+    const snapshot = this.snapshotSignal.value;
+    const name = input.name ?? canvasWidgetNameForDocument(input.docId);
+    const title = boardWidgetTitle(input.title);
+    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
+    const tabs = snapshot.tabs.length
+      ? snapshot.tabs
+      : [
+          {
+            tabId: "main",
+            title: t("chat.board.defaultTab"),
+            position: 0,
+            chatDock: "right" as const,
+          },
+        ];
+    const existing = snapshot.widgets.find((widget) => widget.name === name);
+    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
+    widgets.push({
+      name,
+      tabId,
+      ...(title ? { title } : {}),
+      contentKind: "html",
+      sizeW: existing?.sizeW ?? 6,
+      sizeH: existing?.sizeH ?? 4,
+      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
+      grantState: "none",
+      revision: (existing?.revision ?? 0) + 1,
+      frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}`,
+    });
+    this.snapshotSignal.set(
+      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
+    );
+  }
+
+  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    const snapshot = this.snapshotSignal.value;
+    const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+    const title = boardWidgetTitle(input.title);
+    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
+    const tabs = snapshot.tabs.length
+      ? snapshot.tabs
+      : [
+          {
+            tabId: "main",
+            title: t("chat.board.defaultTab"),
+            position: 0,
+            chatDock: "right" as const,
+          },
+        ];
+    const existing = snapshot.widgets.find((widget) => widget.name === name);
+    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
+    widgets.push({
+      name,
+      tabId,
+      ...(title ? { title } : {}),
+      contentKind: "mcp-app",
+      sizeW: existing?.sizeW ?? 6,
+      sizeH: existing?.sizeH ?? 4,
+      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
+      grantState: "none",
+      revision: (existing?.revision ?? 0) + 1,
+    });
+    this.snapshotSignal.set(
+      normalizeMockBoardSnapshot({
+        ...snapshot,
+        revision: snapshot.revision + 1,
+        tabs,
+        widgets,
+      }),
+    );
+  }
+
+  widgetFrameUrl(name: string, revision: number): string {
+    return (
+      this.snapshotSignal.value.widgets.find(
+        (widget) => widget.name === name && widget.revision === revision,
+      )?.frameUrl ?? `about:blank#board-widget=${encodeURIComponent(name)}&revision=${revision}`
+    );
+  }
+
+  async refreshWidgetFrame(_name: string): Promise<void> {}
+
+  async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "MCP App mock view unavailable" };
+  }
+
+  async refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return await this.widgetAppView(name, revision);
+  }
+
   emitCommand(command: BoardCommand): void {
     this.eventStream.emit({ sessionKey: this.sessionKey, command });
   }
 }
 
-function normalizeMockSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  const tabs = snapshot.tabs
-    .toSorted((left, right) => left.position - right.position)
-    .map((tab, position) => Object.assign({}, tab, { position }));
-  const tabPositions = new Map(tabs.map((tab) => [tab.tabId, tab.position]));
-  const nextWidgetPosition = new Map<string, number>();
-  const widgets = snapshot.widgets
-    .toSorted((left, right) => {
-      const tabDelta =
-        (tabPositions.get(left.tabId) ?? Number.MAX_SAFE_INTEGER) -
-        (tabPositions.get(right.tabId) ?? Number.MAX_SAFE_INTEGER);
-      return tabDelta || left.position - right.position;
-    })
-    .map((widget) => {
-      const position = nextWidgetPosition.get(widget.tabId) ?? 0;
-      nextWidgetPosition.set(widget.tabId, position + 1);
-      return Object.assign({}, widget, { position });
-    });
-  return { ...snapshot, tabs, widgets };
-}
+export class GatewayBoardProvider implements BoardProvider {
+  readonly snapshot$: BoardSnapshotSignal;
+  readonly events: BoardEventStream;
+  private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
+  private readonly eventStream = new EventStream<BoardCommandEvent>();
+  private client: BoardGatewayClient;
+  private clientGeneration = 0;
+  private unsubscribe: (() => void) | undefined;
+  private refreshLoop: Promise<void> | undefined;
+  private refreshRequested = false;
+  private readonly changedWidgets = new Set<string>();
+  private stateGeneration = 0;
+  private connected = false;
+  private wakeRetryDelay: (() => void) | undefined;
+  private readonly appViews = new BoardMcpAppViewCache();
 
-function applyMockOp(snapshot: BoardSnapshot, op: BoardOp): BoardSnapshot {
-  switch (op.kind) {
-    case "tab_create":
-      if (snapshot.tabs.some((tab) => tab.tabId === op.tabId)) {
-        return snapshot;
-      }
-      return {
-        ...snapshot,
-        tabs: [
-          ...snapshot.tabs,
-          {
-            tabId: op.tabId,
-            title: op.title,
-            position: snapshot.tabs.length,
-            chatDock: op.chatDock ?? "right",
-          },
-        ],
-      };
-    case "tab_update": {
-      const orderedTabs = snapshot.tabs.toSorted((left, right) => left.position - right.position);
-      const tabIndex = orderedTabs.findIndex((tab) => tab.tabId === op.tabId);
-      if (tabIndex < 0) {
-        return snapshot;
-      }
-      const [tab] = orderedTabs.splice(tabIndex, 1);
-      const updated = {
-        ...tab!,
-        ...(op.title !== undefined ? { title: op.title } : {}),
-        ...(op.chatDock !== undefined ? { chatDock: op.chatDock } : {}),
-      };
-      const position = Math.max(
-        0,
-        Math.min(
-          op.position === undefined ? tabIndex : Math.trunc(op.position),
-          orderedTabs.length,
-        ),
-      );
-      orderedTabs.splice(position, 0, updated);
-      return {
-        ...snapshot,
-        tabs: orderedTabs.map((candidate, nextPosition) =>
-          Object.assign({}, candidate, { position: nextPosition }),
-        ),
-      };
+  constructor(
+    readonly sessionKey: string,
+    client: BoardGatewayClient,
+    connected = true,
+    public canPinWidgets = true,
+    public canPinMcpApps = false,
+  ) {
+    this.snapshotSignal = new ValueSignal(emptySnapshot(sessionKey));
+    this.snapshot$ = this.snapshotSignal;
+    this.events = this.eventStream;
+    this.client = client;
+    this.connected = connected;
+    this.subscribe(client);
+    if (connected) {
+      void this.activate();
     }
-    case "tab_delete": {
-      const remainingTabs = snapshot.tabs.filter((tab) => tab.tabId !== op.tabId);
-      if (remainingTabs.length === 0 && snapshot.widgets.length > 0) {
-        return snapshot;
-      }
-      const firstTabId = remainingTabs[0]?.tabId;
-      return {
-        ...snapshot,
-        tabs: remainingTabs,
-        widgets: snapshot.widgets.map((widget) =>
-          widget.tabId === op.tabId && firstTabId
-            ? { ...widget, tabId: firstTabId, position: Number.MAX_SAFE_INTEGER }
-            : widget,
-        ),
-      };
-    }
-    case "tabs_reorder": {
-      const requestedTabIds = new Set(op.tabIds);
-      if (
-        op.tabIds.length !== snapshot.tabs.length ||
-        requestedTabIds.size !== snapshot.tabs.length ||
-        snapshot.tabs.some((tab) => !requestedTabIds.has(tab.tabId))
-      ) {
-        return snapshot;
-      }
-      return {
-        ...snapshot,
-        tabs: op.tabIds.flatMap((tabId, position) => {
-          const tab = snapshot.tabs.find((candidate) => candidate.tabId === tabId);
-          return tab ? [{ ...tab, position }] : [];
-        }),
-      };
-    }
-    case "widget_move": {
-      const moving = snapshot.widgets.find((widget) => widget.name === op.name);
-      const anchor = op.after
-        ? snapshot.widgets.find((widget) => widget.name === op.after)
-        : undefined;
-      if (!moving || (op.after && (!anchor || anchor.name === moving.name))) {
-        return snapshot;
-      }
-      const targetTabId = op.tabId ?? moving.tabId;
-      if (
-        (op.position !== undefined && op.after !== undefined) ||
-        !snapshot.tabs.some((tab) => tab.tabId === targetTabId) ||
-        (anchor && anchor.tabId !== targetTabId)
-      ) {
-        return snapshot;
-      }
-      const remaining = snapshot.widgets.filter((widget) => widget.name !== moving.name);
-      const targetWidgets = remaining
-        .filter((widget) => widget.tabId === targetTabId)
-        .toSorted((left, right) => left.position - right.position);
-      const anchorIndex = anchor
-        ? targetWidgets.findIndex((widget) => widget.name === anchor.name)
-        : -1;
-      const insertionIndex = anchor
-        ? anchorIndex + 1
-        : Math.max(0, Math.min(op.position ?? targetWidgets.length, targetWidgets.length));
-      targetWidgets.splice(insertionIndex, 0, { ...moving, tabId: targetTabId });
-      return {
-        ...snapshot,
-        widgets: snapshot.tabs.flatMap((tab) =>
-          (tab.tabId === targetTabId
-            ? targetWidgets
-            : remaining
-                .filter((widget) => widget.tabId === tab.tabId)
-                .toSorted((left, right) => left.position - right.position)
-          ).map((widget, position) => Object.assign({}, widget, { position })),
-        ),
-      };
-    }
-    case "widget_resize":
-      return {
-        ...snapshot,
-        widgets: snapshot.widgets.map((widget) =>
-          widget.name === op.name
-            ? {
-                ...widget,
-                sizeW: Math.min(12, Math.max(1, Math.trunc(op.sizeW))),
-                sizeH: Math.min(20, Math.max(1, Math.trunc(op.sizeH))),
-              }
-            : widget,
-        ),
-      };
-    case "widget_remove":
-      return { ...snapshot, widgets: snapshot.widgets.filter((widget) => widget.name !== op.name) };
   }
-  return snapshot;
+
+  attachClient(
+    client: BoardGatewayClient,
+    connected = true,
+    canPinWidgets = true,
+    canPinMcpApps = false,
+  ): void {
+    const connectionActivated = connected && !this.connected;
+    this.connected = connected;
+    this.canPinWidgets = canPinWidgets;
+    this.canPinMcpApps = canPinMcpApps;
+    if (client === this.client) {
+      if (connectionActivated) {
+        void this.activate();
+      }
+      return;
+    }
+    this.unsubscribe?.();
+    this.client = client;
+    this.clientGeneration += 1;
+    this.stateGeneration += 1;
+    this.changedWidgets.clear();
+    this.appViews.clear();
+    this.snapshotSignal.set(emptySnapshot(this.sessionKey));
+    this.subscribe(client);
+    if (connected) {
+      void this.activate();
+    }
+  }
+
+  activate(): Promise<void> {
+    return this.requestRefresh();
+  }
+
+  async applyOps(ops: BoardOp[]): Promise<void> {
+    await this.mutate("board.update", {
+      sessionKey: this.sessionKey,
+      ops,
+    });
+  }
+
+  async grant(name: string, decision: "granted" | "rejected"): Promise<void> {
+    const widget = this.snapshotSignal.value.widgets.find((candidate) => candidate.name === name);
+    if (!widget) {
+      void this.requestRefresh();
+      throw new Error(`Dashboard widget not found: ${name}`);
+    }
+    await this.mutate("board.widget.grant", {
+      sessionKey: this.sessionKey,
+      name,
+      decision,
+      revision: widget.revision,
+      ...(widget.instanceId ? { instanceId: widget.instanceId } : {}),
+    });
+  }
+
+  async pinWidget(input: BoardPinWidgetInput): Promise<void> {
+    const name = input.name ?? canvasWidgetNameForDocument(input.docId);
+    const title = boardWidgetTitle(input.title);
+    await this.mutate(
+      "board.widget.put",
+      {
+        sessionKey: this.sessionKey,
+        name,
+        ...(title ? { title } : {}),
+        content: { kind: "canvas-doc", docId: input.docId },
+        ...(input.tabId || input.size || input.after
+          ? {
+              placement: {
+                ...(input.tabId ? { tabId: input.tabId } : {}),
+                ...(input.size ? { size: input.size } : {}),
+                ...(input.after ? { after: input.after } : {}),
+              },
+            }
+          : {}),
+      },
+      name,
+    );
+  }
+
+  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+    const title = boardWidgetTitle(input.title);
+    await this.mutate(
+      "board.widget.put",
+      {
+        sessionKey: this.sessionKey,
+        name,
+        ...(title ? { title } : {}),
+        content: { kind: "mcp-app", viewId: input.viewId },
+        ...(input.tabId || input.size || input.after
+          ? {
+              placement: {
+                ...(input.tabId ? { tabId: input.tabId } : {}),
+                ...(input.size ? { size: input.size } : {}),
+                ...(input.after ? { after: input.after } : {}),
+              },
+            }
+          : {}),
+      },
+      name,
+    );
+  }
+
+  widgetFrameUrl(name: string, revision: number): string {
+    return (
+      this.snapshotSignal.value.widgets.find(
+        (widget) => widget.name === name && widget.revision === revision,
+      )?.frameUrl ?? ""
+    );
+  }
+
+  refreshWidgetFrame(name: string): Promise<void> {
+    return this.requestRefresh(name);
+  }
+
+  async widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return await this.resolveWidgetAppView(name, revision, false);
+  }
+
+  async refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return await this.resolveWidgetAppView(name, revision, true);
+  }
+
+  private async resolveWidgetAppView(
+    name: string,
+    revision: number,
+    force: boolean,
+  ): Promise<BoardWidgetAppViewState> {
+    const widget = this.snapshotSignal.value.widgets.find(
+      (candidate) =>
+        candidate.name === name &&
+        candidate.revision === revision &&
+        candidate.contentKind === "mcp-app",
+    );
+    if (!widget) {
+      return { status: "stale", error: "Dashboard MCP App widget unavailable" };
+    }
+    const client = this.client;
+    return await this.appViews.resolve(
+      widget,
+      async () =>
+        await client.request<BoardWidgetAppViewResult>("board.widget.appView", {
+          sessionKey: this.sessionKey,
+          name,
+          revision,
+          ...(widget.instanceId ? { instanceId: widget.instanceId } : {}),
+        }),
+      force,
+    );
+  }
+
+  private subscribe(client: BoardGatewayClient): void {
+    this.unsubscribe = client.addEventListener((event) => {
+      if (event.event === "board.changed") {
+        const payload = event.payload as Partial<BoardChangedEvent> | undefined;
+        if (payload && this.matchesSession(payload.sessionKey)) {
+          this.stateGeneration += 1;
+          void this.requestRefresh(payload.widget);
+        }
+        return;
+      }
+      if (event.event === "board.command") {
+        const payload = event.payload as Partial<BoardCommandEvent> | undefined;
+        if (payload?.command && this.matchesSession(payload.sessionKey)) {
+          this.eventStream.emit({ sessionKey: this.sessionKey, command: payload.command });
+        }
+      }
+    });
+  }
+
+  private matchesSession(sessionKey: string | undefined): boolean {
+    return (
+      typeof sessionKey === "string" &&
+      normalizeSessionKeyForUiComparison(sessionKey) ===
+        normalizeSessionKeyForUiComparison(this.sessionKey)
+    );
+  }
+
+  private requestRefresh(changedWidget?: string): Promise<void> {
+    this.refreshRequested = true;
+    if (changedWidget) {
+      this.changedWidgets.add(changedWidget);
+    }
+    this.wakeRetryDelay?.();
+    this.refreshLoop ??= this.runRefreshLoop().finally(() => {
+      this.refreshLoop = undefined;
+      if (this.refreshRequested) {
+        void this.requestRefresh();
+      }
+    });
+    return this.refreshLoop;
+  }
+
+  private async runRefreshLoop(): Promise<void> {
+    const retry = { delayMs: 1_000 };
+    while (this.refreshRequested) {
+      this.refreshRequested = false;
+      const changedWidgets = new Set(this.changedWidgets);
+      this.changedWidgets.clear();
+      const client = this.client;
+      const stateGeneration = this.stateGeneration;
+      try {
+        const snapshot = await client.request<BoardSnapshot>("board.get", {
+          sessionKey: this.sessionKey,
+        });
+        if (client !== this.client) {
+          this.refreshRequested = true;
+          continue;
+        }
+        if (stateGeneration !== this.stateGeneration) {
+          this.refreshRequested = true;
+          for (const name of changedWidgets) {
+            this.changedWidgets.add(name);
+          }
+          continue;
+        }
+        this.setSnapshot(snapshot, changedWidgets);
+        retry.delayMs = 1_000;
+      } catch {
+        this.refreshRequested = true;
+        if (client !== this.client) {
+          continue;
+        }
+        for (const name of changedWidgets) {
+          this.changedWidgets.add(name);
+        }
+        const delayMs = retry.delayMs;
+        // Carry backoff across failed loop iterations; successful refreshes reset it above.
+        retry.delayMs = Math.min(delayMs * 2, 30_000);
+        await this.waitForRetry(delayMs);
+        continue;
+      }
+    }
+  }
+
+  private waitForRetry(delayMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (!timer) {
+          return;
+        }
+        clearTimeout(timer);
+        timer = undefined;
+        if (this.wakeRetryDelay === finish) {
+          this.wakeRetryDelay = undefined;
+        }
+        resolve();
+      };
+      timer = setTimeout(finish, delayMs);
+      this.wakeRetryDelay = finish;
+    });
+  }
+
+  private async mutate(
+    method: "board.update" | "board.widget.grant" | "board.widget.put",
+    params: Record<string, unknown>,
+    changedWidget?: string,
+  ): Promise<void> {
+    const client = this.client;
+    const clientGeneration = this.clientGeneration;
+    const stateGeneration = ++this.stateGeneration;
+    try {
+      const snapshot = await client.request<BoardSnapshot>(method, params);
+      if (
+        client === this.client &&
+        clientGeneration === this.clientGeneration &&
+        stateGeneration === this.stateGeneration
+      ) {
+        this.stateGeneration += 1;
+        this.setSnapshot(snapshot, changedWidget ? new Set([changedWidget]) : new Set());
+      }
+    } catch (error) {
+      if (
+        client === this.client &&
+        clientGeneration === this.clientGeneration &&
+        stateGeneration === this.stateGeneration
+      ) {
+        void this.requestRefresh();
+      }
+      throw error;
+    }
+  }
+
+  private setSnapshot(snapshot: BoardSnapshot, changedWidgets = new Set<string>()): void {
+    const previousWidgets = new Map(
+      this.snapshotSignal.value.widgets.map((widget) => [widget.name, widget]),
+    );
+    const widgets = snapshot.widgets.map((widget) => {
+      const previous = previousWidgets.get(widget.name);
+      if (
+        previous &&
+        !changedWidgets.has(widget.name) &&
+        previous.revision === widget.revision &&
+        previous.instanceId === widget.instanceId &&
+        previous.frameUrl
+      ) {
+        return { ...widget, frameUrl: previous.frameUrl };
+      }
+      return widget;
+    });
+    this.appViews.prune(widgets);
+    this.snapshotSignal.set({ ...snapshot, widgets });
+  }
 }
 
 const nullProviders = new Map<string, NullProvider>();
 const mockProviders = new Map<string, MockBoardProvider>();
+const gatewayProviders = new Map<string, GatewayBoardProvider>();
 let mockProviderScope: object | null = null;
 
 function resolveMockBoardScope(): object | null {
@@ -348,11 +694,7 @@ function resolveMockBoardScope(): object | null {
   if (new URLSearchParams(location?.search ?? "").get("mockBoard") === "1") {
     return location;
   }
-  return (
-    (typeof document !== "undefined" &&
-      document.querySelector("script[data-openclaw-control-ui-mock-gateway]")) ||
-    null
-  );
+  return null;
 }
 
 export function isMockBoardEnabled(): boolean {
@@ -368,7 +710,14 @@ function boardProviderCacheKey(sessionKey: string): string {
   return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
 }
 
-export function boardProviderForSession(sessionKey: string): BoardProvider {
+export function boardProviderForSession(
+  sessionKey: string,
+  client?: BoardGatewayClient | null,
+  available = true,
+  connected = true,
+  canPinWidgets = available,
+  canPinMcpApps = false,
+): BoardProvider {
   const key = boardProviderCacheKey(sessionKey);
   const mockScope = resolveMockBoardScope();
   if (mockScope && isMockBoardSession(key)) {
@@ -382,6 +731,28 @@ export function boardProviderForSession(sessionKey: string): BoardProvider {
       mockProviders.set(key, provider);
     }
     return provider;
+  }
+  if (!available) {
+    let provider = nullProviders.get(key);
+    if (!provider) {
+      provider = new NullProvider(key);
+      nullProviders.set(key, provider);
+    }
+    return provider;
+  }
+  if (client) {
+    let provider = gatewayProviders.get(key);
+    if (!provider) {
+      provider = new GatewayBoardProvider(key, client, connected, canPinWidgets, canPinMcpApps);
+      gatewayProviders.set(key, provider);
+    } else {
+      provider.attachClient(client, connected, canPinWidgets, canPinMcpApps);
+    }
+    return provider;
+  }
+  const gatewayProvider = gatewayProviders.get(key);
+  if (gatewayProvider) {
+    return gatewayProvider;
   }
   let provider = nullProviders.get(key);
   if (!provider) {

@@ -28,6 +28,7 @@ import {
   resolveDeprecatedAuthChoiceReplacement,
 } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
+import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
@@ -42,7 +43,12 @@ import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "
 import { inferAuthChoiceFromFlags } from "./onboard-non-interactive/local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./onboard-non-interactive/local/gateway-config.js";
 import { validateGatewayWebSocketUrl } from "./onboard-remote.js";
-import type { OnboardOptions, ResetScope } from "./onboard-types.js";
+import {
+  isNodeManagerChoice,
+  isOnboardFlow,
+  type OnboardOptions,
+  type ResetScope,
+} from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 const BUILT_IN_AUTH_CHOICES = ["setup-token", "token", "apiKey", "custom-api-key", "skip"];
@@ -53,7 +59,7 @@ function rejectOption(runtime: RuntimeEnv, message: string): false {
   return false;
 }
 
-function validateResetPreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): boolean {
+function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): boolean {
   if (opts.mode !== undefined && opts.mode !== "local" && opts.mode !== "remote") {
     return rejectOption(
       runtime,
@@ -61,12 +67,9 @@ function validateResetPreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv
     );
   }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
-    ["--flow", opts.flow, ["quickstart", "advanced", "import"]],
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
     ["--tailscale", opts.tailscale, ["off", "serve", "funnel"]],
-    ["--node-manager", opts.nodeManager, ["npm", "pnpm", "bun"]],
-    ["--daemon-runtime", opts.daemonRuntime, ["node"]],
     [
       "--custom-compatibility",
       opts.customCompatibility,
@@ -80,6 +83,18 @@ function validateResetPreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv
         `Invalid ${flag} ${JSON.stringify(value)}. Use ${allowed.map((choice) => JSON.stringify(choice)).join(", ")}.`,
       );
     }
+  }
+  if (opts.flow !== undefined && !isOnboardFlow(opts.flow)) {
+    return rejectOption(
+      runtime,
+      'Invalid --flow. Use "quickstart", "advanced", "manual", or "import".',
+    );
+  }
+  if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
+    return rejectOption(runtime, 'Invalid --daemon-runtime. Use "node".');
+  }
+  if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
+    return rejectOption(runtime, 'Invalid --node-manager. Use "npm", "pnpm", or "bun".');
   }
   if (
     opts.gatewayPort !== undefined &&
@@ -426,6 +441,9 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (!validatePreflightOptions(normalizedOpts, runtime)) {
+    return;
+  }
   if (normalizedOpts.classic && normalizedOpts.nonInteractive) {
     runtime.error(
       "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
@@ -485,9 +503,6 @@ export async function setupWizardCommand(
       : runGuidedOnboarding;
 
   if (normalizedOpts.reset) {
-    if (!validateResetPreflightOptions(normalizedOpts, runtime)) {
-      return;
-    }
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
     const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";

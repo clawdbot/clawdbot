@@ -937,26 +937,6 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
     const stats = store.usageStats?.["anthropic:default"];
     expect(testCase.readUntil(stats)).toBe(MAX_DATE_TIMESTAMP_MS);
   });
-
-  it("preserves fractional disabled cooldown config durations", async () => {
-    const now = 1_000_000;
-    const store = makeStore({});
-
-    await markFailureAt({
-      store,
-      now,
-      reason: "billing",
-      cfg: {
-        auth: {
-          cooldowns: {
-            billingBackoffHours: 0.0166667,
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(now + 60_000);
-  });
 });
 
 describe("markAuthProfileBlockedUntil", () => {

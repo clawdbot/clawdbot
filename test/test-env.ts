@@ -373,10 +373,6 @@ function sanitizeLiveConfig(raw: string): string {
       });
     }
 
-    if (parsed.diagnostics && typeof parsed.diagnostics === "object") {
-      delete parsed.diagnostics.memoryPressureSnapshot;
-    }
-
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {
       return `${JSON.stringify(parsed, null, 2)}\n`;
     }

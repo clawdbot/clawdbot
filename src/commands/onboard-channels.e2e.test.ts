@@ -887,7 +887,7 @@ describe("setupChannels", () => {
             ...qaChannelBase,
             meta: {
               ...qaChannelBase.meta,
-              showInSetup: false,
+              exposure: { setup: false },
             },
           },
         },

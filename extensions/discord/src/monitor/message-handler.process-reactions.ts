@@ -94,10 +94,7 @@ export function createDiscordMessageReactionRuntime(params: {
     messageId: message.id,
     reactionContext: ackReactionContext,
   });
-  const statusReactionTiming = {
-    ...DEFAULT_TIMING,
-    ...cfg.messages?.statusReactions?.timing,
-  };
+  const statusReactionTiming = DEFAULT_TIMING;
   let statusReactionTarget = `${messageChannelId}/${message.id}`;
   let statusReactionsActive = statusReactionsEnabled;
   let statusReactions: StatusReactionController = createStatusReactionController({

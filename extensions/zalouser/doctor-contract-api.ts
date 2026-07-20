@@ -84,6 +84,7 @@ async function collectLegacyZalouserCredentialSources(
 function collectLegacyZalouserDmEntries(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  options: { readOnly?: boolean } = {},
 ): LegacyZalouserDmEntry[] {
   const entries = new Map<string, LegacyZalouserDmEntry>();
   const fallbackAccountId = config.channels?.zalouser?.defaultAccount?.trim() || "default";
@@ -93,7 +94,11 @@ function collectLegacyZalouserDmEntries(
   ]);
   for (const agentId of agentIds) {
     const storePath = resolveStorePath(config.session?.store, { agentId, env });
-    const storedEntries = listSessionEntries({ agentId, storePath });
+    const storedEntries = listSessionEntries({
+      agentId,
+      storePath,
+      ...(options.readOnly ? { readOnly: true } : {}),
+    });
     const entryByKey = new Map(storedEntries.map(({ sessionKey, entry }) => [sessionKey, entry]));
     for (const { sessionKey, entry } of storedEntries) {
       const parsed = parseAgentSessionKey(sessionKey);
@@ -228,10 +233,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "zalouser-direct-session-keys",
     label: "Zalo Personal direct-message sessions",
-    detectLegacyState({ config, env }) {
-      const count = collectLegacyZalouserDmEntries(config, env).flatMap(
-        ({ legacyKeys }) => legacyKeys,
-      ).length;
+    async detectLegacyState({ config, env }) {
+      // A never-configured channel cannot own legacy DMs, so do not scan every agent DB at startup.
+      // Removed config defers leftover-row detection until zalouser is configured again.
+      if (
+        config.channels?.zalouser === undefined &&
+        (await collectLegacyZalouserCredentialSources(env)).length === 0
+      ) {
+        return null;
+      }
+      const pending = collectLegacyZalouserDmEntries(config, env, { readOnly: true });
+      const count = pending.flatMap(({ legacyKeys }) => legacyKeys).length;
       return count > 0
         ? { preview: [`- Zalo Personal direct-message session keys: ${count} legacy row(s)`] }
         : null;

@@ -290,6 +290,35 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(90_000);
   });
 
+  it("gives agents_wait the long-running cap while preserving its inner timeout budget", () => {
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-agents-wait",
+      namespace: null,
+      tool: "agents_wait",
+    };
+
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: { ...call, arguments: { ids: ["run-1"] } },
+        config: undefined,
+      }),
+    ).toBe(630_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 120 } },
+        config: undefined,
+      }),
+    ).toBe(150_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 600 } },
+        config: undefined,
+      }),
+    ).toBe(630_000);
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;

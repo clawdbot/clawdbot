@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
@@ -60,7 +61,9 @@ export async function consultMeetingAgent(params: {
   args: unknown;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
 }): Promise<{ text: string }> {
-  const agentId = normalizeAgentId(params.agentId);
+  const agentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveDefaultAgentId(params.config);
   const requesterSessionKey =
     normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
   const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${params.meetingSessionId}`;

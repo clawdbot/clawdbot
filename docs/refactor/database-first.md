@@ -2034,8 +2034,6 @@ payload.
 6. Delete file-lock-shaped session mutation.
    - Done for runtime lock creation and runtime lock APIs.
    - The standalone legacy `.jsonl.lock` doctor cleanup lane is removed.
-   - `session.writeLock` is doctor-migrated legacy config, not a typed runtime
-     setting.
    - State integrity no longer has a separate orphan transcript-file pruning
      path; doctor migration imports/removes legacy JSONL sources in one place.
    - Gateway singleton coordination uses typed SQLite `state_leases` rows under

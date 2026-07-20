@@ -488,6 +488,24 @@ describe("generate-npm-shrinkwrap", () => {
     ).toEqual(["extensions/acpx"]);
   });
 
+  it("targets the changed publishable gateway protocol shrinkwrap", () => {
+    expect(
+      shrinkwrapPackageDirsForChangedPaths([
+        "packages/gateway-protocol/package.json",
+        "packages/gateway-protocol/npm-shrinkwrap.json",
+      ]).map(repoRelativePath),
+    ).toEqual(["packages/gateway-protocol"]);
+  });
+
+  it("targets the changed publishable gateway client shrinkwrap", () => {
+    expect(
+      shrinkwrapPackageDirsForChangedPaths([
+        "packages/gateway-client/package.json",
+        "packages/gateway-client/npm-shrinkwrap.json",
+      ]).map(repoRelativePath),
+    ).toEqual(["packages/gateway-client"]);
+  });
+
   it("targets changed tracked shrinkwraps for private packages", () => {
     expect(
       shrinkwrapPackageDirsForChangedPaths(["extensions/vault/package.json"]).map(repoRelativePath),
@@ -500,6 +518,8 @@ describe("generate-npm-shrinkwrap", () => {
     );
 
     expect(packageDirs).toContain("");
+    expect(packageDirs).toContain("packages/gateway-client");
+    expect(packageDirs).toContain("packages/gateway-protocol");
     expect(packageDirs).toContain("extensions/acpx");
     expect(packageDirs).toContain("extensions/vault");
   });

@@ -21,6 +21,43 @@ function getDiscordCompatibilityNormalizer(): NonNullable<
 }
 
 describe("discord doctor", () => {
+  it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            gatewayInfoTimeoutMs: 1,
+            gatewayReadyTimeoutMs: 2,
+            gatewayRuntimeReadyTimeoutMs: 3,
+            eventQueue: { listenerTimeout: 4 },
+            retry: { attempts: 5 },
+            voice: {
+              realtime: {
+                providers: {
+                  custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } },
+                },
+              },
+            },
+            accounts: {
+              work: { eventQueue: { maxConcurrency: 6 }, retry: { attempts: 7 } },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      voice: {
+        realtime: {
+          providers: { custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } } },
+        },
+      },
+      accounts: { work: {} },
+    });
+    expect(result.changes).toContain("Removed retired Discord tuning knobs.");
+  });
+
   it("normalizes legacy discord streaming aliases for runtime config", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 

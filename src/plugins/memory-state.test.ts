@@ -14,7 +14,7 @@ import {
   registerMemoryCorpusSupplement,
   registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
   type MemoryPluginPublicArtifact,
@@ -84,7 +84,7 @@ describe("memory plugin state", () => {
   });
 
   it("delegates prompt building to the registered memory plugin", () => {
-    registerMemoryPromptSection(({ availableTools }) => {
+    registerTestMemoryPromptBuilder(({ availableTools }) => {
       if (!availableTools.has("memory_search")) {
         return [];
       }
@@ -266,7 +266,7 @@ describe("memory plugin state", () => {
   });
 
   it("passes citations mode through to the prompt builder", () => {
-    registerMemoryPromptSection(({ citationsMode }) => [
+    registerTestMemoryPromptBuilder(({ citationsMode }) => [
       `citations: ${citationsMode ?? "default"}`,
     ]);
 
@@ -281,7 +281,7 @@ describe("memory plugin state", () => {
   it("passes agent context through the primary and supplemental prompt builders", () => {
     const primary = vi.fn(() => ["primary"]);
     const supplemental = vi.fn(() => ["supplemental"]);
-    registerMemoryPromptSection(primary);
+    registerTestMemoryPromptBuilder(primary);
     registerMemoryPromptSupplement("memory-wiki", supplemental);
 
     const availableTools = new Set(["memory_search", "memory_get"]);
@@ -306,7 +306,7 @@ describe("memory plugin state", () => {
   });
 
   it("appends prompt supplements in plugin-id order", () => {
-    registerMemoryPromptSection(() => ["primary"]);
+    registerTestMemoryPromptBuilder(() => ["primary"]);
     registerMemoryPromptSupplement("memory-wiki", () => ["wiki"]);
     registerMemoryPromptSupplement("alpha-helper", () => ["alpha"]);
 
@@ -318,7 +318,7 @@ describe("memory plugin state", () => {
   });
 
   it("ignores malformed prompt builder output", () => {
-    registerMemoryPromptSection(() => ["primary", 1, undefined] as never);
+    registerTestMemoryPromptBuilder(() => ["primary", 1, undefined] as never);
     registerMemoryPromptSupplement("async-helper", () => Promise.resolve(["async"]) as never);
     registerMemoryPromptSupplement("valid-helper", () => ["valid", false] as never);
 

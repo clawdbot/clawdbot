@@ -447,13 +447,13 @@ export class ProfilePage extends OpenClawLightDomElement {
         )}
       </div>`;
     }
-    const avatarUrl = this.ownProfile.hasAvatar
-      ? userProfileAvatarUrl(
-          this.context.gateway.connection.gatewayUrl,
-          this.ownProfile.id,
-          this.ownProfile.updatedAt,
-        )
-      : null;
+    // The gateway route serves an uploaded avatar first and its private Gravatar
+    // fallback second, while a 404 still leaves the viewer-avatar initials visible.
+    const avatarUrl = userProfileAvatarUrl(
+      this.context.gateway.connection.gatewayUrl,
+      this.ownProfile.id,
+      this.ownProfile.updatedAt,
+    );
     return renderIdentitySection({
       profile: this.ownProfile,
       avatarUrl,

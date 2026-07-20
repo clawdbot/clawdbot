@@ -11,20 +11,6 @@
   "contracts": {
     "tools": ["voice_call"]
   },
-  "channelEnvVars": {
-    "voice-call": [
-      "TELNYX_API_KEY",
-      "TELNYX_CONNECTION_ID",
-      "TELNYX_PUBLIC_KEY",
-      "TWILIO_ACCOUNT_SID",
-      "TWILIO_AUTH_TOKEN",
-      "TWILIO_FROM_NUMBER",
-      "PLIVO_AUTH_ID",
-      "PLIVO_AUTH_TOKEN",
-      "NGROK_AUTHTOKEN",
-      "NGROK_DOMAIN"
-    ]
-  },
   "uiHints": {
     "provider": {
       "label": "Provider",

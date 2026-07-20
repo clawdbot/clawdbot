@@ -48,7 +48,7 @@ function selectChatSendAgentReplyPayloads(params: {
     .map((entry) => entry.payload)
     .filter(
       (payload) =>
-        isSourceReplyTranscriptMirrorPayload(payload) ||
+        (!payload.isError && isSourceReplyTranscriptMirrorPayload(payload)) ||
         (!params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload)),
     );
 }

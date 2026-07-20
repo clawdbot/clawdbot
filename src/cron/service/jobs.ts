@@ -219,11 +219,8 @@ function isPendingErrorBackoffSlot(params: {
   nextRunAtMs: number;
   nowMs: number;
 }): boolean {
-  const { state, job, nextRunAtMs, nowMs } = params;
-  const backoffUntilMs = resolveJobErrorBackoffUntilMs(
-    job,
-    state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-  );
+  const { job, nextRunAtMs, nowMs } = params;
+  const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRunAtMs <= backoffUntilMs;
 }
 
@@ -377,7 +374,7 @@ function assertTriggerSupport(
   if (job.schedule.kind !== "every" && job.schedule.kind !== "cron") {
     throw new Error("cron triggers require an every or cron schedule");
   }
-  const minIntervalMs = resolveCronTriggerMinIntervalMs(opts?.cronConfig);
+  const minIntervalMs = resolveCronTriggerMinIntervalMs();
   if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {
     throw new Error(`cron trigger every interval must be at least ${minIntervalMs}ms`);
   }
@@ -797,7 +794,7 @@ function recomputeJobNextRunAtMs(params: {
     ) {
       const backoffFloor = resolveJobErrorBackoffUntilMs(
         params.job,
-        params.state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+        DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
       );
       if (newNext !== undefined) {
         newNext = backoffFloor !== undefined ? Math.max(newNext, backoffFloor) : newNext;
@@ -939,7 +936,7 @@ export function recomputeNextRunsForMaintenance(
         const alreadyExecutedSlot = isFiniteTimestamp(lastRun) && lastRun >= job.state.nextRunAtMs;
         const backoffUntilMs = resolveJobErrorBackoffUntilMs(
           job,
-          state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+          DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
         );
         const isStaleBackoffSlot =
           backoffUntilMs !== undefined &&

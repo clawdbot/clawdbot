@@ -13,7 +13,7 @@ debug signal rather than a guess.
 
 - `docs/logging.md` for log files, `openclaw logs`, and targeted debug flags.
 - `docs/reference/test.md` for local test commands.
-- `docs/reference/code-mode.md` for code-mode exec/wait and tool catalog rules.
+- `docs/tools/code-mode.md` for code-mode exec/wait and tool catalog rules.
 - Use `$openclaw-testing` for choosing test lanes.
 - Use `$crabbox` for broad, Docker, package, Linux, live-key, or CI-parity proof.
 
@@ -84,9 +84,9 @@ openclaw logs --follow
 - Guarded fetch/timing:
   `src/agents/provider-transport-fetch.ts`
 - OpenAI/Codex provider wrappers:
-  `src/agents/pi-embedded-runner/openai-stream-wrappers.ts`
+  `src/llm/providers/stream-wrappers/openai.ts`
 - Tool construction, Tool Search, code-mode activation:
-  `src/agents/pi-embedded-runner/run/attempt.ts`
+  `src/agents/embedded-agent-runner/run/attempt.ts`
 - Code-mode runtime and worker:
   `src/agents/code-mode.ts`
   `src/agents/code-mode.worker.ts`

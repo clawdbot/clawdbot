@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../test-utils/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildGroupDisplayName,
@@ -16,7 +15,6 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
   updateSessionStore,
-  updateSessionStoreEntry,
 } from "./sessions.js";
 
 describe("sessions", () => {
@@ -95,16 +93,6 @@ describe("sessions", () => {
     const parentDir = path.dirname(filePath);
     const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
     return path.join(canonicalParent, path.basename(filePath));
-  }
-
-  async function expectPathMissing(targetPath: string): Promise<void> {
-    let error: { code?: unknown } | undefined;
-    try {
-      await fs.stat(targetPath);
-    } catch (err) {
-      error = err as { code?: unknown };
-    }
-    expect(error?.code).toBe("ENOENT");
   }
 
   const deriveSessionKeyCases = [
@@ -217,94 +205,6 @@ describe("sessions", () => {
       );
     });
   }
-
-  it("updateSessionStoreEntry preserves existing fields when patching", async () => {
-    const sessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStoreEntry",
-      entries: {
-        [sessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 100,
-          reasoningLevel: "on",
-        },
-      },
-    });
-
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async () => ({ updatedAt: 200 }),
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(200);
-    expect(store[sessionKey]?.reasoningLevel).toBe("on");
-  });
-
-  it("updateSessionStoreEntry returns null when session key does not exist", async () => {
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStoreEntry-missing",
-      entries: {},
-    });
-    const update = async () => ({ thinkingLevel: "high" as const });
-    const result = await updateSessionStoreEntry({
-      storePath,
-      sessionKey: "agent:main:missing",
-      update,
-    });
-    expect(result).toBeNull();
-  });
-
-  it("updateSessionStoreEntry keeps existing entry when patch callback returns null", async () => {
-    const sessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStoreEntry-noop",
-      entries: {
-        [sessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 123,
-          thinkingLevel: "low",
-        },
-      },
-    });
-
-    const result = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async () => null,
-    });
-    expect(result?.sessionId).toBe("sess-1");
-    expect(result?.thinkingLevel).toBe("low");
-
-    const store = loadSessionStore(storePath);
-    expect(store[sessionKey]?.thinkingLevel).toBe("low");
-  });
-
-  it("updateSessionStoreEntry persists callback mutations returned as patches", async () => {
-    const sessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStoreEntry-mutated-patch",
-      entries: {
-        [sessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 123,
-          displayName: "before",
-        },
-      },
-    });
-
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (entry) => {
-        entry.displayName = "after";
-        return { displayName: entry.displayName };
-      },
-    });
-
-    expect(loadSessionStore(storePath)[sessionKey]?.displayName).toBe("after");
-  });
 
   it("updateSessionStore preserves concurrent additions", async () => {
     const dir = await createCaseDir("updateSessionStore");
@@ -555,121 +455,6 @@ describe("sessions", () => {
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(expectedPath),
     );
-  });
-
-  it("updateSessionStoreEntry merges concurrent patches", async () => {
-    const mainSessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStoreEntry",
-      entries: {
-        [mainSessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 123,
-          thinkingLevel: "low",
-        },
-      },
-    });
-
-    const firstStarted = createDeferred();
-    const releaseFirst = createDeferred();
-
-    const p1 = updateSessionStoreEntry({
-      storePath,
-      sessionKey: mainSessionKey,
-      update: async () => {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-        return { modelOverride: "anthropic/claude-opus-4-6" };
-      },
-    });
-    const p2 = updateSessionStoreEntry({
-      storePath,
-      sessionKey: mainSessionKey,
-      update: async () => {
-        await firstStarted.promise;
-        return { thinkingLevel: "high" };
-      },
-    });
-
-    await firstStarted.promise;
-    releaseFirst.resolve();
-    await Promise.all([p1, p2]);
-
-    const store = loadSessionStore(storePath);
-    expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-6");
-    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
-    await expectPathMissing(`${storePath}.lock`);
-  });
-
-  it("updateSessionStoreEntry re-reads disk inside the writer slot instead of using stale cache", async () => {
-    const mainSessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStoreEntry-cache-bypass",
-      entries: {
-        [mainSessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 123,
-          thinkingLevel: "low",
-        },
-      },
-    });
-
-    // Prime the in-process cache with the original entry.
-    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
-    const originalStat = await fs.stat(storePath);
-
-    // Simulate an external writer that updates the store but preserves mtime.
-    const externalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      Record<string, unknown>
-    >;
-    externalStore[mainSessionKey] = {
-      ...externalStore[mainSessionKey],
-      providerOverride: "anthropic",
-      updatedAt: 124,
-    };
-    await fs.writeFile(storePath, JSON.stringify(externalStore), "utf-8");
-    await fs.utimes(storePath, originalStat.atime, originalStat.mtime);
-
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: mainSessionKey,
-      update: async () => ({ thinkingLevel: "high" }),
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store[mainSessionKey]?.providerOverride).toBe("anthropic");
-    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
-  });
-
-  it("updateSessionStoreEntry can skip maintenance for existing-entry metadata writes", async () => {
-    const mainSessionKey = "agent:main:main";
-    const staleSessionKey = "agent:main:stale";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStoreEntry-skip-maintenance",
-      entries: {
-        [mainSessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: Date.now(),
-          thinkingLevel: "low",
-        },
-        [staleSessionKey]: {
-          sessionId: "sess-stale",
-          updatedAt: 1,
-        },
-      },
-    });
-
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: mainSessionKey,
-      skipMaintenance: true,
-      update: async () => ({ thinkingLevel: "high" }),
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
-    expect(store[staleSessionKey]?.sessionId).toBe("sess-stale");
   });
 
   it("updateSessionStore uses the writer-owned mutable cache without disk read", async () => {

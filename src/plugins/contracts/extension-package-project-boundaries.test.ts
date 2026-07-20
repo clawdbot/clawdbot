@@ -281,13 +281,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
     );
-    expect(packageJson.exports?.["./channel-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./compat"]?.types).toBe("./dist/src/plugin-sdk/compat.d.ts");
-    expect(packageJson.exports?.["./config-types"]?.types).toBe(
-      "./dist/src/plugin-sdk/config-types.d.ts",
-    );
     expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/infra-runtime.d.ts",
     );

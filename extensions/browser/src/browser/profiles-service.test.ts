@@ -274,18 +274,6 @@ describe("BrowserProfilesService", () => {
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
-  it("allocates from configured cdpPortRangeStart for new local profiles", async () => {
-    const { result, state } = await createWorkProfileWithConfig({
-      resolved: resolveBrowserConfig({ cdpPortRangeStart: 19000 }),
-      browserConfig: { cdpPortRangeStart: 19000, profiles: {} },
-    });
-
-    expect(result.cdpPort).toBe(19001);
-    expect(result.isRemote).toBe(false);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
-    expect(writeConfigFile).toHaveBeenCalled();
-  });
-
   it("allocates local ports from the rebased config snapshot", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
@@ -310,12 +298,11 @@ describe("BrowserProfilesService", () => {
   });
 
   it("allocates local ports from the rebased CDP range end", async () => {
-    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
+    const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
     vi.mocked(getRuntimeConfig)
       .mockReturnValueOnce({
         browser: {
-          cdpPortRangeStart: 19000,
           profiles: {},
         },
       } as OpenClawConfig)

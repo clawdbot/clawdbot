@@ -1700,6 +1700,13 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       runId: "run-1",
       channelId: "telegram",
+      requester: {
+        channel: "telegram",
+        accountId: "operations",
+        senderId: "maintainer-user",
+        senderIsOwner: false,
+        roleIds: ["maintainer-role"],
+      },
     });
 
     const response = await invokeNativeHookRelay({
@@ -1738,6 +1745,13 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       runId: "run-1",
       channelId: "telegram",
+      requester: {
+        channel: "telegram",
+        accountId: "operations",
+        senderId: "maintainer-user",
+        senderIsOwner: false,
+        roleIds: ["maintainer-role"],
+      },
       toolName: "exec",
       toolCallId: "native-call-1",
     });

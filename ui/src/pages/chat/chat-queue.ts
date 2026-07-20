@@ -341,6 +341,8 @@ export function enqueuePendingRunMessage(
   if (!trimmed && !hasAttachments) {
     return;
   }
+  // Local commands join an existing run without a wire chat.send, so this is
+  // intentionally a non-SteeredChip pending row with no fake sendRunId.
   host.chatQueue = [
     ...host.chatQueue,
     {

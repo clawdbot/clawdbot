@@ -46,7 +46,6 @@ export {
 export {
   extractContactContext,
   extractLocationData,
-  extractMediaPlaceholder,
   extractText,
   monitorWebInbox,
   resetWebInboundDedupe,

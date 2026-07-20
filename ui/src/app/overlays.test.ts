@@ -4,6 +4,11 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts"
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
+vi.mock("../build-info.ts", () => ({
+  controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
+    Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
+}));
+
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 const VERIFICATION_POLL_MS = 250;
 
@@ -115,6 +120,59 @@ async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+describe("Control UI refresh nudge", () => {
+  it("waits for a reconnect before flagging a version mismatch", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    const mismatchedHello = {
+      server: { version: "2.0.0" },
+    } as ApplicationGatewaySnapshot["hello"];
+
+    harness.update({ client: gatewayClient, connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    harness.update({ sessionKey: "agent:main:same-connection" });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    harness.update({ connected: false, hello: null });
+    harness.update({ connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+
+    harness.update({ sessionKey: "agent:main:after-reconnect" });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+
+    overlays.dispose();
+  });
+
+  it("does not flag a matching reconnect and resets on a fresh client lifetime", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    const matchingHello = {
+      server: { version: "1.0.0" },
+    } as ApplicationGatewaySnapshot["hello"];
+    const mismatchedHello = {
+      server: { version: "2.0.0" },
+    } as ApplicationGatewaySnapshot["hello"];
+
+    harness.update({ client: gatewayClient, connected: true, hello: matchingHello });
+    harness.update({ connected: false, hello: null });
+    harness.update({ connected: true, hello: matchingHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    harness.update({ connected: false, hello: null });
+    harness.update({ connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+
+    harness.update({ client: null, connected: false, hello: null });
+    harness.update({ client: gatewayClient, connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    overlays.dispose();
+  });
+});
 
 describe("application approval overlays", () => {
   it("resolves OpenClaw changes through unified human approval", async () => {

@@ -11,6 +11,7 @@ import type {
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
   adoptedSessionKey,
@@ -96,6 +97,7 @@ type DesktopSessionMetadata = {
   model?: unknown;
   isArchived?: unknown;
   title?: unknown;
+  customGroup?: unknown;
 };
 
 type CatalogRecord = ClaudeSessionCatalogSession & {
@@ -217,6 +219,7 @@ async function readDesktopMetadata(homeDir: string): Promise<{
 }> {
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
+  const customGroups = await readClaudeDesktopCustomGroups(homeDir);
   for (const accountDir of await childDirectories(desktopSessionsDir(homeDir))) {
     for (const workspaceDir of await childDirectories(accountDir)) {
       let entries: string[];
@@ -244,7 +247,9 @@ async function readDesktopMetadata(homeDir: string): Promise<{
           continue;
         }
         if (!archived.has(cliSessionId)) {
-          active.set(cliSessionId, metadata);
+          const localSessionId = optionalString(metadata.sessionId, 256);
+          const customGroup = localSessionId ? customGroups.get(localSessionId) : undefined;
+          active.set(cliSessionId, customGroup ? { ...metadata, customGroup } : metadata);
         }
       }
     }
@@ -581,6 +586,7 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
     }
     const createdAt = timestampMs(metadata.createdAt) ?? existing?.createdAt;
     const updatedAt = timestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
+    const customGroup = optionalString(metadata.customGroup, 500);
     records.set(sessionId, {
       ...(existing ?? {
         threadId: sessionId,
@@ -592,6 +598,7 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
       cwd: optionalString(metadata.cwd) ?? optionalString(metadata.originCwd) ?? existing?.cwd,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
+      ...(customGroup ? { customGroup } : {}),
       source: "claude-desktop",
       filePath,
     });
@@ -1448,6 +1455,7 @@ function toGenericClaudeHost(
         modelProvider: session.modelProvider,
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
+        ...(session.customGroup ? { customGroup: session.customGroup } : {}),
         archived: session.archived,
         ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
         canContinue: continuable,

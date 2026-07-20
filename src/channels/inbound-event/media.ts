@@ -1,3 +1,4 @@
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 /**
  * Channel inbound media normalization.
  *
@@ -18,6 +19,51 @@ export type ChannelInboundMediaInput = {
   transcribed?: boolean | null;
   messageId?: string | null;
 };
+
+export type MediaPlaceholderTextFact = Readonly<
+  Pick<ChannelInboundMediaInput, "contentType" | "kind" | "path" | "url">
+>;
+
+type MediaPlaceholderKind = "attachment" | "audio" | "document" | "image" | "sticker" | "video";
+
+function resolveMediaPlaceholderKind(media: MediaPlaceholderTextFact): MediaPlaceholderKind {
+  if (media.kind && media.kind !== "unknown") {
+    return media.kind;
+  }
+  return (
+    kindFromMime(media.contentType) ??
+    kindFromMime(mimeTypeFromFilePath(media.url)) ??
+    kindFromMime(mimeTypeFromFilePath(media.path)) ??
+    "attachment"
+  );
+}
+
+const PLURAL_MEDIA_PLACEHOLDER_LABELS: Readonly<Record<MediaPlaceholderKind, string>> = {
+  image: "images",
+  video: "videos",
+  audio: "audio attachments",
+  document: "files",
+  sticker: "stickers",
+  attachment: "attachments",
+};
+
+/** Renders structured media facts for channel surfaces that can carry text only. */
+export function formatMediaPlaceholderText(media: readonly MediaPlaceholderTextFact[]): string {
+  if (media.length === 0) {
+    return "";
+  }
+  const kinds = media.map(resolveMediaPlaceholderKind);
+  const firstKind = kinds[0] ?? "attachment";
+  const kind = kinds.every((candidate) => candidate === firstKind)
+    ? firstKind
+    : kinds.includes("attachment")
+      ? "attachment"
+      : "document";
+  const tag = `<media:${kind}>`;
+  return media.length === 1
+    ? tag
+    : `${tag} (${media.length} ${PLURAL_MEDIA_PLACEHOLDER_LABELS[kind]})`;
+}
 
 /**
  * Environment payload fields consumed by prompt/context builders for inbound media attachments.

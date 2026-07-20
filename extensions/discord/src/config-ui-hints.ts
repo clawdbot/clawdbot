@@ -65,7 +65,6 @@ export const discordChannelConfigUiHints = {
   ...createChannelConfigUiHints({
     channelLabel: "Discord",
     progress: { includeCommentary: true },
-    retry: true,
   }),
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
@@ -78,18 +77,6 @@ export const discordChannelConfigUiHints = {
   "thread.inheritParent": {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
-  },
-  "eventQueue.listenerTimeout": {
-    label: "Discord EventQueue Listener Timeout (ms)",
-    help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
-  },
-  "eventQueue.maxQueueSize": {
-    label: "Discord EventQueue Max Queue Size",
-    help: "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
-  },
-  "eventQueue.maxConcurrency": {
-    label: "Discord EventQueue Max Concurrency",
-    help: "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
   },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
@@ -134,18 +121,6 @@ export const discordChannelConfigUiHints = {
   "intents.voiceStates": {
     label: "Discord Voice States Intent",
     help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations.",
-  },
-  gatewayInfoTimeoutMs: {
-    label: "Discord Gateway Metadata Timeout (ms)",
-    help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
-  },
-  gatewayReadyTimeoutMs: {
-    label: "Discord Gateway READY Timeout (ms)",
-    help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
-  },
-  gatewayRuntimeReadyTimeoutMs: {
-    label: "Discord Gateway Runtime READY Timeout (ms)",
-    help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
   },
   "voice.enabled": {
     label: "Discord Voice Enabled",

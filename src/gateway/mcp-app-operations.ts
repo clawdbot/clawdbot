@@ -31,6 +31,13 @@ export type McpAppActiveView = {
   view: McpAppViewLease;
 };
 
+export class McpAppViewExpiredError extends Error {
+  constructor() {
+    super("MCP App view expired or is not authorized for this session");
+    this.name = "McpAppViewExpiredError";
+  }
+}
+
 export type McpAppOperation =
   | Pick<CallToolRequest, "method" | "params">
   | Pick<ListToolsRequest, "method" | "params">
@@ -60,14 +67,38 @@ function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
   return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
 }
 
+export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<void> {
+  if (view.readOnly === true || view.allowedAppToolNames === undefined) {
+    throw new Error("MCP App view is read-only");
+  }
+  if (view.authorizeAppInteraction && !(await view.authorizeAppInteraction())) {
+    throw new Error("MCP App widget grant is no longer active");
+  }
+}
+
+export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): Promise<string[]> {
+  if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
+    return [];
+  }
+  const catalog = await active.runtime.getCatalog();
+  return catalog.tools
+    .filter(
+      (tool) =>
+        tool.serverName === active.view.serverName &&
+        isAppCallableTool(tool) &&
+        isAllowedByView(active.view, tool.toolName),
+    )
+    .map((tool) => tool.toolName)
+    .filter((toolName, index, all) => all.indexOf(toolName) === index)
+    .toSorted();
+}
+
 async function requireCallableTool(
   runtime: SessionMcpRuntime,
   view: McpAppViewLease,
   toolName: string,
 ): Promise<void> {
-  if (view.readOnly === true) {
-    throw new Error("MCP App view is read-only");
-  }
+  await requireMcpAppInteraction(view);
   const catalog = await runtime.getCatalog();
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
@@ -103,7 +134,7 @@ export async function resolveMcpAppActiveView(params: {
           })
         : undefined;
   if (!restored) {
-    throw new Error("MCP App view expired or is not authorized for this session");
+    throw new McpAppViewExpiredError();
   }
   return restored;
 }
@@ -146,6 +177,7 @@ export async function executeMcpAppOperation(
       });
     case "tools/list":
       return await withMcpAppActiveView(active, "read", async () => {
+        await requireMcpAppInteraction(view);
         if (!runtime.listTools) {
           throw new Error("MCP tools/list is unavailable");
         }

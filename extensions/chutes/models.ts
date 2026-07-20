@@ -58,6 +58,7 @@ interface ChutesModelEntry {
   pricing?: {
     prompt?: number;
     completion?: number;
+    input_cache_read?: number;
   };
   [key: string]: unknown;
 }
@@ -127,7 +128,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
         cost: {
           input: entry.pricing?.prompt || 0,
           output: entry.pricing?.completion || 0,
-          cacheRead: 0,
+          cacheRead: entry.pricing?.input_cache_read || 0,
           cacheWrite: 0,
         },
         contextWindow: asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,

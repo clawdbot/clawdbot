@@ -17,11 +17,16 @@ struct ChatTranscriptCacheIdentityTests {
     }
 
     @Test @MainActor func `windows share one outbox owner per gateway`() {
-        let databaseURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-cache-owner-\(UUID().uuidString).sqlite")
+        let databaseDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-cache-owner-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: databaseDirectoryURL) }
         let gatewayID = "gw-shared-\(UUID().uuidString)"
-        let first = MacChatTranscriptCache.store(databaseURL: databaseURL, gatewayID: gatewayID)
-        let second = MacChatTranscriptCache.store(databaseURL: databaseURL, gatewayID: gatewayID)
+        let first = MacChatTranscriptCache.store(
+            databaseDirectoryURL: databaseDirectoryURL,
+            gatewayID: gatewayID)
+        let second = MacChatTranscriptCache.store(
+            databaseDirectoryURL: databaseDirectoryURL,
+            gatewayID: gatewayID)
 
         #expect(first === second)
     }

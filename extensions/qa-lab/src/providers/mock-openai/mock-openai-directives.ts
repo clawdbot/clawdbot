@@ -113,7 +113,31 @@ export function shouldUseWhatsAppContactMarker(prompt: string) {
 }
 
 export function shouldUseWhatsAppStickerMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^<media:sticker>(?:\s|$)/iu);
+  const label = "WhatsApp media (untrusted metadata):";
+  let searchFrom = 0;
+  for (;;) {
+    const labelIndex = prompt.indexOf(label, searchFrom);
+    if (labelIndex < 0) {
+      return false;
+    }
+    const fenceStart = prompt.indexOf("```json", labelIndex + label.length);
+    const fenceEnd = fenceStart >= 0 ? prompt.indexOf("```", fenceStart + 7) : -1;
+    if (fenceStart >= 0 && fenceEnd >= 0) {
+      try {
+        const value = JSON.parse(prompt.slice(fenceStart + 7, fenceEnd)) as {
+          payload?: { kind?: unknown };
+        };
+        if (value.payload?.kind === "sticker") {
+          return true;
+        }
+      } catch {
+        // Ignore malformed untrusted metadata and continue to the next matching block.
+      }
+      searchFrom = fenceEnd + 3;
+      continue;
+    }
+    searchFrom = labelIndex + label.length;
+  }
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {

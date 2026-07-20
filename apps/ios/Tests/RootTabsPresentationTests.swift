@@ -1,3 +1,5 @@
+import OpenClawChatUI
+import OpenClawProtocol
 import SwiftUI
 import Testing
 import UIKit
@@ -5,6 +7,91 @@ import UIKit
 
 @MainActor
 struct RootTabsPresentationTests {
+    @Test func `session activity clamps current and future timestamps to just now`() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+
+        #expect(CommandCenterTab.relativeTimeText(
+            forMilliseconds: now.timeIntervalSince1970 * 1000,
+            relativeTo: now) == "just now")
+        #expect(CommandCenterTab.relativeTimeText(
+            forMilliseconds: now.addingTimeInterval(30).timeIntervalSince1970 * 1000,
+            relativeTo: now) == "just now")
+    }
+
+    @Test func `dashboard deep link requests overview navigation`() async throws {
+        let appModel = NodeAppModel()
+        let initialRequestID = appModel.dashboardNavigationRequestID
+        let url = try #require(URL(string: "openclaw://dashboard"))
+
+        await appModel.handleDeepLink(url: url)
+
+        #expect(appModel.dashboardNavigationRequestID == initialRequestID + 1)
+        #expect(appModel.consumeDashboardNavigationRequest(appModel.dashboardNavigationRequestID))
+        #expect(!appModel.consumeDashboardNavigationRequest(appModel.dashboardNavigationRequestID))
+    }
+
+    @Test func `sidebar gateway label ignores empty identity values`() {
+        #expect(RootSidebar.gatewayName(serverName: "  ", remoteAddress: " gateway.example ") == "gateway.example")
+        #expect(RootSidebar.gatewayName(serverName: "Gateway", remoteAddress: "fallback") == "Gateway")
+        #expect(RootSidebar.gatewayName(serverName: nil, remoteAddress: "\n") == "Connection")
+    }
+
+    @Test func `new chat request is consumed once by the active chat owner`() {
+        let appModel = NodeAppModel()
+
+        appModel.requestNewChat()
+        let firstRequestID = appModel.newChatRequestID
+        #expect(appModel.consumeNewChatRequest(firstRequestID))
+        #expect(!appModel.consumeNewChatRequest(firstRequestID))
+
+        appModel.requestNewChat()
+        #expect(!appModel.consumeNewChatRequest(firstRequestID))
+        #expect(appModel.consumeNewChatRequest(appModel.newChatRequestID))
+    }
+
+    @Test func `overview session metrics exclude archived and internal sessions`() {
+        let visible = CommandCenterTab.visibleOverviewSessions([
+            Self.sessionEntry(key: "main"),
+            Self.sessionEntry(key: "onboarding"),
+            Self.sessionEntry(key: "agent:main:onboarding"),
+            Self.sessionEntry(key: "archived", archived: true),
+        ])
+
+        #expect(visible.map(\.key) == ["main"])
+    }
+
+    @Test func `overview token usage sums known totals and marks stale or missing rows partial`() {
+        let summary = RootSidebarModel.tokenUsageSummary(for: [
+            Self.sessionEntry(key: "fresh", totalTokens: 1200, totalTokensFresh: true, contextTokens: 200_000),
+            Self.sessionEntry(key: "stale", totalTokens: 300, totalTokensFresh: false, contextTokens: 200_000),
+            Self.sessionEntry(key: "missing", contextTokens: 200_000),
+        ])
+        let complete = RootSidebarModel.tokenUsageSummary(for: [
+            Self.sessionEntry(key: "one", totalTokens: 20, totalTokensFresh: true),
+            Self.sessionEntry(key: "two", totalTokens: 80),
+        ])
+        let unknown = RootSidebarModel.tokenUsageSummary(for: [Self.sessionEntry(key: "unknown")])
+
+        #expect(summary.total == 1500)
+        #expect(summary.isPartial)
+        #expect(complete.total == 100)
+        #expect(!complete.isPartial)
+        #expect(unknown.total == nil)
+        #expect(unknown.isPartial)
+    }
+
+    @Test func `failed cron attention ignores disabled jobs`() {
+        #expect(RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "error")))
+        #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: false, status: "error")))
+        #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "ok")))
+    }
+
+    @Test func `recent session cap is disabled while search is active`() {
+        #expect(RootSidebar.recentSessionCap(searchText: "") == 20)
+        #expect(RootSidebar.recentSessionCap(searchText: "  \n") == 20)
+        #expect(RootSidebar.recentSessionCap(searchText: "deploy") == nil)
+    }
+
     @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
         let route = RootTabs.startupPresentationRoute(
             gatewayConnected: false,
@@ -74,49 +161,25 @@ struct RootTabsPresentationTests {
         #expect(!shouldPresent)
     }
 
-    @Test func `sidebar tabs enabled for I pad regular width`() {
-        #expect(
-            RootTabs.shouldUseSidebarTabs(
-                idiom: .pad,
-                horizontalSizeClass: .regular))
-    }
-
-    @Test func `sidebar tabs enabled for I pad compact width`() {
-        #expect(
-            RootTabs.shouldUseSidebarTabs(
-                idiom: .pad,
-                horizontalSizeClass: .compact))
-    }
-
-    @Test func `sidebar tabs disabled for I phone`() {
-        #expect(
-            !RootTabs.shouldUseSidebarTabs(
-                idiom: .phone,
-                horizontalSizeClass: .regular))
-    }
-
-    @Test func `sidebar groups match adaptive navigation model`() {
-        let groups = RootTabs.sidebarGroups
+    @Test func `sidebar destinations match frozen page order`() {
         let destinationIDs = RootTabs.SidebarDestination.allCases.map(\.rawValue)
 
-        #expect(groups.map(\.title) == ["CHAT", "CONTROL", "SETTINGS", "REFERENCE"])
-        #expect(groups[0].destinations.map(\.rawValue) == ["chat"])
-        #expect(groups[1].destinations == [
+        #expect(RootTabs.sidebarDestinations == [
+            .chat,
             .overview,
-            .activity,
-            .agents,
             .workboard,
-            .skillWorkshop,
-            .instances,
-            .sessions,
-            .files,
-            .dreaming,
             .usage,
             .cron,
+            .sessions,
+            .activity,
+            .skillWorkshop,
+            .agents,
+            .instances,
+            .files,
+            .dreaming,
             .terminal,
+            .docs,
         ])
-        #expect(groups[2].destinations == [.settings])
-        #expect(groups[3].destinations == [.docs])
         #expect(destinationIDs == [
             "chat",
             "overview",
@@ -136,18 +199,9 @@ struct RootTabsPresentationTests {
             "gateway",
         ])
         #expect(!destinationIDs.contains("agent"))
-        #expect(!RootTabs.sidebarGroups.flatMap(\.destinations).contains(.gateway))
-    }
-
-    @Test func `phone control groups avoid duplicating the agent tab`() {
-        let groups = RootTabs.phoneControlGroups
-        let destinations = groups.flatMap(\.destinations)
-
-        #expect(groups.map(\.title) == ["CHAT", "CONTROL", "SETTINGS", "REFERENCE"])
-        #expect(!destinations.contains(.agents))
-        #expect(RootTabs.sidebarGroups.flatMap(\.destinations).contains(.agents))
-        #expect(destinations.contains(.dreaming))
-        #expect(destinations.contains(.instances))
+        #expect(RootTabs.sidebarDestinations.contains(.chat))
+        #expect(!RootTabs.sidebarDestinations.contains(.settings))
+        #expect(!RootTabs.sidebarDestinations.contains(.gateway))
     }
 
     @Test func `sidebar uses compact labels for long routes`() {
@@ -156,56 +210,38 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.SidebarDestination.gateway.sidebarTitle == "Connection")
     }
 
-    @Test func `phone hub routes only root destinations out of Control`() {
-        #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.chat))
-        #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.agents))
-        #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.gateway))
-        #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.settings))
-
-        for destination in RootTabs.SidebarDestination.allCases
-            where destination != .chat && destination != .agents && destination != .gateway &&
-            destination != .settings
-        {
-            #expect(!RootTabs.shouldOpenRootTabFromPhoneHub(destination))
-        }
-    }
-
-    @Test func `app launch defaults to chat tab`() {
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw"]) == .chat)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab"]) == .chat)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "unknown"]) == .chat)
+    @Test func `app launch defaults to chat destination`() {
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw"]) == .chat)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab"]) == .chat)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "unknown"]) == .chat)
     }
 
     @Test func `app launch uses requested destination before chat fallback`() {
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .control)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "chat"]) == .chat)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .agent)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "gateway"]) == .settings)
+        #expect(RootTabs
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .overview)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "chat"]) == .chat)
+        #expect(RootTabs
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .agents)
+        #expect(RootTabs
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "gateway"]) == .gateway)
         #expect(
-            RootTabs.initialTab(arguments: [
+            RootTabs.initialDestination(arguments: [
                 "OpenClaw",
                 "--openclaw-initial-tab",
                 "unknown",
                 "--openclaw-initial-destination",
                 "activity",
-            ]) == .control)
+            ]) == .activity)
     }
 
-    @Test func `app launch respects explicit initial tab override`() {
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .control)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .control)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "chat"]) == .chat)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "talk"]) == .chat)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .chat)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .agent)
-        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
-    }
-
-    @Test func `initial tabs map to matching sidebar destinations`() {
-        #expect(RootTabs.defaultSidebarDestination(for: .control) == .overview)
-        #expect(RootTabs.defaultSidebarDestination(for: .chat) == .chat)
-        #expect(RootTabs.defaultSidebarDestination(for: .agent) == .agents)
-        #expect(RootTabs.defaultSidebarDestination(for: .settings) == .settings)
+    @Test func `legacy initial tab aliases map directly to sidebar destinations`() {
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .overview)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .overview)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "chat"]) == .chat)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "talk"]) == .chat)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .chat)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .agents)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
     @Test func `skill workshop mutations require admin scope`() {
@@ -538,6 +574,94 @@ struct RootTabsPresentationTests {
         #expect(width <= RootTabs.sidebarDrawerMaximumWidth)
     }
 
+    @Test func `sidebar shows configured agent rows with sane clamping`() {
+        #expect(RootSidebar.shownAgentCount(configured: 1, total: 5) == 1)
+        #expect(RootSidebar.shownAgentCount(configured: 3, total: 5) == 3)
+        #expect(RootSidebar.shownAgentCount(configured: 0, total: 5) == 1)
+        #expect(RootSidebar.shownAgentCount(configured: 3, total: 2) == 2)
+        #expect(RootSidebar.shownAgentCount(configured: 1, total: 0) == 1)
+    }
+
+    @Test func `session work subtitle mirrors the web repo and branch line`() {
+        func entry(repoRoot: String?, branch: String?) -> OpenClawChatSessionEntry {
+            Self.sessionEntry(
+                key: "agent:main:w1",
+                worktree: OpenClawChatSessionWorktree(id: "w1", branch: branch, repoRoot: repoRoot))
+        }
+        #expect(ChatSessionSidebarModel.workSubtitle(
+            for: entry(repoRoot: "/Users/dev/openclaw", branch: "openclaw/fix-thing")) == "openclaw \u{2387} fix-thing")
+        #expect(ChatSessionSidebarModel.workSubtitle(
+            for: entry(repoRoot: "/Users/dev/openclaw", branch: nil)) == "openclaw")
+        #expect(ChatSessionSidebarModel.workSubtitle(for: entry(repoRoot: nil, branch: "main")) == nil)
+        #expect(ChatSessionSidebarModel.workSubtitle(for: Self.sessionEntry(key: "plain")) == nil)
+    }
+
+    @Test func `pinned pages storage round trips and preserves pin order`() {
+        #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
+        #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
+        #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
+
+        // Storage order is the user's pin order (web parity).
+        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs")
+        #expect(parsed == [.usage, .overview, .docs])
+
+        let storage = RootTabs.pinnedSidebarPagesStorage([.docs, .overview, .usage])
+        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.docs, .overview, .usage])
+
+        // Duplicates collapse to first occurrence.
+        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,docs") == [.usage, .docs])
+
+        // Unknown raw values are dropped; chat is never pinnable.
+        #expect(RootTabs.pinnedSidebarPages(from: "chat,bogus").isEmpty)
+        #expect(!RootTabs.pinnedSidebarPages(from: "chat,overview").contains(.chat))
+        #expect(!RootTabs.pinnableSidebarPages.contains(.chat))
+    }
+
+    @Test func `drawer content follows reveal and dismiss drag`() {
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 0,
+            reduceMotion: false) == 0)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: 0,
+            reduceMotion: false) == 340)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: -120,
+            reduceMotion: false) == 220)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: -400,
+            reduceMotion: false) == 0)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: 40,
+            reduceMotion: true) == 0)
+
+        // Closed + positive drag = interactive edge-open follow, clamped to width.
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 120,
+            reduceMotion: false) == 120)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 500,
+            reduceMotion: false) == 340)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 120,
+            reduceMotion: true) == 0)
+    }
+
     @Test func `narrow landscape keeps drawer sidebar`() {
         let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 900, height: 600))
 
@@ -612,5 +736,53 @@ struct RootTabsPresentationTests {
             !IPadSkillWorkshopScreen.usesCompactTaskFlow(
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .regular))
+    }
+
+    private static func sessionEntry(
+        key: String,
+        archived: Bool? = nil,
+        totalTokens: Int? = nil,
+        totalTokensFresh: Bool? = nil,
+        contextTokens: Int? = nil,
+        worktree: OpenClawChatSessionWorktree? = nil) -> OpenClawChatSessionEntry
+    {
+        OpenClawChatSessionEntry(
+            key: key,
+            kind: nil,
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: nil,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: totalTokens,
+            totalTokensFresh: totalTokensFresh,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: contextTokens,
+            archived: archived,
+            worktree: worktree)
+    }
+
+    private static func cronJob(enabled: Bool, status: String) -> CronJob {
+        CronJob(
+            id: "sidebar-test",
+            name: "Sidebar test",
+            enabled: enabled,
+            createdatms: 1,
+            updatedatms: 1,
+            schedule: AnyCodable(["kind": AnyCodable("every")]),
+            sessiontarget: AnyCodable("isolated"),
+            wakemode: AnyCodable("now"),
+            payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
+            state: [:],
+            lastrunstatus: AnyCodable(status))
     }
 }

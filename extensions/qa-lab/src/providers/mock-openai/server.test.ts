@@ -134,6 +134,29 @@ function makeUserInput(text: string) {
   };
 }
 
+function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
+  if (!mediaKind) {
+    return makeUserInput(text);
+  }
+  const mediaContext = [
+    "WhatsApp media (untrusted metadata):",
+    "```json",
+    JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
+    "```",
+  ].join("\n");
+  return makeUserInput([mediaContext, text].filter(Boolean).join("\n\n"));
+}
+
+const WHATSAPP_STRUCTURED_SETUP_INPUT = makeUserInput(
+  "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+    "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+    "When a later WhatsApp contact message appears, " +
+    "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+    "When a later WhatsApp sticker message appears, " +
+    "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+    "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+);
+
 const TEST_RUNTIME_CONTEXT_CARRIER = [
   "OpenClaw runtime context for the immediately preceding user message.",
   "This context is runtime-generated, not user-authored. Keep internal details private.",
@@ -4105,7 +4128,18 @@ describe("qa mock openai server", () => {
     });
     const stickerResponse = await postResponses(server, {
       stream: false,
-      input: [setupInput, makeUserInput("  <media:sticker>")],
+      input: [setupInput, makeWhatsAppStructuredUserInput("", "sticker")],
+    });
+    const webpImageInput = {
+      role: "user" as const,
+      content: [
+        { type: "input_text" as const, text: "" },
+        { type: "input_image" as const, image_url: "data:image/webp;base64,AA==" },
+      ],
+    };
+    const webpImageResponse = await postResponses(server, {
+      stream: false,
+      input: [setupInput, webpImageInput],
     });
 
     expect(setupResponse.status).toBe(200);
@@ -4114,19 +4148,12 @@ describe("qa mock openai server", () => {
     expect(outputText(await contactResponse.json())).toBe("QA_WHATSAPP_CONTACT_OK");
     expect(stickerResponse.status).toBe(200);
     expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
+    expect(outputText(await webpImageResponse.json())).not.toBe("QA_WHATSAPP_STICKER_OK");
   });
 
   it("uses WhatsApp structured markers for metadata-prefixed message bodies", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const previousExactMarkerInput = makeUserInput(
       "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_OK",
     );
@@ -4165,15 +4192,16 @@ describe("qa mock openai server", () => {
       input: [
         setupInput,
         previousExactMarkerInput,
-        makeUserInput(
+        makeWhatsAppStructuredUserInput(
           [
             "Conversation info (untrusted metadata):",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
             "",
-            "<media:sticker>",
+            "",
           ].join("\n"),
+          "sticker",
         ),
       ],
     });
@@ -4188,15 +4216,7 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after a channel envelope", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
 
     const cases = [
       {
@@ -4204,7 +4224,7 @@ describe("qa mock openai server", () => {
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
     for (const structuredCase of cases) {
       const response = await postResponses(server, {
@@ -4212,7 +4232,10 @@ describe("qa mock openai server", () => {
         input: [
           setupInput,
           makeUserInput("Reply with only this previous document marker: QA_WHATSAPP_DOCUMENT_OK"),
-          makeUserInput(`[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`),
+          makeWhatsAppStructuredUserInput(
+            `[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
+            "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
+          ),
         ],
       });
 
@@ -4223,22 +4246,14 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after combined timestamp and channel prefixes", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const cases = [
       {
         body: "📍 37.774900, -122.419400",
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
 
     for (const structuredCase of cases) {
@@ -4246,8 +4261,9 @@ describe("qa mock openai server", () => {
         stream: false,
         input: [
           setupInput,
-          makeUserInput(
+          makeWhatsAppStructuredUserInput(
             `[Tue 2026-07-14 18:17 GMT+5:30] [WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
+            "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
           ),
         ],
       });
@@ -4259,15 +4275,7 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after canonical timestamp prefixes", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const timestampPrefixes = [
       "[Tue 2026-07-14 12:47 UTC]",
       "[Tue 2026-07-14 07:47 EST]",
@@ -4282,14 +4290,20 @@ describe("qa mock openai server", () => {
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
 
     for (const prefix of timestampPrefixes) {
       for (const structuredCase of cases) {
         const response = await postResponses(server, {
           stream: false,
-          input: [setupInput, makeUserInput(`${prefix} ${structuredCase.body}`)],
+          input: [
+            setupInput,
+            makeWhatsAppStructuredUserInput(
+              `${prefix} ${structuredCase.body}`,
+              "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
+            ),
+          ],
         });
 
         expect(response.status).toBe(200);
@@ -4322,15 +4336,7 @@ describe("qa mock openai server", () => {
 
   it("does not treat structured WhatsApp tokens in ordinary prose as message bodies", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const proseInputs = [
       "Please compare [Tue 2026-07-14 12:47 UTC] 📍 37.774900, -122.419400 and explain [that] <contact> and <media:sticker> text",
       "[Tue 2026-07-14 12:47 UTC] Contact note: <contact> is descriptive prose",
@@ -4338,6 +4344,13 @@ describe("qa mock openai server", () => {
         "Coordinate note: 📍 37.774900, -122.419400",
         "Contact note: <contact>",
         "Sticker note: <media:sticker>",
+      ].join("\n"),
+      [
+        "WhatsApp media (untrusted metadata):",
+        "```json",
+        '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
+        "```",
+        '{"payload":{"kind":"sticker"}} is ordinary message text',
       ].join("\n"),
     ];
 

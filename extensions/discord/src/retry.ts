@@ -130,14 +130,10 @@ function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
 
 export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
-  configRetry?: RetryConfig;
   verbose?: boolean;
   isGatewayDisconnected?: () => boolean;
 }): DiscordRetryRunner {
-  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, {
-    ...params.configRetry,
-    ...params.retry,
-  });
+  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, params.retry);
   // Extend only the per-request runner. A delivery may contain several REST
   // writes, so replaying its outer adapter can duplicate already-sent chunks.
   const attempts =

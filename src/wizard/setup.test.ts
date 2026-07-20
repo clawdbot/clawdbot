@@ -5,8 +5,15 @@ import path from "node:path";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import {
+  readAuthProfileStoreForTest,
+  removeOAuthTestTempRoot,
+} from "../agents/auth-profiles/oauth-test-utils.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
@@ -21,12 +28,22 @@ type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
+type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuthChoice;
+type VerifySetupInferenceConfig =
+  typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
+);
+const prepareAuthChoice = vi.hoisted(() =>
+  vi.fn<PrepareAuthChoice>(async (args) => ({
+    ...(await applyAuthChoice(args)),
+    authProfiles: [],
+    persistAuthProfiles: async () => {},
+  })),
 );
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
 const resolveManifestProviderAuthChoice = vi.hoisted(() =>
@@ -111,10 +128,12 @@ const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
 const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
 const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
-const verifySetupInference = vi.hoisted(() =>
-  vi.fn<() => Promise<import("../system-agent/setup-inference.js").VerifySetupInferenceResult>>(
-    async () => ({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 250 }),
-  ),
+const verifySetupInferenceConfig = vi.hoisted(() =>
+  vi.fn<VerifySetupInferenceConfig>(async () => ({
+    ok: true,
+    modelRef: "openai/gpt-5.5",
+    latencyMs: 250,
+  })),
 );
 
 const setupChannels = vi.hoisted(() =>
@@ -123,6 +142,10 @@ const setupChannels = vi.hoisted(() =>
   ),
 );
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const validateGatewayWebSocketUrl = vi.hoisted(() =>
+  vi.fn<(value: string) => string | undefined>(() => undefined),
+);
 
 function providerPluginStub(
   overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
@@ -181,6 +204,70 @@ function getWizardNoteCalls(note: WizardPrompter["note"]) {
   return (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
 }
 
+function modelConfigWithApiKey(apiKey: string): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    auth: {
+      profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
+      order: { openai: ["openai:default"] },
+    },
+    models: {
+      providers: {
+        openai: {
+          apiKey,
+          baseUrl: "https://api.openai.com/v1",
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function stagedOpenAiProfile(apiKey: string) {
+  return {
+    profileId: "openai:default",
+    credential: { type: "api_key" as const, provider: "openai", key: apiKey },
+  };
+}
+
+function prepareMockAuthProfilesIn(
+  agentDir: string,
+): Array<ProviderAuthResult["profiles"] | undefined> {
+  const persistCalls: Array<ProviderAuthResult["profiles"] | undefined> = [];
+  prepareAuthChoice.mockImplementation(async (args) => {
+    const result = await applyAuthChoice(args);
+    const apiKey = result.config.models?.providers?.openai?.apiKey;
+    if (typeof apiKey !== "string") {
+      return {
+        ...result,
+        authProfiles: [],
+        persistAuthProfiles: async () => {},
+      };
+    }
+    const profile = stagedOpenAiProfile(apiKey);
+    return {
+      ...result,
+      authProfiles: [profile],
+      persistAuthProfiles: async (profiles) => {
+        persistCalls.push(profiles);
+        for (const candidate of profiles ?? [profile]) {
+          const updated = await upsertAuthProfileWithLock({ ...candidate, agentDir });
+          if (!updated) {
+            throw new Error("test auth profile write failed");
+          }
+        }
+      },
+    };
+  });
+  return persistCalls;
+}
+
+function persistedWizardConfigs(): OpenClawConfig[] {
+  return (replaceConfigFile.mock.calls as unknown[][]).map(
+    ([params]) => (params as { nextConfig: OpenClawConfig }).nextConfig,
+  );
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
@@ -233,6 +320,11 @@ vi.mock("../commands/onboard-skills.js", () => ({
   setupSkills,
 }));
 
+vi.mock("../commands/onboard-remote.js", () => ({
+  promptRemoteGatewayConfig,
+  validateGatewayWebSocketUrl,
+}));
+
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
 }));
@@ -248,6 +340,7 @@ vi.mock("../commands/auth-choice-prompt.js", () => ({
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice,
+  prepareAuthChoice,
   resolvePreferredProviderForAuthChoice,
   warnIfModelConfigLooksOff,
 }));
@@ -294,7 +387,7 @@ vi.mock("./setup.memory-import.js", () => ({
 }));
 
 vi.mock("../system-agent/setup-inference.js", () => ({
-  verifySetupInference,
+  verifySetupInferenceConfig,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -414,10 +507,20 @@ describe("runSetupWizard", () => {
     promptAuthChoiceGrouped.mockResolvedValue("skip");
     applyAuthChoice.mockReset();
     applyAuthChoice.mockImplementation(async (args) => ({ config: args.config }));
+    prepareAuthChoice.mockReset();
+    prepareAuthChoice.mockImplementation(async (args) => ({
+      ...(await applyAuthChoice(args)),
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    }));
     setupChannels.mockReset();
     setupChannels.mockImplementation(async (cfg) => cfg);
     setupSkills.mockReset();
     setupSkills.mockImplementation(async (cfg) => cfg);
+    promptRemoteGatewayConfig.mockReset();
+    promptRemoteGatewayConfig.mockImplementation(async (cfg) => cfg);
+    validateGatewayWebSocketUrl.mockReset();
+    validateGatewayWebSocketUrl.mockReturnValue(undefined);
     configureGatewayForSetup.mockReset();
     configureGatewayForSetup.mockImplementation(async (args) => ({
       nextConfig: args.nextConfig,
@@ -461,8 +564,8 @@ describe("runSetupWizard", () => {
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
     buildPluginCompatibilitySnapshotNotices.mockReset();
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([]);
-    verifySetupInference.mockReset();
-    verifySetupInference.mockResolvedValue({
+    verifySetupInferenceConfig.mockReset();
+    verifySetupInferenceConfig.mockResolvedValue({
       ok: true,
       modelRef: "openai/gpt-5.5",
       latencyMs: 250,
@@ -649,6 +752,138 @@ describe("runSetupWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("seeds interactive remote setup from command flags", async () => {
+    const remoteToken = "REDACTED";
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          remote: {
+            url: "wss://stored.example.com:18789",
+            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: " wss://flag.example.com:18789 ",
+        remoteToken: ` ${remoteToken} `,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://flag.example.com:18789",
+      token: remoteToken,
+    });
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: {
+            url: "wss://flag.example.com:18789",
+            token: remoteToken,
+            password: undefined,
+          },
+        }),
+      }),
+      expect.any(Object),
+      { secretInputMode: undefined },
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
+  });
+
+  it("does not reuse stored remote credentials for an overridden URL", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          remote: {
+            url: "wss://stored.example.com:18789",
+            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: "wss://flag.example.com:18789",
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://flag.example.com:18789",
+      token: undefined,
+    });
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: {
+            url: "wss://flag.example.com:18789",
+            token: undefined,
+            password: undefined,
+          },
+        }),
+      }),
+      expect.any(Object),
+      { secretInputMode: undefined },
+    );
+  });
+
+  it("does not probe an invalid CLI remote URL with its token", async () => {
+    const remoteToken = "REDACTED";
+    validateGatewayWebSocketUrl.mockReturnValueOnce("Use wss:// for public gateways");
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: "ws://public.example",
+        remoteToken,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(validateGatewayWebSocketUrl).toHaveBeenCalledWith("ws://public.example");
+    expect(probeGatewayReachable).not.toHaveBeenCalledWith({
+      url: "ws://public.example",
+      token: remoteToken,
+    });
   });
 
   it("auto-enables the bundled session-memory hook without showing the hooks screen", async () => {
@@ -1525,11 +1760,11 @@ describe("runSetupWizard", () => {
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
         pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        compatCode: "legacy-before-agent-start",
-        severity: "warn",
+        code: "hook-only",
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
         message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+          "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
       },
     ]);
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -1857,14 +2092,14 @@ describe("runSetupWizard", () => {
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Test AI access now with a live completion?" }),
     );
-    expect(verifySetupInference).toHaveBeenCalledOnce();
+    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
   });
 
   it("continues classic setup when live AI verification fails", async () => {
     applyAuthChoice.mockResolvedValueOnce({
       config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
     });
-    verifySetupInference.mockResolvedValueOnce({
+    verifySetupInferenceConfig.mockResolvedValueOnce({
       ok: false,
       status: "auth",
       error: "login expired",
@@ -1893,39 +2128,220 @@ describe("runSetupWizard", () => {
     expect(select).toHaveBeenCalledWith(
       expect.objectContaining({ message: "How would you like to continue?" }),
     );
-    expect(verifySetupInference).toHaveBeenCalledOnce();
+    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
   });
 
-  it("re-enters model/auth setup once and re-verifies after a failed AI check", async () => {
-    applyAuthChoice.mockResolvedValue({
-      config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
-    });
+  it("keeps failed model/auth fixes in the verification loop without persisting them", async () => {
+    const stateDir = await makeCaseDir("failed-auth-profile-retry-");
+    const agentDir = path.join(stateDir, "agent");
+    prepareMockAuthProfilesIn(agentDir);
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-original-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-retry-invalid-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-retry-still-invalid-key"),
+      });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
-    verifySetupInference
+    verifySetupInferenceConfig
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
-      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 300 });
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "key rejected" })
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "key still rejected" });
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("fix")
+      .mockResolvedValueOnce("fix")
+      .mockResolvedValueOnce("continue") as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
+
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "demo-provider",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        prompter,
+      );
+
+      expect(applyAuthChoice).toHaveBeenCalledTimes(3);
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+      expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(3);
+      const thirdVerification = getMockCallArg(
+        verifySetupInferenceConfig,
+        2,
+        0,
+        "third verification",
+      ) as Parameters<VerifySetupInferenceConfig>[0];
+      expect(thirdVerification.config.models?.providers?.openai?.apiKey).toBe(
+        "test-retry-still-invalid-key",
+      );
+      const secondRetry = getMockCallArg(
+        applyAuthChoice,
+        2,
+        0,
+        "second retry auth choice",
+      ) as Parameters<ApplyAuthChoice>[0];
+      expect(secondRetry.config.models?.providers?.openai?.apiKey).toBe("test-original-key");
+      expect(select).toHaveBeenCalledTimes(3);
+      expect(thirdVerification.authProfiles).toEqual([
+        stagedOpenAiProfile("test-retry-still-invalid-key"),
+      ]);
+      expect(
+        persistedWizardConfigs().some(
+          (config) =>
+            config.models?.providers?.openai?.apiKey === "test-retry-invalid-key" ||
+            config.models?.providers?.openai?.apiKey === "test-retry-still-invalid-key",
+        ),
+      ).toBe(false);
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
+        stagedOpenAiProfile("test-original-key").credential,
+      );
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("persists a model/auth fix after its live verification succeeds", async () => {
+    const stateDir = await makeCaseDir("successful-auth-profile-retry-");
+    const agentDir = path.join(stateDir, "agent");
+    const persistCalls = prepareMockAuthProfilesIn(agentDir);
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-original-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-retry-valid-key"),
+      });
+    promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
+    verifySetupInferenceConfig
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
+      .mockResolvedValueOnce({
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 300,
+        authProfiles: [stagedOpenAiProfile("test-retry-valid-key")],
+      });
     const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "demo-provider",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      createRuntime(),
-      prompter,
-    );
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "demo-provider",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        prompter,
+      );
 
-    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
-    expect(verifySetupInference).toHaveBeenCalledTimes(2);
+      expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+      expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(2);
+      const retryVerification = getMockCallArg(
+        verifySetupInferenceConfig,
+        1,
+        0,
+        "retry verification",
+      ) as Parameters<VerifySetupInferenceConfig>[0];
+      expect(retryVerification.config.models?.providers?.openai?.apiKey).toBe(
+        "test-retry-valid-key",
+      );
+      expect(retryVerification.authProfiles).toEqual([stagedOpenAiProfile("test-retry-valid-key")]);
+      expect(
+        persistedWizardConfigs().some(
+          (config) => config.models?.providers?.openai?.apiKey === "test-retry-valid-key",
+        ),
+      ).toBe(true);
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
+        stagedOpenAiProfile("test-retry-valid-key").credential,
+      );
+      expect(persistCalls).toEqual([undefined, [stagedOpenAiProfile("test-retry-valid-key")]]);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("retains a staged retry credential when a later Fix keeps the current auth", async () => {
+    const stateDir = await makeCaseDir("kept-auth-profile-retry-");
+    const agentDir = path.join(stateDir, "agent");
+    prepareMockAuthProfilesIn(agentDir);
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-original-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-staged-key"),
+      });
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("demo-provider")
+      .mockResolvedValueOnce(keepCurrentAuthChoice);
+    verifySetupInferenceConfig
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: "timeout",
+        error: "request timed out",
+        authProfiles: [stagedOpenAiProfile("test-refreshed-key")],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 300,
+      });
+    const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
+
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "demo-provider",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        prompter,
+      );
+
+      expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+      expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(3);
+      const finalVerification = getMockCallArg(
+        verifySetupInferenceConfig,
+        2,
+        0,
+        "final verification",
+      ) as Parameters<VerifySetupInferenceConfig>[0];
+      expect(finalVerification.authProfiles).toEqual([stagedOpenAiProfile("test-refreshed-key")]);
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
+        stagedOpenAiProfile("test-staged-key").credential,
+      );
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

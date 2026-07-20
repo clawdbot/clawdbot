@@ -1300,7 +1300,7 @@ describe("EmbeddedTuiBackend", () => {
     agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
     resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
-      cfg: { messages: { queue: { debounceMs: 125 } } },
+      cfg: {},
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1331,7 +1331,7 @@ describe("EmbeddedTuiBackend", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
       "active-session",
       "steer this turn",
-      { steeringMode: "all", debounceMs: 125 },
+      { steeringMode: "all", debounceMs: 500 },
     );
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 
@@ -1354,7 +1354,7 @@ describe("EmbeddedTuiBackend", () => {
       .mockReturnValueOnce(second.promise);
     resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
-      cfg: { messages: { queue: { debounceMs: 0 } } },
+      cfg: {},
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1449,7 +1449,7 @@ describe("EmbeddedTuiBackend", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(collected.promise);
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
-      cfg: { messages: { queue: { mode: "collect", debounceMs: 0 } } },
+      cfg: { messages: { queue: { mode: "collect" } } },
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1508,7 +1508,7 @@ describe("EmbeddedTuiBackend", () => {
       .mockReturnValueOnce(second.promise);
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       cfg: {
-        messages: { queue: { mode: "followup", debounceMs: 0, cap: 1, drop: "new" } },
+        messages: { queue: { mode: "followup", cap: 1, drop: "new" } },
       },
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",

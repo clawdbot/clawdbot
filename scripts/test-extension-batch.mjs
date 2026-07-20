@@ -4,8 +4,11 @@
 import path from "node:path";
 import pMap from "p-map";
 import {
-  listTrackedTestFilesForRoots,
+  createExtensionTestProcessTargetChunks,
+  listExtensionTestFilesForRoots,
   resolveExtensionBatchPlan,
+  shouldSplitExtensionTestProcesses,
+  splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mjs";
 import {
   normalizeRelativePath,
@@ -149,7 +152,7 @@ function resolveGroupTargets(group, exactExcludePaths) {
     return group.roots;
   }
 
-  const testFiles = listTrackedTestFilesForRoots(group.roots);
+  const testFiles = listExtensionTestFilesForRoots(group.roots);
   if (!testFiles) {
     return group.roots;
   }
@@ -164,20 +167,33 @@ async function runPlanGroup(group, params) {
     return params.allowEmptyAfterExclude ? 0 : 1;
   }
 
-  console.log(
-    `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${targets.length} targets)`,
-  );
-  return await params.runGroup({
-    args: relativizeExtensionVitestArgs(params.vitestArgs),
-    config: group.config,
-    env: createGroupEnv({
-      baseEnv: params.env,
-      group,
-      groupIndex: params.groupIndex,
-      useDedicatedCache: params.useDedicatedCache,
-    }),
-    targets: targets.map((target) => relativizeExtensionVitestPath(target)),
-  });
+  const targetChunks =
+    params.exactExcludePaths.size > 0
+      ? shouldSplitExtensionTestProcesses(group.config, params.vitestArgs)
+        ? splitExtensionTestProcessTargets(group.config, targets)
+        : [targets]
+      : createExtensionTestProcessTargetChunks(group.config, group.roots, params.vitestArgs);
+  let finalExitCode = 0;
+  for (const [index, chunk] of targetChunks.entries()) {
+    console.log(
+      `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${chunk.length} targets${targetChunks.length > 1 ? `, chunk ${index + 1}/${targetChunks.length}` : ""})`,
+    );
+    const exitCode = await params.runGroup({
+      args: relativizeExtensionVitestArgs(params.vitestArgs),
+      config: group.config,
+      env: createGroupEnv({
+        baseEnv: params.env,
+        group,
+        groupIndex: params.groupIndex,
+        useDedicatedCache: params.useDedicatedCache,
+      }),
+      targets: chunk.map((target) => relativizeExtensionVitestPath(target)),
+    });
+    if (exitCode !== 0 && finalExitCode === 0) {
+      finalExitCode = exitCode;
+    }
+  }
+  return finalExitCode;
 }
 
 /**

@@ -172,8 +172,10 @@ function hasTrustedOpenClawRootIndicator(params: {
   packageJson: PluginSdkPackageJson;
 }): boolean {
   const packageExports = params.packageJson.exports ?? {};
-  const hasPluginSdkRootExport = Object.hasOwn(packageExports, "./plugin-sdk");
-  if (!hasPluginSdkRootExport) {
+  const hasPluginSdkSubpathExport = Object.keys(packageExports).some((key) =>
+    key.startsWith("./plugin-sdk/"),
+  );
+  if (!hasPluginSdkSubpathExport) {
     return false;
   }
   const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
@@ -400,80 +402,6 @@ function resolvePluginSdkAliasCandidateOrder(params: {
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
 }
 
-function listPluginSdkAliasCandidates(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath: string;
-  argv1?: string;
-  cwd?: string;
-  moduleUrl?: string;
-  devSourceRoot?: string | null;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}) {
-  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-    modulePath: params.modulePath,
-    isProduction: process.env.NODE_ENV === "production",
-    pluginSdkResolution: params.pluginSdkResolution,
-  });
-  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
-  if (packageRoot) {
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "plugin-sdk", params.srcFile),
-      dist: path.join(packageRoot, "dist", "plugin-sdk", params.distFile),
-    } as const;
-    return orderedKinds.map((kind) => candidateMap[kind]);
-  }
-  let cursor = path.dirname(params.modulePath);
-  const candidates: string[] = [];
-  for (let i = 0; i < 6; i += 1) {
-    const candidateMap = {
-      src: path.join(cursor, "src", "plugin-sdk", params.srcFile),
-      dist: path.join(cursor, "dist", "plugin-sdk", params.distFile),
-    } as const;
-    for (const kind of orderedKinds) {
-      candidates.push(candidateMap[kind]);
-    }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
-    }
-    cursor = parent;
-  }
-  return candidates;
-}
-
-function resolvePluginSdkAliasFile(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath?: string;
-  argv1?: string;
-  cwd?: string;
-  moduleUrl?: string;
-  devSourceRoot?: string | null;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}): string | null {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    for (const candidate of listPluginSdkAliasCandidates({
-      srcFile: params.srcFile,
-      distFile: params.distFile,
-      modulePath,
-      argv1: params.argv1,
-      cwd: params.cwd,
-      moduleUrl: params.moduleUrl,
-      devSourceRoot: params.devSourceRoot,
-      pluginSdkResolution: params.pluginSdkResolution,
-    })) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
 const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
@@ -488,6 +416,31 @@ const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"]
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-state-test-runtime",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "qa-channel",
+  "qa-channel-protocol",
+  "qa-lab",
+  "qa-runtime",
+  "reply-payload-testing",
+  "sqlite-runtime-testing",
+  "test-env",
+  "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
+  "test-node-mocks",
+]);
 type PrivatePluginSdkSubpathOwner = {
   bundledPluginId: string;
   officialInstalledPackageName?: string;
@@ -1382,6 +1335,13 @@ function isBundledPluginModulePath(params: {
   );
 }
 
+function isAnyBundledPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  return ["extensions", path.join("dist", "extensions"), path.join("dist-runtime", "extensions")]
+    .map((segment) => path.join(params.packageRoot, segment))
+    .some((root) => normalizedModulePath.startsWith(`${root}${path.sep}`));
+}
+
 function isOfficialInstalledPluginPackageRoot(params: {
   packageRoot: string;
   packageName: string;
@@ -1476,9 +1436,14 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   modulePath: string;
   subpath: string;
 }) {
+  if (PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS.has(params.subpath)) {
+    return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  }
   const owners = findPrivatePluginSdkSubpathOwners(params.subpath);
   if (owners.length === 0) {
-    return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+    // Public demotions remain loadable by bundled plugins, but never by arbitrary installed
+    // plugins. Explicit owner records below impose tighter boundaries for sensitive helpers.
+    return isAnyBundledPluginModulePath(params) || shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
   }
   return owners.some(
     (owner) =>
@@ -1652,41 +1617,6 @@ function resolvePluginSdkScopedAliasMap(
   }
   cachedPluginSdkScopedAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
-}
-
-function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {}): string | null {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    const packageRoot =
-      resolveDevSourceRootParam(params) ?? resolveLoaderPackageRoot({ ...params, modulePath });
-    if (!packageRoot) {
-      return null;
-    }
-
-    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-      modulePath,
-      isProduction: process.env.NODE_ENV === "production",
-      pluginSdkResolution: params.pluginSdkResolution,
-    });
-    for (const kind of orderedKinds) {
-      if (kind === "dist") {
-        const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-        continue;
-      }
-      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
-        const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
 }
 
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
@@ -1871,24 +1801,7 @@ export function buildPluginLoaderAliasMap(
     return cached;
   }
 
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
-    modulePath,
-    argv1,
-    moduleUrl,
-    pluginSdkResolution,
-    devSourceRoot,
-  });
-  const extensionApiAlias = resolveExtensionApiAlias({
-    modulePath,
-    pluginSdkResolution,
-    devSourceRoot,
-  });
   const result: Record<string, string> = {
-    ...(extensionApiAlias
-      ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
-      : {}),
     ...resolveBundledPluginPackagePublicSurfaceAliasMap({
       modulePath,
       argv1,
@@ -1903,14 +1816,6 @@ export function buildPluginLoaderAliasMap(
       pluginSdkResolution,
       devSourceRoot,
     }),
-    ...(pluginSdkAlias
-      ? Object.fromEntries(
-          PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
-            packageName,
-            normalizeJitiAliasTargetPath(pluginSdkAlias),
-          ]),
-        )
-      : {}),
     ...Object.fromEntries(
       Object.entries(
         resolvePluginSdkScopedAliasMap({

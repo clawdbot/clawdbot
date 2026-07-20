@@ -34,6 +34,7 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
@@ -909,6 +910,7 @@ type GatewayPostAttachRuntimeDeps = {
     ...args: Parameters<typeof scheduleGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
+  warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
   startGatewayTailscaleExposure: (
     ...args: Parameters<typeof startGatewayTailscaleExposure>
   ) => ReturnType<typeof startGatewayTailscaleExposure>;
@@ -923,6 +925,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
+  warmSystemCa: warmMacOSSystemCaOffMainThread,
   startGatewayTailscaleExposure: async (...args) =>
     (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
 };
@@ -1066,6 +1069,14 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
+  if (!params.minimalTestGateway) {
+    // The HTTP server is already attached, so keep health probes responsive while the worker
+    // resolves Node's effective default CA set before any plugin or worker provider can use TLS.
+    await measureStartup(params.startupTrace, "post-attach.system-ca", () =>
+      runtimeDeps.warmSystemCa({ log: params.log }),
+    );
+  }
+
   let pluginRegistry = params.pluginRegistry;
   let startupPluginsLoaded = false;
   let startupPluginsLoadPromise: Promise<{

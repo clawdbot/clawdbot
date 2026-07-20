@@ -666,7 +666,7 @@ async function drainPendingAuthMutations(): Promise<void> {
         entries.push({ owner, input: owner.input });
       }
     }
-    await Promise.all(
+    const results = await Promise.allSettled(
       entries.map(
         async ({ owner, input }) =>
           await publishPreparedModelRuntimeSnapshot(input, {
@@ -675,6 +675,20 @@ async function drainPendingAuthMutations(): Promise<void> {
           }),
       ),
     );
+    // Supersession belongs to one owner generation. Wait for every sibling refresh before
+    // deciding the batch outcome so an expected race cannot hide a genuine owner failure.
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" &&
+      !(result.reason instanceof PreparedModelRuntimePublicationSupersededError)
+        ? [result.reason]
+        : [],
+    );
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `${failures.length} model runtime owner refreshes failed`);
+    }
   }
 }
 
@@ -684,6 +698,7 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     agentDir: normalizeOptionalDir(event.agentDir),
   };
   const staleError = new Error("prepared model runtime owner is stale after auth mutation");
+  let invalidatedOwner = false;
   for (const owner of owners.values()) {
     if (
       !normalizedEvent.affectsInheritedStores &&
@@ -692,12 +707,21 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     ) {
       continue;
     }
+    invalidatedOwner = true;
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = staleError;
   }
+  if (!invalidatedOwner) {
+    // A first owner reads the already-published auth snapshot while it builds. Replaying an earlier
+    // mutation would immediately stale that initial generation even though no prior owner existed.
+    return;
+  }
   pendingAuthMutations.push(normalizedEvent);
   void enqueuePreparedModelRuntimePublication(drainPendingAuthMutations).catch((error: unknown) => {
+    if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+      return;
+    }
     log.warn(`auth-triggered model runtime refresh failed: ${String(error)}`);
   });
 }

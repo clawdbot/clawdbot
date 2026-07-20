@@ -88,6 +88,7 @@ export async function sendGatewayHello(
       methods: gatewayMethods,
       events,
       capabilities: [
+        GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       ],

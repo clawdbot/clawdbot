@@ -179,7 +179,6 @@ export type {
   ProviderBuiltInModelSuppressionResult,
   ProviderCatalogContext,
   ProviderCatalogResult,
-  ProviderDiscoveryContext,
   ProviderModernModelPolicyContext,
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
@@ -247,5 +246,5 @@ export type {
 } from "./plugin-registration.types.js";
 export type { PluginHookRegistration } from "./hook-types.js";
 export type { PluginTextTransformRegistration } from "./plugin-api.types.js";
-export type { ProviderDiscoveryOrder } from "./provider-catalog.types.js";
+export type { ProviderCatalogOrder } from "./provider-catalog.types.js";
 export type { ProviderPlugin } from "./provider-plugin.types.js";

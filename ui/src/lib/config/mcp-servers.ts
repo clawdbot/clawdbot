@@ -1,14 +1,16 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig, type RuntimeConfigCapability } from "./index.ts";
+import type { RuntimeConfigCapability } from "./index.ts";
 
 export const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+export type McpServerTransport = "streamable-http" | "sse" | "stdio";
 
 export type McpServerSummary = {
   name: string;
   enabled: boolean;
-  transport: "http" | "stdio" | "invalid";
+  transport: McpServerTransport | "invalid";
   target: string;
   auth: string | null;
   toolFilter: boolean;
@@ -18,14 +20,93 @@ export type McpServerSummary = {
 
 export type McpServersPatchBuildResult = { patch: Record<string, unknown> } | { error: string };
 
-export function parseMcpTarget(target: string): Record<string, unknown> | null {
-  if (/^https?:\/\//i.test(target)) {
-    // The runtime defaults URL-only servers to SSE; modern MCP endpoints are
-    // streamable HTTP unless the /sse path convention says otherwise.
-    const transport = /\/sse\/?$/i.test(target.split("?")[0] ?? target) ? "sse" : "streamable-http";
-    return { url: target, transport };
+function splitMcpCommandLine(value: string): string[] | null {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let tokenStarted = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] ?? "";
+    if (char === "\\" && quote === '"') {
+      let slashCount = 1;
+      while (value[index + slashCount] === "\\") {
+        slashCount += 1;
+      }
+      const next = value[index + slashCount];
+      if (next === '"') {
+        current += "\\".repeat(Math.floor(slashCount / 2));
+        if (slashCount % 2 === 0) {
+          quote = null;
+        } else {
+          current += '"';
+        }
+        index += slashCount;
+      } else {
+        current += "\\".repeat(slashCount);
+        index += slashCount - 1;
+      }
+      tokenStarted = true;
+      continue;
+    }
+    if (char === "\\" && quote === null) {
+      const next = value[index + 1];
+      if (next && (next === '"' || next === "'" || /\s/u.test(next))) {
+        current += next;
+        tokenStarted = true;
+        index += 1;
+      } else {
+        current += char;
+        tokenStarted = true;
+      }
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      tokenStarted = true;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      tokenStarted = true;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      if (tokenStarted) {
+        parts.push(current);
+        current = "";
+        tokenStarted = false;
+      }
+      continue;
+    }
+    current += char;
+    tokenStarted = true;
   }
-  const [command, ...args] = target.trim().split(/\s+/u);
+
+  if (quote) {
+    return null;
+  }
+  if (tokenStarted) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+export function parseMcpTarget(
+  target: string,
+  transport: McpServerTransport,
+): Record<string, unknown> | null {
+  if (transport !== "stdio") {
+    return /^https?:\/\//i.test(target) ? { url: target, transport } : null;
+  }
+  if (/^https?:\/\//i.test(target)) {
+    return null;
+  }
+  const [command, ...args] = splitMcpCommandLine(target.trim()) ?? [];
   if (!command) {
     return null;
   }
@@ -46,11 +127,20 @@ export function summarizeMcpServers(
       // Command only: stdio args routinely carry tokens, and this projection
       // is visible to read-only operators.
       const command = typeof server.command === "string" ? server.command : "";
+      const transport = command
+        ? ("stdio" as const)
+        : url
+          ? server.transport === "streamable-http"
+            ? ("streamable-http" as const)
+            : server.transport === undefined || server.transport === "sse"
+              ? ("sse" as const)
+              : ("invalid" as const)
+          : ("invalid" as const);
       return {
         name,
         enabled: server.enabled !== false,
-        transport: url ? ("http" as const) : command ? ("stdio" as const) : ("invalid" as const),
-        target: url ? redactSensitiveUrlLikeString(url) : command,
+        transport,
+        target: command || redactSensitiveUrlLikeString(url),
         auth: typeof server.auth === "string" ? server.auth : null,
         toolFilter: Boolean(server.toolFilter),
         parallel: server.supportsParallelToolCalls === true,
@@ -98,8 +188,9 @@ export function buildRemoveMcpServerPatch(
 
 /**
  * Apply one mutation to config.mcp.servers through the shared config seam.
- * config.patch uses RFC 7396 merge semantics, so `buildPatch` must return a
- * minimal fragment (with explicit nulls for deletions), never a full config.
+ * The builder runs after pending editor writes settle so duplicate/existence
+ * decisions use the same snapshot as the patch base hash. config.patch uses
+ * RFC 7396 semantics, so return a minimal fragment with explicit deletion nulls.
  */
 export async function patchMcpServers(
   runtimeConfig: RuntimeConfigCapability,
@@ -110,18 +201,17 @@ export async function patchMcpServers(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     await runtimeConfig.ensureLoaded();
-    const base = resolveEditableSnapshotConfig(runtimeConfig.state.configSnapshot);
-    if (!base) {
-      return { ok: false, error: t("mcpServers.configUnavailable") };
-    }
-    const servers = asRecord(asRecord(base.mcp)?.servers) ?? {};
-    const built = options.buildPatch(servers);
-    if ("error" in built) {
-      return { ok: false, error: built.error };
-    }
-    const patched = await runtimeConfig.patch({
-      raw: { mcp: { servers: built.patch } },
-      note: options.note,
+    const patched = await runtimeConfig.patchFromSnapshot((base) => {
+      const servers = asRecord(asRecord(base.mcp)?.servers) ?? {};
+      const built = options.buildPatch(servers);
+      return "error" in built
+        ? built
+        : {
+            options: {
+              raw: { mcp: { servers: built.patch } },
+              note: options.note,
+            },
+          };
     });
     if (!patched) {
       return {

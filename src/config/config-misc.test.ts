@@ -491,20 +491,6 @@ describe("diagnostics.otel.captureContent", () => {
   });
 });
 
-describe("auth.cooldowns auth_permanent backoff config", () => {
-  it("accepts auth_permanent backoff knobs", () => {
-    const result = OpenClawSchema.safeParse({
-      auth: {
-        cooldowns: {
-          authPermanentBackoffMinutes: 10,
-          authPermanentMaxMinutes: 60,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-});
-
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -917,93 +903,6 @@ describe("gateway.tools config", () => {
   });
 });
 
-describe("gateway.channelHealthCheckMinutes", () => {
-  it("accepts preauth handshake timeout tuning", () => {
-    const res = validateConfigObject({
-      gateway: {
-        handshakeTimeoutMs: 30_000,
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects non-positive preauth handshake timeouts", () => {
-    const res = validateConfigObject({
-      gateway: {
-        handshakeTimeoutMs: 0,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
-    }
-  });
-
-  it("accepts zero to disable monitor", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 0,
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects negative intervals", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: -1,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
-    }
-  });
-
-  it("rejects stale thresholds shorter than the health check interval", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 4,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
-    }
-  });
-
-  it("accepts stale thresholds that match or exceed the health check interval", () => {
-    const equal = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 5,
-      },
-    });
-    expect(equal.ok).toBe(true);
-
-    const greater = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 6,
-      },
-    });
-    expect(greater.ok).toBe(true);
-  });
-
-  it("rejects stale thresholds shorter than the default health check interval", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelStaleEventThresholdMinutes: 4,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
-    }
-  });
-});
-
 describe("config identity/materialization regressions", () => {
   it("keeps explicit responsePrefix and group mention patterns", () => {
     const res = validateConfigObject({
@@ -1109,19 +1008,6 @@ describe("cron webhook schema", () => {
       },
     });
 
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts cron.retry config", () => {
-    const res = OpenClawSchema.safeParse({
-      cron: {
-        retry: {
-          maxAttempts: 5,
-          backoffMs: [60000, 120000, 300000],
-          retryOn: ["rate_limit", "overloaded", "network"],
-        },
-      },
-    });
     expect(res.success).toBe(true);
   });
 });

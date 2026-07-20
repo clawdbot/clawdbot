@@ -222,6 +222,7 @@ describe("shouldStartProxyForCli", () => {
   });
 
   it("skips managed proxy routing for bare parent default help", () => {
+    expect(shouldStartProxyForCli(["node", "openclaw", "qa", "suite"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "plugins"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "channels"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "cron"])).toBe(false);

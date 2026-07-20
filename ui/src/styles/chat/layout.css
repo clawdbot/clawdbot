@@ -28,6 +28,99 @@ openclaw-chat-page {
   box-shadow: none !important;
 }
 
+/* Chat pane error alert. The pane strips its own padding, so the alert
+   carries its own inset as a centered card instead of stretching into a
+   full-bleed bar; visual language mirrors the connection pill (status dot
+   on an elevated surface) with a danger accent. */
+.chat-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  align-self: center;
+  max-width: min(36rem, calc(100% - 32px));
+  margin: 12px 16px 4px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--danger) 9%, var(--bg-elevated));
+  box-shadow: var(--shadow-lg);
+  color: var(--text-strong);
+  font-size: 13px;
+  line-height: 1.5;
+  animation: chat-error-enter 0.25s var(--ease-out);
+}
+
+@keyframes chat-error-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-error {
+    animation: none;
+  }
+}
+
+.chat-error__dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  /* Optically centers the dot on the first text line when the message wraps. */
+  margin-top: 6px;
+  border-radius: var(--radius-full);
+  background: var(--danger);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.chat-error__content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-error__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  /* Pulls the hit target into the card's padding so the text stays the
+     tallest run and the card keeps its compact height. */
+  margin: -4px -6px -4px 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.chat-error__dismiss:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: var(--text-strong);
+}
+
+.chat-error__dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-error__dismiss svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .chat::after {
   content: "";
   position: absolute;
@@ -155,6 +248,42 @@ openclaw-chat-page {
   width: calc(100% - 36px - 2 * clamp(6px, 1vw, 12px));
   max-width: var(--chat-thread-max-width);
   margin: 8px auto;
+}
+
+.chat-run-error {
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 8px auto 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-run-error__icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.chat-run-error__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-run-error__summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-virtual-sizer {
@@ -4145,6 +4274,11 @@ openclaw-chat-page {
     width: calc(100% - 8px);
     margin: 6px 4px calc(14px + var(--safe-area-bottom));
     gap: 6px;
+  }
+
+  .chat-run-error {
+    width: calc(100% - 8px);
+    margin: 6px 4px 0;
   }
 
   .agent-chat__composer-shell:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {

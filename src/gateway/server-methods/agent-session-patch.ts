@@ -209,7 +209,14 @@ export function buildAgentSessionPatch(params: {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
-    ...(params.touchInteraction ? { lastInteractionAt: params.now } : {}),
+    ...(params.touchInteraction
+      ? {
+          lastInteractionAt: params.now,
+          // Clear at human-turn admission, before the model may declare a new
+          // status. Later lifecycle writes must not erase a same-turn declaration.
+          agentStatus: undefined,
+        }
+      : {}),
     ...automaticRecoveryClearPatch,
     ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
     ...(effectiveDeliveryFields.deliveryContext

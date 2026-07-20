@@ -5,6 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import {
   normalizeSessionIconInput,
   parseSessionIcon,
+  type SessionAgentAttentionIconId,
 } from "../../../packages/gateway-protocol/src/session-icon.js";
 import { icons } from "./icons.ts";
 
@@ -21,6 +22,12 @@ const SESSION_ICON_REGISTRY = {
   globe: icons.globe,
   sun: icons.sun,
   moon: icons.moon,
+  hand: icons.hand,
+  key: icons.key,
+  alert: icons.alertTriangle,
+  flag: icons.flag,
+  lock: icons.lock,
+  hourglass: icons.hourglass,
 } as const satisfies Record<string, TemplateResult>;
 
 type CuratedSessionIconId = keyof typeof SESSION_ICON_REGISTRY;
@@ -54,4 +61,8 @@ export function resolveSessionIcon(icon: string | undefined): TemplateResult {
     }
   }
   return renderNamedIcon(icons.messageSquare);
+}
+
+export function resolveSessionAttentionIcon(icon: SessionAgentAttentionIconId): TemplateResult {
+  return SESSION_ICON_REGISTRY[icon];
 }

@@ -302,7 +302,7 @@ function buildCliBackendTimeoutFailureText(input: {
       `⚠️ CLI subprocess${routingSuffix}: no output for ${seconds}s, so the no-output watchdog stopped it. ` +
       `This is separate from the overall agent timeout; the gateway is unaffected.${workStatus} ` +
       "Check for an interactive prompt. " +
-      `For an intentionally quiet CLI, raise \`agents.defaults.cliBackends.${backendId}.reliability.watchdog.{fresh,resume}.noOutputTimeoutMs\`.`
+      `The CLI backend ${backendId} produced no output before its watchdog expired.`
     );
   }
   return (

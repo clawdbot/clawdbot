@@ -104,6 +104,7 @@ function readSessionStoreEntries(storePath: string): Record<string, SessionEntry
 
 async function seedDreamingTranscriptEvent(params: {
   sessionId: string;
+  sessionKey: string;
   storePath: string;
   timestampMs: number;
   runId?: string;
@@ -111,7 +112,7 @@ async function seedDreamingTranscriptEvent(params: {
   await appendSqliteSessionTranscriptEventForTest({
     agentId: "main",
     sessionId: params.sessionId,
-    sessionKey: `agent:main:dreaming-narrative-fixture:${params.sessionId}`,
+    sessionKey: params.sessionKey,
     storePath: params.storePath,
     event: {
       type: "metadata",
@@ -866,7 +867,8 @@ describe("generateAndAppendDreamNarrative", () => {
     const updatedAt = Date.now();
     await seedSessionStore(storePath, {
       "agent:main:dreaming-narrative-light-1": {
-        sessionId: "missing",
+        sessionId: "orphan",
+        sessionFile: orphanPath,
         updatedAt,
       },
       "agent:main:kept-session": {
@@ -886,12 +888,14 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     await seedDreamingTranscriptEvent({
       sessionId: "orphan",
+      sessionKey: "agent:main:dreaming-narrative-light-1",
       storePath,
       timestampMs: Date.now() - 600_000,
       runId: "dreaming-narrative-light-123",
     });
     await seedDreamingTranscriptEvent({
       sessionId: "still-live",
+      sessionKey: "agent:main:kept-session",
       storePath,
       timestampMs: Date.now(),
       runId: "dreaming-narrative-light-keep",
@@ -969,12 +973,14 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     await seedDreamingTranscriptEvent({
       sessionId: "orphan-dreaming",
+      sessionKey: "agent:main:dreaming-narrative-deep-orphan",
       storePath,
       timestampMs: Date.now() - 600_000,
       runId: "dreaming-narrative-deep-orphan",
     });
     await seedDreamingTranscriptEvent({
       sessionId: "live-dreaming",
+      sessionKey: "agent:main:dreaming-narrative-deep-live",
       storePath,
       timestampMs: Date.now(),
       runId: "dreaming-narrative-deep-live",

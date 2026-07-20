@@ -2,7 +2,7 @@
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTimestampMs } from "./format.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
-import { resolveDiscordMessageText } from "./message-utils.js";
+import { resolveDiscordMessageHistoryText } from "./message-utils.js";
 
 export function buildDiscordPreflightHistoryEntry(params: {
   isGuildMessage: boolean;
@@ -10,7 +10,7 @@ export function buildDiscordPreflightHistoryEntry(params: {
   message: DiscordMessagePreflightContext["message"];
   senderLabel: string;
 }): HistoryEntry | undefined {
-  const textForHistory = resolveDiscordMessageText(params.message, {
+  const textForHistory = resolveDiscordMessageHistoryText(params.message, {
     includeForwarded: true,
   });
   return params.isGuildMessage && params.historyLimit > 0 && textForHistory

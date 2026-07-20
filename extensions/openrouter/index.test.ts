@@ -559,12 +559,6 @@ describe("openrouter provider hooks", () => {
       } as never)?.defaultLevel,
     ).toBe("high");
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-pro",
-      } as never),
-    ).toBe(true);
-    expect(
       provider.resolveThinkingProfile?.({
         provider: "openrouter",
         modelId: "openai/gpt-5.4",

@@ -181,12 +181,16 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     }
   });
 
-  it("renders the shared Gravatar fallback in the profile preview", async () => {
+  it("renders the gateway avatar route in the profile preview", async () => {
     const context = await browser.newContext();
     const page = await context.newPage();
-    const gravatarRequests: string[] = [];
-    await page.route("https://gravatar.com/avatar/**", async (route) => {
-      gravatarRequests.push(route.request().url());
+    const avatarRequests: string[] = [];
+    // The gateway serves the avatar (uploaded first, Gravatar fallback second)
+    // behind its own same-origin route; the Control UI renders only that route,
+    // so the preview never requests gravatar.com directly — the Control UI CSP
+    // (img-src 'self') would block it.
+    await page.route("**/api/users/profile-1/avatar*", async (route) => {
+      avatarRequests.push(route.request().url());
       await route.fulfill({
         body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
         contentType: "image/svg+xml",
@@ -228,12 +232,16 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
         ],
       });
 
-      const expectedUrl =
-        "https://gravatar.com/avatar/973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b?d=404&s=128";
       const profileAvatar = page.locator("#settings-profile-identity openclaw-viewer-avatar img");
       await profileAvatar.waitFor({ timeout: 10_000 });
-      expect(await profileAvatar.getAttribute("src")).toBe(expectedUrl);
-      await expect.poll(() => gravatarRequests.includes(expectedUrl)).toBe(true);
+      // profile-page derives the src from userProfileAvatarUrl(id, updatedAt);
+      // the gateway origin may absolutize it, so match the canonical path suffix.
+      expect(await profileAvatar.getAttribute("src")).toMatch(
+        /\/api\/users\/profile-1\/avatar\?v=2$/u,
+      );
+      await expect
+        .poll(() => avatarRequests.some((url) => url.includes("/api/users/profile-1/avatar")))
+        .toBe(true);
     } finally {
       await context.close();
     }

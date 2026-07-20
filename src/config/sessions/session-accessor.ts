@@ -122,6 +122,7 @@ export type {
 export {
   clearPluginOwnedSessionState,
   listSessionEntries,
+  listSessionEntriesReadOnly,
   loadExactSessionEntry,
   loadSessionEntry,
   loadSessionEntryReadOnly,

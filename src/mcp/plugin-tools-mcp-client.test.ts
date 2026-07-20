@@ -46,7 +46,9 @@ describe("plugin tools MCP client bridge", () => {
       });
 
       expect(execute).toHaveBeenCalledWith(
-        expect.stringMatching(/^mcp-\d+$/),
+        expect.stringMatching(
+          /^mcp-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+        ),
         { query: "ORBIT-9 codename", maxResults: 3 },
         expect.any(AbortSignal),
         undefined,

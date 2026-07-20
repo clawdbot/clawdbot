@@ -31,6 +31,13 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "clickclack",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "CLICKCLACK_BOT_TOKEN"
+          ]
+        }
+      },
       "label": "ClickClack",
       "selectionLabel": "ClickClack",
       "detailLabel": "ClickClack Bot",

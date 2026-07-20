@@ -395,6 +395,49 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "unsupported flow",
+      options: { flow: "bogus" as never },
+      expectedError: "Invalid --flow",
+    },
+    {
+      label: "malformed remote URL",
+      options: { mode: "remote" as const, remoteUrl: "garbage" },
+      expectedError: "URL must start with ws:// or wss://",
+    },
+    {
+      label: "non-WebSocket remote URL",
+      options: { mode: "remote" as const, remoteUrl: "https://example.invalid" },
+      expectedError: "URL must start with ws:// or wss://",
+    },
+    {
+      label: "unsupported daemon runtime while daemon install is skipped",
+      options: { daemonRuntime: "bogus" as never, installDaemon: false },
+      expectedError: "Invalid --daemon-runtime",
+    },
+    {
+      label: "unsupported node manager",
+      options: { nodeManager: "bogus" as never },
+      expectedError: "Invalid --node-manager",
+    },
+  ])(
+    "rejects $label before non-interactive setup without reset",
+    async ({ options, expectedError }) => {
+      const runtime = makeRuntime();
+
+      await setupWizardCommand({ nonInteractive: true, acceptRisk: true, ...options }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(expectedError));
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+      expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+      expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+    },
+  );
+
   it("validates dependent gateway options before reset", async () => {
     const runtime = makeRuntime();
 

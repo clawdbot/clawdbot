@@ -449,10 +449,14 @@ describe("transcripts tool", () => {
   });
 
   it("bounds summary input while retaining the full transcript", async () => {
-    // Summary generation uses a bounded utterance window, but the durable JSONL
-    // transcript must retain every utterance.
+    // Exercise the fixed 2,000-utterance summary window while proving the
+    // durable transcript still retains the complete import.
     const stateDir = await makeStateDir();
-    const { tool } = await createHarness(stateDir, { maxUtterances: 1 });
+    const { tool } = await createHarness(stateDir);
+    const transcript = Array.from(
+      { length: 2_001 },
+      (_, index) => `Alex: transcript line ${index}`,
+    ).join("\n");
 
     await tool.execute(
       "call-1",
@@ -461,8 +465,7 @@ describe("transcripts tool", () => {
         providerId: "manual-transcript",
         sessionId: "long-meeting",
         title: "Long meeting",
-        transcript:
-          "Alex: Action item: write the first draft.\nSam: Decision: ship the final plan.",
+        transcript,
       },
       undefined,
       vi.fn(),
@@ -472,16 +475,14 @@ describe("transcripts tool", () => {
       path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "summary.md"),
       "utf8",
     );
-    expect(summary).toContain("Decision: ship the final plan.");
-    expect(summary).not.toContain("Action item: write the first draft.");
-    expect(summary).toContain("## Transcript");
-    expect(summary).toContain("Sam: Decision: ship the final plan.");
-    const transcript = await fs.readFile(
+    expect(summary).not.toContain("transcript line 0\n");
+    expect(summary).toContain("transcript line 2000");
+    const storedTranscript = await fs.readFile(
       path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "transcript.jsonl"),
       "utf8",
     );
-    expect(transcript).toContain("Action item: write the first draft.");
-    expect(transcript).toContain("Decision: ship the final plan.");
+    expect(storedTranscript).toContain("transcript line 0");
+    expect(storedTranscript).toContain("transcript line 2000");
   });
 
   it("requires date-qualified selectors for repeated stored session ids", async () => {

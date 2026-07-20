@@ -7,91 +7,8 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
-const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
-
-/** Computes a reserve-token floor scaled to the selected context window. */
-function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
-  if (typeof contextWindow !== "number" || contextWindow <= 0) {
-    return DEFAULT_RESERVE_TOKENS_FLOOR;
-  }
-  if (contextWindow >= 1_000_000) {
-    return 100_000;
-  }
-  if (contextWindow >= 200_000) {
-    return 50_000;
-  }
-  if (contextWindow >= 100_000) {
-    return 35_000;
-  }
-  return DEFAULT_RESERVE_TOKENS_FLOOR;
-}
-
-function resolveContextWindowForCompactionHint(params: {
-  cfg: FollowupRun["run"]["config"];
-  primaryProvider?: string;
-  primaryModel?: string;
-  runtimeProvider?: string;
-  runtimeModel?: string;
-  agentId?: string;
-  activeSessionEntry?: SessionEntry;
-}): number | undefined {
-  let modelWindow: number | undefined;
-  const entryProvider = params.activeSessionEntry?.modelProvider;
-  const entryModel = params.activeSessionEntry?.model;
-  const runtimeProvider = params.runtimeProvider ?? entryProvider;
-  const runtimeModel = params.runtimeModel ?? entryModel;
-  const hasExplicitRuntimeRef = Boolean(params.runtimeProvider && params.runtimeModel);
-  if (runtimeProvider && runtimeModel) {
-    const resolved = resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: runtimeProvider,
-      model: runtimeModel,
-      allowAsyncLoad: false,
-    });
-    if (typeof resolved === "number" && resolved > 0) {
-      modelWindow = resolved;
-    }
-  }
-  const sessionWindow = normalizePositiveContextTokens(params.activeSessionEntry?.contextTokens);
-  const sessionMatchesRuntimeRef = runtimeProvider === entryProvider && runtimeModel === entryModel;
-  const trustedSessionWindow =
-    !hasExplicitRuntimeRef || sessionMatchesRuntimeRef ? sessionWindow : undefined;
-  if (modelWindow === undefined && sessionMatchesRuntimeRef && sessionWindow !== undefined) {
-    modelWindow = sessionWindow;
-  }
-  if (
-    modelWindow === undefined &&
-    !hasExplicitRuntimeRef &&
-    params.primaryProvider &&
-    params.primaryModel
-  ) {
-    const resolved = resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.primaryProvider,
-      model: params.primaryModel,
-      allowAsyncLoad: false,
-    });
-    if (typeof resolved === "number" && resolved > 0) {
-      modelWindow = resolved;
-    }
-  }
-  const contextWindow = modelWindow ?? trustedSessionWindow;
-  const agentCap = resolveAgentContextTokensForHint({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  if (agentCap !== undefined && contextWindow !== undefined) {
-    return Math.min(agentCap, contextWindow);
-  }
-  return agentCap ?? contextWindow;
-}
-
-function buildContextOverflowResetHint(contextWindowTokens: number | undefined): string {
-  const reserveFloor = computeContextAwareReserveTokensFloor(contextWindowTokens);
-  return (
-    "\n\nTo prevent this, increase your compaction buffer by setting " +
-    `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor} or higher in your config.`
-  );
+function buildContextOverflowResetHint(): string {
+  return "\n\nTry starting a fresh session or using a model with a larger context window.";
 }
 
 type ModelRefLike = {
@@ -279,15 +196,6 @@ export function buildContextOverflowRecoveryText(params: {
     : params.duringCompaction
       ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
       : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
-  const primaryContextWindow = resolveContextWindowForCompactionHint({
-    cfg: params.cfg,
-    primaryProvider: params.primaryProvider,
-    primaryModel: params.primaryModel,
-    runtimeProvider: params.runtimeProvider,
-    runtimeModel: params.runtimeModel,
-    agentId: params.agentId,
-    activeSessionEntry: params.activeSessionEntry,
-  });
   const explicitRuntimeMatchesSession =
     !params.runtimeProvider ||
     !params.runtimeModel ||
@@ -302,5 +210,5 @@ export function buildContextOverflowRecoveryText(params: {
         activeSessionEntry: params.activeSessionEntry,
       })
     : undefined;
-  return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint(primaryContextWindow));
+  return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint());
 }

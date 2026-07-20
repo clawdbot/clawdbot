@@ -1,11 +1,13 @@
 // Whatsapp plugin module implements outbound media contract behavior.
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
-import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { mediaKindFromMime, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import {
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  transcodeAudioBufferToOpus,
+} from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
-import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import {
   sanitizeAssistantVisibleText,
@@ -123,17 +125,7 @@ function inferWhatsAppMediaKind(
   ) {
     return media.kind;
   }
-  const contentType = normalizeContentType(media.contentType);
-  if (contentType.startsWith("image/")) {
-    return "image";
-  }
-  if (contentType.startsWith("audio/")) {
-    return "audio";
-  }
-  if (contentType.startsWith("video/")) {
-    return "video";
-  }
-  return "document";
+  return mediaKindFromMime(normalizeMimeType(media.contentType)) ?? "document";
 }
 
 function normalizeWhatsAppLoadedMedia(
@@ -189,16 +181,12 @@ export async function prepareWhatsAppOutboundMedia(
   };
 }
 
-function normalizeContentType(value: string | undefined): string {
-  return value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-}
-
 function isWhatsAppNativeVoiceAudio(params: {
   contentType?: string;
   fileName?: string;
   mediaUrl?: string;
 }): boolean {
-  const contentType = normalizeContentType(params.contentType);
+  const contentType = normalizeMimeType(params.contentType);
   if (contentType === "audio/ogg" || contentType === "audio/opus") {
     return true;
   }
@@ -211,45 +199,16 @@ async function transcodeToWhatsAppVoiceOpus(params: {
   buffer: Buffer;
   fileName: string;
 }): Promise<Buffer> {
-  return await withTempWorkspace(
-    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "whatsapp-voice-" },
-    async (workspace) => {
-      const ext = path.extname(params.fileName).toLowerCase();
-      const inputExt = ext && ext.length <= 12 ? ext : ".audio";
-      const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
-      await writeExternalFileWithinRoot({
-        rootDir: workspace.dir,
-        path: WHATSAPP_VOICE_FILE_NAME,
-        write: async (outputPath) => {
-          await runFfmpeg([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            inputPath,
-            "-vn",
-            "-sn",
-            "-dn",
-            "-t",
-            String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-            "-ar",
-            String(WHATSAPP_VOICE_SAMPLE_RATE_HZ),
-            "-ac",
-            "1",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            WHATSAPP_VOICE_BITRATE,
-            "-f",
-            "ogg",
-            outputPath,
-          ]);
-        },
-      });
-      return await workspace.read(WHATSAPP_VOICE_FILE_NAME);
-    },
-  );
+  return await transcodeAudioBufferToOpus({
+    audioBuffer: params.buffer,
+    inputFileName: params.fileName,
+    tempPrefix: "whatsapp-voice-",
+    outputFileName: WHATSAPP_VOICE_FILE_NAME,
+    maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+    sampleRateHz: WHATSAPP_VOICE_SAMPLE_RATE_HZ,
+    channels: 1,
+    bitrate: WHATSAPP_VOICE_BITRATE,
+  });
 }
 
 function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | undefined {

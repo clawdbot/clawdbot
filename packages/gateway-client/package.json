@@ -1,10 +1,31 @@
 {
   "name": "@openclaw/gateway-client",
-  "version": "0.0.0-private",
-  "private": true,
-  "files": [
-    "dist"
+  "version": "2026.7.2",
+  "description": "Reference WebSocket client for the OpenClaw Gateway protocol",
+  "keywords": [
+    "client",
+    "gateway",
+    "openclaw",
+    "websocket"
   ],
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "packages/gateway-client"
+  },
+  "files": [
+    "dist",
+    "npm-shrinkwrap.json",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -35,8 +56,18 @@
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
-    "@openclaw/net-policy": "workspace:*",
-    "@openclaw/retry": "workspace:*",
+    "ipaddr.js": "2.4.0",
     "ws": "8.21.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "openclaw": {
+    "release": {
+      "publishToNpm": true
+    }
   }
 }

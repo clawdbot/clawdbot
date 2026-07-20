@@ -146,7 +146,177 @@ function hasMediaDeepgram(value: unknown): boolean {
   });
 }
 
+const RETIRED_TUNING_PATHS = [
+  ["auth", "cooldowns"],
+  ["secrets", "resolution"],
+  ["browser", "remoteCdpTimeoutMs"],
+  ["browser", "remoteCdpHandshakeTimeoutMs"],
+  ["browser", "localLaunchTimeoutMs"],
+  ["browser", "localCdpReadyTimeoutMs"],
+  ["browser", "actionTimeoutMs"],
+  ["browser", "cdpPortRangeStart"],
+  ["browser", "tabCleanup", "idleMinutes"],
+  ["browser", "tabCleanup", "maxTabsPerSession"],
+  ["browser", "tabCleanup", "sweepMinutes"],
+  ["tools", "loopDetection", "genericRepeat"],
+  ["tools", "loopDetection", "knownPollNoProgress"],
+  ["tools", "loopDetection", "pingPong"],
+  ["tools", "loopDetection", "windowSize"],
+  ["tools", "loopDetection", "historySize"],
+  ["tools", "loopDetection", "warningThreshold"],
+  ["tools", "loopDetection", "unknownToolThreshold"],
+  ["tools", "loopDetection", "criticalThreshold"],
+  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
+  ["tools", "loopDetection", "detectors"],
+  ["tools", "loopDetection", "postCompactionGuard"],
+  ["gateway", "handshakeTimeoutMs"],
+  ["gateway", "channelHealthCheckMinutes"],
+  ["gateway", "channelStaleEventThresholdMinutes"],
+  ["gateway", "channelMaxRestartsPerHour"],
+  ["gateway", "reload", "debounceMs"],
+  ["gateway", "reload", "deferralTimeoutMs"],
+  ["gateway", "http", "endpoints", "chatCompletions", "maxBodyBytes"],
+  ["gateway", "http", "endpoints", "chatCompletions", "maxImageParts"],
+  ["gateway", "http", "endpoints", "chatCompletions", "maxTotalImageBytes"],
+  ["gateway", "http", "endpoints", "responses", "maxBodyBytes"],
+  ["session", "typingIntervalSeconds"],
+  ["session", "writeLock"],
+  ["session", "agentToAgent", "maxPingPongTurns"],
+  ["cron", "maxConcurrentRuns"],
+  ["cron", "triggers", "minIntervalMs"],
+  ["cron", "retry"],
+  ["diagnostics", "stuckSessionWarnMs"],
+  ["diagnostics", "stuckSessionAbortMs"],
+  ["diagnostics", "memoryPressureSnapshot"],
+  ["diagnostics", "memoryPressureBundle"],
+  ["web", "heartbeatSeconds"],
+  ["web", "reconnect"],
+  ["web", "whatsapp"],
+  ["messages", "queue", "debounceMs"],
+  ["messages", "statusReactions", "timing"],
+  ["acp", "stream", "coalesceIdleMs"],
+  ["acp", "stream", "maxChunkChars"],
+  ["acp", "stream", "maxOutputChars"],
+  ["acp", "stream", "maxSessionUpdateChars"],
+  ["acp", "stream", "hiddenBoundarySeparator"],
+  ["acp", "maxConcurrentSessions"],
+  ["acp", "runtime", "ttlMinutes"],
+  ["mcp", "sessionIdleTtlMs"],
+  ["worktrees"],
+  ["transcripts", "maxUtterances"],
+  ["hooks", "maxBodyBytes"],
+  ["update", "auto", "stableDelayHours"],
+  ["update", "auto", "stableJitterHours"],
+  ["update", "auto", "betaCheckIntervalHours"],
+] as const;
+
+const RETIRED_AGENT_TUNING_PATHS = [
+  ["compaction", "reserveTokens"],
+  ["compaction", "reserveTokensFloor"],
+  ["compaction", "maxHistoryShare"],
+  ["contextPruning", "keepLastAssistants"],
+  ["contextPruning", "softTrimRatio"],
+  ["contextPruning", "hardClearRatio"],
+  ["contextPruning", "minPrunableToolChars"],
+  ["contextPruning", "softTrim"],
+  ["memorySearch", "chunking"],
+  ["memorySearch", "sync", "watchDebounceMs"],
+  ["memorySearch", "sync", "intervalMinutes"],
+  ["memorySearch", "query", "hybrid", "vectorWeight"],
+  ["memorySearch", "query", "hybrid", "textWeight"],
+  ["memorySearch", "query", "hybrid", "candidateMultiplier"],
+  ["memorySearch", "query", "hybrid", "mmr", "lambda"],
+  ["memorySearch", "query", "hybrid", "temporalDecay", "halfLifeDays"],
+  ["memorySearch", "cache", "maxEntries"],
+  ["cliBackends", "*", "reliability", "outputLimits"],
+  ["cliBackends", "*", "reliability", "watchdog", "fresh", "noOutputTimeoutMs"],
+  ["cliBackends", "*", "reliability", "watchdog", "resume", "noOutputTimeoutMs"],
+  ["runRetries"],
+  ["tools", "loopDetection", "genericRepeat"],
+  ["tools", "loopDetection", "knownPollNoProgress"],
+  ["tools", "loopDetection", "pingPong"],
+  ["tools", "loopDetection", "windowSize"],
+  ["tools", "loopDetection", "historySize"],
+  ["tools", "loopDetection", "warningThreshold"],
+  ["tools", "loopDetection", "unknownToolThreshold"],
+  ["tools", "loopDetection", "criticalThreshold"],
+  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
+  ["tools", "loopDetection", "detectors"],
+  ["tools", "loopDetection", "postCompactionGuard"],
+] as const;
+
+function deleteRetiredPath(owner: unknown, path: readonly string[], index = 0): boolean {
+  const record = getRecord(owner);
+  if (!record) {
+    return false;
+  }
+  const key = path[index];
+  if (!key) {
+    return false;
+  }
+  if (key === "*") {
+    let changed = false;
+    for (const value of Object.values(record)) {
+      changed = deleteRetiredPath(value, path, index + 1) || changed;
+    }
+    return changed;
+  }
+  if (index === path.length - 1) {
+    if (!Object.hasOwn(record, key)) {
+      return false;
+    }
+    delete record[key];
+    return true;
+  }
+  const child = getRecord(record[key]);
+  if (!child || !deleteRetiredPath(child, path, index + 1)) {
+    return false;
+  }
+  if (Object.keys(child).length === 0) {
+    delete record[key];
+  }
+  return true;
+}
+
+function stripRetiredTuningKnobs(raw: Record<string, unknown>): boolean {
+  let changed = false;
+  for (const path of RETIRED_TUNING_PATHS) {
+    changed = deleteRetiredPath(raw, path) || changed;
+  }
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  if (defaults) {
+    for (const path of RETIRED_AGENT_TUNING_PATHS) {
+      changed = deleteRetiredPath(defaults, path) || changed;
+    }
+  }
+  if (Array.isArray(agents?.list)) {
+    for (const agent of agents.list) {
+      for (const path of RETIRED_AGENT_TUNING_PATHS) {
+        changed = deleteRetiredPath(agent, path) || changed;
+      }
+    }
+  }
+  return changed;
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "runtime.tuning-knobs-purge",
+    describe: "Remove retired runtime tuning knobs",
+    legacyRules: [
+      rule(
+        [],
+        "Numeric runtime tuning knobs were retired and now use built-in defaults.",
+        (_value, root) => stripRetiredTuningKnobs(structuredClone(root)),
+      ),
+    ],
+    apply: (raw, changes) => {
+      if (stripRetiredTuningKnobs(raw)) {
+        changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "runtime.retired-config-keys",
     describe: "Migrate retired root and tool config keys",

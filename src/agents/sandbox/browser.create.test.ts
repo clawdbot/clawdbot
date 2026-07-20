@@ -774,6 +774,46 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
+  it.each([200, 503])(
+    "cancels the CDP probe response body after a %i startup probe",
+    async (status) => {
+      const cancels: Array<ReturnType<typeof vi.fn>> = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        const cancel = vi.fn().mockResolvedValue(undefined);
+        cancels.push(cancel);
+        return {
+          ok: status === 200,
+          body: { cancel },
+        } as never;
+      });
+      bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+        await params.onEnsureAttachTarget?.({});
+        throw new Error("probe completed before bridge creation");
+      });
+
+      const cfg = buildConfig(false);
+      cfg.browser.autoStartTimeoutMs = 50;
+
+      await expect(
+        ensureTestSandboxBrowser({
+          scopeKey: "session:test",
+          workspaceDir: "/tmp/workspace",
+          agentWorkspaceDir: "/tmp/workspace",
+          cfg,
+        }),
+      ).rejects.toThrow(
+        status === 200
+          ? "probe completed before bridge creation"
+          : "hung container has been forcefully removed",
+      );
+
+      expect(cancels).not.toHaveLength(0);
+      for (const cancel of cancels) {
+        expect(cancel).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("keeps a stalled CDP request inside the browser startup deadline", async () => {
     const sockets = new Set<Socket>();
     let requestPath: string | undefined;

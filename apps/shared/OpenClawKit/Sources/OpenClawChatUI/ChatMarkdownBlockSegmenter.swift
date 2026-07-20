@@ -2,13 +2,15 @@ import Foundation
 import Markdown
 
 /// One renderable block of a chat message. Prose stays on the
-/// AttributedString pipeline; headings, fenced code, display math, and GFM tables get dedicated views.
+/// AttributedString pipeline; structural Markdown gets dedicated views.
 enum ChatMarkdownBlock: Equatable {
     case prose(String)
     case heading(ChatMarkdownHeading)
     case code(ChatCodeBlock)
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
+    case list(ChatMarkdownList)
+    case thematicBreak
 }
 
 struct ChatMarkdownHeading: Equatable {
@@ -44,6 +46,32 @@ struct ChatMarkdownTable: Equatable {
     let rows: [[String]]
 }
 
+struct ChatMarkdownList: Equatable {
+    enum Kind: Equatable {
+        case unordered
+        case ordered(start: UInt)
+    }
+
+    let kind: Kind
+    let items: [ChatMarkdownListItem]
+}
+
+struct ChatMarkdownListItem: Equatable {
+    enum Checkbox: Equatable {
+        case checked
+        case unchecked
+    }
+
+    let checkbox: Checkbox?
+    let content: [ChatMarkdownListItemContent]
+}
+
+indirect enum ChatMarkdownListItemContent: Equatable {
+    case markdown(String)
+    case code(ChatCodeBlock)
+    case list(ChatMarkdownList)
+}
+
 enum ChatMarkdownBlockSyntax {
     static func startsBlock(_ line: String, includesSetextUnderline: Bool = true) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -70,10 +98,13 @@ enum ChatMarkdownBlockSegmenter {
     static let maxTableRows = 100
     static let maxTableColumns = 12
     static let maxTableCells = 600
+    static let maxListBytes = 20000
+    static let maxListItems = 100
+    static let maxListDepth = 6
 
-    /// Extracts only top-level headings, fenced code, display math, and GFM tables. The parser owns
-    /// CommonMark container and reference semantics; nested blocks stay in the
-    /// surrounding prose range unchanged.
+    /// Extracts top-level structural blocks. The parser owns CommonMark
+    /// container and reference semantics; nested list content stays attached
+    /// to its owning list item.
     static func segments(markdown: String, isComplete: Bool) -> [ChatMarkdownBlock] {
         let source = SourceBuffer(markdown)
         let document = Document(parsing: source.markdown)
@@ -130,6 +161,34 @@ enum ChatMarkdownBlockSegmenter {
                     continue
                 }
                 extractions.append(Extraction(lineRange: tableRange, block: .table(rendered)))
+                continue
+            }
+
+            if child is Markdown.OrderedList || child is Markdown.UnorderedList {
+                // Streaming reveal tracks one prose block. Keep lists on that
+                // path until completion so extracting item subdocuments cannot
+                // make still-fading words appear instantly.
+                guard isComplete else { continue }
+                var itemCount = 0
+                guard source.text(in: lineRange).utf8.count <= self.maxListBytes,
+                      let list = self.list(
+                          child,
+                          source: source,
+                          depth: 1,
+                          itemCount: &itemCount)
+                else { continue }
+                extractions.append(Extraction(lineRange: lineRange, block: .list(list)))
+                continue
+            }
+
+            if child is Markdown.ThematicBreak {
+                let trailingLines = source.lines[lineRange.upperBound...]
+                if !isComplete,
+                   trailingLines.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty })
+                {
+                    continue
+                }
+                extractions.append(Extraction(lineRange: lineRange, block: .thematicBreak))
             }
         }
 
@@ -155,7 +214,13 @@ enum ChatMarkdownBlockSegmenter {
         }
 
         appendProse(until: source.lines.count)
-        if blocks.count > 1, self.containsReferenceLink(document, source: source) {
+        let reparsesListContent = blocks.contains { block in
+            if case .list = block { return true }
+            return false
+        }
+        if blocks.count > 1 || reparsesListContent,
+           self.containsReferenceLink(document, source: source)
+        {
             return self.proseOnly(source.lines)
         }
         return blocks
@@ -357,6 +422,67 @@ enum ChatMarkdownBlockSegmenter {
         return ChatMarkdownTable(header: header, alignments: alignments, rows: rows)
     }
 
+    private static func list(
+        _ markup: any Markup,
+        source: SourceBuffer,
+        depth: Int,
+        itemCount: inout Int) -> ChatMarkdownList?
+    {
+        guard depth <= self.maxListDepth else { return nil }
+
+        let kind: ChatMarkdownList.Kind
+        let items: [Markdown.ListItem]
+        if let ordered = markup as? Markdown.OrderedList {
+            kind = .ordered(start: ordered.startIndex)
+            items = Array(ordered.listItems)
+        } else if let unordered = markup as? Markdown.UnorderedList {
+            kind = .unordered
+            items = Array(unordered.listItems)
+        } else {
+            return nil
+        }
+
+        var renderedItems: [ChatMarkdownListItem] = []
+        for item in items {
+            itemCount += 1
+            guard itemCount <= self.maxListItems else { return nil }
+
+            let checkbox: ChatMarkdownListItem.Checkbox? = switch item.checkbox {
+            case .checked?: .checked
+            case .unchecked?: .unchecked
+            case nil: nil
+            }
+            var content: [ChatMarkdownListItemContent] = []
+            for child in item.children {
+                if let code = child as? Markdown.CodeBlock {
+                    let language = code.language?
+                        .split(whereSeparator: \.isWhitespace)
+                        .first
+                        .map { $0.lowercased() }
+                    content.append(.code(ChatCodeBlock(
+                        language: language,
+                        code: self.dropStructuralCodeNewline(code.code),
+                        isComplete: true)))
+                } else if child is Markdown.OrderedList || child is Markdown.UnorderedList {
+                    guard let nested = self.list(
+                        child,
+                        source: source,
+                        depth: depth + 1,
+                        itemCount: &itemCount)
+                    else { return nil }
+                    content.append(.list(nested))
+                } else if let range = child.range,
+                          let markdown = source.dedentedText(in: range),
+                          !markdown.isEmpty
+                {
+                    content.append(.markdown(markdown))
+                }
+            }
+            renderedItems.append(ChatMarkdownListItem(checkbox: checkbox, content: content))
+        }
+        return ChatMarkdownList(kind: kind, items: renderedItems)
+    }
+
     private struct SourceBuffer {
         let markdown: String
         let lines: [String]
@@ -398,6 +524,54 @@ enum ChatMarkdownBlockSegmenter {
             else { return nil }
             let middle = self.lines[(startLine + 1)..<endLine]
             return ([first] + middle + [last]).joined(separator: "\n")
+        }
+
+        func dedentedText(in range: SourceRange) -> String? {
+            guard let raw = self.text(in: range) else { return nil }
+            let startLine = range.lowerBound.line - 1
+            let startOffset = max(range.lowerBound.column - 1, 0)
+            guard self.lines.indices.contains(startLine),
+                  let prefix = self.utf8Slice(self.lines[startLine], from: 0, to: startOffset)
+            else { return nil }
+            let indentColumns = self.visualWidth(of: prefix)
+            guard indentColumns > 0, raw.contains("\n") else { return raw }
+            let lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            return ([lines[0]] + lines.dropFirst().map { line in
+                self.droppingIndent(columns: indentColumns, from: line)
+            }).joined(separator: "\n")
+        }
+
+        private func visualWidth(of indentation: String) -> Int {
+            indentation.reduce(into: 0) { column, character in
+                if character == "\t" {
+                    column += 4 - (column % 4)
+                } else {
+                    column += 1
+                }
+            }
+        }
+
+        private func droppingIndent(columns target: Int, from line: String) -> String {
+            var index = line.startIndex
+            var column = 0
+            while index < line.endIndex, column < target {
+                let character = line[index]
+                let nextIndex = line.index(after: index)
+                if character == " " {
+                    column += 1
+                    index = nextIndex
+                } else if character == "\t" {
+                    let nextColumn = column + 4 - (column % 4)
+                    if nextColumn > target {
+                        return String(repeating: " ", count: nextColumn - target) + line[nextIndex...]
+                    }
+                    column = nextColumn
+                    index = nextIndex
+                } else {
+                    break
+                }
+            }
+            return String(line[index...])
         }
 
         private func utf8Slice(_ line: String, from start: Int, to end: Int) -> String? {

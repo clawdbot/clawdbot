@@ -3674,12 +3674,22 @@ describe("package artifact reuse", () => {
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
     expect(npmWorkflow).toContain("tarballSha256");
+    expect(npmWorkflow).toContain("corePackageTarballs");
     expect(npmWorkflow).toContain("dependencyTarballs");
+    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
     expect(npmWorkflow).toContain('packageName: "@openclaw/ai"');
+    expect(npmWorkflow).toContain('packageName: "@openclaw/gateway-protocol"');
+    expect(npmWorkflow).toContain('packageName: "@openclaw/gateway-client"');
+    expect(npmWorkflow).toContain(
+      "CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
+    );
     expect(npmWorkflow).toContain("AI_TARBALL_SHA256");
+    expect(npmWorkflow).toContain("GATEWAY_PROTOCOL_TARBALL_SHA256");
+    expect(npmWorkflow).toContain("GATEWAY_CLIENT_TARBALL_SHA256");
     expect(npmWorkflow).toContain("does not match openclaw");
     expect(npmWorkflow).toContain("Frozen target does not depend on @openclaw/ai");
-    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
+    expect(npmWorkflow).toContain("core-packages-SHA256SUMS");
+    expect(npmWorkflow).toContain(".corePackageTarballs[] | [.packageName, .tarballName] | @tsv");
     expect(npmWorkflow).toContain('verify_args=("$TARBALL_PATH" "$PACKAGE_VERSION")');
     expect(npmWorkflow).toContain("Frozen target without an @openclaw/ai dependency");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");

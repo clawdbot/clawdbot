@@ -344,7 +344,6 @@ describe("scanStatus", () => {
     expect(firstCallArg(mocks.probeGateway, "probeGateway args")).toStrictEqual({
       url: "ws://127.0.0.1:18789",
       auth: {},
-      preauthHandshakeTimeoutMs: undefined,
       timeoutMs: 2500,
       detailLevel: "presence",
     });

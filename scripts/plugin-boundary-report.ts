@@ -539,7 +539,7 @@ function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {
       matchesOwner(options.owner, entry.owner) || matchesOwner(options.owner, entry.consumerOwner),
   );
   const usedReserved = new Set(reservedImports.map((entry) => entry.subpath));
-  const unusedReservedSubpaths = reservedBundledPluginSdkEntrypoints
+  const unusedReservedSubpaths = (reservedBundledPluginSdkEntrypoints as readonly string[])
     .filter(
       (subpath) =>
         !usedReserved.has(subpath) &&

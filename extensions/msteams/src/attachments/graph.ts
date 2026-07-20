@@ -22,12 +22,12 @@ import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
   GRAPH_ROOT,
-  inferPlaceholder,
   isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
   normalizeContentType,
+  resolveMSTeamsMediaKind,
   resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
   resolveRequestUrl,
@@ -44,6 +44,15 @@ type GraphHostedContent = {
   id?: string | null;
   contentType?: string | null;
 };
+
+function createGraphHostedContentFact(item: GraphHostedContent): MSTeamsInboundMedia {
+  const contentType = normalizeContentType(item.contentType);
+  return {
+    kind: resolveMSTeamsMediaKind({ contentType }),
+    ...(contentType ? { contentType } : {}),
+    ...(item.id ? { sourceId: item.id } : {}),
+  };
+}
 
 type GraphAttachment = {
   id?: string | null;
@@ -138,6 +147,7 @@ function normalizeGraphAttachment(att: GraphAttachment): MSTeamsAttachmentLike {
     }
   }
   return {
+    id: att.id ?? undefined,
     contentType: normalizeContentType(att.contentType) ?? undefined,
     contentUrl: att.contentUrl ?? undefined,
     name: att.name ?? undefined,
@@ -182,6 +192,7 @@ async function downloadGraphHostedContent(params: {
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
     if (!item.id) {
+      out.push(createGraphHostedContentFact(item));
       continue;
     }
 
@@ -201,6 +212,7 @@ async function downloadGraphHostedContent(params: {
       });
       try {
         if (!valRes.ok) {
+          out.push(createGraphHostedContentFact(item));
           continue;
         }
         const saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(valRes, {
@@ -212,12 +224,14 @@ async function downloadGraphHostedContent(params: {
         out.push({
           path: saved.path,
           contentType: saved.contentType,
-          placeholder: inferPlaceholder({ contentType: saved.contentType }),
+          kind: resolveMSTeamsMediaKind({ contentType: saved.contentType }),
+          sourceId: item.id,
         });
       } finally {
         await release();
       }
     } catch (err) {
+      out.push(createGraphHostedContentFact(item));
       params.logger?.warn?.("msteams graph hostedContent value fetch failed", {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -340,7 +354,16 @@ export async function downloadMSTeamsGraphMedia(params: {
   for (const att of referenceAttachments) {
     const name = att.name ?? "file";
     const shareUrl = att.contentUrl ?? "";
+    const sourceId = att.id?.trim();
+    const unavailableMedia: MSTeamsInboundMedia = {
+      kind: resolveMSTeamsMediaKind({
+        contentType: att.contentType ?? undefined,
+        fileName: name,
+      }),
+      ...(sourceId ? { sourceId } : {}),
+    };
     if (!shareUrl) {
+      sharePointMedia.push(unavailableMedia);
       continue;
     }
 
@@ -351,6 +374,7 @@ export async function downloadMSTeamsGraphMedia(params: {
           messageUrl,
           sharesUrl,
         });
+        sharePointMedia.push(unavailableMedia);
         continue;
       }
 
@@ -385,9 +409,10 @@ export async function downloadMSTeamsGraphMedia(params: {
           });
         },
       });
-      sharePointMedia.push(media);
+      sharePointMedia.push(sourceId ? { ...media, sourceId } : media);
       downloadedReferenceUrls.add(shareUrl);
     } catch (err) {
+      sharePointMedia.push(unavailableMedia);
       params.logger?.warn?.("msteams SharePoint reference download failed", {
         error: err instanceof Error ? err.message : String(err),
         name,

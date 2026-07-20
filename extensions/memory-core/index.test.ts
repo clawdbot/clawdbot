@@ -264,7 +264,6 @@ describe("buildMemoryFlushPlan", () => {
         agents: {
           defaults: {
             compaction: {
-              reserveTokensFloor: Number.NaN,
               memoryFlush: {
                 softThresholdTokens: -100,
               },
@@ -276,7 +275,6 @@ describe("buildMemoryFlushPlan", () => {
 
     expect(plan?.softThresholdTokens).toBe(4000);
     expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
-    expect(plan?.reserveTokensFloor).toBe(20_000);
   });
 
   it("parses forceFlushTranscriptBytes from byte-size strings", () => {

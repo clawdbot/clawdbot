@@ -25,6 +25,13 @@
     },
     "channel": {
       "id": "telegram",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "TELEGRAM_BOT_TOKEN"
+          ]
+        }
+      },
       "approvalFlags": ["native"],
       "label": "Telegram",
       "selectionLabel": "Telegram (Bot API)",
@@ -42,13 +49,6 @@
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true
-      },
-      "configuredState": {
-        "env": {
-          "allOf": [
-            "TELEGRAM_BOT_TOKEN"
-          ]
-        }
       }
     }
   }

@@ -869,7 +869,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.mcpMessage = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;
     }
-    const config = parseMcpTarget(form.target);
+    const config = parseMcpTarget(form.target, form.transport);
     if (!config) {
       this.mcpMessage = { kind: "error", text: t("mcpServers.targetInvalid") };
       return;

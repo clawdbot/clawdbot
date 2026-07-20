@@ -3698,9 +3698,7 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
   it("keeps private bundled plugins discoverable in the functional Docker E2E image", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
-    expect(dockerfile).toContain(
-      "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 node /app/scripts/postinstall-bundled-plugins.mjs",
-    );
+    expect(dockerfile).toContain("node /app/scripts/postinstall-bundled-plugins.mjs");
   });
 
   it("keeps onboarding Docker E2E resource-guarded", () => {

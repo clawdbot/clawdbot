@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
   clearMemoryPluginState,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
@@ -1258,7 +1258,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     const seen: {
       modelMessages?: unknown[];
@@ -1325,7 +1324,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
@@ -1393,7 +1391,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
@@ -1992,7 +1989,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     const seen: {
       modelMessages?: unknown[];
@@ -2073,7 +2069,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
 
     const result = await createContextEngineAttemptRunner({
@@ -2222,7 +2217,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
 
     const result = await createContextEngineAttemptRunner({
@@ -2732,12 +2726,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "hook context" }));
     const runLlmInput = vi.fn(async () => {});
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn(
-        (name: string) =>
-          name === "before_prompt_build" || name === "before_agent_start" || name === "llm_input",
-      ),
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build" || name === "llm_input"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "legacy hook context" })),
       runLlmInput,
     });
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
@@ -2968,7 +2958,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("lets non-legacy engines opt into the active memory prompt helper", async () => {
-    registerMemoryPromptSection(({ availableTools, citationsMode }) => {
+    registerTestMemoryPromptBuilder(({ availableTools, citationsMode }) => {
       if (!availableTools.has("memory_search")) {
         return [];
       }

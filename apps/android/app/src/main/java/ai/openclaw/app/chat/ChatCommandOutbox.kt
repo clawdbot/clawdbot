@@ -5,6 +5,7 @@ import androidx.room.Dao
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.withTransaction
@@ -290,6 +291,41 @@ internal class OutboxAttachmentChunkEntity(
 
 @Dao
 internal interface ChatOutboxDao {
+  // One-time legacy import reads small metadata sets plus bounded BLOB pages before copying them
+  // into client-state. Runtime callers remain gateway-scoped below.
+  @Query("SELECT * FROM outbox_commands ORDER BY gatewayId ASC, createdAtMs ASC, id ASC")
+  suspend fun allCommands(): List<OutboxCommandEntity>
+
+  @Query("SELECT * FROM composer_send_admissions ORDER BY gatewayId ASC, ownerAgentId ASC, id ASC")
+  suspend fun allAdmissionReceipts(): List<ComposerSendAdmissionEntity>
+
+  @Query("SELECT * FROM outbox_attachments ORDER BY commandId ASC, position ASC")
+  suspend fun allAttachments(): List<OutboxAttachmentEntity>
+
+  @Query(
+    "SELECT * FROM outbox_attachment_chunks " +
+      "WHERE :afterAttachmentId IS NULL OR attachmentId > :afterAttachmentId " +
+      "OR (attachmentId = :afterAttachmentId AND chunkIndex > :afterChunkIndex) " +
+      "ORDER BY attachmentId ASC, chunkIndex ASC LIMIT :limit",
+  )
+  suspend fun attachmentChunkPage(
+    afterAttachmentId: String?,
+    afterChunkIndex: Int,
+    limit: Int,
+  ): List<OutboxAttachmentChunkEntity>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertImportedCommands(rows: List<OutboxCommandEntity>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertImportedAdmissionReceipts(rows: List<ComposerSendAdmissionEntity>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertImportedAttachments(rows: List<OutboxAttachmentEntity>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertImportedAttachmentChunks(rows: List<OutboxAttachmentChunkEntity>)
+
   // id tiebreak keeps flush order deterministic when two rows share a createdAt millisecond.
   @Query("SELECT * FROM outbox_commands WHERE gatewayId = :gatewayId ORDER BY createdAtMs ASC, id ASC")
   suspend fun commands(gatewayId: String): List<OutboxCommandEntity>
@@ -458,13 +494,13 @@ internal interface ChatOutboxDao {
 }
 
 /**
- * Room-backed [ChatCommandOutbox] sharing the chat cache database. Callers pass the gateway id
- * captured before their suspend point; a blank identity disables both reads and writes.
+ * Room-backed [ChatCommandOutbox] in the durable client-state database. Callers pass the gateway
+ * id captured before their suspend point; a blank identity disables both reads and writes.
  * Command rows and their attachment bytes are admitted and retired in single transactions, so
  * a crash can never orphan bytes or strand a row without its attachments.
  */
 class RoomChatCommandOutbox internal constructor(
-  private val database: ChatCacheDatabase,
+  private val database: ClientStateDatabase,
 ) : ChatCommandOutbox {
   override suspend fun load(gatewayId: String): List<ChatOutboxItem> {
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()

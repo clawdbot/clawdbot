@@ -74,6 +74,7 @@ export type GatewayClient = {
     profileId: string;
     displayName: string | null;
     hasAvatar: boolean;
+    updatedAt: number;
   };
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
@@ -103,6 +104,16 @@ export type RespondFn = (
 ) => void;
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
+/**
+ * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
+ * leaf contract: importing the assistant module here closes a madge cycle
+ * through the agents/config cluster.
+ */
+type SystemAgentHistoryTurn = {
+  role: "user" | "assistant";
+  text: string;
+};
+
 type GatewaySystemAgentSession = {
   engine: {
     handle: (message: string) => Promise<{
@@ -111,6 +122,9 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
+    historyLength: () => number;
+    historySince: (index: number) => SystemAgentHistoryTurn[];
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
@@ -120,8 +134,10 @@ type GatewaySystemAgentSession = {
   };
   welcome: string;
   welcomeQuestion?: SystemAgentChatQuestion;
+  /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
+  welcomeAuditSequence?: number;
   lastUsedAt: number;
-  delegationKey?: string;
+  ownerKey: string;
   pendingApproval?: { id: string; proposalHash: string };
 };
 

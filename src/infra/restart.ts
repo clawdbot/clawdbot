@@ -2,7 +2,6 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -107,10 +106,7 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
         void emitPreparedGatewayRestart(undefined, scheduledReason);
         return;
       }
-      const cfg = getRuntimeConfig();
-      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
-        cfg.gateway?.reload?.deferralTimeoutMs,
-      );
+      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
         maxWaitMs: deferralTimeoutMs,
@@ -409,7 +405,7 @@ type GatewayRestartEmitResult =
   | { status: "coalesced" }
   | { status: "failed" };
 
-export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): number | undefined {
+export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs?: unknown): number | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
     return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
   }

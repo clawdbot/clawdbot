@@ -104,6 +104,30 @@ test("process poll accepts string timeout values", async () => {
   });
 });
 
+test("process poll warns when the session times out while poll is waiting", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-timeout-while-polling";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+
+    setTimeout(() => {
+      markExited(session, null, "SIGKILL", "failed", "overall-timeout", false);
+    }, 10);
+
+    const pollPromise = pollSession(processTool, "toolcall", sessionId, 2000);
+    await vi.advanceTimersByTimeAsync(250);
+    const poll = await pollPromise;
+
+    expect(pollStatus(poll)).toBe("failed");
+    expect(poll.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Verify the resulting state before retrying"),
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("process poll clamps long waits to 30 seconds", async () => {
   vi.useFakeTimers();
   try {
@@ -223,4 +247,16 @@ test("process poll exposes finished-session termination metadata", async () => {
   expect(details.timedOut).toBe(true);
   expect(details.noOutputTimedOut).toBe(true);
   expect(details.aggregated).toContain("terminated");
+  expect(poll.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("external side effects may already have completed"),
+  });
+  expect(poll.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("Verify the resulting state before retrying"),
+  });
+  expect(poll.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("Do not automatically rerun non-idempotent commands"),
+  });
 });

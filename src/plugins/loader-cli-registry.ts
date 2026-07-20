@@ -72,7 +72,7 @@ export async function loadOpenClawPluginCliRegistry(
     }),
     activateGlobalSideEffects: false,
   });
-  const { manifestRegistry, orderedCandidates, manifestByRoot } = resolvePluginLoadDiscovery({
+  const { manifestRegistry, orderedCandidates, manifestBySource } = resolvePluginLoadDiscovery({
     options,
     context,
     diagnostics: registry.diagnostics,
@@ -93,7 +93,7 @@ export async function loadOpenClawPluginCliRegistry(
   });
 
   for (const candidate of orderedCandidates) {
-    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+    const manifestRecord = manifestBySource.get(candidate.source);
     if (!manifestRecord) {
       continue;
     }

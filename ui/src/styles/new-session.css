@@ -245,7 +245,40 @@ wa-popover.new-session-page__select--folder::part(body) {
 
 /* The chip row already spaces itself; keep the composer snug beneath it. */
 .new-session-page__composer.agent-chat__composer-shell {
+  position: relative;
   margin-top: 0;
+  border-radius: var(--radius-md);
+}
+
+.new-session-page__composer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.new-session-page__composer[data-attachment-drop-active]::after {
+  opacity: 0.1;
+}
+
+.new-session-page__composer > * {
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.new-session-page__composer[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-session-page__composer::after,
+  .new-session-page__composer > * {
+    transition-duration: 0ms;
+  }
 }
 
 .new-session-page__target-icon {

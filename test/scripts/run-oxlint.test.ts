@@ -69,9 +69,7 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
-    expect(packageJson.scripts.lint).toBe(
-      "pnpm lint:ui:i18n && node scripts/run-oxlint-shards.mjs",
-    );
+    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
     expect(packageJson.scripts["lint:core"]).toBe(
       "node scripts/run-oxlint-shards.mjs --only=core --split-core",
     );
@@ -80,6 +78,22 @@ describe("run-oxlint", () => {
     );
     expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mjs");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
+  });
+
+  it("prepares the worktree toolchain before the complete lint pre-step", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const lintRunner = readFileSync("scripts/run-lint.mjs", "utf8");
+
+    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
+    expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
+    expect(
+      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
+    ).toBeGreaterThan(lintRunner.indexOf("ensureRepoToolNodeModulesLink("));
+    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mjs")')).toBeGreaterThan(
+      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
+    );
   });
 
   it("holds one parent heavy-check lock for sharded lint runs", () => {

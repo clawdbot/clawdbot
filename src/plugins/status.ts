@@ -45,7 +45,6 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 export type PluginCompatibilityNotice = {
   pluginId: string;
   code:
-    | "legacy-before-agent-start"
     | "hook-only"
     | "deprecated-memory-embedding-provider-api"
     | "removed-session-transcript-file-api";
@@ -103,27 +102,16 @@ export type PluginInspectReport = {
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
   };
-  usesLegacyBeforeAgentStart: boolean;
   compatibility: PluginCompatibilityNotice[];
 };
 
 function buildCompatibilityNoticesForInspect(
-  inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart"> & {
+  inspect: Pick<PluginInspectReport, "plugin" | "shape"> & {
     diagnostics: readonly PluginDiagnostic[];
     hasRuntimeMemoryEmbeddingProviderRegistration: boolean;
   },
 ): PluginCompatibilityNotice[] {
   const warnings: PluginCompatibilityNotice[] = [];
-  if (inspect.usesLegacyBeforeAgentStart) {
-    warnings.push({
-      pluginId: inspect.plugin.id,
-      code: "legacy-before-agent-start",
-      compatCode: "legacy-before-agent-start",
-      severity: "warn",
-      message:
-        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-    });
-  }
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -441,14 +429,12 @@ export function buildPluginInspectReport(params: {
     ];
   }
 
-  const usesLegacyBeforeAgentStart = shapeSummary.usesLegacyBeforeAgentStart;
   const hasRuntimeMemoryEmbeddingProviderRegistration = report.memoryEmbeddingProviders.some(
     (entry) => entry.pluginId === plugin.id,
   );
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
-    usesLegacyBeforeAgentStart,
     diagnostics,
     hasRuntimeMemoryEmbeddingProviderRegistration,
   });
@@ -481,7 +467,6 @@ export function buildPluginInspectReport(params: {
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
     },
-    usesLegacyBeforeAgentStart,
     compatibility,
   };
 }

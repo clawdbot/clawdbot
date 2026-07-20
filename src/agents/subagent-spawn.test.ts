@@ -685,49 +685,59 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("retains the requester-wide active-child ceiling for collector groups", async () => {
+  it("admits a sixth live collector under the swarm group cap", async () => {
     hoisted.configOverride = createConfigOverride({
-      tools: { swarm: true },
+      tools: { swarm: { enabled: true, maxChildrenPerGroup: 6 } },
       agents: {
         defaults: {
           workspace: os.tmpdir(),
-          subagents: { maxChildrenPerAgent: 1 },
+          subagents: { maxChildrenPerAgent: 5 },
         },
         list: [{ id: "main", workspace: "/tmp/workspace-main" }],
       },
     });
-    hoisted.countActiveRunsForSessionMock.mockReturnValue(1);
+    hoisted.countActiveRunsForSessionMock.mockReturnValue(5);
+    hoisted.listSwarmRunsForGroupMock.mockReturnValue(
+      Array.from({ length: 5 }, (_, index) => ({
+        runId: `collector-${index}`,
+        collect: true,
+        execution: { status: "running" },
+      })),
+    );
 
-    const rejected = await spawnSubagentDirect(
-      { task: "new group", collect: true, groupId: "fresh" },
+    const accepted = await spawnSubagentDirect(
+      { task: "sixth collector", collect: true, groupId: "fresh" },
       { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
     );
 
-    expect(rejected.status).toBe("forbidden");
-    expect(rejected.error).toContain("max active children");
+    expect(accepted.status).toBe("accepted");
+    expect(hoisted.countActiveRunsForSessionMock).not.toHaveBeenCalled();
   });
 
-  it("rechecks the requester-wide cap before reserving a prepared collector", async () => {
+  it("admits an announce child when 50 collectors are active", async () => {
     hoisted.configOverride = createConfigOverride({
-      tools: { swarm: true },
       agents: {
         defaults: {
           workspace: os.tmpdir(),
-          subagents: { maxChildrenPerAgent: 1 },
+          subagents: { maxChildrenPerAgent: 5 },
         },
         list: [{ id: "main", workspace: "/tmp/workspace-main" }],
       },
     });
-    hoisted.countActiveRunsForSessionMock.mockReturnValueOnce(0).mockReturnValueOnce(1);
-
-    const rejected = await spawnSubagentDirect(
-      { task: "concurrent collector", collect: true, groupId: "fresh" },
-      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    hoisted.countActiveRunsForSessionMock.mockImplementation(
+      (_sessionKey: string, options?: { collect?: boolean }) =>
+        options?.collect === false ? 0 : 50,
     );
 
-    expect(rejected.status).toBe("forbidden");
-    expect(rejected.error).toContain("max active children");
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    const accepted = await spawnSubagentDirect(
+      { task: "announce independently" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(accepted.status).toBe("accepted");
+    expect(hoisted.countActiveRunsForSessionMock).toHaveBeenCalledWith("agent:main:main", {
+      collect: false,
+    });
   });
 
   it("rejects invalid collector output schemas before creating a child session", async () => {

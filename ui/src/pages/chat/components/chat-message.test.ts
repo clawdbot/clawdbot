@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
+import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderMessageGroup, renderStreamGroup } from "./chat-message.ts";
@@ -461,6 +462,7 @@ afterEach(() => {
   });
   clearDeleteConfirmSkip();
   setUiTimeFormatPreference("auto");
+  setAvatarGatewayOrigin(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -1113,6 +1115,22 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
+  it("relabels the working indicator while the run waits for approval", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
+        waitingApproval: true,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent?.trim()).toBe(
+      "Waiting for approval…",
+    );
+    expect(container.querySelector(".chat-working-indicator__elapsed")).toBeNull();
+  });
+
   it("renders the active plan card inside the working stream group", () => {
     const container = document.createElement("div");
 
@@ -1225,13 +1243,14 @@ describe("grouped chat rendering", () => {
     expect(avatar?.tagName).toBe("DIV");
   });
 
-  it("renders a durable sender label in the user message metadata", () => {
+  it("renders a durable sender label and avatar chip in user message metadata", async () => {
     const container = document.createElement("div");
     const group: MessageGroup = {
       kind: "group",
       key: "attributed-user-group",
       role: "user",
       senderLabel: "alice",
+      sender: { id: "profile-1", name: "Alice Example" },
       messages: [
         {
           key: "attributed-user-message",
@@ -1256,6 +1275,11 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
     ).toBe("alice");
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector<HTMLElement>(".chat-author-avatar__initials")?.textContent?.trim(),
+      ).toBe("AE");
+    });
   });
 
   it("renders an author avatar for a user group with sender identity", async () => {
@@ -1305,7 +1329,7 @@ describe("grouped chat rendering", () => {
       senderLabel: "alice",
       // profileAvatarUrl exercises the img tier; bare emails render initials
       // only (no third-party avatar fetch without a gateway proxy base).
-      sender: { id: "alice@example.com", profileAvatarUrl: "/avatars/alice.png" },
+      sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
       messages: [
         {
           key: "gravatar-message",
@@ -1327,6 +1351,7 @@ describe("grouped chat rendering", () => {
     const image = await vi.waitFor(() => {
       const result = container.querySelector<HTMLImageElement>(".chat-author-avatar__image");
       expect(result).not.toBeNull();
+      expect(result?.getAttribute("src")).toBe("/api/users/alice/avatar");
       return result!;
     });
     image.dispatchEvent(new Event("error"));

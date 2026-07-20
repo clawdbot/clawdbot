@@ -65,8 +65,11 @@ function createHarness(
     recordWorkspaceResultConflict: (claim, conflict) =>
       placementStore.recordWorkspaceResultConflict(claim, conflict),
     claimTurn: (params) => placementStore.claimTurn(params),
+    claimReclaimWorkspaceResult: (params) => placementStore.claimReclaimWorkspaceResult(params),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
+    cancelWorkspaceResultAndReleaseTurn: (claim) =>
+      placementStore.cancelWorkspaceResultAndReleaseTurn(claim),
     completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) => {
       const completed = placementStore.completeWorkspaceResultAndReleaseTurn(
         claim,
@@ -678,7 +681,11 @@ describe("worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "active",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: { owner: "worker" },
     });
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: expect.any(Number) },
+    ]);
     expect(harness.log).not.toContain("placement:draining");
     expect(harness.log).toContain("workspace:resume");
   });

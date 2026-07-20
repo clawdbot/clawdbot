@@ -1025,6 +1025,73 @@
   padding: 16px;
 }
 
+.sidebar-content--discussion {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* Host wrapper for full-height panel kinds: the discussion iframe has no
+   intrinsic height, so the wrapper must stretch for height:100% to resolve. */
+.sidebar-panel-host--fill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+openclaw-session-discussion {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.session-discussion__empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--muted);
+}
+
+.session-discussion__open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-discussion__header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.session-discussion__external {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
+}
+
+.session-discussion__frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--panel);
+}
+
 .sidebar-file-view {
   display: flex;
   flex-direction: column;

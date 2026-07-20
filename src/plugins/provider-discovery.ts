@@ -5,9 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { copyProviderCatalogResultProjection } from "./provider-catalog-result.js";
-import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
-const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
+const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
 const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
@@ -18,7 +18,7 @@ function loadProviderRuntime() {
 }
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
-  return provider.catalog ?? provider.discovery;
+  return provider.catalog;
 }
 
 function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
@@ -59,13 +59,13 @@ export async function resolveRuntimePluginDiscoveryProviders(
 /** Groups plugin providers into stable discovery phases for catalog probing. */
 export function groupPluginDiscoveryProvidersByOrder(
   providers: ProviderPlugin[],
-): Record<ProviderDiscoveryOrder, ProviderPlugin[]> {
+): Record<ProviderCatalogOrder, ProviderPlugin[]> {
   const grouped = {
     simple: [],
     profile: [],
     paired: [],
     late: [],
-  } as Record<ProviderDiscoveryOrder, ProviderPlugin[]>;
+  } as Record<ProviderCatalogOrder, ProviderPlugin[]>;
 
   for (const provider of providers) {
     const order = resolveProviderCatalogOrderHook(provider)?.order ?? "late";

@@ -70,24 +70,9 @@ export const SessionSchema = z
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
-    typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
-    writeLock: z
-      .object({
-        acquireTimeoutMs: z.number().int().positive().optional(),
-        staleMs: z.number().int().positive().optional(),
-        maxHoldMs: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
-    agentToAgent: z
-      .object({
-        maxPingPongTurns: z.number().int().min(0).max(20).optional(),
-      })
-      .strict()
-      .optional(),
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
@@ -177,16 +162,6 @@ export const MessagesSchema = z
             stallSoft: z.string().optional(),
             stallHard: z.string().optional(),
             compacting: z.string().optional(),
-          })
-          .strict()
-          .optional(),
-        timing: z
-          .object({
-            debounceMs: z.number().int().min(0).optional(),
-            stallSoftMs: z.number().int().min(0).optional(),
-            stallHardMs: z.number().int().min(0).optional(),
-            doneHoldMs: z.number().int().min(0).optional(),
-            errorHoldMs: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

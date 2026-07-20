@@ -1,9 +1,9 @@
 ---
-summary: "How to enable and tune guardrails that detect repetitive tool-call loops"
+summary: "How to enable guardrails that detect repetitive tool-call loops"
 title: "Tool-loop detection"
 read_when:
   - A user reports agents getting stuck repeating tool calls
-  - You need to tune repetitive-call protection
+  - You need to control repetitive-call protection
   - You are editing agent tool/runtime policies
   - You hit `compaction_loop_persisted` aborts after a context-overflow retry
 ---
@@ -13,7 +13,7 @@ both configured under `tools.loopDetection`:
 
 1. **Loop detection** (`enabled`) - disabled by default. Watches the rolling
    tool-call history for repeated patterns and unknown-tool retries.
-2. **Post-compaction guard** (`postCompactionGuard`) - enabled whenever
+2. **Post-compaction guard** - enabled whenever
    `enabled` is not explicitly `false`. Arms after every compaction-retry and
    aborts the run if the agent repeats the same `(tool, args, result)` triple
    within the window.
@@ -31,26 +31,13 @@ Set `tools.loopDetection.enabled: false` to silence both guardrails.
 
 ## Configuration block
 
-Global defaults, with every documented field shown:
+Global setting:
 
 ```json5
 {
   tools: {
     loopDetection: {
       enabled: false, // master switch for the rolling-history detectors
-      historySize: 30,
-      warningThreshold: 10,
-      criticalThreshold: 20,
-      unknownToolThreshold: 10,
-      globalCircuitBreakerThreshold: 30,
-      detectors: {
-        genericRepeat: true,
-        knownPollNoProgress: true,
-        pingPong: true,
-      },
-      postCompactionGuard: {
-        windowSize: 3, // armed after compaction-retry; runs unless enabled is explicitly false
-      },
     },
   },
 }
@@ -67,8 +54,6 @@ Per-agent override (optional, at `agents.list[].tools.loopDetection`):
         tools: {
           loopDetection: {
             enabled: true,
-            warningThreshold: 8,
-            criticalThreshold: 16,
           },
         },
       },
@@ -77,24 +62,13 @@ Per-agent override (optional, at `agents.list[].tools.loopDetection`):
 }
 ```
 
-Per-agent settings overlay the global block field by field (including nested
-`detectors` and `postCompactionGuard`), so an agent only needs to set the
-fields it wants to change.
+The per-agent setting overrides the global setting.
 
 ### Field behavior
 
-| Field                            | Default | Effect                                                                                                                                     |
-| -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`                        | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard.                                          |
-| `historySize`                    | `30`    | Number of recent tool calls kept for analysis.                                                                                             |
-| `warningThreshold`               | `10`    | Repeat count before a pattern is classified as warning-only.                                                                               |
-| `criticalThreshold`              | `20`    | Repeat count for blocking a no-progress loop pattern. Runtime clamps this above `warningThreshold` if misconfigured.                       |
-| `unknownToolThreshold`           | `10`    | Blocks repeated calls to the same unavailable tool after this many misses. Not gated by `detectors`.                                       |
-| `globalCircuitBreakerThreshold`  | `30`    | Global no-progress breaker across all detectors. Runtime clamps this above `criticalThreshold` if misconfigured. Not gated by `detectors`. |
-| `detectors.genericRepeat`        | `true`  | Warns on repeated same-tool + same-args calls; blocks once those calls also return identical outcomes.                                     |
-| `detectors.knownPollNoProgress`  | `true`  | Detects known no-progress polling patterns (`process` with `action: "poll"`/`"log"`, `command_status`).                                    |
-| `detectors.pingPong`             | `true`  | Detects alternating no-progress ping-pong patterns between two calls.                                                                      |
-| `postCompactionGuard.windowSize` | `3`     | Attempts the guard stays armed after compaction, and the count of identical triples that aborts the run.                                   |
+| Field     | Default | Effect                                                                                            |
+| --------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `enabled` | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard. |
 
 For `exec`, no-progress hashing compares stable command outcomes (status,
 exit code, timed-out flag, output) and ignores volatile runtime metadata such
@@ -107,19 +81,9 @@ from earlier runs.
 
 ## Recommended setup
 
-- For smaller models, set `enabled: true` and leave thresholds at their
-  defaults. Flagship models rarely need rolling-history detection and can
+- For smaller models, set `enabled: true`. Flagship models rarely need rolling-history detection and can
   leave the master switch `false` while still benefiting from the
   post-compaction guard.
-- Keep thresholds ordered `warningThreshold < criticalThreshold <
-globalCircuitBreakerThreshold`; the runtime nudges `criticalThreshold` and
-  `globalCircuitBreakerThreshold` upward if you set them at or below the
-  threshold they must exceed.
-- If false positives occur:
-  - Raise `warningThreshold` and/or `criticalThreshold`.
-  - Optionally raise `globalCircuitBreakerThreshold`.
-  - Disable only the specific detector causing issues (`detectors.<name>: false`).
-  - Reduce `historySize` for a shorter historical window.
 - To disable everything, including the post-compaction guard, set
   `tools.loopDetection.enabled: false` explicitly.
 
@@ -127,8 +91,7 @@ globalCircuitBreakerThreshold`; the runtime nudges `criticalThreshold` and
 
 After a compaction-retry following a context-overflow, the runner arms a
 short-window guard on the next few tool calls. If the agent emits the same
-`(toolName, argsHash, resultHash)` triple `postCompactionGuard.windowSize`
-times within that window, the guard concludes compaction did not break the
+`(toolName, argsHash, resultHash)` triple enough times within that window, the guard concludes compaction did not break the
 loop and aborts the run with a `compaction_loop_persisted` error.
 
 The guard is gated by the master `tools.loopDetection.enabled` flag with one
@@ -143,16 +106,11 @@ so a no-config user still gets the protection.
     loopDetection: {
       // master switch; set false to disable the guard along with the rolling detectors
       enabled: true,
-      postCompactionGuard: {
-        windowSize: 3, // default
-      },
     },
   },
 }
 ```
 
-- Lower `windowSize` is stricter (fewer attempts before abort).
-- Higher `windowSize` gives the agent more recovery attempts.
 - The guard never aborts while results are changing; only byte-identical
   results across the window trigger it.
 - It only arms in the immediate aftermath of a compaction-retry, not at other

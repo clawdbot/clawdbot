@@ -1412,6 +1412,53 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for command argv carrier chains", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "command");
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "command echo warmup-ok",
+      secondCommand: "command id > marker",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
+  it("requires approval for command carriers that use default PATH lookup", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "command");
+    const echo = makeExecutable(dir, "echo");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "command -p echo warmup-ok",
+      allowlist: [{ pattern: echo, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("prevents allow-always bypass for time wrapper chains", async () => {
     if (process.platform === "win32") {
       return;

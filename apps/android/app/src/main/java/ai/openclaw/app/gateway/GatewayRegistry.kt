@@ -1,6 +1,7 @@
 package ai.openclaw.app.gateway
 
 import ai.openclaw.app.SecurePrefs
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -97,15 +98,23 @@ class GatewayRegistryStore(
       upsert(existing.copy(lastConnectedAtMs = atMs))
     }
 
-  fun remove(stableId: String): Unit =
+  fun remove(stableId: String): Boolean =
     synchronized(mutationLock) {
       val normalized = stableId.trim()
-      _entries.value = _entries.value.filterNot { it.stableId == normalized }
-      if (_activeStableId.value == normalized) {
-        _activeStableId.value = null
-        onActiveChanged?.invoke(null)
+      val nextEntries = _entries.value.filterNot { it.stableId == normalized }
+      val previousActiveStableId = _activeStableId.value
+      val nextActiveStableId = previousActiveStableId?.takeUnless { it == normalized }
+      if (!persistSynchronously(nextEntries, nextActiveStableId)) return@synchronized false
+
+      // Publish only after the durable commit. Notification is post-commit and cannot turn a
+      // successful removal into a failure that would cancel the database recovery marker.
+      _entries.value = nextEntries
+      _activeStableId.value = nextActiveStableId
+      if (previousActiveStableId != nextActiveStableId) {
+        runCatching { onActiveChanged?.invoke(nextActiveStableId) }
+          .onFailure { Log.e("GatewayRegistry", "Active-gateway observer failed after durable removal", it) }
       }
-      persist()
+      true
     }
 
   fun activeEntry(): GatewayRegistryEntry? =
@@ -117,13 +126,24 @@ class GatewayRegistryStore(
   internal fun storedActiveStableId(): String? = decode(prefs.getString(STORAGE_KEY)).activeStableId
 
   private fun persist() {
-    val registry =
-      PersistedGatewayRegistry(
-        activeStableId = _activeStableId.value,
-        entries = _entries.value.sortedForStorage(),
-      )
-    prefs.putString(STORAGE_KEY, json.encodeToString(registry))
+    prefs.putString(STORAGE_KEY, encodedRegistry())
   }
+
+  private fun persistSynchronously(
+    entries: List<GatewayRegistryEntry>,
+    activeStableId: String?,
+  ): Boolean = prefs.putStringSynchronously(STORAGE_KEY, encodedRegistry(entries, activeStableId))
+
+  private fun encodedRegistry(
+    entries: List<GatewayRegistryEntry> = _entries.value,
+    activeStableId: String? = _activeStableId.value,
+  ): String =
+    json.encodeToString(
+      PersistedGatewayRegistry(
+        activeStableId = activeStableId,
+        entries = entries.sortedForStorage(),
+      ),
+    )
 
   private fun decode(raw: String?): PersistedGatewayRegistry =
     raw

@@ -73,7 +73,7 @@ async function loadFreshHealthModulesForTest() {
     loadSessionStore: () => testStore,
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
-    listSessionEntries: (scope?: { agentId?: string; storePath?: string }) => {
+    listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
       listHealthSessionEntriesCalls.push(scope ?? {});
       return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
     },

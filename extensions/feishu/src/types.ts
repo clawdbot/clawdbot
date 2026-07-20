@@ -87,9 +87,9 @@ export interface FeishuProbeResult extends BaseProbeResult {
 }
 
 export type FeishuMediaInfo = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
+  kind: "image" | "video" | "audio" | "document" | "sticker";
 };
 
 export type FeishuToolsConfig = {

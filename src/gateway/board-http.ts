@@ -5,6 +5,7 @@ import { BOARD_HTTP_PATH_PREFIX, verifyBoardViewTicket } from "./board-view-tick
 import { sendMethodNotAllowed } from "./http-common.js";
 
 const BOARD_WIDGET_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const BOARD_WIDGET_CSP = "sandbox allow-scripts";
 
 type BoardHttpOptions = {
   store?: BoardStore;
@@ -68,7 +69,6 @@ export function handleBoardHttpRequest(
   const document = (opts.store ?? boardStore).readWidgetHtml(path.sessionKey, path.name);
   if (
     !document ||
-    !("html" in document) ||
     (document.grantState !== "none" && document.grantState !== "granted") ||
     document.revision !== claims.revision ||
     document.viewGeneration !== claims.viewGeneration
@@ -78,7 +78,7 @@ export function handleBoardHttpRequest(
   }
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
+  res.setHeader("Content-Security-Policy", BOARD_WIDGET_CSP);
   res.setHeader("Cache-Control", "no-cache");
   res.end(document.html);
   return true;

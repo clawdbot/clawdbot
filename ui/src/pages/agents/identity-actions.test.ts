@@ -1,9 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import * as avatarImage from "./avatar-image.ts";
 import { resetIdentityDraft, saveIdentityDraft, selectIdentityAvatar } from "./identity-actions.ts";
 
-const mocks = vi.hoisted(() => ({ fileToAvatarDataUrl: vi.fn() }));
-vi.mock("./avatar-image.ts", () => ({ fileToAvatarDataUrl: mocks.fileToAvatarDataUrl }));
+const fileToAvatarDataUrlMock = vi.fn<typeof avatarImage.fileToAvatarDataUrl>();
+
+beforeEach(() => {
+  vi.spyOn(avatarImage, "fileToAvatarDataUrl").mockImplementation(fileToAvatarDataUrlMock);
+});
+
+afterEach(() => {
+  fileToAvatarDataUrlMock.mockReset();
+  vi.restoreAllMocks();
+});
 
 function host(): Parameters<typeof resetIdentityDraft>[0] {
   return {
@@ -35,7 +44,7 @@ describe("agent identity actions", () => {
 
   it("drops an avatar decode that completes after the selected agent resets", async () => {
     let resolveAvatar!: (value: string | null) => void;
-    mocks.fileToAvatarDataUrl.mockReturnValueOnce(
+    fileToAvatarDataUrlMock.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveAvatar = resolve;
       }),

@@ -216,8 +216,8 @@ describe("projects vitest config", () => {
     const config = createUiVitestConfig();
     const testConfig = requireTestConfig(config);
     expect(testConfig.environment).toBe("jsdom");
-    expect(testConfig.isolate).toBe(false);
-    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+    expect(testConfig.isolate).toBe(true);
+    expect(testConfig.runner).toBeUndefined();
     const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");

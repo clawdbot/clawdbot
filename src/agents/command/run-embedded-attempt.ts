@@ -21,15 +21,13 @@ import {
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
 import {
-  classifyEmbeddedAgentRunResultForModelFallback,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-} from "../embedded-agent-runner/result-fallback-classifier.js";
+  runEmbeddedAgentEntry,
+  type EmbeddedAgentRunEntryTerminal,
+} from "../embedded-agent-runner/run-entry.js";
 import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
-import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
-import { runWithModelFallback } from "../model-fallback.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
@@ -46,7 +44,7 @@ import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
-import { applyAgentRunAbortMetadata, createAgentCommandLifecycle } from "./lifecycle.js";
+import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
@@ -190,6 +188,7 @@ export async function runEmbeddedAgentAttempt(params: {
   let fallbackProvider = provider;
   let fallbackModel = model;
   let fallbackExhausted = false;
+  let terminal: EmbeddedAgentRunEntryTerminal;
   let liveSwitchRetries = 0;
   let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
   const fastModeStartedAtMs = Date.now();
@@ -224,7 +223,6 @@ export async function runEmbeddedAgentAttempt(params: {
               : hasStoredAutoFallbackProvenance,
           });
 
-      let fallbackAttemptIndex = 0;
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
       attemptLifecycleState.currentTurnUserMessagePersisted = false;
       let attemptMediaTaskIds = liveSwitchMediaTaskIds;
@@ -232,53 +230,75 @@ export async function runEmbeddedAgentAttempt(params: {
         Boolean(
           sessionKey && hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds),
         );
-      const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
-        cfg,
-        provider,
-        model,
-        ...modelManifestContext,
-        runId,
-        agentDir,
-        agentId: sessionAgentId,
-        sessionId,
-        sessionKey: sessionKey ?? sessionId,
-        resolveAgentHarnessRuntimeOverride: (candidateProvider) =>
-          resolveSessionRuntimeOverrideForProvider({
-            provider: candidateProvider,
-            entry: sessionEntryForAttempt,
-            cfg,
-          }),
-        prepareAgentHarnessRuntime: async ({
-          provider: providerValue,
-          model: modelValue,
-          agentHarnessRuntimeOverride,
-        }) => {
-          await ensureSelectedAgentHarnessPlugin({
-            config: cfg,
-            provider: providerValue,
-            modelId: modelValue,
-            agentId: sessionAgentId,
-            sessionKey,
-            agentHarnessRuntimeOverride,
-            workspaceDir,
-          });
+      const fallbackResult = await runEmbeddedAgentEntry<AgentAttemptResult>({
+        selection: {
+          cfg,
+          provider,
+          model,
+          agentDir,
+          fallbacksOverride: effectiveFallbacksOverride,
+          ...modelManifestContext,
         },
-        fallbacksOverride: effectiveFallbacksOverride,
+        identity: {
+          runId,
+          agentId: sessionAgentId,
+          sessionId,
+          sessionKey: sessionKey ?? sessionId,
+        },
+        harness: {
+          workspaceDir,
+          sessionKey,
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: (candidateProvider) =>
+            resolveSessionRuntimeOverrideForProvider({
+              provider: candidateProvider,
+              entry: sessionEntryForAttempt,
+              cfg,
+            }),
+        },
+        behavior: {
+          kind: "command-rpc",
+          hasCommittedSideEffect: currentAttemptCommittedCronMedia,
+        },
+        sessionOverride: {
+          kind: "reconcile-completed",
+          reconcile: async ({ provider: winnerProvider, model: winnerModel }) => {
+            if (
+              !autoFallbackPrimaryProbe ||
+              autoFallbackPrimaryProbeInterruptedByLiveSwitch ||
+              !sessionEntry ||
+              !sessionStore ||
+              !sessionKey ||
+              isModelSelectionLocked(sessionEntry) ||
+              params.suppressVisibleSessionEffects ||
+              params.preserveUserFacingSessionModelState ||
+              !entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) ||
+              winnerProvider !== autoFallbackPrimaryProbe.provider ||
+              winnerModel !== autoFallbackPrimaryProbe.model
+            ) {
+              return;
+            }
+            const nextSessionEntry = { ...sessionEntry };
+            clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
+            sessionEntry = await persistSessionEntry({
+              sessionStore,
+              sessionKey,
+              storePath,
+              initialEntry: sessionEntry,
+              entry: nextSessionEntry,
+              shouldPersist: (current) =>
+                Boolean(
+                  current &&
+                  entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
+                ),
+            });
+          },
+        },
+        abortSignal: params.opts.abortSignal,
         onFallbackStep: (step) => {
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
-        classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) => {
-          const classification = classifyEmbeddedAgentRunResultForModelFallback({
-            provider: providerLocal,
-            model: modelLocal,
-            result: resultLocal,
-          });
-          return classification && currentAttemptCommittedCronMedia() ? undefined : classification;
-        },
-        canFallbackAfterError: () => !currentAttemptCommittedCronMedia(),
-        mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-        abortSignal: params.opts.abortSignal,
-        run: async (providerOverride, modelOverride, runOptions) => {
+        runCandidate: async (providerOverride, modelOverride, runOptions) => {
           attemptMediaTaskIds = sessionKey
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
             : new Set<string>();
@@ -298,8 +318,6 @@ export async function runEmbeddedAgentAttempt(params: {
           if (isAutoFallbackPrimaryProbeCandidate) {
             markAutoFallbackPrimaryProbe({ probe: autoFallbackPrimaryProbe, sessionKey });
           }
-          const isFallbackRetry = fallbackAttemptIndex > 0;
-          fallbackAttemptIndex += 1;
           await params.opts.onActiveModelSelected?.({
             provider: providerOverride,
             model: modelOverride,
@@ -369,7 +387,7 @@ export async function runEmbeddedAgentAttempt(params: {
             cwd,
             body,
             transcriptBody,
-            isFallbackRetry,
+            isFallbackRetry: runOptions.isFallbackRetry,
             resolvedThinkLevel: candidateThinkLevel,
             fastMode,
             fastModeStartedAtMs,
@@ -403,7 +421,7 @@ export async function runEmbeddedAgentAttempt(params: {
               suppressUserTurnPersistence ||
               userTurnTranscriptRecorder.hasPersisted() ||
               userTurnTranscriptRecorder.isBlocked() ||
-              (isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
+              (runOptions.isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
             userTurnTranscriptRecorder,
             onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
             onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
@@ -416,41 +434,15 @@ export async function runEmbeddedAgentAttempt(params: {
           });
         },
       });
-      result = applyAgentRunAbortMetadata(fallbackResult.result, params.opts.abortSignal);
+      result = fallbackResult.result;
+      terminal = fallbackResult.terminal;
       if (isAgentRunRestartAbortReason(params.opts.abortSignal?.reason)) {
         throw params.opts.abortSignal?.reason;
       }
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
       fallbackExhausted = fallbackResult.outcome === "exhausted";
-      if (
-        !fallbackExhausted &&
-        autoFallbackPrimaryProbe &&
-        !autoFallbackPrimaryProbeInterruptedByLiveSwitch &&
-        sessionEntry &&
-        sessionStore &&
-        sessionKey &&
-        !isModelSelectionLocked(sessionEntry) &&
-        !params.suppressVisibleSessionEffects &&
-        !params.preserveUserFacingSessionModelState &&
-        entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) &&
-        fallbackProvider === autoFallbackPrimaryProbe.provider &&
-        fallbackModel === autoFallbackPrimaryProbe.model
-      ) {
-        const nextSessionEntry = { ...sessionEntry };
-        clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-        sessionEntry = await persistSessionEntry({
-          sessionStore,
-          sessionKey,
-          storePath,
-          initialEntry: sessionEntry,
-          entry: nextSessionEntry,
-          shouldPersist: (current) =>
-            Boolean(
-              current && entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
-            ),
-        });
-      }
+      await fallbackResult.settleSessionOverride();
       if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
         result = {
           ...result,
@@ -464,7 +456,7 @@ export async function runEmbeddedAgentAttempt(params: {
         };
       }
       if (!fallbackExhausted) {
-        lifecycle.emitFinishing(result);
+        lifecycle.emitFinishing(terminal);
       }
       break;
     } catch (err) {
@@ -625,6 +617,7 @@ export async function runEmbeddedAgentAttempt(params: {
     userTurnTranscriptRecorder,
     fallbackTrajectoryRecorder,
     lifecycle,
+    terminal,
   };
 }
 

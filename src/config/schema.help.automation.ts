@@ -32,8 +32,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Provides channel-specific reset overrides keyed by provider/channel id for fine-grained behavior control. Use this only when one channel needs exceptional reset behavior beyond type-level policies.",
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
-  "session.typingIntervalSeconds":
-    "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
   "session.typingMode":
     'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
   "session.mainKey":
@@ -56,18 +54,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
-  "session.writeLock":
-    "Groups session transcript write-lock controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default policies.",
-  "session.writeLock.acquireTimeoutMs":
-    "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; env override: OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS.",
-  "session.writeLock.staleMs":
-    "Milliseconds before an existing session transcript lock can be treated as stale and reclaimed. Default: 1800000; env override: OPENCLAW_SESSION_WRITE_LOCK_STALE_MS.",
-  "session.writeLock.maxHoldMs":
-    "Milliseconds a held in-process session transcript lock may remain held before the watchdog releases it. Default: 300000; env override: OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS.",
-  "session.agentToAgent":
-    "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
-  "session.agentToAgent.maxPingPongTurns":
-    "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-20, default 5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
   "session.threadBindings":
     "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":
@@ -99,34 +85,14 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
   "cron.store":
     "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
-  "cron.maxConcurrentRuns":
-    "Defaults to 8. Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
-  "cron.retry":
-    "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
-  "cron.retry.maxAttempts":
-    "Max retries for one-shot jobs on transient errors before permanent disable (default: 3).",
-  "cron.retry.backoffMs":
-    "Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). Use shorter values for faster retries.",
-  "cron.retry.retryOn":
-    "Error types to retry: rate_limit, overloaded, network, timeout, server_error. Use to restrict which errors trigger retries; omit to retry all transient types.",
   "cron.webhookToken":
     "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.sessionRetention":
     "Controls how long completed cron run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
-  worktrees:
-    "Managed worktree retention settings applied by hourly cleanup and manual `openclaw worktrees gc`. Keep defaults unless managed worktrees accumulate faster than idle cleanup reclaims them.",
-  "worktrees.cleanup":
-    "Retention limits for OpenClaw-managed worktrees across all repositories. Cleanup snapshots and removes the least recently active session- and Workboard-owned worktrees first; manual, locked, and recently active worktrees are never limit-evicted.",
-  "worktrees.cleanup.maxCount":
-    "Maximum number of managed worktrees to retain across all repositories. When exceeded, the least recently active evictable worktrees are snapshotted and removed until the count fits. 0 or unset disables the count limit.",
-  "worktrees.cleanup.maxTotalSizeGb":
-    "Maximum total disk size in GB across all managed worktrees, measured during cleanup. When exceeded, the least recently active evictable worktrees are snapshotted and removed until usage fits. 0 or unset disables the size limit.",
   transcripts:
     "Core transcript capture settings for recording-capable agent tools and configured live meeting auto-start sources. Keep disabled unless operators explicitly want agents to capture or import meeting transcripts.",
   "transcripts.enabled":
     "Enables the recording-capable transcripts agent tool and configured auto-start sources. Default: false. Enable only on hosts where operators have reviewed meeting capture policy and provider permissions.",
-  "transcripts.maxUtterances":
-    "Maximum utterances retained in a transcript summary operation before truncation. Use lower values to limit prompt/storage footprint, or raise carefully for long meetings where summary completeness matters.",
   "transcripts.autoStart":
     "Live transcript sources started automatically when the gateway starts. Each entry is enabled by being present; remove an entry to disable that source.",
   "transcripts.autoStart[].providerId":
@@ -159,8 +125,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allowlist of accepted session-key prefixes for inbound hook requests when caller-provided keys are enabled. Use narrow prefixes to prevent arbitrary session-key injection.",
   "hooks.allowedAgentIds":
     "Allowlist of effective agent IDs that hook requests and mappings are allowed to target, including default-agent routing when agentId is omitted. Use this to constrain automation events to dedicated service agents and reduce blast radius if a hook token is exposed.",
-  "hooks.maxBodyBytes":
-    "Maximum accepted webhook payload size in bytes before the request is rejected. Keep this bounded to reduce abuse risk and protect memory usage under bursty integrations.",
   "hooks.presets":
     "Named hook preset bundles applied at load time to seed standard mappings and behavior defaults. Keep preset usage explicit so operators can audit which automations are active.",
   "hooks.transformsDir":
@@ -289,8 +253,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.byChannel":
     "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel's traffic pattern needs different behavior than global defaults.",
-  "messages.queue.debounceMs":
-    "Global fallback followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
   "messages.queue.debounceMsByChannel":
     "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
   "messages.queue.cap":
@@ -382,8 +344,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
   "messages.statusReactions.emojis":
     "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
-  "messages.statusReactions.timing":
-    "Override default timing. Keys: debounceMs (700), stallSoftMs (10000), stallHardMs (30000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
 };

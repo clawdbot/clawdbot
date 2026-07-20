@@ -107,7 +107,6 @@ export async function createWhatsAppStatusReactionController(
     },
     initialEmoji: ackEmoji,
     emojis: statusReactionsConfig.emojis,
-    timing: statusReactionsConfig.timing,
     onError: (err) => {
       logVerbose(`WhatsApp status-reaction error for chat ${chatId}/${msgId}: ${String(err)}`);
     },

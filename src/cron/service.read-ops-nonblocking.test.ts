@@ -64,12 +64,12 @@ function createDeferredIsolatedRun() {
 
 function expectCronStatus(
   status: Awaited<ReturnType<CronService["status"]>>,
-  params: { storePath: string; jobs: number },
+  params: { jobs: number },
 ) {
   expect(status.enabled).toBe(true);
-  expect(status.storePath).toBe(params.storePath);
   expect(status.storage).toBe("sqlite");
   expect(status.sqlitePath).toContain("openclaw.sqlite");
+  expect(status.storePath).toBe(status.sqlitePath);
   expect(status.jobs).toBe(params.jobs);
   if (status.nextWakeAtMs !== null) {
     expect(status.nextWakeAtMs).toBeTypeOf("number");
@@ -129,7 +129,7 @@ describe("CronService read ops while job is running", () => {
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
       await expect(cron.list({ includeDisabled: true })).resolves.toHaveLength(1);
-      expectCronStatus(await cron.status(), { storePath: store.storePath, jobs: 1 });
+      expectCronStatus(await cron.status(), { jobs: 1 });
 
       const running = await cron.list({ includeDisabled: true });
       expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
@@ -205,7 +205,6 @@ describe("CronService read ops while job is running", () => {
           message: "cron.status during cron.run timed out",
         }),
         {
-          storePath: store.storePath,
           jobs: 1,
         },
       );
@@ -274,7 +273,6 @@ describe("CronService read ops while job is running", () => {
           message: "cron.status during startup timed out",
         }),
         {
-          storePath: store.storePath,
           jobs: 1,
         },
       );

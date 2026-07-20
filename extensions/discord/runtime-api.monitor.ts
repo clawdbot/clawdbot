@@ -1,7 +1,6 @@
 // Discord plugin module implements runtime api.monitor behavior.
 export {
   allowListMatches,
-  buildDiscordMediaPayload,
   createDiscordMessageHandler,
   createDiscordNativeCommand,
   isDiscordGroupAllowedByPolicy,

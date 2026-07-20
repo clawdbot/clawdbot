@@ -11,8 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type {
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -39,8 +37,6 @@ import type {
 } from "./host-hook-turn-types.js";
 
 export type {
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -52,7 +48,6 @@ export type {
   PluginHookChannelContext,
   PluginHookChannelSenderContext,
 } from "./hook-channel-context.types.js";
-export { stripPromptMutationFieldsFromLegacyHookResult } from "./hook-before-agent-start.types.js";
 export type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -78,7 +73,6 @@ export type PluginHookName =
   | "before_model_resolve"
   | "agent_turn_prepare"
   | "before_prompt_build"
-  | "before_agent_start"
   | "before_agent_reply"
   | "model_call_started"
   | "model_call_ended"
@@ -128,7 +122,6 @@ const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "agent_turn_prepare",
   "before_prompt_build",
-  "before_agent_start",
   "before_agent_reply",
   "model_call_started",
   "model_call_ended",
@@ -233,7 +226,6 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
 const PROMPT_INJECTION_HOOK_NAMES = [
   "agent_turn_prepare",
   "before_prompt_build",
-  "before_agent_start",
   "heartbeat_prompt_contribution",
 ] as const satisfies readonly PluginHookName[];
 
@@ -628,6 +620,20 @@ export type PluginHookReplyPayloadSendingResult = {
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
 
+/** Host-derived identity for the message requester that initiated a tool call. */
+export type PluginHookToolRequesterContext = {
+  /** Channel/plugin id, for example `discord` or `telegram`. */
+  readonly channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  readonly accountId?: string;
+  /** Channel-scoped sender id when the host received one. */
+  readonly senderId?: string;
+  /** True only when the host resolved the sender as an owner. */
+  readonly senderIsOwner?: boolean;
+  /** Provider-native role ids when the channel supplies them. */
+  readonly roleIds?: readonly string[];
+};
+
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
@@ -642,6 +648,12 @@ export type PluginHookToolContext = {
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
+  /**
+   * Message requester for this turn. Absent for non-message runs and harnesses
+   * that cannot prove requester identity. Authorization hooks should fail
+   * closed when a required field is absent.
+   */
+  requester?: PluginHookToolRequesterContext;
 };
 
 export type PluginHookBeforeToolCallEvent = {
@@ -1149,11 +1161,6 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
-  /** @deprecated Use before_model_resolve and before_prompt_build. */
-  before_agent_start: (
-    event: PluginHookBeforeAgentStartEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
   before_agent_reply: (
     event: PluginHookBeforeAgentReplyEvent,
     ctx: PluginHookAgentContext,

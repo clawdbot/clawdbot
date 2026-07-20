@@ -1296,6 +1296,9 @@ describe("gateway server cron", () => {
       tempPrefix: "openclaw-gw-cron-log-",
       cronEnabled: true,
     });
+    await writeCronConfig({
+      agents: { list: [{ id: "main", default: true }, { id: "writer" }] },
+    });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
 
@@ -1395,7 +1398,7 @@ describe("gateway server cron", () => {
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
       const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
-      expect(storePath).toContain("jobs.json");
+      expect(storePath).toContain("openclaw.sqlite");
 
       const autoRes = await directCronReq(cronState, "cron.add", {
         name: "auto run test",

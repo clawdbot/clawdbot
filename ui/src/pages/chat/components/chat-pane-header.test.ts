@@ -49,6 +49,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     copiedAction: null,
     canRename: true,
     terminalAction: nothing,
+    discussionAction: nothing,
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,

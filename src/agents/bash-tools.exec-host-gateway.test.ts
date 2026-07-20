@@ -2320,6 +2320,42 @@ EOF`,
     expect(runExecProcessMock).toHaveBeenCalledTimes(1);
   });
 
+  it("warns detached approval followups after a supervisor timeout", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const outcome = {
+      status: "failed" as const,
+      exitCode: null,
+      exitReason: "overall-timeout" as const,
+      timedOut: true,
+      aggregated: "",
+      reason: "Command timed out.",
+    } satisfies ExecApprovalFollowupOutcome;
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-timeout" },
+      promise: Promise.resolve(outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "side-effecting-command",
+      turnSourceChannel: "feishu",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+    });
+    expect(requireSentFollowupText(0)).toContain(
+      "external side effects may already have completed",
+    );
+    expect(requireSentFollowupText(0)).toContain("Verify the resulting state before retrying");
+  });
+
   it("drops detached execution and follow-up when the owning run is aborted", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockRejectedValue(runAbortedApprovalError);
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);

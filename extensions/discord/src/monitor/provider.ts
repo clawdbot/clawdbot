@@ -504,8 +504,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceManagerRef,
       threadBindings,
       gatewaySupervisor,
-      gatewayReadyTimeoutMs: account.config.gatewayReadyTimeoutMs,
-      gatewayRuntimeReadyTimeoutMs: account.config.gatewayRuntimeReadyTimeoutMs,
     });
   } finally {
     await cleanupDiscordProviderStartup({

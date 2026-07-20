@@ -426,6 +426,7 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
 export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   controllerSessionKey: string,
+  options?: { collect?: boolean },
 ): number {
   const key = controllerSessionKey.trim();
   if (!key) {
@@ -443,7 +444,12 @@ export function countActiveRunsForSessionFromRuns(
   };
 
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  // Records already carry collect, and spawn admission is not request-hot, so a
+  // filtered snapshot is simpler than maintaining a second registry index.
   for (const entry of runs.values()) {
+    if (options?.collect !== undefined && (entry.collect === true) !== options.collect) {
+      continue;
+    }
     if (resolveConcurrencyOwnerSessionKey(entry) !== key) {
       continue;
     }

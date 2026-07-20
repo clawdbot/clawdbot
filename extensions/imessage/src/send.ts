@@ -1,6 +1,7 @@
 // Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
 import { createRequire } from "node:module";
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -109,6 +110,7 @@ type IMessageSendResult = {
   guid?: string;
   sentText: string;
   echoText?: string;
+  echoMedia?: MediaPlaceholderTextFact;
   receipt: MessageReceipt;
 };
 
@@ -388,15 +390,17 @@ function canCheckSentMessageAfterRpcTimeout(params: {
   );
 }
 
-function resolveOutboundEchoText(text: string, mediaContentType?: string): string | undefined {
-  if (text.trim()) {
-    return text;
-  }
-  const kind = kindFromMime(mediaContentType ?? undefined);
-  if (!kind) {
+function resolveOutboundEchoText(text: string): string | undefined {
+  return text.trim() || undefined;
+}
+
+function resolveOutboundEchoMedia(
+  mediaContentType: string | undefined,
+): MediaPlaceholderTextFact | undefined {
+  if (!mediaContentType) {
     return undefined;
   }
-  return kind === "image" ? "<media:image>" : `<media:${kind}>`;
+  return { contentType: mediaContentType, kind: kindFromMime(mediaContentType) ?? "unknown" };
 }
 
 function createIMessageSendReceipt(params: {
@@ -565,6 +569,7 @@ async function trySendAttachmentForTarget(params: {
   audioAsVoice?: boolean;
   replyToId?: string;
   echoText?: string;
+  echoMedia?: MediaPlaceholderTextFact;
   pendingEchoTtlMs: number;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
@@ -597,6 +602,7 @@ async function trySendAttachmentForTarget(params: {
       pendingEchoKey = rememberPersistedIMessageEcho({
         scope: echoScope,
         text: params.echoText,
+        media: params.echoMedia,
         ttlMs: params.pendingEchoTtlMs,
         pending: true,
       });
@@ -641,6 +647,7 @@ async function trySendAttachmentForTarget(params: {
     rememberPersistedIMessageEcho({
       scope: echoScope,
       text: params.echoText,
+      media: params.echoMedia,
       messageId: resolvedId ?? undefined,
     });
   }
@@ -668,6 +675,7 @@ async function trySendAttachmentForTarget(params: {
     ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
     sentText: "",
     ...(params.echoText ? { echoText: params.echoText } : {}),
+    ...(params.echoMedia ? { echoMedia: params.echoMedia } : {}),
     receipt: createIMessageSendReceipt({
       messageId,
       target: params.target,
@@ -771,7 +779,8 @@ export async function sendMessageIMessage(
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
-  const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
+  const echoText = resolveOutboundEchoText(message);
+  const echoMedia = filePath ? resolveOutboundEchoMedia(mediaContentType) : undefined;
   // The reply id actually delivered. The threaded-reply fallback below clears it
   // so the receipt and approval binding report the unthreaded send it became,
   // not the threaded reply the transport rejected (#99638).
@@ -781,9 +790,6 @@ export async function sendMessageIMessage(
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
   if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
-    const attachmentEchoText = message.trim()
-      ? resolveOutboundEchoText("", mediaContentType)
-      : echoText;
     const attachmentResult = await trySendAttachmentForTarget({
       accountId: account.accountId,
       dbPath: chatDbLookupPath,
@@ -792,7 +798,7 @@ export async function sendMessageIMessage(
       filePath,
       audioAsVoice: opts.audioAsVoice,
       ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
-      echoText: attachmentEchoText,
+      echoMedia,
       pendingEchoTtlMs,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
@@ -818,6 +824,7 @@ export async function sendMessageIMessage(
         ...((captionResult.echoText ?? attachmentResult.echoText)
           ? { echoText: captionResult.echoText ?? attachmentResult.echoText }
           : {}),
+        ...(attachmentResult.echoMedia ? { echoMedia: attachmentResult.echoMedia } : {}),
         receipt: createMessageReceiptFromOutboundResults({
           results: [{ receipt: attachmentResult.receipt }, { receipt: captionResult.receipt }],
           sentAt: Math.max(attachmentResult.receipt.sentAt, captionResult.receipt.sentAt),
@@ -876,6 +883,7 @@ export async function sendMessageIMessage(
         pendingEchoKey = rememberPersistedIMessageEcho({
           scope: echoScope,
           text: echoText,
+          media: echoMedia,
           ttlMs: pendingEchoTtlMs,
           pending: true,
         });
@@ -958,6 +966,7 @@ export async function sendMessageIMessage(
       rememberPersistedIMessageEcho({
         scope: echoScope,
         text: echoText,
+        media: echoMedia,
         messageId: resolvedId ?? undefined,
       });
     }
@@ -1002,6 +1011,7 @@ export async function sendMessageIMessage(
       ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
       sentText: message,
       ...(echoText ? { echoText } : {}),
+      ...(echoMedia ? { echoMedia } : {}),
       receipt: createIMessageSendReceipt({
         messageId,
         target,

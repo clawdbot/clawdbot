@@ -109,7 +109,22 @@ describe("subagent spawn depth + child limits", () => {
 
     expectForbidden(
       result,
-      "sessions_spawn is not allowed at this depth (current depth: 1, max: 1)",
+      "sessions_spawn is not allowed at this depth (current depth: 1, max: 1; agents.defaults.subagents.maxSpawnDepth).",
+    );
+  });
+
+  it("checks depth before collector group validation", async () => {
+    hoisted.configOverride = {
+      ...createDepthLimitConfig(),
+      tools: { swarm: { enabled: true } },
+    };
+    hoisted.depthBySession.set("agent:main:subagent:parent", 1);
+
+    const result = await spawnFrom("agent:main:subagent:parent", { collect: true });
+
+    expectForbidden(
+      result,
+      "sessions_spawn is not allowed at this depth (current depth: 1, max: 1; agents.defaults.subagents.maxSpawnDepth).",
     );
   });
 
@@ -167,7 +182,7 @@ describe("subagent spawn depth + child limits", () => {
 
     expectForbidden(
       result,
-      "sessions_spawn is not allowed at this depth (current depth: 2, max: 2)",
+      "sessions_spawn is not allowed at this depth (current depth: 2, max: 2; agents.defaults.subagents.maxSpawnDepth).",
     );
   });
 
@@ -183,7 +198,7 @@ describe("subagent spawn depth + child limits", () => {
 
     expectForbidden(
       result,
-      "sessions_spawn has reached max active children for this session (1/1)",
+      "sessions_spawn has reached max active children for this session (1/1; agents.defaults.subagents.maxChildrenPerAgent).",
     );
   });
 

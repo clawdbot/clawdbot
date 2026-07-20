@@ -894,8 +894,8 @@ describe("workspace .env blocklist completeness", () => {
           rootDir: "/plugins/runtime-cloud",
           source: "/plugins/runtime-cloud/index.js",
           manifestPath: "/plugins/runtime-cloud/openclaw.plugin.json",
-          providerAuthEnvVars: {
-            "runtime-cloud": ["RUNTIME_CLOUD_API_KEY"],
+          setup: {
+            providers: [{ id: "runtime-cloud", envVars: ["RUNTIME_CLOUD_API_KEY"] }],
           },
         };
         await writeEnvFile(

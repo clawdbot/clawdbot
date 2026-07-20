@@ -366,11 +366,22 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 };
 
 const buildSessionSummary = async (storePath: string, agentId?: string) => {
-  const { listSessionEntries } = await import("../config/sessions/session-accessor.js");
-  const sessions = listSessionEntries({
-    ...(agentId ? { agentId } : {}),
-    storePath,
-  })
+  const { listSessionEntriesReadOnly } = await import("../config/sessions/session-accessor.js");
+  const { isTransientSqliteError } = await import("../infra/unhandled-rejections.js");
+  let listed: ReturnType<typeof listSessionEntriesReadOnly>;
+  try {
+    listed = listSessionEntriesReadOnly({
+      ...(agentId ? { agentId } : {}),
+      storePath,
+    });
+  } catch (error) {
+    if (!isTransientSqliteError(error)) {
+      throw error;
+    }
+    // Health is best-effort: an empty snapshot beats failing on a transient lock.
+    listed = [];
+  }
+  const sessions = listed
     .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
     .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);

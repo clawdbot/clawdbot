@@ -74,27 +74,11 @@ export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";
   /** TTL to consider cache expired (duration string, default unit: minutes). */
   ttl?: string;
-  /** Number of most recent assistant turns preserved from pruning. */
-  keepLastAssistants?: number;
-  /** Context pressure ratio where soft trimming starts. */
-  softTrimRatio?: number;
-  /** Context pressure ratio where hard clearing starts. */
-  hardClearRatio?: number;
-  /** Minimum tool-result size before pruning considers it worthwhile. */
-  minPrunableToolChars?: number;
   tools?: {
     /** Tool names eligible for context pruning. */
     allow?: string[];
     /** Tool names excluded from context pruning. */
     deny?: string[];
-  };
-  softTrim?: {
-    /** Maximum retained characters for softly trimmed tool results. */
-    maxChars?: number;
-    /** Leading characters retained during soft trim. */
-    headChars?: number;
-    /** Trailing characters retained during soft trim. */
-    tailChars?: number;
   };
   hardClear?: {
     /** Replace oversized old tool results with a placeholder at high pressure. */
@@ -128,17 +112,6 @@ export type AgentContextLimitsConfig = {
   toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
-};
-
-export type AgentRunRetriesConfig = {
-  /** Base number of run retry iterations (default: 24). */
-  base?: number;
-  /** Additional run retry iterations per fallback profile (default: 8). */
-  perProfile?: number;
-  /** Minimum limit for run retry iterations (default: 32). */
-  min?: number;
-  /** Maximum limit for run retry iterations (default: 160). */
-  max?: number;
 };
 
 export type CliBackendConfig = {
@@ -202,19 +175,10 @@ export type CliBackendConfig = {
   reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
-    /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
-    outputLimits?: {
-      /** Max raw JSONL characters retained for one live CLI turn. */
-      maxTurnRawChars?: number;
-      /** Max raw JSONL lines retained for one live CLI turn. */
-      maxTurnLines?: number;
-    };
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */
       fresh?: {
-        /** Fixed watchdog timeout in ms (overrides ratio when set). */
-        noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
         /** Lower bound for computed watchdog timeout. */
@@ -224,8 +188,6 @@ export type CliBackendConfig = {
       };
       /** Resume sessions. */
       resume?: {
-        /** Fixed watchdog timeout in ms (overrides ratio when set). */
-        noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
         /** Lower bound for computed watchdog timeout. */
@@ -351,8 +313,6 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
-  /** Outer run loop retry iteration boundaries. */
-  runRetries?: AgentRunRetriesConfig;
   /** Embedded OpenClaw runner hardening and compatibility controls. */
   embeddedAgent?: {
     /**
@@ -597,14 +557,8 @@ export type AgentCompactionConfig = {
   mode?: AgentCompactionMode;
   /** Override the session thinking level for embedded OpenClaw compaction summaries. */
   thinkingLevel?: AgentThinkingLevel;
-  /** Embedded OpenClaw reserve target before floor and context-window caps. */
-  reserveTokens?: number;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
-  /** Minimum reserve tokens enforced for embedded OpenClaw compaction (0 disables the floor). */
-  reserveTokensFloor?: number;
-  /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
-  maxHistoryShare?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
   customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */

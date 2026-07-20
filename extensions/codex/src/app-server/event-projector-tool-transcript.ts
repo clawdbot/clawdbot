@@ -72,6 +72,7 @@ export class CodexToolTranscriptProjection {
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly progress: CodexToolProgressProjection,
+    private readonly nextTranscriptTimestamp: () => number,
     private readonly options: {
       nativePostToolUseRelayEnabled?: boolean;
       trajectoryRecorder?: CodexTrajectoryRecorder | null;
@@ -343,7 +344,7 @@ export class CodexToolTranscriptProjection {
       model: this.params.modelId,
       usage: ZERO_USAGE,
       stopReason: "toolUse",
-      timestamp: Date.now(),
+      timestamp: this.nextTranscriptTimestamp(),
     } as unknown as AgentMessage;
   }
 
@@ -367,7 +368,7 @@ export class CodexToolTranscriptProjection {
           text,
         },
       ],
-      timestamp: Date.now(),
+      timestamp: this.nextTranscriptTimestamp(),
     } as unknown as AgentMessage;
   }
 }

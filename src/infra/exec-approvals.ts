@@ -2,13 +2,19 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
+  isAgentDeletionBlocked,
+} from "../agents/agent-lifecycle-registry.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
@@ -1252,16 +1258,49 @@ type ExecApprovalsUpdate = {
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
 };
 
-function updateExecApprovalsUnlocked(params: ExecApprovalsUpdate): ExecApprovalsSnapshot | null {
+type InternalExecApprovalsUpdate = ExecApprovalsUpdate & {
+  allowDeletedAgentRemoval?: string;
+};
+
+function assertNoDeletedAgentApprovalChanged(
+  current: ExecApprovalsFile,
+  next: ExecApprovalsFile,
+  allowDeletedAgentRemoval?: string,
+): void {
+  const agentIds = new Set([
+    ...Object.keys(current.agents ?? {}),
+    ...Object.keys(next.agents ?? {}),
+  ]);
+  for (const agentId of agentIds) {
+    const currentPolicy = current.agents?.[agentId];
+    const nextPolicy = next.agents?.[agentId];
+    const allowedRemoval =
+      agentId === allowDeletedAgentRemoval &&
+      currentPolicy !== undefined &&
+      nextPolicy === undefined;
+    if (
+      isAgentDeletionBlocked(agentId) &&
+      !allowedRemoval &&
+      !isDeepStrictEqual(currentPolicy, nextPolicy)
+    ) {
+      throw new Error(`Exec approvals are unavailable while agent ${agentId} is deleted.`);
+    }
+  }
+}
+
+function updateExecApprovalsUnlocked(
+  params: InternalExecApprovalsUpdate,
+): ExecApprovalsSnapshot | null {
   // Both sync and async entry points hold the sidecar lock across this full CAS transaction.
   const current = readExecApprovalsSnapshotUnlocked();
   if (params.baseHash !== undefined && current.hash !== params.baseHash) {
     return null;
   }
-  const next = params.update(current.file);
+  const next = params.update(structuredClone(current.file));
   if (next === null) {
     return current;
   }
+  assertNoDeletedAgentApprovalChanged(current.file, next, params.allowDeletedAgentRemoval);
   if (
     current.exists &&
     current.hash === hashExecApprovalsFile(next) &&
@@ -1322,6 +1361,46 @@ export async function updateExecApprovals(
   params: ExecApprovalsUpdate,
 ): Promise<ExecApprovalsSnapshot | null> {
   return await withExecApprovalsLock(async () => updateExecApprovalsUnlocked(params));
+}
+
+/** Hold the approvals lock across an agent deletion and restore policy if commit fails. */
+export async function withAgentExecApprovalsRemoved<T>(
+  agentId: string,
+  commit: () => Promise<T>,
+): Promise<T> {
+  const key = normalizeAgentId(agentId);
+  return await withExecApprovalsLock(async () => {
+    const snapshot = readExecApprovalsSnapshotUnlocked();
+    try {
+      if (Object.hasOwn(snapshot.file.agents ?? {}, key)) {
+        const agents = { ...snapshot.file.agents };
+        delete agents[key];
+        const updated = updateExecApprovalsUnlocked({
+          baseHash: snapshot.hash,
+          allowDeletedAgentRemoval: key,
+          update: (file) => ({ ...file, agents }),
+        });
+        if (!updated) {
+          throw new Error("Exec approvals changed while deleting agent; retry deletion.");
+        }
+      }
+      return await commit();
+    } catch (error) {
+      if (error instanceof AgentDeletionCommitUncertainError) {
+        throw error;
+      }
+      try {
+        restoreExecApprovalsSnapshotUnlocked(snapshot);
+      } catch (rollbackError) {
+        throw new AgentDeletionAuthorityRollbackError(
+          [error, rollbackError],
+          `Failed to roll back exec approvals deletion for agent ${key}.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  });
 }
 
 function hardenUnchangedExecApprovals(filePath: string): boolean {

@@ -477,6 +477,36 @@ describe("mcp cli", () => {
     });
   });
 
+  it("redacts stdio argv credentials from MCP status output", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "local",
+        '{"command":"node","args":["server.mjs","--api-key","test-api-key","--token=test-token"]}',
+      ]);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "status", "--json"]);
+      const jsonOutput = lastLogLine();
+      expect(jsonOutput).not.toContain("test-api-key");
+      expect(jsonOutput).not.toContain("test-token");
+      expect(JSON.parse(jsonOutput).servers[0].launch).toBe(
+        "node server.mjs --api-key *** --token=***",
+      );
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "status", "--verbose"]);
+      const verboseOutput = mockLog.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(verboseOutput).toContain("launch: node server.mjs --api-key *** --token=***");
+      expect(verboseOutput).not.toContain("test-api-key");
+      expect(verboseOutput).not.toContain("test-token");
+    });
+  });
+
   it("includes OAuth credential status in MCP status output", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();

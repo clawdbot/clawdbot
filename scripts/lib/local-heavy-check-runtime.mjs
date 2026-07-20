@@ -59,6 +59,46 @@ export function resolveRepoToolBinPath(
   return fileExists(primaryPath) ? primaryPath : localPath;
 }
 
+/** Link a dependency-less worktree to the primary checkout toolchain selected above. */
+export function ensureRepoToolNodeModulesLink(
+  toolPath,
+  {
+    cwd = process.cwd(),
+    fileExists = fs.existsSync,
+    resolveCommonDir = resolveGitCommonDir,
+    symlink = fs.symlinkSync,
+    platform = process.platform,
+  } = {},
+) {
+  const localNodeModules = path.resolve(cwd, "node_modules");
+  if (fileExists(localNodeModules)) {
+    return localNodeModules;
+  }
+
+  const commonDir = resolveCommonDir(cwd);
+  if (!commonDir || path.basename(commonDir) !== ".git") {
+    return null;
+  }
+
+  const primaryNodeModules = path.join(path.dirname(commonDir), "node_modules");
+  const toolNodeModules = path.dirname(path.dirname(path.resolve(toolPath)));
+  if (toolNodeModules !== path.resolve(primaryNodeModules) || !fileExists(primaryNodeModules)) {
+    return null;
+  }
+
+  try {
+    // Match run-vitest.mjs's hydrated-toolchain behavior: keep one stable link
+    // so compilers can resolve imports from worktree source paths.
+    symlink(primaryNodeModules, localNodeModules, platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    // Another local runner may have installed the same stable link concurrently.
+    if (!fileExists(localNodeModules)) {
+      throw error;
+    }
+  }
+  return localNodeModules;
+}
+
 function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }

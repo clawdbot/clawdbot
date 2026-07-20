@@ -72,6 +72,8 @@ export function describeSessionsSpawnTool(options?: {
     options?.threadAvailable
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
+    '`visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode="run"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override.',
+    "Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree).",
     "Inherits parent workspace. Native task arrives as first `[Subagent Task]`.",
     'Native transcript needed: `context="fork"`; else omit/isolated.',
     "Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers.",
@@ -81,9 +83,9 @@ export function describeSessionsSpawnTool(options?: {
     return baseDescription.join(" ");
   }
   return [
-    ...baseDescription.slice(0, 3),
+    ...baseDescription.slice(0, 5),
     '`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.',
-    ...baseDescription.slice(3),
+    ...baseDescription.slice(5),
   ].join(" ");
 }
 

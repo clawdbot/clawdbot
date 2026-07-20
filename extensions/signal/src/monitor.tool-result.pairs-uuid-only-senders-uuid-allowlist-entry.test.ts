@@ -7,6 +7,7 @@ import {
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
   toSignalToolResultTestError,
+  waitForSignalToolResultIngressIdle,
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
@@ -63,6 +64,7 @@ describe("monitorSignalProvider tool results", () => {
         event: "receive",
         data: JSON.stringify(payload),
       });
+      await waitForSignalToolResultIngressIdle();
       abortController.abort();
     });
 
@@ -264,6 +266,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         }),
       });
+      await waitForSignalToolResultIngressIdle();
       abortController.abort();
     });
 

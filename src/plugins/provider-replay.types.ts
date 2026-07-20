@@ -10,16 +10,6 @@ type ProviderReplayToolCallIdMode = "strict" | "strict9";
 export type ProviderReasoningOutputMode = "native" | "tagged";
 
 /**
- * @deprecated Legacy static provider capability bag.
- *
- * Core replay/runtime ownership now lives on explicit provider hooks such as
- * `buildReplayPolicy`, `normalizeToolSchemas`, and `wrapStreamFn`. OpenClaw no
- * longer reads this bag at runtime, but the field remains typed so existing
- * third-party plugins do not fail to compile immediately.
- */
-export type ProviderCapabilities = Record<string, unknown>;
-
-/**
  * Provider-owned replay/compaction transcript policy.
  *
  * These values are consumed by shared history replay and compaction logic.

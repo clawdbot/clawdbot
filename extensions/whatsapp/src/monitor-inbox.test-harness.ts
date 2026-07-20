@@ -16,7 +16,7 @@ type AnyMockFn = any;
 
 export const DEFAULT_ACCOUNT_ID = "default";
 
-export const DEFAULT_WEB_INBOX_CONFIG = {
+const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.

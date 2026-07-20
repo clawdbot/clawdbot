@@ -26,11 +26,7 @@ import { retirePendingChatSideQuestion, type ChatSideResult } from "../../lib/ch
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import {
-  scopedAgentParamsForSession,
-  visibleSessionMatches,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   readSessionChangedEvent,
   type SessionChangedResult,
@@ -65,7 +61,6 @@ import {
   type ChatState,
 } from "./chat-history.ts";
 import {
-  clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
   removeQueuedMessage,
@@ -140,13 +135,13 @@ import {
   scheduleCommittedChatScroll,
 } from "./scroll.ts";
 import {
-  appendChatMessageToCache,
   cacheChatSessionSnapshot,
-  readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
+import { isAckedSteeredChip } from "./steered-chip.ts";
 import {
   clearAuthoritativeTerminal,
   rememberAuthoritativeTerminal,
@@ -159,8 +154,8 @@ import {
   type FallbackStatus,
   type PlanStatus,
   type ToolStreamEntry,
+  type WaitingApprovalStatus,
 } from "./tool-stream.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
@@ -238,6 +233,9 @@ export type ChatPageHost = ChatHost &
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
     planStatus: PlanStatus | null;
+    knownAgentRunIds: Set<string>;
+    waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
+    waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatMetadataRequestVersion: number;
@@ -507,6 +505,9 @@ export function resetChatStateForRouteSession(
   saveChatMessagesForSession(state, previousSessionKey);
   const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
+  if (state.sidebarContent?.kind === "session-discussion") {
+    state.sidebarContent = { ...state.sidebarContent, sessionKey };
+  }
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
@@ -535,6 +536,7 @@ export function resetChatStateForRouteSession(
   state.chatSideChatHidden = false;
   state.lastError = null;
   state.chatError = null;
+  state.chatRunError = null;
   state.chatAvatarUrl = null;
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
@@ -1063,7 +1065,7 @@ function finishSessionMessageRunReconcile(
   if (!cleared) {
     return false;
   }
-  clearPendingQueueItemsForRun(state, runId ?? undefined);
+  retireSteeredChipsForTerminalRun(state, runId ?? undefined);
   void loadChatHistory(state)
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
@@ -1263,6 +1265,7 @@ export function createPageState(
     chatStreamStartedAt: null,
     lastError: null,
     chatError: null,
+    chatRunError: null,
     agentsError: null,
     chatStreamSegments: [] as Array<{ text: string; ts: number }>,
     chatSideChatTurns: [] as ChatSideResult[],
@@ -1273,6 +1276,9 @@ export function createPageState(
     compactionStatus: null,
     fallbackStatus: null,
     planStatus: null,
+    knownAgentRunIds: new Set(),
+    waitingApprovalStatuses: new Map(),
+    waitingApprovalResolvedIds: new Set(),
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
@@ -1462,7 +1468,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     if (delivered) {
       // The queued projection is the only local copy until history catches up.
       // Materialize it before the terminal assistant to preserve transcript order.
-      preserveDeliveredQueuedUserTurn(state, delivered);
+      preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
     if (shouldCelebrateFirstReply && result === "final") {
@@ -1532,6 +1538,9 @@ function rememberDeliveredQueuedUserTurn(
     turns = new Map();
     deliveredQueueTurnsByClient.set(owner, turns);
   }
+  const pending = state.chatQueue.find(
+    (item) => isAckedSteeredChip(item) && item.pendingRunId === runId,
+  );
   const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
   if (stored) {
     turns.delete(runId);
@@ -1544,64 +1553,11 @@ function rememberDeliveredQueuedUserTurn(
       turns.delete(oldestRunId);
     }
   }
-  return stored ?? turns.get(runId) ?? null;
-}
-
-function durableDeliveredAttachments(
-  attachments: readonly ChatAttachment[] | undefined,
-): ChatAttachment[] | undefined {
-  return attachments?.flatMap((attachment) => {
-    if (!attachment.dataUrl) {
-      return [];
-    }
-    // Terminal retirement releases the queue-owned live blob. Pin synthetic
-    // transcript content to durable bytes before that ownership ends.
-    return [{ ...attachment, previewUrl: attachment.dataUrl }];
-  });
-}
-
-function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueItem): void {
-  const runId = item.sendRunId;
-  const sessionKey = item.sessionKey ?? state.sessionKey;
-  if (!runId) {
-    return;
-  }
-  const idempotencyKey = `${runId}:user`;
-  const containsUserTurn = (messages: unknown[]) =>
-    messages.some((message) => {
-      if (!message || typeof message !== "object" || Array.isArray(message)) {
-        return false;
-      }
-      const marker = (message as { __openclaw?: unknown })["__openclaw"];
-      return (
-        Boolean(marker && typeof marker === "object" && !Array.isArray(marker)) &&
-        (marker as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey
-      );
-    });
-  const content = buildUserChatMessageContentBlocks(
-    item.text,
-    durableDeliveredAttachments(item.attachments),
-  );
-  if (!content.length) {
-    return;
-  }
-  const userMessage = {
-    role: "user",
-    content,
-    timestamp: item.createdAt,
-    __openclaw: { idempotencyKey },
-  };
-  if (visibleSessionMatches(state, sessionKey, item.agentId)) {
-    if (!containsUserTurn(state.chatMessages)) {
-      state.chatMessages = [...state.chatMessages, userMessage];
-    }
-    return;
-  }
-  const target = { sessionKey, agentId: item.agentId };
-  const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
-  if (!containsUserTurn(cached)) {
-    appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
-  }
+  // Original-turn copies first: a run can own both its queued turn (stored, or
+  // its remembered fallback in `turns`) and a steered follow-up chip; the chip
+  // is preserved separately by retireSteeredChipsForTerminalRun and must not
+  // mask the original copy here.
+  return stored ?? turns.get(runId) ?? pending ?? null;
 }
 
 type ChatPageUpdateMode = "immediate" | "animation-frame";

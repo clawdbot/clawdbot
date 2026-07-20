@@ -65,6 +65,7 @@ import {
   sendExecApprovalFollowupResult,
   shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
+import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
@@ -390,6 +391,7 @@ function buildGatewayExecApprovalFollowupSummary(params: {
   approvalFollowupText?: string;
 }): string {
   const exitLabel = formatOutcomeExitLabel(params.outcome);
+  let summary: string;
   if (params.trigger === "diagnostics") {
     const diagnosticsText =
       params.outcome.status === "completed" && params.outcome.exitCode === 0
@@ -397,15 +399,16 @@ function buildGatewayExecApprovalFollowupSummary(params: {
         : formatDiagnosticsExportFailure({ outcome: params.outcome, exitLabel });
     const followupText = params.approvalFollowupText?.trim();
     const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
-    return `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
+    summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
+  } else {
+    const output = normalizeNotifyOutput(
+      tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
+    );
+    summary = output
+      ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
+      : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
   }
-
-  const output = normalizeNotifyOutput(
-    tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
-  return output
-    ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
-    : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
+  return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
 }
 
 function shouldAwaitGatewayApprovalInline(params: {

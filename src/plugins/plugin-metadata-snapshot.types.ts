@@ -34,7 +34,6 @@ export type PluginMetadataSnapshotMetrics = {
 export type PluginMetadataSnapshotRegistryDiagnostic = {
   level: "info" | "warn";
   code:
-    | "persisted-registry-disabled"
     | "persisted-registry-missing"
     | "persisted-registry-stale-policy"
     | "persisted-registry-stale-source";

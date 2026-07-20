@@ -94,9 +94,7 @@ export async function createBrowserProfileConfig(params: {
           ? rawDraftBrowser.cdpPortRangeEnd
           : undefined;
       const useRebasedPortRange =
-        draft.gateway?.port !== undefined ||
-        draft.browser?.cdpPortRangeStart !== undefined ||
-        draftCdpPortRangeEnd !== undefined;
+        draft.gateway?.port !== undefined || draftCdpPortRangeEnd !== undefined;
       const latestResolved = resolveBrowserConfig(
         {
           ...params.resolved,

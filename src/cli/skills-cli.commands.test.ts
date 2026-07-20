@@ -394,6 +394,24 @@ describe("skills cli commands", () => {
     expect(runtimeLogs).toEqual(["legacy-calendar  Legacy Calendar"]);
   });
 
+  it("keeps multiline ClawHub search metadata on one terminal line", async () => {
+    searchSkillsFromClawHubMock.mockResolvedValue([
+      {
+        slug: "oauth-helper",
+        ownerHandle: "demo-owner",
+        displayName: "Oauth\nHelper",
+        summary:
+          "Automate OAuth login flows.\nSupports multiple providers.\n\nFeatures:\n- Confirm before authorizing",
+      },
+    ]);
+
+    await runCommand(["skills", "search", "oauth-helper"]);
+
+    expect(runtimeLogs).toEqual([
+      "@demo-owner/oauth-helper  Oauth Helper  Automate OAuth login flows. Supports multiple providers. Features: - Confirm before authorizing",
+    ]);
+  });
+
   it("keeps ClawHub skill search JSON output unchanged", async () => {
     const results = [
       {

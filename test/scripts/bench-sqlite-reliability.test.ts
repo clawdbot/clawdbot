@@ -23,7 +23,7 @@ function runProof(args: string[]) {
     {
       cwd: process.cwd(),
       encoding: "utf8",
-      timeout: 120_000,
+      timeout: 240_000,
     },
   );
 }

@@ -8,8 +8,8 @@ vi.mock("./shared.js", async (importOriginal) => {
     ...actual,
     applyAuthorizationHeaderForUrl: vi.fn(),
     GRAPH_ROOT: "https://graph.microsoft.com/v1.0",
-    inferPlaceholder: vi.fn(({ contentType }: { contentType?: string }) =>
-      contentType?.startsWith("image/") ? "[image]" : "[file]",
+    resolveMSTeamsMediaKind: vi.fn(({ contentType }: { contentType?: string }) =>
+      contentType?.startsWith("image/") ? "image" : "document",
     ),
     isRecord: (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v),
     isUrlAllowed: vi.fn(() => true),
@@ -184,8 +184,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       maxBytes: 10 * 1024 * 1024,
     });
 
-    // No media because there is no id for the required $value fetch.
-    expect(result.media).toHaveLength(0);
+    expect(result.media).toEqual([{ kind: "image", contentType: "image/png" }]);
   });
 
   it("skips $value content when Content-Length exceeds maxBytes", async () => {
@@ -216,7 +215,9 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     expect(fetchCalls).toContain(
       "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cl/hostedContents/hosted-big/$value",
     );
-    expect(result.media).toHaveLength(0);
+    expect(result.media).toEqual([
+      { kind: "image", contentType: "image/png", sourceId: "hosted-big" },
+    ]);
   });
 
   it("skips hosted content when the Graph collection response exceeds the byte cap", async () => {
@@ -317,7 +318,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       return {
         path: "/tmp/file.docx",
         contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        placeholder: "[file]",
+        kind: "document",
       };
     });
 
@@ -393,7 +394,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockResolvedValue({
       path: "/tmp/inline.pdf",
       contentType: "application/pdf",
-      placeholder: "[file]",
+      kind: "document",
     });
 
     const result = await downloadMSTeamsGraphMedia({
@@ -407,6 +408,34 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     // Regression guard: attachmentCount now reflects real inline attachments,
     // not the imaginary `/attachments` sub-resource count.
     expect(result.attachmentCount).toBe(1);
+  });
+
+  it("keeps a type-only fact when a Graph reference download fails", async () => {
+    mockGraphMediaFetch({
+      messageId: "msg-failed-reference",
+      messageResponse: {
+        body: {},
+        attachments: [
+          {
+            id: "reference-1",
+            contentType: "reference",
+            contentUrl: "https://tenant.sharepoint.com/failed.pdf",
+            name: "failed.pdf",
+          },
+        ],
+      },
+    });
+    vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockRejectedValueOnce(
+      new Error("download failed"),
+    );
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-failed-reference",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result.media).toEqual([{ kind: "document", sourceId: "reference-1" }]);
   });
 
   it("releases message metadata before starting nested SharePoint downloads", async () => {
@@ -433,7 +462,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
     vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockImplementation(async () => {
       order.push("sharepoint-download");
-      return { path: "/tmp/release.pdf", contentType: "application/pdf", placeholder: "[file]" };
+      return { path: "/tmp/release.pdf", contentType: "application/pdf", kind: "document" };
     });
 
     await downloadMSTeamsGraphMedia({
@@ -516,7 +545,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockResolvedValue({
       path: "/tmp/partial.pdf",
       contentType: "application/pdf",
-      placeholder: "[file]",
+      kind: "document",
     });
     const logger = { warn: vi.fn() };
 
@@ -531,7 +560,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
       {
         path: "/tmp/partial.pdf",
         contentType: "application/pdf",
-        placeholder: "[file]",
+        kind: "document",
       },
     ]);
     expect(logger.warn).toHaveBeenCalledWith("msteams graph hostedContents fetch failed", {

@@ -14,6 +14,42 @@ const streamingAliasMigration = defineChannelAliasMigration({
   streaming: { defaultMode: "partial", includePreviewChunk: true },
 });
 
+const RETIRED_TUNING_KEYS = new Set([
+  "timeoutSeconds",
+  "mediaGroupFlushMs",
+  "pollingStallThresholdMs",
+  "retry",
+  "errorCooldownMs",
+]);
+
+function stripRetiredTuningKnobs(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const stripped = stripRetiredTuningKnobs(item);
+      changed = changed || stripped.changed;
+      return stripped.value;
+    });
+    return { value: changed ? next : value, changed };
+  }
+  const record = asObjectRecord(value);
+  if (!record) {
+    return { value, changed: false };
+  }
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (RETIRED_TUNING_KEYS.has(key)) {
+      changed = true;
+      continue;
+    }
+    const stripped = stripRetiredTuningKnobs(child);
+    changed = changed || stripped.changed;
+    next[key] = stripped.value;
+  }
+  return { value: changed ? next : value, changed };
+}
+
 function hasRetiredTelegramDmConfig(value: unknown): boolean {
   const entry = asObjectRecord(value);
   if (!entry) {
@@ -257,6 +293,12 @@ export function normalizeCompatibilityConfig({
 
   let updated = rawEntry;
   let changed = aliases.config !== cfg;
+  const tuningKnobs = stripRetiredTuningKnobs(updated);
+  if (tuningKnobs.changed) {
+    updated = tuningKnobs.value as Record<string, unknown>;
+    changes.push("Removed retired Telegram tuning knobs.");
+    changed = true;
+  }
   const rootGroupHistoryContextMode = updated.includeGroupHistoryContext;
   const rootGroupHistoryLimitBeforeMigration =
     typeof updated.historyLimit === "number"

@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -72,10 +73,9 @@ function resolveTransport(
 }
 
 function withSessionAgentConfig(config: ZoomMeetingsConfig, agentId: string): ZoomMeetingsConfig {
-  const consultAgentId = config.realtime.agentId ?? agentId;
-  return config.realtime.agentId === consultAgentId
+  return config.realtime.agentId === agentId
     ? config
-    : { ...config, realtime: { ...config.realtime, agentId: consultAgentId } };
+    : { ...config, realtime: { ...config.realtime, agentId } };
 }
 
 function noteSession(session: ZoomMeetingsSession, note: string): void {
@@ -90,6 +90,7 @@ function isAwaitingAdmission(session: ZoomMeetingsSession): boolean {
 }
 
 export class ZoomMeetingsRuntime {
+  readonly #defaultAgentId: string;
   readonly #sessions: SessionRuntime;
   readonly #requesterSessionKeys = new Map<string, string>();
 
@@ -101,6 +102,9 @@ export class ZoomMeetingsRuntime {
       logger: RuntimeLogger;
     },
   ) {
+    this.#defaultAgentId = normalizeAgentId(
+      params.config.realtime.agentId ?? resolveDefaultAgentId(params.fullConfig),
+    );
     this.#sessions = new MeetingSessionRuntime({
       logger: params.logger,
       logScope: ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope,
@@ -139,7 +143,7 @@ export class ZoomMeetingsRuntime {
         url: ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request, params.config),
         mode: request.mode ?? params.config.defaultMode,
-        agentId: normalizeAgentId(request.agentId),
+        agentId: normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
         const session = createZoomMeetingsSession({ config: params.config, resolved, createdAt });
@@ -250,7 +254,7 @@ export class ZoomMeetingsRuntime {
   async join(request: ZoomMeetingsJoinRequest): Promise<ZoomMeetingsJoinResult> {
     try {
       const url = ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url);
-      const agentId = normalizeAgentId(request.agentId);
+      const agentId = normalizeAgentId(request.agentId ?? this.#defaultAgentId);
       return await this.#sessions.join({ ...request, agentId, url });
     } catch (error) {
       const activeIds = new Set(this.list().map((session) => session.id));
@@ -314,7 +318,7 @@ export class ZoomMeetingsRuntime {
   #probeContext(): ZoomMeetingsProbeContext {
     return {
       config: this.params.config,
-      resolveAgentId: (request) => normalizeAgentId(request.agentId),
+      resolveAgentId: (request) => normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       list: () => this.list(),
       join: async (request) => await this.join(request),
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),

@@ -19,7 +19,6 @@ describe("createDiscordClient", () => {
         channels: {
           discord: {
             token: "discord-token",
-            retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
           },
         },
       },
@@ -57,38 +56,6 @@ describe("createDiscordRestClient", () => {
     expect(result.token).toBe("explicit-token");
     expect(result.rest).toBe(fakeRest);
     expect(result.account.accountId).toBe("default");
-  });
-
-  it("keeps account retry config when explicit token is provided", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            ops: {
-              token: {
-                source: "exec",
-                provider: "vault",
-                id: "discord/ops-token",
-              },
-              retry: {
-                attempts: 7,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = createDiscordRestClient({
-      cfg,
-      accountId: "ops",
-      token: "Bot explicit-account-token",
-      rest: fakeRest,
-    });
-
-    expect(result.token).toBe("explicit-account-token");
-    expect(result.account.accountId).toBe("ops");
-    expect(result.account.config.retry).toEqual({ attempts: 7 });
   });
 
   it("applies a caller timeout to a dedicated REST client", () => {

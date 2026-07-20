@@ -1,126 +1,202 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import type { PresenceViewer } from "./viewer-facepile.ts";
 import "./viewer-facepile.ts";
 
 type ViewerAvatarElement = HTMLElement & {
-  user: PresenceViewer;
+  user: PresenceViewer | null;
   updateComplete: Promise<boolean>;
 };
 
-function viewer(overrides: Partial<PresenceViewer> = {}): PresenceViewer {
-  return {
-    id: "profile-1",
-    name: "Test Person",
-    watchedSessions: [],
-    ...overrides,
-  };
-}
-
-async function mountViewer(user: PresenceViewer): Promise<ViewerAvatarElement> {
-  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
-  avatar.user = user;
-  document.body.append(avatar);
-  await avatar.updateComplete;
-  return avatar;
-}
-
-async function waitForImage(avatar: ViewerAvatarElement): Promise<HTMLImageElement> {
-  await vi.waitFor(() => expect(avatar.querySelector("img")).not.toBeNull());
-  return avatar.querySelector<HTMLImageElement>("img")!;
-}
-
 afterEach(() => {
   document.body.replaceChildren();
+  setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
 });
 
-describe("viewer avatar resolution", () => {
-  it("keeps an uploaded avatar ahead of the email fallback", async () => {
-    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
-    const avatar = await mountViewer(
-      viewer({ email: "test@example.com", avatarUrl: "/api/users/profile-1/avatar?v=2" }),
-    );
-    const image = await waitForImage(avatar);
+it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
+  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  avatar.user = {
+    id: "profile-mallory",
+    name: "Mallory",
+    avatarUrl: "https://evil.example/avatar.png",
+    watchedSessions: [],
+  };
+  document.body.append(avatar);
 
-    expect(image.getAttribute("src")).toBe("/api/users/profile-1/avatar?v=2");
-    expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(image.getAttribute("loading")).toBe("lazy");
-    expect(digest).not.toHaveBeenCalled();
-  });
-
-  it("retries a failed uploaded avatar after the user snapshot updates", async () => {
-    const avatarUrl = "/api/users/profile-1/avatar?v=2";
-    const avatar = await mountViewer(viewer({ avatarUrl }));
-    const failedImage = await waitForImage(avatar);
-
-    failedImage.dispatchEvent(new Event("error"));
+  await vi.waitFor(async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")).toBeNull();
+    expect(avatar.textContent?.trim()).toBe("MA");
+  });
+});
 
-    avatar.user = viewer({ avatarUrl });
+it("renders trusted presence avatar routes directly", async () => {
+  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  avatar.user = {
+    id: "profile-ada",
+    name: "Ada Lovelace",
+    avatarUrl: "/api/users/profile-ada/avatar",
+    watchedSessions: [],
+  };
+  document.body.append(avatar);
+
+  await vi.waitFor(async () => {
     await avatar.updateComplete;
-    expect(avatar.querySelector("img")?.getAttribute("src")).toBe(avatarUrl);
+    expect(avatar.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-ada/avatar");
+  });
+});
+
+type ViewerFacepileElement = HTMLElement & {
+  presencePayload: unknown;
+  selfInstanceId?: string;
+  variant: "session" | "footer";
+  updateComplete: Promise<boolean>;
+};
+
+function mountFooterFacepile() {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "footer";
+  facepile.selfInstanceId = "self-instance";
+  facepile.presencePayload = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "00-self", name: "Self User", email: "self@example.test" },
+        watchedSessions: [],
+      },
+      {
+        instanceId: "alice-1",
+        user: { id: "alice", name: "Alice", email: "alice@example.test" },
+        watchedSessions: [],
+      },
+      {
+        instanceId: "bob-1",
+        user: { id: "bob", email: "bob@example.test" },
+        watchedSessions: [],
+      },
+    ],
+  };
+  document.body.append(facepile);
+  return facepile;
+}
+
+it("opens a who's-online roster from the footer facepile", async () => {
+  const facepile = mountFooterFacepile();
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
   });
 
-  it("normalizes and hashes email with SHA-256 for the Gravatar URL", async () => {
-    const avatar = await mountViewer(viewer({ email: "  TEST@example.com " }));
+  facepile.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.click();
 
-    expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("TP");
-    const image = await waitForImage(avatar);
-    expect(image.getAttribute("src")).toBe(
-      "https://gravatar.com/avatar/973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b?d=404&s=128",
-    );
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    const items = [...document.querySelectorAll(".presence-roster-menu__item")];
+    // Everyone online is listed — including self, sorted first and marked.
+    expect(items.map((item) => item.getAttribute("data-viewer-id"))).toEqual([
+      "00-self",
+      "alice",
+      "bob",
+    ]);
   });
 
-  it("falls back to initials when the Gravatar image fails", async () => {
-    const avatar = await mountViewer(viewer({ email: "missing-one@example.test" }));
-    const image = await waitForImage(avatar);
+  const menu = document.querySelector(".presence-roster-menu");
+  expect(menu?.querySelector(".presence-roster-menu__title")?.textContent).toContain("3");
+  const rows = [...(menu?.querySelectorAll(".presence-roster-menu__item") ?? [])];
+  expect(rows[0]?.querySelector(".presence-roster-menu__you")?.textContent).toContain("you");
+  // Named users show the email as a subtitle; email-only users don't repeat it.
+  expect(rows[1]?.querySelector(".presence-roster-menu__email")?.textContent).toBe(
+    "alice@example.test",
+  );
+  expect(rows[2]?.querySelector(".presence-roster-menu__name")?.textContent?.trim()).toBe(
+    "bob@example.test",
+  );
+  expect(rows[2]?.querySelector(".presence-roster-menu__email")).toBeNull();
+  // Each row carries the shared avatar element.
+  expect(rows[1]?.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+});
 
-    image.dispatchEvent(new Event("error"));
-    await avatar.updateComplete;
+it("keeps session facepiles as plain non-interactive avatar clusters", async () => {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "session";
+  facepile.presencePayload = {
+    presence: [
+      {
+        instanceId: "alice-1",
+        user: { id: "alice", name: "Alice" },
+        watchedSessions: [],
+      },
+    ],
+  };
+  document.body.append(facepile);
 
-    expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("TP");
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
+  });
+  expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
+});
+
+it("closes the roster when a row is selected", async () => {
+  const facepile = mountFooterFacepile();
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
+  });
+  facepile.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.click();
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(document.querySelector(".presence-roster-menu")).not.toBeNull();
   });
 
-  it("does not attribute a stale Gravatar error to the next user", async () => {
-    const avatar = await mountViewer(viewer({ email: "first-stale@example.test" }));
-    const staleImage = await waitForImage(avatar);
+  document
+    .querySelector(".presence-roster-menu")
+    ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, cancelable: true }));
 
-    avatar.user = viewer({ id: "profile-2", email: "second-current@example.test" });
-    staleImage.dispatchEvent(new Event("error"));
-    await avatar.updateComplete;
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(document.querySelector(".presence-roster-menu")).toBeNull();
+  });
+});
 
-    const image = await waitForImage(avatar);
-    expect(image.getAttribute("src")).toMatch(
-      /^https:\/\/gravatar\.com\/avatar\/[a-f0-9]{64}\?d=404&s=128$/u,
-    );
+it("drops a stale open roster when presence empties and does not reopen on return", async () => {
+  const facepile = mountFooterFacepile();
+  const fullPresence = facepile.presencePayload;
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
+  });
+  facepile.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.click();
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(document.querySelector(".presence-roster-menu")).not.toBeNull();
   });
 
-  it("renders initials without attempting a hash when email is absent", async () => {
-    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
-    const avatar = await mountViewer(viewer());
-
-    expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("TP");
-    expect(digest).not.toHaveBeenCalled();
+  // Everyone else disconnects: the facepile (and menu) unmount without a
+  // wa-after-hide, so the open state must clear instead of going stale.
+  facepile.presencePayload = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "00-self", name: "Self User", email: "self@example.test" },
+        watchedSessions: [],
+      },
+    ],
+  };
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(document.querySelector(".presence-roster-menu")).toBeNull();
   });
 
-  it("caches missing Gravatars by normalized email", async () => {
-    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
-    const first = await mountViewer(viewer({ email: " Missing-Two@Example.Test " }));
-    const image = await waitForImage(first);
-    image.dispatchEvent(new Event("error"));
-    await first.updateComplete;
-
-    const second = await mountViewer(
-      viewer({ id: "profile-2", email: "missing-two@example.test" }),
-    );
-
-    expect(second.querySelector("img")).toBeNull();
-    expect(digest).toHaveBeenCalledTimes(1);
+  facepile.presencePayload = fullPresence;
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
   });
+  // Presence returning must not resurrect the previously open menu.
+  expect(document.querySelector(".presence-roster-menu")).toBeNull();
 });

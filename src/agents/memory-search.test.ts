@@ -485,8 +485,6 @@ describe("memory search config", () => {
               onSessionStart: false,
               onSearch: true,
               watch: false,
-              watchDebounceMs: 25,
-              intervalMinutes: 3,
               sessions: {
                 deltaBytes: 321,
                 deltaMessages: 7,
@@ -502,8 +500,8 @@ describe("memory search config", () => {
       onSessionStart: false,
       onSearch: true,
       watch: false,
-      watchDebounceMs: 25,
-      intervalMinutes: 3,
+      watchDebounceMs: 1500,
+      intervalMinutes: 0,
       embeddingBatchTimeoutSeconds: undefined,
       sessions: {
         deltaBytes: 321,
@@ -543,7 +541,6 @@ describe("memory search config", () => {
                 extensionPath: "/opt/sqlite-vec.dylib",
               },
             },
-            chunking: { tokens: 500, overlap: 100 },
             query: { maxResults: 4, minScore: 0.2 },
           },
         },
@@ -552,7 +549,6 @@ describe("memory search config", () => {
             id: "main",
             default: true,
             memorySearch: {
-              chunking: { tokens: 320 },
               query: { maxResults: 8 },
               store: {
                 vector: {
@@ -567,8 +563,6 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");
-    expect(resolved?.chunking.tokens).toBe(320);
-    expect(resolved?.chunking.overlap).toBe(100);
     expect(resolved?.query.maxResults).toBe(8);
     expect(resolved?.query.minScore).toBe(0.2);
     expect(resolved?.store.vector.enabled).toBe(true);

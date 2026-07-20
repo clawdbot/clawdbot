@@ -39,6 +39,7 @@ import {
   signalApprovalCapability,
 } from "./approval-native.js";
 import { markdownToSignalTextChunks } from "./format.js";
+import { formatSignalMediaText } from "./media-text.js";
 import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
@@ -150,10 +151,16 @@ function resolveSignalReplyOptions(params: {
   }).then((persistedContext) => {
     const replyToAuthor =
       persistedContext?.ambiguous === true ? undefined : persistedContext?.author;
+    const replyToBody =
+      persistedContext?.ambiguous === true
+        ? ""
+        : [persistedContext?.body, formatSignalMediaText(persistedContext?.media ?? [])]
+            .filter(Boolean)
+            .join("\n");
     return {
       replyToId,
       ...(replyToAuthor ? { replyToAuthor } : {}),
-      ...(persistedContext?.body ? { replyToBody: persistedContext.body } : {}),
+      ...(replyToBody ? { replyToBody } : {}),
     };
   });
 }

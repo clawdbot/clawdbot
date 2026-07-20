@@ -31,6 +31,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "zalouser",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "ZALOUSER_PROFILE",
+            "ZCA_PROFILE"
+          ]
+        }
+      },
       "label": "Zalo Personal",
       "selectionLabel": "Zalo (Personal Account)",
       "docsPath": "/channels/zalouser",

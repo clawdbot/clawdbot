@@ -98,24 +98,9 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   return normalizeRenderedContextMaxChars(scaledChars);
 }
 
-/** Reads Codex projection reserve tokens from compaction config. */
-export function resolveCodexContextEngineProjectionReserveTokens(params: {
-  config?: unknown;
-}): number | undefined {
-  const compaction = asRecord(asRecord(asRecord(params.config)?.agents)?.defaults)?.compaction;
-  const configuredReserveTokens = toNonNegativeInt(asRecord(compaction)?.reserveTokens);
-  const configuredReserveTokensFloor = toNonNegativeInt(asRecord(compaction)?.reserveTokensFloor);
-
-  if (configuredReserveTokens !== undefined) {
-    return Math.max(
-      configuredReserveTokens,
-      configuredReserveTokensFloor ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
-    );
-  }
-  if (configuredReserveTokensFloor !== undefined) {
-    return configuredReserveTokensFloor;
-  }
-  return undefined;
+/** Returns the fixed reserve used for Codex context-engine projections. */
+export function resolveCodexContextEngineProjectionReserveTokens(): number {
+  return DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
 }
 
 /** Fits projected context prompts under Codex app-server turn/start text limits. */
@@ -231,17 +216,6 @@ function resolveProjectionPromptBudgetTokens(params: {
     Math.max(0, params.contextTokenBudget - minPromptBudget),
   );
   return Math.max(1, params.contextTokenBudget - effectiveReserveTokens);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function toNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.floor(value);
 }
 
 function dropDuplicateTrailingPrompt(messages: AgentMessage[], prompt: string): AgentMessage[] {

@@ -37,6 +37,7 @@ export const SessionCatalogSessionSchema = closedObject({
   modelProvider: Type.Optional(Type.String()),
   cliVersion: Type.Optional(Type.String()),
   gitBranch: Type.Optional(Type.String()),
+  customGroup: Type.Optional(Type.String()),
   archived: Type.Boolean(),
   sessionKey: Type.Optional(NonEmptyString),
   canContinue: Type.Boolean(),

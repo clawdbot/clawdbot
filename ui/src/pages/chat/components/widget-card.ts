@@ -9,6 +9,11 @@ import {
 } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  canvasWidgetNameForDocument,
+  mcpAppWidgetNameForViewId,
+  type BoardProvider,
+} from "../../../lib/board/provider.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import {
   isInternalCanvasEntryUrl,
@@ -31,7 +36,95 @@ type WidgetCardOptions = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   sessionKey?: string;
+  boardProvider?: BoardProvider;
 };
+
+async function pinCanvasWidget(
+  event: Event,
+  preview: ToolPreview,
+  provider: BoardProvider,
+  name: string,
+): Promise<void> {
+  const button = event.currentTarget;
+  const docId = preview.viewId?.trim();
+  if (!(button instanceof HTMLButtonElement) || !docId) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = t("chat.toolCards.pinToDashboardPending");
+  try {
+    await provider.pinWidget({
+      docId,
+      name,
+      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
+    });
+    button.textContent = t("chat.toolCards.pinnedToDashboard");
+    button.dataset.pinned = "true";
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = t("chat.toolCards.pinToDashboard");
+    button.title = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function pinMcpAppWidget(
+  event: Event,
+  preview: ToolPreview,
+  provider: BoardProvider,
+  name: string,
+  viewId: string,
+): Promise<void> {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = t("chat.toolCards.pinToDashboardPending");
+  try {
+    await provider.pinMcpApp({
+      viewId,
+      name,
+      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
+    });
+    button.textContent = t("chat.toolCards.pinnedToDashboard");
+    button.dataset.pinned = "true";
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = t("chat.toolCards.pinToDashboard");
+    button.title = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function canvasWidgetName(preview: ToolPreview): string | undefined {
+  if (preview.boardWidgetName) {
+    return preview.boardWidgetName;
+  }
+  const viewId = preview.viewId?.trim();
+  return viewId ? canvasWidgetNameForDocument(viewId) : undefined;
+}
+
+function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
+  const viewId = preview.viewId?.trim();
+  const entryUrl = preview.url?.trim();
+  if (!viewId || !entryUrl) {
+    return false;
+  }
+  try {
+    const entry = new URL(entryUrl, "http://localhost");
+    const prefix = "/__openclaw__/canvas/documents/";
+    if (entry.origin !== "http://localhost" || !entry.pathname.startsWith(prefix)) {
+      return false;
+    }
+    const [encodedDocumentId, entrypoint] = entry.pathname.slice(prefix.length).split("/", 2);
+    if (!encodedDocumentId || !entrypoint) {
+      return false;
+    }
+    const documentId = decodeURIComponent(encodedDocumentId);
+    return /^[A-Za-z0-9._-]+$/u.test(documentId) && documentId === viewId;
+  } catch {
+    return false;
+  }
+}
 
 // Sandboxed widget documents report their content height via postMessage so the
 // preview iframe can fit short/tall widgets. The event source must be one of our
@@ -234,7 +327,10 @@ function renderPreviewFrame(params: {
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
+const loadMcpAppView = async () => {
+  const registration = await import("../../../components/mcp-app-view-registration.ts");
+  registration.registerMcpAppView();
+};
 
 function renderMcpAppView(params: {
   sessionKey: string;
@@ -365,11 +461,50 @@ function renderWidgetCard(
   }
   const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
+  const provider = options?.boardProvider;
+  const mcpAppViewId = preview.mcpApp?.viewId?.trim();
+  const pinName = preview.mcpApp
+    ? mcpAppViewId
+      ? mcpAppWidgetNameForViewId(mcpAppViewId)
+      : undefined
+    : canvasWidgetName(preview);
+  const pinned = Boolean(
+    pinName && provider?.snapshot$.value.widgets.some((widget) => widget.name === pinName),
+  );
+  const pinAction =
+    provider &&
+    (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
+    pinName &&
+    ((contentKind === "canvas-html" &&
+      preview.sandbox === "scripts" &&
+      isManagedCanvasDocumentPreview(preview)) ||
+      (contentKind === "mcp-app" && mcpAppViewId))
+      ? html`<button
+          class="chat-tool-card__widget-action"
+          type="button"
+          data-pin-widget
+          ?disabled=${pinned}
+          ?data-pinned=${pinned}
+          title=${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
+          aria-label=${t(
+            pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard",
+          )}
+          @click=${(event: Event) =>
+            contentKind === "mcp-app" && mcpAppViewId
+              ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
+              : void pinCanvasWidget(event, preview, provider, pinName)}
+        >
+          ${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
+        </button>`
+      : nothing;
   return html`
     <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
       <div class="chat-tool-card__preview-header">
         <span class="chat-tool-card__preview-label">${label}</span>
-        ${renderWidgetActions(preview)}
+        <div class="chat-tool-card__preview-actions">
+          <div data-widget-actions ?hidden=${pinAction === nothing}>${pinAction}</div>
+          ${renderWidgetActions(preview)}
+        </div>
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${renderWidgetContent(contentKind, preview, options)}

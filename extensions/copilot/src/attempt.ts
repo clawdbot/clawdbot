@@ -736,9 +736,6 @@ export async function runCopilotAttempt(
           messages,
           ctx: hookContext,
           bootstrapContextRunKind: input.bootstrapContextRunKind,
-          ...("beforeAgentStartResult" in input
-            ? { beforeAgentStartResult: input.beforeAgentStartResult }
-            : {}),
         });
     const attemptInput =
       promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };

@@ -37,6 +37,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "qqbot",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "QQBOT_APP_ID",
+            "QQBOT_CLIENT_SECRET"
+          ]
+        }
+      },
       "approvalFlags": ["native"],
       "label": "QQ Bot",
       "selectionLabel": "QQ Bot (Official API)",

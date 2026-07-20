@@ -2,12 +2,16 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 
 function hasTranscriptMeta(message: unknown): boolean {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { __openclaw?: unknown })["__openclaw"] &&
-    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object",
-  );
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const metadata = (message as { __openclaw?: unknown })["__openclaw"];
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return false;
+  }
+  // An idempotency marker alone identifies a locally materialized queued turn;
+  // authoritative transcript metadata adds identity, sequence, or kind fields.
+  return Object.keys(metadata).some((key) => key !== "idempotencyKey");
 }
 
 export function readTranscriptSequence(message: unknown): number | null {

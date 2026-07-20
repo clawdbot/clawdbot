@@ -11,7 +11,56 @@ import {
 import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
+const RETIRED_TUNING_KEYS = new Set([
+  "gatewayInfoTimeoutMs",
+  "gatewayReadyTimeoutMs",
+  "gatewayRuntimeReadyTimeoutMs",
+  "eventQueue",
+  "retry",
+]);
 type AgentBindingConfig = NonNullable<OpenClawConfig["bindings"]>[number];
+
+function stripRetiredTuningKnobs(value: unknown): { value: unknown; changed: boolean } {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return { value, changed: false };
+  }
+  const next = { ...record };
+  let changed = false;
+  for (const key of RETIRED_TUNING_KEYS) {
+    if (Object.hasOwn(next, key)) {
+      delete next[key];
+      changed = true;
+    }
+  }
+  return { value: changed ? next : record, changed };
+}
+
+function stripRetiredDiscordTuningKnobs(value: unknown): {
+  value: Record<string, unknown>;
+  changed: boolean;
+} {
+  const root = asObjectRecord(value) ?? {};
+  const rootResult = stripRetiredTuningKnobs(root);
+  const nextRoot = rootResult.value as Record<string, unknown>;
+  const accounts = asObjectRecord(nextRoot.accounts);
+  if (!accounts) {
+    return { value: nextRoot, changed: rootResult.changed };
+  }
+  let accountsChanged = false;
+  const nextAccounts = { ...accounts };
+  for (const [accountId, account] of Object.entries(accounts)) {
+    const accountResult = stripRetiredTuningKnobs(account);
+    if (accountResult.changed) {
+      nextAccounts[accountId] = accountResult.value;
+      accountsChanged = true;
+    }
+  }
+  return {
+    value: accountsChanged ? { ...nextRoot, accounts: nextAccounts } : nextRoot,
+    changed: rootResult.changed || accountsChanged,
+  };
+}
 
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "discord",
@@ -521,6 +570,12 @@ export function normalizeCompatibilityConfig({
   }
   let updated = rawEntry;
   let changed = aliases.config !== cfg;
+  const tuningKnobs = stripRetiredDiscordTuningKnobs(updated);
+  if (tuningKnobs.changed) {
+    updated = tuningKnobs.value as Record<string, unknown>;
+    changes.push("Removed retired Discord tuning knobs.");
+    changed = true;
+  }
 
   const guildAliases = normalizeDiscordGuildChannelAllowAliases({
     entry: updated,

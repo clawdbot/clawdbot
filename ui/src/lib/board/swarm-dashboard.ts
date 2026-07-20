@@ -2,6 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 import type { BoardSnapshot } from "./types.ts";
+import type { BoardViewSnapshot } from "./view-types.ts";
 
 const SWARM_TAB_ID = "builtin-swarm";
 const SWARM_WIDGET_NAME = "builtin:swarm";
@@ -26,7 +27,7 @@ function hasSwarmRowsForSession(
 export function withSwarmWidget(
   snapshot: BoardSnapshot,
   sessions: readonly GatewaySessionRow[],
-): BoardSnapshot {
+): BoardViewSnapshot {
   // Keep the card mounted through terminal collector updates so its explicit
   // empty state is visible before the retention sweep removes the group.
   if (!hasSwarmRowsForSession(sessions, snapshot.sessionKey)) {
@@ -55,7 +56,7 @@ export function withSwarmWidget(
     position: 0,
     grantState: "granted" as const,
     revision: snapshot.revision,
-  };
+  } satisfies BoardViewSnapshot["widgets"][number];
   const widgets = snapshot.widgets.some((candidate) => candidate.name === SWARM_WIDGET_NAME)
     ? snapshot.widgets.map((candidate) =>
         candidate.name === SWARM_WIDGET_NAME ? widget : candidate,

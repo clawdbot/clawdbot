@@ -384,6 +384,22 @@ export function collectGatewayConfigFindings(
         remediation:
           "Enable this only when the proxy is the exclusive Gateway ingress, strongly authenticates users, overwrites identity headers, and restricts access with allowUsers.",
       });
+
+      if (
+        trustedProxyConfig.deviceAutoApprove.scopes?.some(
+          (scope) => scope.trim() === "operator.admin",
+        )
+      ) {
+        findings.push({
+          checkId: "gateway.trusted_proxy_device_auto_approve_admin",
+          severity: "critical",
+          title: "Trusted-proxy device auto-approval allows full admin",
+          detail:
+            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+          remediation:
+            "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+        });
+      }
     }
 
     const allowUsers = trustedProxyConfig?.allowUsers ?? [];

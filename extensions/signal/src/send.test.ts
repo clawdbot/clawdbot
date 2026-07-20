@@ -120,7 +120,7 @@ describe("sendMessageSignal receipts", () => {
     );
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "send",
-      expect.objectContaining({ attachments: ["/tmp/image.png"] }),
+      expect.objectContaining({ attachments: ["/tmp/image.png"], message: "" }),
       expect.objectContaining({ maxAttachmentBytes: maxBytes }),
     );
     expect(result.messageId).toBe("1234567891");

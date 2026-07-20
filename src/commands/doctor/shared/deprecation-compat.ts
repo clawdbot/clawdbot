@@ -63,6 +63,22 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-runtime-tuning-knobs-purge",
+    deprecated: "2026-07-19",
+    warningStarts: "2026-07-19",
+    removeAfter: "2026-09-18",
+    owner: "config",
+    introduced: "2026-07-19",
+    source: "retired runtime and bundled-channel numeric tuning knobs",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.ts",
+    replacement: "built-in runtime and channel defaults",
+    docsPath: "/gateway/doctor",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts",
+      "src/config/dead-config-keys.test.ts",
+    ],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-phase2-channel-dm-aliases",
     deprecated: "2026-07-18",
     warningStarts: "2026-07-18",

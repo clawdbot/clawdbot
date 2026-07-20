@@ -2542,13 +2542,15 @@ describe("handleFeishuMessage command authorization", () => {
       BodyForAgent?: string;
       CommandBody?: string;
       MediaPath?: string;
+      MediaTypes?: string[];
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.RawBody).toBe("<media:image>");
-    expect(context.CommandBody).toBe("<media:image>");
+    expect(context.RawBody).toBe("");
+    expect(context.CommandBody).toBe("");
     expect(context.BodyForAgent).toContain("[feishu attachment unavailable]");
     expect(context.BodyForAgent).not.toContain("<media:image>");
     expect(context.MediaPath).toBeUndefined();
+    expect(context.MediaTypes).toEqual(["image"]);
   });
 
   it("preserves an audio transcript when the media download fails", async () => {
@@ -2578,6 +2580,7 @@ describe("handleFeishuMessage command authorization", () => {
       BodyForAgent?: string;
       CommandBody?: string;
       MediaPath?: string;
+      MediaTypes?: string[];
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.RawBody).toBe("spoken words");
@@ -2586,7 +2589,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.MediaPath).toBeUndefined();
   });
 
-  it("preserves a filename without a phantom placeholder when a file download fails", async () => {
+  it("drops the unstable filename annotation when a file download fails", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired file key"));
 
@@ -2610,13 +2613,16 @@ describe("handleFeishuMessage command authorization", () => {
       BodyForAgent?: string;
       CommandBody?: string;
       MediaPath?: string;
+      MediaTypes?: string[];
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.RawBody).toBe("<media:document> (q1.pdf)");
-    expect(context.CommandBody).toBe("<media:document> (q1.pdf)");
-    expect(context.BodyForAgent).toContain("q1.pdf\n\n[feishu attachment unavailable]");
+    expect(context.RawBody).toBe("");
+    expect(context.CommandBody).toBe("");
+    expect(context.BodyForAgent).toContain("[feishu attachment unavailable]");
+    expect(context.BodyForAgent).not.toContain("q1.pdf");
     expect(context.BodyForAgent).not.toContain("<media:document>");
     expect(context.MediaPath).toBeUndefined();
+    expect(context.MediaTypes).toEqual(["document"]);
   });
 
   it("drops group image message when groupPolicy is open but requireMention is explicitly true", async () => {
@@ -3138,7 +3144,7 @@ describe("handleFeishuMessage command authorization", () => {
       MediaPath?: string;
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.RawBody).toBe("Rich text\n\nBefore ![image] after");
+    expect(context.RawBody).toBe("Rich text\n\nBefore  after");
     expect(context.BodyForAgent).toContain(
       "Rich text\n\nBefore  after\n\n[feishu attachment unavailable]",
     );

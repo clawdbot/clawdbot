@@ -56,7 +56,7 @@ type SystemEventOptions = {
   sessionDeliveryAckStateDir?: string;
   /**
    * @deprecated Legacy untrusted-producer downgrade flag, re-exported via the
-   * `plugin-sdk/channel-runtime` + `plugin-sdk/system-event-runtime` subpaths.
+   * the `plugin-sdk/system-event-runtime` subpath.
    * Accepted-and-ignored for installed third-party channel plugins that still
    * pass it: the anti-spoof sanitizer is now unconditional for untrusted
    * producers (sanitize-by-default), so this flag has no runtime effect. Kept
@@ -137,8 +137,16 @@ function findDuplicateInQueue(
   text: string,
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
+  sessionDeliveryAckId: string | undefined,
+  sessionDeliveryAckStateDir: string | undefined,
 ): boolean {
-  const incoming = { text, contextKey, deliveryContext };
+  const incoming = {
+    text,
+    contextKey,
+    deliveryContext,
+    sessionDeliveryAckId,
+    sessionDeliveryAckStateDir,
+  };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
     return last ? isDuplicateSystemEvent(last, incoming) : false;
@@ -172,7 +180,16 @@ export function enqueueSystemEventEntry(
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
-  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
+  if (
+    findDuplicateInQueue(
+      entry.queue,
+      cleaned,
+      normalizedContextKey,
+      normalizedDeliveryContext,
+      options.sessionDeliveryAckId,
+      options.sessionDeliveryAckStateDir,
+    )
+  ) {
     return null;
   } // skip consecutive duplicates
   const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
@@ -278,11 +295,20 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
 
 function isDuplicateSystemEvent(
   existing: SystemEvent,
-  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
+  incoming: Pick<
+    SystemEvent,
+    | "text"
+    | "contextKey"
+    | "deliveryContext"
+    | "sessionDeliveryAckId"
+    | "sessionDeliveryAckStateDir"
+  >,
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
+    existing.sessionDeliveryAckId === incoming.sessionDeliveryAckId &&
+    existing.sessionDeliveryAckStateDir === incoming.sessionDeliveryAckStateDir &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }

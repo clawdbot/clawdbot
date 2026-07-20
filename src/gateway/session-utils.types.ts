@@ -80,6 +80,7 @@ export type GatewaySessionRow = {
   icon?: string;
   unread?: boolean;
   lastReadAt?: number;
+  agentStatus?: SessionEntry["agentStatus"];
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
   lastActivityAt?: number;

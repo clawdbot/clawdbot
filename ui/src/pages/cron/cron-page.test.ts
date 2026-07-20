@@ -304,12 +304,12 @@ describe("CronPage editor state sync", () => {
 });
 
 describe("CronPage lifecycle", () => {
-  it("registers idempotently after a module reset with the shared custom element registry", async () => {
+  it("registers idempotently when the module is evaluated again", async () => {
     const registered = customElements.get("openclaw-cron-page");
     expect(registered).toBeDefined();
 
-    vi.resetModules();
-    await expect(import("./cron-page.ts")).resolves.toBeDefined();
+    const freshModulePath = "./cron-page.ts?custom-element-idempotence";
+    await expect(import(/* @vite-ignore */ freshModulePath)).resolves.toBeDefined();
 
     expect(customElements.get("openclaw-cron-page")).toBe(registered);
   });

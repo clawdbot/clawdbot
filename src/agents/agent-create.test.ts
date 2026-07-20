@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   rootRead: vi.fn(),
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
+  readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
+  claimCompletedAgentDeletion: vi.fn(() => true),
 }));
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
@@ -35,6 +37,14 @@ vi.mock("./agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope.js")>()),
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   resolveAgentDir: mocks.resolveAgentDir,
+}));
+
+vi.mock("./agent-lifecycle-registry.js", () => ({
+  claimCompletedAgentDeletion: mocks.claimCompletedAgentDeletion,
+}));
+
+vi.mock("../state/agent-deletion-journal.js", () => ({
+  readAgentDeletionJournal: mocks.readAgentDeletionJournal,
 }));
 
 vi.mock("./workspace.js", async (importOriginal) => {
@@ -64,6 +74,8 @@ describe("createAgent", () => {
     vi.clearAllMocks();
     mocks.config = {};
     mocks.persisted = {};
+    mocks.readAgentDeletionJournal.mockReturnValue(undefined);
+    mocks.claimCompletedAgentDeletion.mockReturnValue(true);
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/default-researcher");
     mocks.resolveAgentDir.mockReturnValue("/tmp/agent-researcher");
     mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
@@ -74,9 +86,9 @@ describe("createAgent", () => {
     mocks.rootWrite.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
     mocks.parseBindingSpecs.mockReturnValue({ bindings: [], errors: [] });
-    mocks.withConfigMutationExclusive.mockImplementation(async (fn: () => Promise<unknown>) => {
-      return await fn();
-    });
+    mocks.withConfigMutationExclusive.mockImplementation(
+      async (fn: (config: Record<string, unknown>) => Promise<unknown>) => await fn(mocks.config),
+    );
     mocks.transformConfigFileWithRetry.mockImplementation(
       async ({
         transform,
@@ -180,7 +192,25 @@ describe("createAgent", () => {
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
   });
 
+  it("keeps the template identity while bootstrap is pending", async () => {
+    await createAgent({ name: "researcher" });
+
+    expect(mocks.rootRead).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+    expect(mocks.persisted).toMatchObject({
+      agents: {
+        list: expect.arrayContaining([
+          expect.objectContaining({ identity: { name: "researcher" } }),
+        ]),
+      },
+    });
+  });
+
   it("does not publish config when identity setup is unsafe", async () => {
+    mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
+      dir,
+      bootstrapPending: false,
+    }));
     mocks.rootRead.mockRejectedValue(new FsSafeError("invalid-path", "unsafe identity path"));
 
     await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
@@ -189,6 +219,62 @@ describe("createAgent", () => {
     });
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.persisted).not.toHaveProperty("agents");
+  });
+
+  it("does not recreate an id with pending deletion cleanup", async () => {
+    mocks.readAgentDeletionJournal.mockReturnValue({
+      operationId: "delete-1",
+      cleanupCompleted: false,
+    });
+
+    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
+      status: "error",
+      reason: "deletion-pending",
+    });
+    expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("claims a completed deletion tombstone after recreating the id", async () => {
+    mocks.readAgentDeletionJournal.mockReturnValue({
+      operationId: "delete-1",
+      cleanupCompleted: true,
+    });
+
+    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
+      status: "created",
+      agentId: "researcher",
+    });
+    expect(mocks.claimCompletedAgentDeletion).toHaveBeenCalledWith("researcher", "delete-1");
+  });
+
+  it("claims a recovered completed tombstone only once for an existing roster entry", async () => {
+    mocks.config = { agents: { list: [{ id: "researcher" }] } };
+    mocks.readAgentDeletionJournal.mockReturnValue({
+      operationId: "delete-1",
+      cleanupCompleted: true,
+    });
+
+    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
+      status: "error",
+      reason: "already-exists",
+    });
+    expect(mocks.claimCompletedAgentDeletion).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains a completed tombstone when creation returns an error result", async () => {
+    mocks.readAgentDeletionJournal.mockReturnValue({
+      operationId: "delete-1",
+      cleanupCompleted: true,
+    });
+    mocks.transformConfigFileWithRetry.mockResolvedValueOnce({
+      result: { status: "error", reason: "invalid-bindings", message: "invalid" },
+      nextConfig: {},
+    });
+
+    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
+      status: "error",
+    });
+    expect(mocks.claimCompletedAgentDeletion).not.toHaveBeenCalled();
   });
 
   it("rejects a concurrent duplicate from the mutation snapshot", async () => {

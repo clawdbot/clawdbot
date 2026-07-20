@@ -2141,57 +2141,95 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps streamed text visible when a chat error terminates the turn", async () => {
-    const context = await newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${server.baseUrl}chat`);
-
-      const prompt = "stream before terminal error";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params);
-      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-      const partialText = "Partial answer before gateway error.";
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: partialText,
-        message: {
-          content: [{ text: partialText, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        sessionKey: "main",
-        state: "delta",
+  it.each([
+    { label: "desktop", viewport: { height: 900, width: 1280 } },
+    { label: "mobile", viewport: { height: 844, width: 390 } },
+  ])(
+    "keeps streamed text visible when a chat error terminates the turn on $label",
+    async ({ viewport }) => {
+      const context = await newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
       });
-      await page.getByText(partialText).waitFor({ timeout: 10_000 });
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page);
 
-      await gateway.emitGatewayEvent("chat", {
-        errorMessage: "gateway disconnected",
-        runId,
-        sessionKey: "main",
-        state: "error",
-      });
+      try {
+        await page.goto(`${server.baseUrl}chat`);
 
-      await page.getByText(partialText).waitFor({ timeout: 10_000 });
-      await page
-        .locator(".chat-thread-inner")
-        .getByText("Error: gateway disconnected")
-        .waitFor({ timeout: 10_000 });
-    } finally {
-      await closeBrowserContext(context);
-    }
-  });
+        const prompt = "stream before terminal error";
+        await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+        await page.getByRole("button", { name: "Send message" }).click();
 
-  it("replaces the pending reading indicator with the streamed response", async () => {
+        const sendRequest = await gateway.waitForRequest("chat.send");
+        const params = requireRecord(sendRequest.params);
+        const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+        const partialText = "Partial answer before gateway error.";
+        await gateway.emitGatewayEvent("chat", {
+          deltaText: partialText,
+          message: {
+            content: [{ text: partialText, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        await page
+          .locator(".chat-thread-inner")
+          .getByText(partialText)
+          .waitFor({ timeout: 10_000 });
+
+        const gatewayErrorText =
+          "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
+        const errorText = gatewayErrorText.replace(/^⚠️\s*/u, "");
+        await gateway.emitGatewayEvent("chat", {
+          errorMessage: gatewayErrorText,
+          message: {
+            content: [{ text: gatewayErrorText, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId,
+          sessionKey: "main",
+          state: "error",
+        });
+
+        await page
+          .locator(".chat-thread-inner")
+          .getByText(partialText)
+          .waitFor({ timeout: 10_000 });
+        const alert = page.locator(".chat-run-error");
+        await alert.getByText(errorText).waitFor({ timeout: 10_000 });
+        expect(await alert.locator("button").count()).toBe(0);
+        expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
+        expect(
+          await alert.evaluate((element) =>
+            element.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
+          ),
+        ).toBe(true);
+        const [alertBox, composerBox] = await Promise.all([
+          alert.boundingBox(),
+          page.locator(".agent-chat__composer-shell").boundingBox(),
+        ]);
+        expect(alertBox).not.toBeNull();
+        expect(composerBox).not.toBeNull();
+        expect(Math.abs((alertBox?.x ?? 0) - (composerBox?.x ?? 0))).toBeLessThan(1);
+        expect(Math.abs((alertBox?.width ?? 0) - (composerBox?.width ?? 0))).toBeLessThan(1);
+
+        await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
+        await page.getByRole("button", { name: "Send message" }).click();
+        await waitForRequests(gateway, "chat.send", 2);
+        await alert.waitFor({ state: "detached", timeout: 10_000 });
+      } finally {
+        await closeBrowserContext(context);
+      }
+    },
+  );
+
+  it("keeps the pending working row stable through acknowledgement and streaming", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -2218,13 +2256,97 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await page.locator(".chat-reading-indicator").waitFor({ timeout: 10_000 });
+      const indicator = page.locator(".chat-reading-indicator");
+      await indicator.waitFor({ timeout: 10_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
+      await page.locator(".chat-working-indicator").evaluate(async (element) => {
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+      });
+      const pendingRow = await indicator
+        .locator(
+          "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-virtual-row ')][1]",
+        )
+        .elementHandle();
+      if (!pendingRow) {
+        throw new Error("expected pending working indicator virtual row");
+      }
+      const pendingLayout = await pendingRow.evaluate((row) => {
+        const rect = row.getBoundingClientRect();
+        Reflect.set(window, "__openclawPendingWorkingRow", row);
+        return {
+          height: rect.height,
+          key: row.getAttribute("data-virtual-row-key"),
+          top: rect.top,
+        };
+      });
+      expect(pendingLayout.key).not.toBeNull();
+      await page.evaluate(() => {
+        const samples: Array<{
+          height: number | null;
+          key: string | null;
+          sameRow: boolean;
+          top: number | null;
+        }> = [];
+        Reflect.set(window, "__openclawWorkingRowSamples", samples);
+        let remaining = 20;
+        const sample = () => {
+          const originalRow = Reflect.get(window, "__openclawPendingWorkingRow");
+          const currentRow = document
+            .querySelector(".chat-reading-indicator")
+            ?.closest<HTMLElement>(".chat-virtual-row");
+          const rect = currentRow?.getBoundingClientRect();
+          samples.push({
+            height: rect?.height ?? null,
+            key: currentRow?.getAttribute("data-virtual-row-key") ?? null,
+            sameRow: currentRow === originalRow,
+            top: rect?.top ?? null,
+          });
+          remaining -= 1;
+          if (remaining > 0) {
+            requestAnimationFrame(sample);
+          }
+        };
+        sample();
+      });
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
 
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await page.locator(".chat-reading-indicator").waitFor({ timeout: 10_000 });
+      await indicator.waitFor({ timeout: 10_000 });
+      const samples = await page.evaluate(
+        () =>
+          new Promise<
+            Array<{
+              height: number | null;
+              key: string | null;
+              sameRow: boolean;
+              top: number | null;
+            }>
+          >((resolve) => {
+            const read = () => {
+              const current = Reflect.get(window, "__openclawWorkingRowSamples");
+              if (Array.isArray(current) && current.length >= 20) {
+                resolve(current);
+                return;
+              }
+              requestAnimationFrame(read);
+            };
+            read();
+          }),
+      );
+      const layouts = samples.filter(
+        (sample): sample is { height: number; key: string; sameRow: true; top: number } =>
+          sample.sameRow &&
+          typeof sample.height === "number" &&
+          typeof sample.key === "string" &&
+          typeof sample.top === "number",
+      );
+      expect(layouts).toHaveLength(20);
+      expect(new Set(layouts.map((sample) => sample.key))).toEqual(new Set([pendingLayout.key]));
+      const tops = layouts.map((sample) => sample.top);
+      const heights = layouts.map((sample) => sample.height);
+      expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
+      expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(1);
 
       const response = "The streamed response is now visible.";
       await gateway.emitGatewayEvent("chat", {
@@ -2241,6 +2363,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText(response).waitFor({ timeout: 10_000 });
       await page.locator(".chat-reading-indicator").waitFor({ state: "detached", timeout: 10_000 });
+      const streamingLayout = await pendingRow.evaluate(
+        (row, visibleResponse) => ({
+          connected: row.isConnected,
+          hasResponse: row.textContent?.includes(visibleResponse) ?? false,
+          key: row.getAttribute("data-virtual-row-key"),
+        }),
+        response,
+      );
+      expect(streamingLayout).toEqual({
+        connected: true,
+        hasResponse: true,
+        key: pendingLayout.key,
+      });
     } finally {
       await closeBrowserContext(context);
     }

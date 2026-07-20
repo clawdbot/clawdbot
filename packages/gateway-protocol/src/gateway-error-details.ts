@@ -22,6 +22,7 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 /** Stable discriminants for structured method-level authorization failures. */
 export const GatewayErrorDetailCodes = {
   MISSING_SCOPE: "MISSING_SCOPE",
+  MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
 } as const;
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
@@ -31,8 +32,12 @@ export type MissingScopeErrorDetails = {
   requiredScopes: string[];
 };
 
+export type McpAppViewExpiredErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
+};
+
 /** Structured details emitted by method-level authorization failures. */
-export type GatewayErrorDetails = MissingScopeErrorDetails;
+export type GatewayErrorDetails = MissingScopeErrorDetails | McpAppViewExpiredErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;
@@ -67,6 +72,11 @@ export function readMissingScopeErrorDetails(details: unknown): MissingScopeErro
     missingScope,
     requiredScopes,
   };
+}
+
+export function isMcpAppViewExpiredError(error: unknown): boolean {
+  const record = asRecord(error);
+  return asRecord(record?.details)?.code === GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 }
 
 /**

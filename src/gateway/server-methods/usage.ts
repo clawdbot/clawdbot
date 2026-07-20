@@ -905,12 +905,7 @@ async function loadCostUsageSummaryCached(params: {
   const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
-  if (
-    cached?.summary &&
-    cached.updatedAt &&
-    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS &&
-    cached.summary.cacheStatus?.status !== "refreshing"
-  ) {
+  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
     return cached.summary;
   }
 
@@ -941,9 +936,11 @@ async function loadCostUsageSummaryCached(params: {
         })
   )
     .then((summary) => {
+      // Refresh work is independent; retaining freshness prevents fleet rescans while it runs.
+      // The short TTL still picks up a completed refresh promptly.
       setCostUsageCache(cacheKey, {
         summary,
-        updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
+        updatedAt: Date.now(),
       });
       return summary;
     })

@@ -154,7 +154,7 @@ export function createWhatsAppPluginBase(params: {
       docsLabel: "whatsapp",
       blurb: "works with your own number; recommend a separate phone + eSIM.",
       systemImage: "message",
-      showConfigured: false,
+      exposure: { configured: false },
       quickstartAllowFrom: true,
       forceAccountBinding: true,
       preferSessionLookupForAnnounceTarget: true,

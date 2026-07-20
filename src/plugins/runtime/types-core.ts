@@ -264,23 +264,6 @@ export type PluginRuntimeCore = {
     replaceConfigFile: (
       params: RuntimeReplaceConfigFileParams,
     ) => Promise<RuntimeConfigReplaceResult>;
-    /**
-     * @deprecated Use current(), or pass the already loaded config through the
-     * call path. Runtime code must not reload config on demand. Bundled
-     * plugins and repo code are blocked from using this by the
-     * deprecated-internal-config-api architecture guard.
-     */
-    loadConfig: () => import("../../config/types.openclaw.js").OpenClawConfig;
-    /**
-     * @deprecated Use mutateConfigFile() or replaceConfigFile() with an
-     * explicit afterWrite intent so restart behavior stays under host control.
-     * Bundled plugins and repo code are blocked from using this by the
-     * deprecated-internal-config-api architecture guard.
-     */
-    writeConfigFile: (
-      cfg: import("../../config/types.openclaw.js").OpenClawConfig,
-      options?: RuntimeWriteConfigOptions & { afterWrite?: RuntimeConfigAfterWrite },
-    ) => Promise<void>;
   };
   agent: {
     defaults: {
@@ -408,9 +391,6 @@ export type PluginRuntimeCore = {
       params: import("../../web-search/runtime-types.js").RunWebSearchParams,
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
   };
-  stt: {
-    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
-  };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
     onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
@@ -460,11 +440,7 @@ export type PluginRuntimeCore = {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;
     managedFlows: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
-    /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-    flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
     acquireLocalService: (

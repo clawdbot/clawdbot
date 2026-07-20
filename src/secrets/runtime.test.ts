@@ -821,41 +821,6 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow("Env secret reference id must match");
   });
 
-  it("keeps provider resolution limit violations fail-closed", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          secrets: {
-            resolution: { maxRefsPerProvider: 1 },
-          },
-          models: {
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: { apiKey: TTS_REF },
-              },
-            },
-          },
-        }),
-        env: {
-          OPENAI_API_KEY: "test-openai-api-key",
-          ELEVENLABS_API_KEY: "test-elevenlabs-api-key",
-        },
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow('Secret provider "default" exceeded maxRefsPerProvider (1).');
-  });
-
   it("keeps unconfigured SecretRef provider aliases fail-closed", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({

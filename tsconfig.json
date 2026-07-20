@@ -25,8 +25,6 @@
     "useDefineForClassFields": false,
     "verbatimModuleSyntax": true,
     "paths": {
-      "openclaw/extension-api": ["./src/extensionAPI.ts"],
-      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "@openclaw/ai": ["./packages/ai/src/index.ts"],
       "@openclaw/ai/diagnostics": ["./packages/ai/src/utils/diagnostics.ts"],
@@ -246,7 +244,6 @@
       "@openclaw/speech-core/voice-models": ["./packages/speech-core/voice-models.ts"],
       "@openclaw/speech-core/*": ["./packages/speech-core/*"],
       "@openclaw/sdk": ["./packages/sdk/src/index.ts"],
-      "@openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],
       "@openclaw/*": ["./extensions/*"]

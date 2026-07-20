@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -12,10 +9,6 @@ import {
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
 import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
-import {
-  loadInstalledPluginIndexInstallRecordsSync,
-  writePersistedInstalledPluginIndexInstallRecordsSync,
-} from "../plugins/installed-plugin-index-records.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -32,18 +25,8 @@ import {
   resolveConfigPathForDeps,
 } from "./io.read-helpers.js";
 import { autoOwnerDisplaySecretByPath } from "./io.state.js";
-import type {
-  ConfigIoFactoryOptions,
-  NormalizedConfigIoDeps,
-  ShippedPluginInstallConfigReadMigration,
-  ShippedPluginInstallConfigWriteMigration,
-} from "./io.types.js";
+import type { ConfigIoFactoryOptions, NormalizedConfigIoDeps } from "./io.types.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { resolveStateDir } from "./paths.js";
-import {
-  extractShippedPluginInstallConfigRecords,
-  stripShippedPluginInstallConfigRecords,
-} from "./plugin-install-config-migration.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
@@ -60,25 +43,11 @@ export type ConfigIoContext = {
   options: ConfigIoFactoryOptions;
   observeLoadConfigSnapshot: (snapshot: ConfigFileSnapshot) => ConfigFileSnapshot;
   finalizeLoadedRuntimeConfig: (config: OpenClawConfig) => OpenClawConfig;
-  migrateAndStripShippedPluginInstallConfigRecords: (
-    configRaw: unknown,
-    options?: { persist?: boolean; rootConfigRaw?: unknown },
-  ) => ShippedPluginInstallConfigReadMigration;
-  retainRuntimeOnlyShippedPluginInstallConfigRecords: (
-    config: OpenClawConfig,
-    sourceRaw: unknown,
-  ) => OpenClawConfig;
   createValidationPluginMetadataSnapshotLoader: (params: {
     effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
   }) => ValidationPluginMetadataSnapshotLoader;
   resolveRuntimePreflightSourceConfig: (candidate: OpenClawConfig) => OpenClawConfig;
-  ensureShippedPluginInstallConfigRecordsMigratedForWrite: (
-    snapshot: ConfigFileSnapshot,
-  ) => ShippedPluginInstallConfigWriteMigration;
-  rollbackShippedPluginInstallConfigWriteMigration: (
-    migration: ShippedPluginInstallConfigWriteMigration,
-  ) => boolean;
   resolveSuspiciousRecoveryBackupCandidate: (parsed: unknown) => OpenClawConfig | null;
 };
 
@@ -124,76 +93,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     );
   }
 
-  function replaceConfigFileSync(raw: string): void {
-    replaceFileAtomicSync({
-      filePath: configPath,
-      content: raw,
-      dirMode: 0o700,
-      mode: 0o600,
-      tempPrefix: path.basename(configPath),
-      copyFallbackOnPermissionError: true,
-      fileSystem: deps.fs,
-    });
-  }
-
-  function migrateAndStripShippedPluginInstallConfigRecords(
-    configRaw: unknown,
-    migrationOptions: { persist?: boolean; rootConfigRaw?: unknown } = {},
-  ): ShippedPluginInstallConfigReadMigration {
-    const installRecords = extractShippedPluginInstallConfigRecords(configRaw);
-    const stripped = stripShippedPluginInstallConfigRecords(configRaw);
-    if (Object.keys(installRecords).length === 0) {
-      return { config: stripped };
-    }
-    if (migrationOptions.persist === false) {
-      return { config: configRaw, validationConfig: stripped };
-    }
-    try {
-      const stateDir = resolveStateDir(deps.env, deps.homedir);
-      const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
-        env: deps.env,
-        stateDir,
-      });
-      const nextRecords = { ...installRecords, ...existingRecords };
-      if (Object.keys(installRecords).some((pluginId) => !(pluginId in existingRecords))) {
-        writePersistedInstalledPluginIndexInstallRecordsSync(nextRecords, {
-          config: coerceConfig(stripped),
-          env: deps.env,
-          stateDir,
-        });
-      }
-      const rootConfigRaw = migrationOptions.rootConfigRaw;
-      if (
-        rootConfigRaw !== undefined &&
-        Object.keys(extractShippedPluginInstallConfigRecords(rootConfigRaw)).length > 0
-      ) {
-        const persistedRootParsed = stripShippedPluginInstallConfigRecords(rootConfigRaw);
-        const persistedRootRaw = JSON.stringify(persistedRootParsed, null, 2)
-          .trimEnd()
-          .concat("\n");
-        replaceConfigFileSync(persistedRootRaw);
-        return { config: stripped, persistedRootParsed, persistedRootRaw };
-      }
-    } catch (error) {
-      deps.logger.warn(
-        `Config (${configPath}): could not migrate shipped plugins.installs records into the plugin index: ${formatErrorMessage(error)}`,
-      );
-      return { config: configRaw };
-    }
-    return { config: stripped };
-  }
-
-  function retainRuntimeOnlyShippedPluginInstallConfigRecords(
-    config: OpenClawConfig,
-    sourceRaw: unknown,
-  ): OpenClawConfig {
-    const installRecords = extractShippedPluginInstallConfigRecords(sourceRaw);
-    if (Object.keys(installRecords).length === 0) {
-      return config;
-    }
-    return { ...config, plugins: { ...config.plugins, installs: installRecords } };
-  }
-
   function createValidationPluginMetadataSnapshotLoader(params: {
     effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
@@ -204,10 +103,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         if (snapshot) {
           return snapshot;
         }
-        const metadataConfig = retainRuntimeOnlyShippedPluginInstallConfigRecords(
-          config,
-          params.effectiveConfigRaw,
-        );
+        const metadataConfig = config;
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
         snapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
@@ -229,54 +125,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     const env = { ...deps.env } as NodeJS.ProcessEnv;
     const resolvedIncludes = resolveConfigIncludesForRead(candidate, configPath, { ...deps, env });
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
-    return coerceConfig(
-      migrateAndStripShippedPluginInstallConfigRecords(resolution.resolvedConfigRaw, {
-        persist: false,
-        rootConfigRaw: candidate,
-      }).config,
-    );
-  }
-
-  function ensureShippedPluginInstallConfigRecordsMigratedForWrite(
-    snapshot: ConfigFileSnapshot,
-  ): ShippedPluginInstallConfigWriteMigration {
-    const installRecords = {
-      ...extractShippedPluginInstallConfigRecords(snapshot.sourceConfig),
-      ...extractShippedPluginInstallConfigRecords(snapshot.parsed),
-    };
-    if (Object.keys(installRecords).length === 0) {
-      return { migrated: false };
-    }
-    const stateDir = resolveStateDir(deps.env, deps.homedir);
-    const existingRecords = loadInstalledPluginIndexInstallRecordsSync({ env: deps.env, stateDir });
-    if (Object.keys(installRecords).every((pluginId) => pluginId in existingRecords)) {
-      return { migrated: false };
-    }
-    try {
-      writePersistedInstalledPluginIndexInstallRecordsSync(
-        { ...installRecords, ...existingRecords },
-        {
-          config: coerceConfig(stripShippedPluginInstallConfigRecords(snapshot.sourceConfig)),
-          env: deps.env,
-          stateDir,
-        },
-      );
-      return { migrated: true };
-    } catch (error) {
-      throw new Error(
-        `Config write blocked: shipped plugins.installs records in ${configPath} could not be migrated into the plugin index. Fix state directory permissions or run openclaw plugins registry --refresh, then retry. ${formatErrorMessage(error)}`,
-        { cause: error },
-      );
-    }
-  }
-
-  function rollbackShippedPluginInstallConfigWriteMigration(
-    migration: ShippedPluginInstallConfigWriteMigration,
-  ): boolean {
-    if (!migration.migrated) {
-      return false;
-    }
-    return false;
+    return coerceConfig(resolution.resolvedConfigRaw);
   }
 
   function resolveSuspiciousRecoveryBackupCandidate(parsed: unknown): OpenClawConfig | null {
@@ -287,17 +136,12 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         env: candidateEnv,
       });
       const resolution = resolveConfigForRead(resolved, candidateEnv, deps.lowerPrecedenceEnv);
-      const migration = migrateAndStripShippedPluginInstallConfigRecords(
-        resolution.resolvedConfigRaw,
-        { persist: false, rootConfigRaw: parsed },
-      );
-      const effectiveConfigRaw = migration.config;
-      const validationConfigRaw = migration.validationConfig ?? effectiveConfigRaw;
+      const effectiveConfigRaw = resolution.resolvedConfigRaw;
       const pluginMetadata = createValidationPluginMetadataSnapshotLoader({
         effectiveConfigRaw,
         env: candidateEnv,
       });
-      const validated = validateConfigObjectWithPlugins(validationConfigRaw, {
+      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
         env: candidateEnv,
         pluginValidation: options.pluginValidation,
         loadPluginMetadataSnapshot: pluginMetadata.load,
@@ -316,12 +160,8 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     options,
     observeLoadConfigSnapshot,
     finalizeLoadedRuntimeConfig,
-    migrateAndStripShippedPluginInstallConfigRecords,
-    retainRuntimeOnlyShippedPluginInstallConfigRecords,
     createValidationPluginMetadataSnapshotLoader,
     resolveRuntimePreflightSourceConfig,
-    ensureShippedPluginInstallConfigRecordsMigratedForWrite,
-    rollbackShippedPluginInstallConfigWriteMigration,
     resolveSuspiciousRecoveryBackupCandidate,
   };
 }
@@ -331,15 +171,12 @@ export function resolveModelIdNormalizationPolicies(snapshot: PluginMetadataSnap
 }
 
 export function materializeConfigForLoad(
-  context: ConfigIoContext,
+  _context: ConfigIoContext,
   config: OpenClawConfig,
-  effectiveConfigRaw: unknown,
+  _effectiveConfigRaw: unknown,
   pluginMetadata: PluginMetadataSnapshot | undefined,
 ): OpenClawConfig {
-  return context.retainRuntimeOnlyShippedPluginInstallConfigRecords(
-    materializeRuntimeConfig(config, "load", {
-      manifestRegistry: pluginMetadata?.manifestRegistry,
-    }),
-    effectiveConfigRaw,
-  );
+  return materializeRuntimeConfig(config, "load", {
+    manifestRegistry: pluginMetadata?.manifestRegistry,
+  });
 }

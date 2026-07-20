@@ -6,7 +6,6 @@
  */
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
@@ -130,6 +129,8 @@ export function getOwnBrowserProfile<T>(
 }
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
+const DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS = 1_500;
+const DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS = 3_000;
 /**
  * Default extension relay port offset from the browser control port. Sits just
  * below the CDP allocation range (controlPort+9..) so profile port allocation
@@ -138,7 +139,6 @@ const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
 const EXTENSION_RELAY_PORT_OFFSET = 8;
 /** Username half of the relay's Basic credential; the password is the derived token. */
 const EXTENSION_RELAY_CDP_USER = "openclaw";
-const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
 /** Environment variable that overrides managed Chrome headless mode. */
 const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
@@ -178,39 +178,6 @@ function normalizeHexColor(raw: string | undefined): string {
     return DEFAULT_OPENCLAW_BROWSER_COLOR;
   }
   return normalized.toUpperCase();
-}
-
-function normalizeTimeoutMs(raw: number | undefined, fallback: number): number {
-  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
-  return value < 0 ? fallback : value;
-}
-
-function normalizeStartupTimeoutMs(raw: number | undefined, fallback: number): number {
-  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
-  if (value <= 0) {
-    return fallback;
-  }
-  return Math.min(value, MAX_BROWSER_STARTUP_TIMEOUT_MS);
-}
-
-function normalizeNonNegativeInteger(raw: number | undefined, fallback: number): number {
-  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
-  return value < 0 ? fallback : value;
-}
-
-function normalizePositiveInteger(raw: number | undefined, fallback: number): number {
-  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
-  return value <= 0 ? fallback : value;
-}
-
-const MAX_BROWSER_TIMER_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
-
-function normalizeNonNegativeTimerMinutes(raw: number | undefined, fallback: number): number {
-  return Math.min(normalizeNonNegativeInteger(raw, fallback), MAX_BROWSER_TIMER_MINUTES);
-}
-
-function normalizePositiveTimerMinutes(raw: number | undefined, fallback: number): number {
-  return Math.min(normalizePositiveInteger(raw, fallback), MAX_BROWSER_TIMER_MINUTES);
 }
 
 function normalizeExecutablePath(raw: string | undefined): string | undefined {
@@ -269,40 +236,10 @@ function resolveBrowserTabCleanupConfig(
   const raw = cfg?.tabCleanup;
   return {
     enabled: raw?.enabled ?? true,
-    idleMinutes: normalizeNonNegativeTimerMinutes(
-      raw?.idleMinutes,
-      DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
-    ),
-    maxTabsPerSession: normalizeNonNegativeInteger(
-      raw?.maxTabsPerSession,
-      DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
-    ),
-    sweepMinutes: normalizePositiveTimerMinutes(
-      raw?.sweepMinutes,
-      DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
-    ),
+    idleMinutes: DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
+    maxTabsPerSession: DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
+    sweepMinutes: DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
   };
-}
-
-function resolveCdpPortRangeStart(
-  rawStart: number | undefined,
-  fallbackStart: number,
-  rangeSpan: number,
-): number {
-  const start =
-    typeof rawStart === "number" && Number.isFinite(rawStart)
-      ? Math.floor(rawStart)
-      : fallbackStart;
-  if (start < 1 || start > 65535) {
-    throw new Error(`browser.cdpPortRangeStart must be between 1 and 65535, got: ${start}`);
-  }
-  const maxStart = 65535 - rangeSpan;
-  if (start > maxStart) {
-    throw new Error(
-      `browser.cdpPortRangeStart (${start}) is too high for a ${rangeSpan + 1}-port range; max is ${maxStart}.`,
-    );
-  }
-  return start;
 }
 
 const normalizeStringList = normalizeOptionalTrimmedStringList;
@@ -445,32 +382,15 @@ export function resolveBrowserConfig(
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
   const defaultColor = normalizeHexColor(cfg?.color);
-  const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
-  const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(
-    cfg?.remoteCdpHandshakeTimeoutMs,
-    Math.max(2000, remoteCdpTimeoutMs * 2),
-  );
-  const localLaunchTimeoutMs = normalizeStartupTimeoutMs(
-    cfg?.localLaunchTimeoutMs,
-    DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
-  );
-  const localCdpReadyTimeoutMs = normalizeStartupTimeoutMs(
-    cfg?.localCdpReadyTimeoutMs,
-    DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
-  );
-  const actionTimeoutMs = normalizeTimeoutMs(
-    cfg?.actionTimeoutMs,
-    DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-  );
+  const remoteCdpTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS;
+  const remoteCdpHandshakeTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS;
+  const localLaunchTimeoutMs = DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS;
+  const localCdpReadyTimeoutMs = DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS;
+  const actionTimeoutMs = DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
-  const cdpRangeSpan = derivedCdpRange.end - derivedCdpRange.start;
-  const cdpPortRangeStart = resolveCdpPortRangeStart(
-    cfg?.cdpPortRangeStart,
-    derivedCdpRange.start,
-    cdpRangeSpan,
-  );
-  const cdpPortRangeEnd = cdpPortRangeStart + cdpRangeSpan;
+  const cdpPortRangeStart = derivedCdpRange.start;
+  const cdpPortRangeEnd = derivedCdpRange.end;
 
   const rawCdpUrl = (cfg?.cdpUrl ?? "").trim();
   let cdpInfo:

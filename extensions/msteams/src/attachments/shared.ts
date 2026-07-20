@@ -23,15 +23,16 @@ type InlineImageCandidate =
       kind: "data";
       data: Buffer;
       contentType?: string;
-      placeholder: string;
+      sourceId?: string;
     }
   | {
       kind: "url";
       url: string;
       contentType?: string;
       fileHint?: string;
-      placeholder: string;
-    };
+      sourceId?: string;
+    }
+  | { kind: "unavailable"; sourceId?: string };
 
 type InlineImageLimitOptions = {
   maxInlineBytes?: number;
@@ -42,6 +43,21 @@ const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
 export const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
 export const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
+const GRAPH_HOSTED_CONTENT_SRC_RE = /\/hostedContents\/([^/?#]+)/i;
+
+function resolveInlineImageSourceId(src: string): string {
+  // Graph fallback names hosted content by item ID, while activity HTML carries its `$value` URL.
+  // Normalize both paths to one identity so a recovered image replaces its advertised slot.
+  const hostedContentId = GRAPH_HOSTED_CONTENT_SRC_RE.exec(src)?.[1];
+  if (!hostedContentId) {
+    return src;
+  }
+  try {
+    return decodeURIComponent(hostedContentId);
+  } catch {
+    return hostedContentId;
+  }
+}
 
 const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "graph.microsoft.com",
@@ -216,11 +232,11 @@ export function normalizeContentType(value: unknown): string | undefined {
   return `${trimmed.slice(0, parameterIndex).trim().toLowerCase()}${trimmed.slice(parameterIndex)}`;
 }
 
-export function inferPlaceholder(params: {
+export function resolveMSTeamsMediaKind(params: {
   contentType?: string;
   fileName?: string;
   fileType?: string;
-}): string {
+}): "image" | "document" {
   const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
   const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
   const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");
@@ -228,7 +244,7 @@ export function inferPlaceholder(params: {
   const looksLikeImage =
     mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
 
-  return looksLikeImage ? "<media:image>" : "<media:document>";
+  return looksLikeImage ? "image" : "document";
 }
 
 export function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
@@ -280,6 +296,23 @@ export function isDownloadableAttachment(att: MSTeamsAttachmentLike): boolean {
   }
 
   return false;
+}
+
+export function isAdvertisedFileAttachment(attachment: MSTeamsAttachmentLike): boolean {
+  const contentType = normalizeContentType(attachment.contentType) ?? "";
+  if (
+    contentType.startsWith("text/html") ||
+    contentType.startsWith("application/vnd.microsoft.card.") ||
+    contentType.startsWith("application/vnd.microsoft.teams.card.")
+  ) {
+    return false;
+  }
+  return Boolean(
+    isDownloadableAttachment(attachment) ||
+    isLikelyImageAttachment(attachment) ||
+    attachment.name?.trim() ||
+    contentType,
+  );
 }
 
 function isHtmlAttachment(att: MSTeamsAttachmentLike): boolean {
@@ -370,7 +403,7 @@ function decodeDataImageWithLimits(
   try {
     const data = Buffer.from(canonicalPayload, "base64");
     return {
-      candidate: { kind: "data", data, contentType, placeholder: "<media:image>" },
+      candidate: { kind: "data", data, contentType },
       estimatedBytes,
     };
   } catch {
@@ -393,8 +426,15 @@ export function extractInlineImageCandidates(
   limits?: InlineImageLimitOptions,
 ): InlineImageCandidate[] {
   const out: InlineImageCandidate[] = [];
+  const seenReferences = new Set<string>();
+  const representedAttachmentIds = new Set(
+    attachments.flatMap((attachment) => {
+      const id = attachment.id?.trim();
+      return id && !extractHtmlFromAttachment(attachment) ? [id] : [];
+    }),
+  );
   let totalEstimatedInlineBytes = 0;
-  outerLoop: for (const att of attachments) {
+  for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
       continue;
@@ -403,7 +443,7 @@ export function extractInlineImageCandidates(
     let match: RegExpExecArray | null = IMG_SRC_RE.exec(html);
     while (match) {
       const src = match[1]?.trim();
-      if (src && !src.startsWith("cid:")) {
+      if (src) {
         if (src.startsWith("data:")) {
           const { candidate: decoded, estimatedBytes } = decodeDataImageWithLimits(src, {
             maxInlineBytes: limits?.maxInlineBytes,
@@ -414,17 +454,29 @@ export function extractInlineImageCandidates(
               typeof limits?.maxInlineTotalBytes === "number" &&
               nextTotal > limits.maxInlineTotalBytes
             ) {
-              break outerLoop;
+              out.push({ kind: "unavailable" });
+            } else {
+              totalEstimatedInlineBytes = nextTotal;
+              out.push(decoded);
             }
-            totalEstimatedInlineBytes = nextTotal;
-            out.push(decoded);
+          } else {
+            out.push({ kind: "unavailable" });
           }
-        } else {
+        } else if (!seenReferences.has(src)) {
+          seenReferences.add(src);
+          if (src.startsWith("cid:")) {
+            const sourceId = src.slice("cid:".length) || undefined;
+            if (!sourceId || !representedAttachmentIds.has(sourceId)) {
+              out.push({ kind: "unavailable", sourceId });
+            }
+            match = IMG_SRC_RE.exec(html);
+            continue;
+          }
           out.push({
             kind: "url",
             url: src,
             fileHint: fileHintFromUrl(src),
-            placeholder: "<media:image>",
+            sourceId: resolveInlineImageSourceId(src),
           });
         }
       }

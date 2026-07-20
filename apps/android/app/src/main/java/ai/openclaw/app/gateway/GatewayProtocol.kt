@@ -186,6 +186,7 @@ enum class GatewayMethod(
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
   OpenclawChat("openclaw.chat"),
+  OpenclawChatHistory("openclaw.chat.history"),
   OpenclawChangesList("openclaw.changes.list"),
   OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),
@@ -234,6 +235,7 @@ enum class GatewayMethod(
   BoardUpdate("board.update"),
   BoardWidgetPut("board.widget.put"),
   BoardWidgetGrant("board.widget.grant"),
+  BoardWidgetAppView("board.widget.appView"),
   BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
@@ -455,6 +457,8 @@ enum class GatewayMethod(
   ApprovalHistory("approval.history"),
   PluginSurfaceRefresh("plugin.surface.refresh"),
   ConversationsList("conversations.list"),
+  SessionDiscussionInfo("session.discussion.info"),
+  SessionDiscussionOpen("session.discussion.open"),
 }
 
 enum class GatewayEvent(

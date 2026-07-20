@@ -16,6 +16,7 @@ import {
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
   readSessionUpdatedAt as readAccessorSessionUpdatedAt,
@@ -360,11 +361,17 @@ export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | 
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** Lists session entries for one agent. */
+/**
+ * Lists session entries for one agent. `readOnly` reads without joining the
+ * agent database writable lifecycle (no create/register/migrate) — required
+ * for detection/introspection paths that may run across the whole fleet.
+ * One flagged entry instead of a second export keeps the SDK surface budget flat.
+ */
 export function listSessionEntries(
-  params: SessionStoreListParams = {},
+  params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
+  return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined

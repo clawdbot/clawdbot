@@ -26,6 +26,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "zalo",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "ZALO_BOT_TOKEN",
+            "ZALO_WEBHOOK_SECRET"
+          ]
+        }
+      },
       "label": "Zalo",
       "selectionLabel": "Zalo (Bot API)",
       "docsPath": "/channels/zalo",

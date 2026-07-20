@@ -132,6 +132,14 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Building a Gateway client",
+    "target": "构建 Gateway 客户端"
+  },
+  {
+    "source": "Embedding OpenClaw",
+    "target": "嵌入 OpenClaw"
+  },
+  {
     "source": "Secure file operations",
     "target": "安全文件操作"
   },

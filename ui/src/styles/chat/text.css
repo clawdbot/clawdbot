@@ -60,7 +60,7 @@
 }
 
 .chat-text :where(li + li) {
-  margin-top: 0.25em;
+  margin-top: 0.4em;
 }
 
 /* Hide default marker only for unordered task lists; ordered lists keep numbers */

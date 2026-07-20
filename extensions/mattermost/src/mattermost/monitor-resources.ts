@@ -1,5 +1,12 @@
 // Mattermost plugin module implements monitor resources behavior.
-import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundMediaPayload,
+  formatInboundMediaUnavailableText,
+  formatMediaPlaceholderText,
+  toInboundMediaFacts,
+  type ChannelInboundMediaPayload,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
@@ -20,25 +27,39 @@ import { buildButtonProps, type MattermostInteractionResponse } from "./interact
 
 type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
-export type MattermostMediaInfo = {
-  path: string;
+type MattermostMediaInfo = {
+  path?: string;
   contentType?: string;
   kind: MattermostMediaKind;
 };
 
+export function buildMattermostInboundMediaPayload(
+  media: readonly MattermostMediaInfo[],
+): ChannelInboundMediaPayload {
+  return buildChannelInboundMediaPayload(toInboundMediaFacts(media));
+}
+
+export function formatMattermostPendingMediaText(params: {
+  body: string;
+  media: readonly MediaPlaceholderTextFact[];
+}): string {
+  return [params.body, formatMediaPlaceholderText(params.media)].filter(Boolean).join("\n").trim();
+}
+
 export function formatMattermostInboundMediaText(params: {
   body: string;
-  mediaPlaceholder: string;
-  expectedCount: number;
-  mediaCount: number;
+  nativeMedia: readonly MediaPlaceholderTextFact[];
+  materializedMedia: readonly MediaPlaceholderTextFact[];
 }): string {
-  const unavailableCount = Math.max(0, params.expectedCount - params.mediaCount);
+  const materializedCount = params.materializedMedia.filter(
+    (media) => Boolean(media.path) || Boolean(media.url),
+  ).length;
+  const unavailableCount = Math.max(0, params.nativeMedia.length - materializedCount);
   if (unavailableCount === 0) {
     return params.body;
   }
   return formatInboundMediaUnavailableText({
     body: params.body,
-    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
     notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
   });
 }
@@ -123,9 +144,19 @@ export function createMattermostMonitorResources(params: {
     }
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
+      let downloadUrl: string;
+      try {
+        downloadUrl = buildMattermostApiUrl(client.baseUrl, `/files/${fileId}`);
+      } catch (err) {
+        logger.debug?.(`mattermost: failed to resolve file ${fileId}: ${String(err)}`);
+        // Keep the fact list aligned one-per-native-file so a rejected ID cannot
+        // shift later attachments' payload positions; no download is attempted.
+        out.push({ kind: "unknown" });
+        continue;
+      }
       try {
         const saved = await saveRemoteMedia({
-          url: buildMattermostApiUrl(client.baseUrl, `/files/${fileId}`),
+          url: downloadUrl,
           requestInit: {
             headers: {
               Authorization: `Bearer ${client.token}`,
@@ -147,6 +178,19 @@ export function createMattermostMonitorResources(params: {
         });
       } catch (err) {
         logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
+        let contentType: string | undefined;
+        try {
+          const info = await client.request<{ mime_type?: string | null }>(`/files/${fileId}/info`);
+          contentType = info.mime_type?.trim() || undefined;
+        } catch (infoErr) {
+          logger.debug?.(
+            `mattermost: failed to resolve metadata for file ${fileId}: ${String(infoErr)}`,
+          );
+        }
+        out.push({
+          contentType,
+          kind: mediaKindFromMime(contentType) ?? "unknown",
+        });
       }
     }
     return out;

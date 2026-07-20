@@ -411,7 +411,6 @@ function wrapResolvedContextEngine(
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 const CORE_CONTEXT_ENGINE_OWNER = "core";
-const PUBLIC_CONTEXT_ENGINE_OWNER = "public-sdk";
 
 type ContextEngineRuntimeQuarantine = {
   engineId: string;
@@ -565,20 +564,6 @@ export function registerContextEngineForOwner(
     clearContextEngineRuntimeQuarantine(id);
   }
   return { ok: true };
-}
-
-/**
- * Public SDK entry point for third-party registrations.
- *
- * This path is intentionally unprivileged: it cannot claim core-owned ids and
- * it cannot safely refresh an existing registration because the caller's
- * identity is not authenticated.
- */
-export function registerContextEngine(
-  id: string,
-  factory: ContextEngineFactory,
-): ContextEngineRegistrationResult {
-  return registerContextEngineForOwner(id, factory, PUBLIC_CONTEXT_ENGINE_OWNER);
 }
 
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */

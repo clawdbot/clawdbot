@@ -607,7 +607,8 @@ describe("scoped vitest configs", () => {
 
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
-    expectThreadedNonIsolatedRunner(defaultUiConfig);
+    expect(requireTestConfig(defaultUiConfig).isolate).toBe(true);
+    expect(requireTestConfig(defaultUiConfig).runner).toBeUndefined();
     expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
     expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
     expectForkedIsolatedRunner(defaultInfraConfig);

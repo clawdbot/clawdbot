@@ -1,7 +1,10 @@
 // QA runner runtime helpers expose plugin QA scenarios through the CLI command surface.
 import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  loadPluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync,
@@ -235,8 +238,11 @@ function listDeclaredQaRunnerPlugins(
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
 > {
-  return loadPluginManifestRegistry(env ? { env } : {})
-    .plugins.filter(
+  // Private QA is a source-checkout harness. Its command tree must be derived
+  // from repo-owned manifests before Commander pre-action hooks can run.
+  const registry = env ? loadBundledPluginManifestRegistry({ env }) : loadPluginManifestRegistry();
+  return registry.plugins
+    .filter(
       (
         plugin,
       ): plugin is PluginManifestRecord & {

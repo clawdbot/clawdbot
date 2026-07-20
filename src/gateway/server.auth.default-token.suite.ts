@@ -165,6 +165,9 @@ export function registerDefaultAuthTokenSuite(): void {
         | undefined;
       expect(payload?.type).toBe("hello-ok");
       expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
+      );
+      expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
       );
       expect(payload?.features?.capabilities).toContain(

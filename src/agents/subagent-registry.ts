@@ -2559,10 +2559,14 @@ export function getSwarmRunByLaunchReplayKey(
   );
 }
 
-export function countActiveRunsForSession(requesterSessionKey: string): number {
+export function countActiveRunsForSession(
+  requesterSessionKey: string,
+  options?: { collect?: boolean },
+): number {
   return countActiveRunsForSessionFromRuns(
     subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
     requesterSessionKey,
+    options,
   );
 }
 

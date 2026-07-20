@@ -1,5 +1,9 @@
 // Whatsapp plugin module implements quoted message behavior.
 import type { MiscMessageGenerationOptions } from "baileys";
+import {
+  formatMediaPlaceholderText,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { jidToE164 } from "./text-runtime.js";
 
 // ── Inbound message metadata cache ──────────────────────────────────────
@@ -12,6 +16,7 @@ type QuotedMeta = {
   participant?: string;
   participantE164?: string;
   body?: string;
+  media?: MediaPlaceholderTextFact;
   fromMe?: boolean;
 };
 type CacheEntry = QuotedMeta & { ts: number };
@@ -61,6 +66,7 @@ export function lookupInboundMessageMeta(
     participant: entry.participant,
     participantE164: entry.participantE164,
     body: entry.body,
+    media: entry.media,
     fromMe: entry.fromMe,
   };
 }
@@ -125,6 +131,7 @@ export function lookupInboundMessageMetaForTarget(
       participant: exact.participant,
       participantE164: exact.participantE164,
       body: exact.body,
+      media: exact.media,
       fromMe: exact.fromMe,
     };
   }
@@ -145,6 +152,7 @@ export function lookupInboundMessageMetaForTarget(
       participant: entry.participant,
       participantE164: entry.participantE164,
       body: entry.body,
+      media: entry.media,
       fromMe: entry.fromMe,
     };
     if (!matchesQuotedConversationTarget(targetJid, candidate)) {
@@ -165,12 +173,19 @@ export function buildQuotedMessageOptions(params: {
   participant?: string;
   /** Original message text — shown in the quote preview bubble. */
   messageText?: string;
+  media?: MediaPlaceholderTextFact;
 }): MiscMessageGenerationOptions | undefined {
   const id = params.messageId?.trim();
   const remoteJid = params.remoteJid?.trim();
   if (!id || !remoteJid) {
     return undefined;
   }
+  const previewText = [
+    params.messageText,
+    formatMediaPlaceholderText(params.media ? [params.media] : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     quoted: {
       key: {
@@ -179,7 +194,7 @@ export function buildQuotedMessageOptions(params: {
         fromMe: params.fromMe ?? false,
         participant: params.participant,
       },
-      message: { conversation: params.messageText ?? "" },
+      message: { conversation: previewText },
     },
   } as MiscMessageGenerationOptions;
 }

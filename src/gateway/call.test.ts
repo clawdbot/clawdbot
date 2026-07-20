@@ -1139,7 +1139,6 @@ describe("buildGatewayConnectionDetails", () => {
         mode: "local",
         bind: "loopback",
         tls: { enabled: true },
-        handshakeTimeoutMs: 4321,
       },
     } satisfies OpenClawConfig;
     resolveGatewayPort.mockReturnValue(18800);
@@ -1157,7 +1156,7 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("wss://127.0.0.1:18800");
     expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
-    expect(details.preauthHandshakeTimeoutMs).toBe(4321);
+    expect(details.preauthHandshakeTimeoutMs).toBeUndefined();
   });
 
   it("lets probe details local port override bypass gateway env URL and port", async () => {
@@ -1777,27 +1776,6 @@ describe("callGateway error details", () => {
     expect(startCalls).toBe(0);
   });
 
-  it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {
-    startMode = "silent";
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
-    });
-    setGatewayNetworkDefaults();
-
-    vi.useFakeTimers();
-    let errMessage = "";
-    const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
-
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(errMessage).toBe("");
-    await vi.advanceTimersByTimeAsync(20_000);
-    await promise;
-
-    expect(errMessage).toContain("gateway timeout after 30000ms");
-  });
-
   it("keeps the default wrapper timeout aligned with env handshake timeout", async () => {
     const envSnapshot = captureEnv(["OPENCLAW_HANDSHAKE_TIMEOUT_MS"]);
     try {
@@ -2088,17 +2066,6 @@ describe("callGateway error details", () => {
     expect(onSignalAbort).not.toHaveBeenCalled();
     expect(lastRequestOptions).toBeNull();
     expect(stopStarted).toBe(true);
-  });
-
-  it("passes configured gateway handshake timeout to the client watchdog", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
-    });
-    setGatewayNetworkDefaults();
-
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {

@@ -10,6 +10,10 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+private let clientDatabaseLogger = Logger(
+    subsystem: "ai.openclawfoundation.app",
+    category: "ClientDatabases")
+
 /// Wrap errors without pulling non-Sendable types into async notification paths.
 private struct NotificationCallError: Error {
     let message: String
@@ -462,6 +466,12 @@ final class NodeAppModel {
     var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    var newChatRequestID: Int = 0
+    // RootTabs has one chat destination; keep its acknowledgement here so recreating
+    // that destination cannot replay a request that the prior view already handled.
+    @ObservationIgnored private var consumedNewChatRequestID: Int = 0
+    var dashboardNavigationRequestID: Int = 0
+    @ObservationIgnored private var consumedDashboardNavigationRequestID: Int = 0
     var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var pendingGatewaySetupLink: GatewayConnectDeepLink?
@@ -581,6 +591,7 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageRetryAttempts: [String: Int] = [:]
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
     @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
+    @ObservationIgnored private var clientDatabases: OpenClawClientDatabases?
     @ObservationIgnored private var chatTranscriptCachesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
     @ObservationIgnored private var chatSessionRoutingRestoreTask: Task<Void, Never>?
     private var watchExecApprovalPromptsByID: [ExecApprovalIdentifier.Key: ExecApprovalPrompt] = [:]
@@ -694,18 +705,29 @@ final class NodeAppModel {
     }
 
     private var chatTranscriptCacheGeneration = 0
+    private var quarantinedChatOfflineGatewayIDs: Set<String> = []
 
-    /// Offline transcript cache plus durable command outbox, both scoped to
-    /// the paired gateway identity (one SQLite file per gateway, memoized so
-    /// retire/purge can close every open handle). Nil for fixture/unpaired
-    /// transports: no cache and no outbox.
+    /// Gateway-scoped facade over the installation-wide cache and client-state
+    /// databases. Nil for fixture/unpaired transports: no cache and no outbox.
     func makeChatOfflineStore() -> OpenClawChatSQLiteTranscriptCache? {
-        guard let gatewayID = self.chatTranscriptCacheGatewayID else { return nil }
+        guard let gatewayID = self.chatTranscriptCacheGatewayID,
+              !self.quarantinedChatOfflineGatewayIDs.contains(gatewayID)
+        else { return nil }
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { return nil }
+        // The durable marker is authoritative across task suspension and app
+        // relaunch. Never expose even an existing facade while cleanup can
+        // still delete rows written through it.
+        guard !clientDatabases.hasPendingGatewayRemoval(gatewayID: gatewayID) else {
+            self.quarantinedChatOfflineGatewayIDs.insert(gatewayID)
+            return nil
+        }
         if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
             return cache
         }
-        guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
-        let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+        let cache = clientDatabases.store(gatewayID: gatewayID)
         self.chatTranscriptCachesByGatewayID[gatewayID] = cache
         return cache
     }
@@ -750,20 +772,67 @@ final class NodeAppModel {
         await cache.storeSessions(sessions)
     }
 
-    /// Delete one gateway's cache during bootstrap replacement, or the whole
-    /// disposable database during a full onboarding reset. The offline command
-    /// outbox shares each gateway's database file, so purging a cache also
-    /// drops that gateway's queued commands.
-    func purgeChatTranscriptCache(gatewayID: String? = nil) async {
-        if let gatewayID, !gatewayID.isEmpty {
-            guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
-            if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
-                await cache.retire()
-            }
-            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+    /// Delete one forgotten gateway's cache and durable state, or both
+    /// installation-wide databases during a full onboarding reset.
+    func stageChatOfflineDataRemoval(gatewayID: String) async -> Bool {
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { return false }
+        do {
+            try clientDatabases.stageGatewayRemoval(gatewayID: gatewayID)
+            await self.chatTranscriptCachesByGatewayID[gatewayID]?.retire()
+            return true
+        } catch {
+            clientDatabaseLogger.error(
+                "gateway removal staging failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    func commitChatOfflineDataRemoval(gatewayID: String) -> Bool {
+        guard let clientDatabases else { return false }
+        do {
+            try clientDatabases.commitGatewayRemoval(gatewayID: gatewayID)
+            self.quarantinedChatOfflineGatewayIDs.remove(gatewayID)
             self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
             self.chatTranscriptCacheGeneration &+= 1
-            return
+            return true
+        } catch {
+            clientDatabaseLogger.error(
+                "gateway removal commit failed: \(error.localizedDescription, privacy: .public)")
+            // The removal may already be irreversible. Keep this gateway
+            // quarantined until foreground recovery proves no marker remains.
+            self.quarantinedChatOfflineGatewayIDs.insert(gatewayID)
+            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
+            self.chatTranscriptCacheGeneration &+= 1
+            return false
+        }
+    }
+
+    func cancelChatOfflineDataRemoval(gatewayID: String) {
+        guard let clientDatabases else { return }
+        do {
+            try clientDatabases.cancelGatewayRemoval(gatewayID: gatewayID)
+        } catch {
+            clientDatabaseLogger.error(
+                "gateway removal cancellation failed: \(error.localizedDescription, privacy: .public)")
+        }
+        // The registry owner did not commit, so cleanup never crossed into the
+        // irreversible phase. Repair the retired live facade even if the
+        // cancellation transaction or its checkpoint must be retried later.
+        self.quarantinedChatOfflineGatewayIDs.remove(gatewayID)
+        if self.chatTranscriptCachesByGatewayID[gatewayID] != nil {
+            self.chatTranscriptCachesByGatewayID[gatewayID] = clientDatabases.store(gatewayID: gatewayID)
+            self.chatTranscriptCacheGeneration &+= 1
+        }
+    }
+
+    @discardableResult
+    func purgeChatTranscriptCache(gatewayID: String? = nil) async -> Bool {
+        if let gatewayID, !gatewayID.isEmpty {
+            guard await self.stageChatOfflineDataRemoval(gatewayID: gatewayID) else { return false }
+            return self.commitChatOfflineDataRemoval(gatewayID: gatewayID)
         }
 
         // Full reset retires every open handle before removing SQLite sidecars,
@@ -771,33 +840,72 @@ final class NodeAppModel {
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
-        if let directoryURL = Self.chatTranscriptCacheDirectoryURL() {
-            try? FileManager.default.removeItem(at: directoryURL)
+        do {
+            try self.clientDatabases?.close()
+            self.clientDatabases = nil
+            try Self.removeAllChatDatabaseFiles()
+        } catch {
+            clientDatabaseLogger.error(
+                "full database reset failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
         self.chatTranscriptCachesByGatewayID.removeAll()
+        self.quarantinedChatOfflineGatewayIDs.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
+        return true
     }
 
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
-        guard let directoryURL = Self.chatTranscriptCacheDirectoryURL() else { return }
-        try? FileManager.default.removeItem(at: directoryURL)
+        do {
+            try self.clientDatabases?.close()
+            self.clientDatabases = nil
+            try Self.removeAllChatDatabaseFiles()
+        } catch {
+            clientDatabaseLogger.error(
+                "startup database reset failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
         self.chatTranscriptCachesByGatewayID.removeAll()
+        self.quarantinedChatOfflineGatewayIDs.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
     }
 
-    private static func chatTranscriptCacheDirectoryURL() -> URL? {
+    static func chatDatabaseDirectoryURL() -> URL? {
+        try? OpenClawNodeStorage.appSupportDir()
+            .appendingPathComponent("databases", isDirectory: true)
+    }
+
+    private static func legacyChatDatabaseDirectoryURL() -> URL? {
         try? OpenClawNodeStorage.appSupportDir()
             .appendingPathComponent("chat-cache", isDirectory: true)
     }
 
-    static func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
-        let digest = SHA256.hash(data: Data(gatewayID.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return Self.chatTranscriptCacheDirectoryURL()?
-            .appendingPathComponent("\(digest).sqlite", isDirectory: false)
+    private static func removeAllChatDatabaseFiles() throws {
+        if let directoryURL = chatDatabaseDirectoryURL() {
+            try OpenClawClientDatabases.removeDatabaseFiles(in: directoryURL)
+        }
+        if let legacyDirectoryURL = Self.legacyChatDatabaseDirectoryURL(),
+           FileManager.default.fileExists(atPath: legacyDirectoryURL.path)
+        {
+            try FileManager.default.removeItem(at: legacyDirectoryURL)
+        }
+    }
+
+    private static func makeClientDatabases() -> OpenClawClientDatabases? {
+        guard let directoryURL = chatDatabaseDirectoryURL() else { return nil }
+        let legacyDirectories = Self.legacyChatDatabaseDirectoryURL().map { [$0] } ?? []
+        do {
+            return try OpenClawClientDatabases(
+                directoryURL: directoryURL,
+                legacyDirectoryURLs: legacyDirectories,
+                registeredGatewayIDs: Set(GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID)))
+        } catch {
+            clientDatabaseLogger.error(
+                "client databases unavailable: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -1082,6 +1190,26 @@ final class NodeAppModel {
             break
         case .active:
             self.isBackgrounded = false
+            if self.clientDatabases == nil {
+                // Recovery must run even after forgetting the final gateway;
+                // no chat facade may remain to initialize the container.
+                self.clientDatabases = Self.makeClientDatabases()
+            }
+            let registeredGatewayIDs = Set(
+                GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID))
+            self.clientDatabases?.resolvePendingGatewayRemovals(
+                registeredGatewayIDs: registeredGatewayIDs)
+            if let clientDatabases = self.clientDatabases {
+                let recoveredGatewayIDs = self.quarantinedChatOfflineGatewayIDs.filter {
+                    !clientDatabases.hasPendingGatewayRemoval(gatewayID: $0)
+                }
+                if !recoveredGatewayIDs.isEmpty {
+                    self.quarantinedChatOfflineGatewayIDs.subtract(recoveredGatewayIDs)
+                    self.chatTranscriptCacheGeneration &+= 1
+                }
+            }
+            self.clientDatabases?.retryLegacyImport(
+                registeredGatewayIDs: registeredGatewayIDs)
             self.endBackgroundConnectionGracePeriod(reason: "scene_foreground")
             self.clearBackgroundReconnectSuppression(reason: "scene_foreground")
             var shouldStartGatewayHealthMonitor = self.operatorConnected
@@ -3551,6 +3679,28 @@ extension NodeAppModel {
             self.acknowledgeChatSessionReadIfNeeded(activeKey)
         }
         self.openChatRequestID &+= 1
+    }
+
+    func requestNewChat() {
+        self.newChatRequestID &+= 1
+    }
+
+    func consumeNewChatRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.newChatRequestID,
+              requestID != self.consumedNewChatRequestID
+        else { return false }
+        self.consumedNewChatRequestID = requestID
+        return true
+    }
+
+    func consumeDashboardNavigationRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.dashboardNavigationRequestID,
+              requestID != self.consumedDashboardNavigationRequestID
+        else { return false }
+        self.consumedDashboardNavigationRequestID = requestID
+        return true
     }
 
     /// One acknowledgement per unread episode: the pending flag clears when a fresh
@@ -10252,7 +10402,7 @@ extension NodeAppModel {
         case let .gateway(link):
             self.stageGatewaySetupLink(link)
         case .dashboard:
-            break
+            self.dashboardNavigationRequestID &+= 1
         }
     }
 

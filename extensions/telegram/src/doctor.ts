@@ -460,7 +460,6 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
           chatId: username,
           network: account.config.network,
           signal: undefined,
-          timeoutSeconds: account.config.timeoutSeconds,
         });
         if (id) {
           return id;

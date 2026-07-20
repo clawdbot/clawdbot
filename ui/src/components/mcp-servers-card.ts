@@ -124,7 +124,7 @@ class McpServersCard extends OpenClawLightDomElement {
       this.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;
     }
-    const config = parseMcpTarget(form.target);
+    const config = parseMcpTarget(form.target, form.transport);
     if (!config) {
       this.message = { kind: "error", text: t("mcpServers.targetInvalid") };
       return;

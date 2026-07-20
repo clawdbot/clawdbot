@@ -19,7 +19,123 @@ function expectUnknownKey(params: { config: Record<string, unknown>; path: strin
   }
 }
 
+function configWithPath(path: string): Record<string, unknown> {
+  const segments = path.split(".");
+  const config = segments.reduceRight<unknown>(
+    (value, segment) => (segment === "0" ? [value] : { [segment]: value }),
+    1,
+  ) as Record<string, unknown>;
+  const agent = (config.agents as { list?: Array<Record<string, unknown>> } | undefined)?.list?.[0];
+  if (agent) {
+    agent.id = "test";
+  }
+  return config;
+}
+
 describe("dead config keys", () => {
+  it.each([
+    "auth.cooldowns",
+    "secrets.resolution",
+    "browser.remoteCdpTimeoutMs",
+    "browser.remoteCdpHandshakeTimeoutMs",
+    "browser.localLaunchTimeoutMs",
+    "browser.localCdpReadyTimeoutMs",
+    "browser.actionTimeoutMs",
+    "browser.cdpPortRangeStart",
+    "browser.tabCleanup.idleMinutes",
+    "browser.tabCleanup.maxTabsPerSession",
+    "browser.tabCleanup.sweepMinutes",
+    "tools.loopDetection.historySize",
+    "tools.loopDetection.warningThreshold",
+    "tools.loopDetection.detectors",
+    "tools.loopDetection.postCompactionGuard",
+    "agents.defaults.compaction.reserveTokens",
+    "agents.defaults.compaction.reserveTokensFloor",
+    "agents.defaults.compaction.maxHistoryShare",
+    "agents.defaults.contextPruning.keepLastAssistants",
+    "agents.defaults.contextPruning.softTrimRatio",
+    "agents.defaults.contextPruning.softTrim",
+    "agents.defaults.memorySearch.chunking",
+    "agents.defaults.memorySearch.sync.watchDebounceMs",
+    "agents.defaults.memorySearch.sync.intervalMinutes",
+    "agents.defaults.memorySearch.query.hybrid.vectorWeight",
+    "agents.defaults.memorySearch.query.hybrid.textWeight",
+    "agents.defaults.memorySearch.query.hybrid.candidateMultiplier",
+    "agents.defaults.memorySearch.query.hybrid.mmr.lambda",
+    "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays",
+    "agents.defaults.memorySearch.cache.maxEntries",
+    "agents.defaults.cliBackends.codex.reliability.outputLimits",
+    "agents.defaults.cliBackends.codex.reliability.watchdog.fresh.noOutputTimeoutMs",
+    "agents.defaults.cliBackends.codex.reliability.watchdog.resume.noOutputTimeoutMs",
+    "agents.defaults.runRetries",
+    "agents.list.0.memorySearch.chunking",
+    "agents.list.0.runRetries",
+    "gateway.handshakeTimeoutMs",
+    "gateway.channelHealthCheckMinutes",
+    "gateway.channelStaleEventThresholdMinutes",
+    "gateway.channelMaxRestartsPerHour",
+    "gateway.reload.debounceMs",
+    "gateway.reload.deferralTimeoutMs",
+    "gateway.http.endpoints.chatCompletions.maxBodyBytes",
+    "gateway.http.endpoints.chatCompletions.maxImageParts",
+    "gateway.http.endpoints.chatCompletions.maxTotalImageBytes",
+    "gateway.http.endpoints.responses.maxBodyBytes",
+    "session.typingIntervalSeconds",
+    "session.writeLock",
+    "session.agentToAgent",
+    "cron.maxConcurrentRuns",
+    "cron.triggers.minIntervalMs",
+    "cron.retry",
+    "diagnostics.stuckSessionWarnMs",
+    "diagnostics.stuckSessionAbortMs",
+    "diagnostics.memoryPressureSnapshot",
+    "web.heartbeatSeconds",
+    "web.reconnect",
+    "web.whatsapp",
+    "messages.queue.debounceMs",
+    "messages.statusReactions.timing",
+    "acp.stream.coalesceIdleMs",
+    "acp.stream.maxChunkChars",
+    "acp.stream.maxOutputChars",
+    "acp.stream.maxSessionUpdateChars",
+    "acp.stream.hiddenBoundarySeparator",
+    "acp.maxConcurrentSessions",
+    "acp.runtime.ttlMinutes",
+    "mcp.sessionIdleTtlMs",
+    "worktrees",
+    "transcripts.maxUtterances",
+    "hooks.maxBodyBytes",
+    "update.auto.stableDelayHours",
+    "update.auto.stableJitterHours",
+    "update.auto.betaCheckIntervalHours",
+    "channels.telegram.timeoutSeconds",
+    "channels.telegram.mediaGroupFlushMs",
+    "channels.telegram.pollingStallThresholdMs",
+    "channels.telegram.retry",
+    "channels.telegram.errorCooldownMs",
+    "channels.telegram.accounts.work.timeoutSeconds",
+    "channels.telegram.accounts.work.retry",
+    "channels.telegram.groups.-100.errorCooldownMs",
+    "channels.telegram.groups.-100.topics.1.errorCooldownMs",
+    "channels.discord.gatewayInfoTimeoutMs",
+    "channels.discord.gatewayReadyTimeoutMs",
+    "channels.discord.gatewayRuntimeReadyTimeoutMs",
+    "channels.discord.eventQueue",
+    "channels.discord.retry",
+    "channels.discord.accounts.work.eventQueue",
+    "channels.discord.accounts.work.retry",
+    "channels.clickclack.timeoutSeconds",
+    "channels.clickclack.accounts.work.timeoutSeconds",
+  ] as const)("rejects retired tuning knob %s", (fullPath) => {
+    const segments = fullPath.split(".");
+    const key = segments.pop() ?? "";
+    expectUnknownKey({
+      config: configWithPath(fullPath),
+      path: segments.join("."),
+      key,
+    });
+  });
+
   it.each([
     ["Discord root", "discord", { dm: { policy: "pairing" } }, "channels.discord.dm", "policy"],
     [

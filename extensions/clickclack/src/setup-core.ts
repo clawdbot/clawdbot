@@ -241,7 +241,7 @@ export function applyClickClackCredentialConfig(params: {
 
 export const clickClackSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  prepareAccountConfigInput: async ({ input }) => {
+  prepareAccountConfigInput: async ({ cfg, accountId, input }) => {
     if (!input.code?.trim()) {
       return input;
     }
@@ -252,10 +252,12 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
       code: input.code,
       baseUrl: input.baseUrl,
     });
+    const existing = resolveClickClackAccountConfig(cfg as CoreConfig, accountId);
+    const apiEndpoint = normalizeClickClackBaseUrl(existing.apiBaseUrl) ?? setup.baseUrl;
     let claim;
     try {
       const { claimClickClackSetupCode } = await import("./setup-claim.js");
-      claim = await claimClickClackSetupCode(setup);
+      claim = await claimClickClackSetupCode({ ...setup, baseUrl: apiEndpoint });
     } catch (error) {
       throw formatClickClackSetupCodeClaimError(error);
     }

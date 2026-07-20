@@ -15,6 +15,17 @@ export function resolveRepoToolBinPath(
     resolveCommonDir?: (cwd: string) => string | null;
   },
 ): string;
+/** Link a dependency-less worktree to the primary checkout toolchain selected above. */
+export function ensureRepoToolNodeModulesLink(
+  toolPath: string,
+  options?: {
+    cwd?: string;
+    fileExists?: (candidate: string) => boolean;
+    resolveCommonDir?: (cwd: string) => string | null;
+    symlink?: (target: string, path: string, type?: string) => void;
+    platform?: NodeJS.Platform;
+  },
+): string | null;
 /** Apply local tsgo defaults for declaration skipping, caching, throttling, and profiling. */
 export function applyLocalTsgoPolicy(
   args: string[],

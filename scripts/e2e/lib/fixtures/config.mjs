@@ -15,10 +15,10 @@ function writeConfig(kind) {
               mode: "token",
               token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
             },
-            channelHealthCheckMinutes: 1,
             controlUi: { enabled: false },
-            reload: { mode: "hybrid", debounceMs: 0 },
+            reload: { mode: "hybrid" },
           },
+          ui: { seamColor: "#ff4500" },
         }
       : kind === "browser-cdp"
         ? {

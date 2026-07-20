@@ -412,10 +412,6 @@ function buildDiscordQaConfig(
         statusReactions: {
           ...baseCfg.messages?.statusReactions,
           enabled: true,
-          timing: {
-            ...baseCfg.messages?.statusReactions?.timing,
-            debounceMs: 0,
-          },
         },
       }
     : {

@@ -1,7 +1,8 @@
 // Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
 // plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
@@ -220,41 +221,23 @@ export function buildGatewayCronService(params: {
   const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
     Boolean(findAgentEntry(cfg, agentId));
 
-  const mergeRuntimeAgentConfig = (runtimeConfig: OpenClawConfig, requestedAgentId: string) => {
-    if (hasConfiguredAgent(runtimeConfig, requestedAgentId)) {
-      return runtimeConfig;
-    }
-    const fallbackAgentEntry = findAgentEntry(params.cfg, requestedAgentId);
-    if (!fallbackAgentEntry) {
-      return runtimeConfig;
-    }
-    const startupAgents = params.cfg.agents;
-    const runtimeAgents = runtimeConfig.agents;
-    return {
-      ...runtimeConfig,
-      agents: {
-        ...startupAgents,
-        ...runtimeAgents,
-        defaults: {
-          ...startupAgents?.defaults,
-          ...runtimeAgents?.defaults,
-        },
-        list: [...(runtimeAgents?.list ?? []), fallbackAgentEntry],
-      },
-    };
-  };
-
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const effectiveConfig =
-      normalized !== undefined ? mergeRuntimeAgentConfig(runtimeConfig, normalized) : runtimeConfig;
-    const agentId =
-      normalized !== undefined && hasConfiguredAgent(effectiveConfig, normalized)
-        ? normalized
-        : resolveDefaultAgentId(effectiveConfig);
-    return { agentId, cfg: effectiveConfig };
+    const defaultAgentId = resolveDefaultAgentId(runtimeConfig);
+    if (
+      normalized !== undefined &&
+      normalized !== defaultAgentId &&
+      !hasConfiguredAgent(runtimeConfig, normalized)
+    ) {
+      throw new Error(`cron job agent is unavailable: ${normalized}`);
+    }
+    const agentId = normalized ?? defaultAgentId;
+    if (isAgentDeletionBlocked(agentId)) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
+    return { agentId, cfg: runtimeConfig };
   };
 
   const resolveCronSessionKey = (paramsValue: {
@@ -471,6 +454,10 @@ export function buildGatewayCronService(params: {
         }
       : {}),
     defaultAgentId,
+    resolveDefaultAgentId: () => resolveDefaultAgentId(getRuntimeConfig()),
+    isAgentAvailable: (agentId) =>
+      !isAgentDeletionBlocked(agentId) &&
+      listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {

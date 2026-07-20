@@ -168,7 +168,7 @@ describe("probeGatewayStatus", () => {
     });
   });
 
-  it("forwards configured handshake timeout to the connect probe and status RPC", async () => {
+  it("forwards the resolved handshake timeout to the connect probe and status RPC", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
     callGatewayMock.mockResolvedValueOnce({ status: "ok" });
@@ -180,7 +180,7 @@ describe("probeGatewayStatus", () => {
         capability: "admin_capable",
       },
     });
-    const config = { gateway: { handshakeTimeoutMs: 30_000 } };
+    const config = {};
 
     await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",

@@ -419,19 +419,20 @@ describe("whatsapp inbound dispatch", () => {
       combinedBody: "spoken transcript",
       command: {
         kind: "normal",
-        body: "<media:audio>",
+        body: "",
         authorized: false,
       },
       msg: makeMsg({
         payload: {
-          body: "<media:audio>",
+          body: "",
           media: {
             path: "/tmp/voice.ogg",
             type: "audio/ogg; codecs=opus",
+            kind: "audio",
           },
         },
       }),
-      rawBody: "<media:audio>",
+      rawBody: "",
       route: makeRoute(),
       sender: {
         e164: "+1000",
@@ -442,9 +443,9 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(ctx, "voice inbound context"), {
       Body: "spoken transcript",
       BodyForAgent: "spoken transcript",
-      BodyForCommands: "<media:audio>",
-      CommandBody: "<media:audio>",
-      RawBody: "<media:audio>",
+      BodyForCommands: "",
+      CommandBody: "",
+      RawBody: "",
       Transcript: "spoken transcript",
     });
   });

@@ -843,67 +843,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
-  it("falls back to local resolution for legacy web fetch SecretRefs", async () => {
-    const envKey = "WEB_FETCH_LEGACY_FIRECRAWL_API_KEY_LOCAL_FALLBACK";
-    await withEnvValue(envKey, "firecrawl-legacy-local-fallback-key", async () => {
-      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          tools: {
-            web: {
-              fetch: {
-                provider: "firecrawl",
-                firecrawl: {
-                  apiKey: { source: "env", provider: "default", id: envKey },
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        commandName: "infer web fetch",
-        targetIds: new Set(["tools.web.fetch.firecrawl.apiKey"]),
-      });
-
-      const fetchConfig = result.resolvedConfig.tools?.web?.fetch as
-        | { firecrawl?: { apiKey?: unknown } }
-        | undefined;
-      expect(fetchConfig?.firecrawl?.apiKey).toBe("firecrawl-legacy-local-fallback-key");
-      expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
-      expectGatewayUnavailableLocalFallbackDiagnostics(result);
-    });
-  });
-
-  it("keeps top-level web search SecretRefs on the direct local fallback path", async () => {
-    const runtimeWebTools = await import("../secrets/runtime-web-tools.js");
-    vi.mocked(runtimeWebTools.resolveRuntimeWebTools).mockClear();
-    const envKey = "WEB_SEARCH_BRAVE_TOP_LEVEL_LOCAL_FALLBACK";
-    await withEnvValue(envKey, "brave-top-level-local-fallback-key", async () => {
-      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          tools: {
-            web: {
-              search: {
-                provider: "exa",
-                apiKey: { source: "env", provider: "default", id: envKey },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        commandName: "infer web search",
-        targetIds: new Set(["tools.web.search.apiKey"]),
-        forcedActivePaths: new Set(["tools.web.search.apiKey"]),
-      });
-
-      expect(result.resolvedConfig.tools?.web?.search?.apiKey).toBe(
-        "brave-top-level-local-fallback-key",
-      );
-      expect(result.targetStatesByPath["tools.web.search.apiKey"]).toBe("resolved_local");
-      expect(runtimeWebTools.resolveRuntimeWebTools).not.toHaveBeenCalled();
-      expectGatewayUnavailableLocalFallbackDiagnostics(result);
-    });
-  });
-
   it("treats command-scoped web fetch fallback SecretRefs as active even when web search is disabled", async () => {
     const restoreDeps = setFirecrawlWebSearchTargetDeps();
     const envKey = "WEB_FETCH_FIRECRAWL_SEARCH_FALLBACK_KEY";

@@ -16,7 +16,6 @@ type NavigationItem = {
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
-  "custodian",
   "workboard",
   "usage",
   "cron",
@@ -55,7 +54,7 @@ export type SidebarZoneEntry =
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = ["custodian", "usage", "cron", "plugins"].map((route) =>
+export const DEFAULT_SIDEBAR_ENTRIES = ["usage", "cron", "plugins"].map((route) =>
   serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
 );
 
@@ -192,16 +191,10 @@ export const SETTINGS_NAVIGATION_GROUPS = [
 // highlights nothing for them; search still deep-links via their owning page.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
 
-const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = [
+const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ...SETTINGS_SUBPAGE_ROUTES,
-];
-
-// Custodian is linked from Settings, but remains a workspace destination with
-// normal app chrome when opened from either Settings or the pinned sidebar.
-const SETTINGS_TAKEOVER_ROUTES = SETTINGS_NAVIGATION_ROUTES.filter(
-  (routeId) => routeId !== "custodian",
-);
+]);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
@@ -245,7 +238,7 @@ const NAVIGATION_ICONS: NavigationItem = {
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
-  return (SETTINGS_TAKEOVER_ROUTES as readonly NavigationRouteId[]).includes(routeId);
+  return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {

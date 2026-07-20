@@ -799,25 +799,6 @@ describe("runCopilotAttempt", () => {
     );
   });
 
-  it("reuses the precomputed legacy before_agent_start result", async () => {
-    const beforeAgentStart = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_agent_start", handler: beforeAgentStart }]),
-    );
-    const sdk = makeFakeSdk();
-
-    await runCopilotAttempt(
-      makeParams({
-        beforeAgentStartResult: { prependContext: "Use the cached result." },
-      } as never),
-      { pool: makeFakePool(sdk) },
-    );
-
-    expect(beforeAgentStart).not.toHaveBeenCalled();
-    const messageOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as { prompt?: string };
-    expect(messageOptions.prompt).toBe("Use the cached result.\n\nhello");
-  });
-
   it("preserves native Copilot SDK hooks alongside generic lifecycle hooks", async () => {
     const sdk = makeFakeSdk();
     const onPreToolUse = vi.fn();

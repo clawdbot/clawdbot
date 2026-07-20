@@ -26,6 +26,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "nextcloud-talk",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "NEXTCLOUD_TALK_BOT_SECRET",
+            "NEXTCLOUD_TALK_API_PASSWORD"
+          ]
+        }
+      },
       "label": "Nextcloud Talk",
       "selectionLabel": "Nextcloud Talk (self-hosted)",
       "docsPath": "/channels/nextcloud-talk",

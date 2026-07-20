@@ -6,6 +6,7 @@ import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 export const GATEWAY_SERVER_CAPS = {
+  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
 } as const;

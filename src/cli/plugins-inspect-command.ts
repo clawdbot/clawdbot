@@ -37,19 +37,10 @@ function formatCapabilityKinds(
   return capabilities.map((entry) => entry.kind).join(", ");
 }
 
-function formatHookSummary(params: {
-  usesLegacyBeforeAgentStart: boolean;
-  typedHookCount: number;
-  customHookCount: number;
-}): string {
+function formatHookSummary(params: { typedHookCount: number; customHookCount: number }): string {
   const parts: string[] = [];
-  if (params.usesLegacyBeforeAgentStart) {
-    parts.push("before_agent_start");
-  }
-  const nonLegacyTypedHookCount =
-    params.typedHookCount - (params.usesLegacyBeforeAgentStart ? 1 : 0);
-  if (nonLegacyTypedHookCount > 0) {
-    parts.push(`${nonLegacyTypedHookCount} typed`);
+  if (params.typedHookCount > 0) {
+    parts.push(`${params.typedHookCount} typed`);
   }
   if (params.customHookCount > 0) {
     parts.push(`${params.customHookCount} custom`);
@@ -196,7 +187,6 @@ export async function runPluginsInspectCommand(
           : "none",
       Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
       Hooks: formatHookSummary({
-        usesLegacyBeforeAgentStart: inspect.usesLegacyBeforeAgentStart,
         typedHookCount: inspect.typedHooks.length,
         customHookCount: inspect.customHooks.length,
       }),
@@ -318,9 +308,6 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
   lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);
-  lines.push(
-    `${theme.muted("Legacy before_agent_start:")} ${inspect.usesLegacyBeforeAgentStart ? "yes" : "no"}`,
-  );
   if (inspect.bundleCapabilities.length > 0) {
     lines.push(`${theme.muted("Bundle capabilities:")} ${inspect.bundleCapabilities.join(", ")}`);
   }

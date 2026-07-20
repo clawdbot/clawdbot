@@ -143,12 +143,3 @@ export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
 };
-
-export type ShippedPluginInstallConfigWriteMigration = { migrated: false } | { migrated: true };
-
-export type ShippedPluginInstallConfigReadMigration = {
-  config: unknown;
-  validationConfig?: unknown;
-  persistedRootParsed?: unknown;
-  persistedRootRaw?: string;
-};

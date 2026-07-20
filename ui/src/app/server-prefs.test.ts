@@ -162,11 +162,11 @@ describe("changedServerUiPrefs", () => {
     const previous = loadSettings();
     const withOverrides = {
       ...previous,
-      chatPersistCommentary: true,
+      chatPersistCommentary: false,
       chatFollowUpMode: "queue" as const,
     };
     expect(changedServerUiPrefs(previous, withOverrides)).toEqual({
-      chatPersistCommentary: true,
+      chatPersistCommentary: false,
       chatFollowUpMode: "queue",
     });
 

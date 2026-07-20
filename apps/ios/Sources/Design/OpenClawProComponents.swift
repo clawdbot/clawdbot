@@ -5,6 +5,7 @@ enum OpenClawProMetric {
     static let pagePadding: CGFloat = 16
     static let cardRadius: CGFloat = 16
     static let controlRadius: CGFloat = 12
+    static let drawerRadius: CGFloat = 28
     static let compactControlSize: CGFloat = 36
     static let bottomScrollInset: CGFloat = 96
 }
@@ -179,16 +180,6 @@ private struct OpenClawGlassButtonModifier: ViewModifier {
     }
 }
 
-private struct OpenClawTabBarBehaviorModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.tabBarMinimizeBehavior(.onScrollDown)
-        } else {
-            content
-        }
-    }
-}
-
 private struct OpenClawGlassSurfaceModifier: ViewModifier {
     let radius: CGFloat
 
@@ -221,10 +212,6 @@ extension View {
 
     func openClawGlassButton(prominent: Bool = false, tint: Color? = nil) -> some View {
         modifier(OpenClawGlassButtonModifier(prominent: prominent, tint: tint))
-    }
-
-    func openClawTabBarBehavior() -> some View {
-        modifier(OpenClawTabBarBehaviorModifier())
     }
 
     func openClawGlassSurface(radius: CGFloat = OpenClawProMetric.controlRadius) -> some View {
@@ -306,6 +293,7 @@ struct OpenClawSidebarRevealButton: View {
                     height: OpenClawProMetric.compactControlSize)
                 .contentShape(Rectangle())
         }
+        .frame(width: 44, height: 44)
         .buttonBorderShape(.circle)
         .openClawGlassButton(tint: OpenClawBrand.accent)
         .accessibilityLabel(self.headerAction.accessibilityLabel.text)

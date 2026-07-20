@@ -4,7 +4,10 @@ import {
   removeAckReactionHandleAfterReply,
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
-import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatMediaPlaceholderText,
+  runChannelInboundEvent,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
@@ -240,7 +243,7 @@ export async function processMessage(params: {
     sessionKey: params.route.sessionKey,
   });
   // Preflight audio transcription: transcribe voice notes before building the
-  // inbound context so the agent receives the transcript instead of <media:audio>.
+  // inbound context so the agent receives the transcript instead of an empty audio caption.
   // Mirrors the preflight step added for Telegram in #61008.
   // When the caller already performed transcription (e.g. on-message.ts before
   // broadcast fan-out) the pre-computed result is reused to avoid N STT calls
@@ -251,8 +254,9 @@ export async function processMessage(params: {
   //   undefined → caller did not attempt; run internal STT
   let audioTranscript: string | undefined = params.preflightAudioTranscript ?? undefined;
   const hasAudioBody =
-    params.msg.payload.media?.type?.startsWith("audio/") === true &&
-    params.msg.payload.body === "<media:audio>";
+    (params.msg.payload.media?.kind === "audio" ||
+      params.msg.payload.media?.type?.startsWith("audio/") === true) &&
+    !params.msg.payload.body.trim();
   if (
     params.preflightAudioTranscript === undefined &&
     hasAudioBody &&
@@ -275,9 +279,9 @@ export async function processMessage(params: {
         cfg: params.cfg,
       });
     } catch {
-      // Transcription failure is non-fatal: fall back to <media:audio> placeholder.
+      // Transcription failure is non-fatal: keep the empty caption and structured audio fact.
       if (shouldLogVerbose()) {
-        logVerbose("whatsapp: audio preflight transcription failed, using placeholder");
+        logVerbose("whatsapp: audio preflight transcription failed, keeping structured audio");
       }
     }
   }
@@ -326,6 +330,7 @@ export async function processMessage(params: {
         sender: m.sender,
         body: m.body,
         timestamp: m.timestamp,
+        media: m.media,
       }));
       combinedBody = buildHistoryContextFromEntries({
         entries: historyEntries,
@@ -336,7 +341,9 @@ export async function processMessage(params: {
             channel: "WhatsApp",
             from: conversationId,
             timestamp: entry.timestamp,
-            body: entry.body,
+            body: [entry.body, formatMediaPlaceholderText(entry.media ?? [])]
+              .filter(Boolean)
+              .join("\n"),
             chatType: "group",
             senderLabel: entry.sender,
             envelope: envelopeOptions,

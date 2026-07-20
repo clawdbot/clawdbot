@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { hasInboundAudio } from "./inbound-media.js";
+import { hasInboundAudio, hasInboundMedia } from "./inbound-media.js";
+
+describe("hasInboundMedia", () => {
+  it("detects aligned type-only facts without a placeholder body", () => {
+    expect(hasInboundMedia({ Body: "", MediaTypes: ["sticker", "image"] })).toBe(true);
+  });
+});
 
 describe("hasInboundAudio", () => {
   it("detects audio from the singular structured media type without a placeholder body", () => {

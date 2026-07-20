@@ -107,6 +107,7 @@ export type RuntimeConfigCapability = {
   ensureAgentEntry: (agentId: string) => number;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
+  patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
@@ -122,6 +123,9 @@ type ConfigPatchOptions = {
   /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
   replacePaths?: string[];
 };
+
+type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
+type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
 
 type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -1582,6 +1586,30 @@ export function createRuntimeConfigCapability(
     publish();
   });
 
+  const queueConfigPatch = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
+    cancelAppliedRefresh();
+    if (autoSaveTimer) {
+      cancelScheduledAutoSave();
+      runAutoSave();
+    }
+    return afterPendingWritesSettled(async () => {
+      // A drained autosave can start its own refresh while this patch waits.
+      cancelAppliedRefresh();
+      try {
+        const resolved = resolveOptions();
+        if ("error" in resolved) {
+          state.lastError = resolved.error;
+          return false;
+        }
+        return await patchConfig(state, resolved.options);
+      } finally {
+        reconcileAppliedRefresh();
+      }
+    }).finally(() => {
+      scheduleAutoSave();
+    });
+  };
+
   return {
     get state() {
       return state;
@@ -1712,24 +1740,14 @@ export function createRuntimeConfigCapability(
     // Unlike save/apply, a patch does not submit the form draft — flush a
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
-    patch: (options) => {
-      cancelAppliedRefresh();
-      if (autoSaveTimer) {
-        cancelScheduledAutoSave();
-        runAutoSave();
-      }
-      return afterPendingWritesSettled(async () => {
-        // A drained autosave can start its own refresh while this patch waits.
-        cancelAppliedRefresh();
-        try {
-          return await patchConfig(state, options);
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }).finally(() => {
-        scheduleAutoSave();
-      });
-    },
+    patch: (options) => queueConfigPatch(() => ({ options })),
+    patchFromSnapshot: (build) =>
+      queueConfigPatch(() => {
+        const config = resolveEditableSnapshotConfig(state.configSnapshot);
+        return config
+          ? build(config)
+          : { error: "Configuration is unavailable; refresh and try again." };
+      }),
     lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);

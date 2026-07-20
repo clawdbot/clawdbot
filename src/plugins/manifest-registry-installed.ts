@@ -466,8 +466,6 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   for (const key of [
     "selectionDocsOmitLabel",
     "markdownCapable",
-    "showConfigured",
-    "showInSetup",
     "quickstartAllowFrom",
     "forceAccountBinding",
     "preferSessionLookupForAnnounceTarget",

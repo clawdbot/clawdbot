@@ -1,3 +1,4 @@
+import { DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import { expect, it, vi } from "vitest";
 import {
   createChannelMessageReplyPipeline,
@@ -12,6 +13,7 @@ import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-deliv
 
 describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
   it("cleans delivery correlation when reply-pipeline initialization fails", async () => {
+    vi.useFakeTimers();
     const sessionKey = "agent:main:telegram:direct:pipeline-init-failure";
     const statusReactionController = createStatusReactionController();
     const reactionApi = vi.fn(async () => undefined);
@@ -37,18 +39,12 @@ describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
         reactionApi,
         removeAckAfterReply: true,
       }),
-      cfg: {
-        messages: {
-          statusReactions: {
-            timing: { errorHoldMs: 0 },
-          },
-        },
-      },
       runtime,
       suppressFailureFallback: true,
     });
 
-    await vi.waitFor(() => expect(statusReactionController.restoreInitial).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.errorHoldMs);
+    expect(statusReactionController.restoreInitial).toHaveBeenCalled();
     expect(reactionApi).not.toHaveBeenCalled();
   });
 });

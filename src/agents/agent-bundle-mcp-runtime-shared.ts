@@ -27,10 +27,6 @@ export type CreateSessionMcpRuntime = (params: {
   configFingerprint?: string;
 }) => SessionMcpRuntime;
 
-export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.mcp?.sessionIdleTtlMs;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
-    return Math.floor(raw);
-  }
+export function resolveSessionMcpRuntimeIdleTtlMs(): number {
   return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
 }
