@@ -12,12 +12,13 @@ vi.mock("node:child_process", async () => {
 });
 vi.mock("node:fs", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const accessSync = vi.fn();
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
   return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:fs")>("node:fs"),
-    { accessSync, constants: { X_OK: 1 }, existsSync, readFileSync },
+    async () => actual,
+    { accessSync, constants: actual.constants, existsSync, readFileSync },
     { mirrorToDefault: true },
   );
 });
