@@ -1040,6 +1040,8 @@ describe("board gateway methods", () => {
     const suffix = " on widget counter";
     const clippedCodeUnits = 500 - prefix.length - suffix.length - 1;
 
+    // JSON serialization adds a leading quote, placing the emoji's high surrogate
+    // at the old slice boundary when the payload contains clippedCodeUnits - 2 ASCII units.
     await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",
