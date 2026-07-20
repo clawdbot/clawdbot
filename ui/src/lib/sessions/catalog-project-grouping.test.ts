@@ -110,6 +110,23 @@ describe("groupCatalogSessionsByProject", () => {
     expect(result.ungrouped.map((item) => item.threadId)).toEqual(["missing", "blank"]);
   });
 
+  it("leaves Windows filesystem roots and root worktrees ungrouped", () => {
+    const result = groupCatalogSessionsByProject([
+      session("drive-root", "C:\\"),
+      session("drive-root-worktree", "c:\\.CLAUDE\\WORKTREES\\fix-1\\src"),
+      session("current-drive-root", "\\"),
+      session("current-drive-root-worktree", "\\.claude\\worktrees\\fix-2\\src"),
+    ]);
+
+    expect(result.groups).toHaveLength(0);
+    expect(result.ungrouped.map((item) => item.threadId)).toEqual([
+      "drive-root",
+      "drive-root-worktree",
+      "current-drive-root",
+      "current-drive-root-worktree",
+    ]);
+  });
+
   it.each([
     [" /Users/dev/openclaw/// ", "/Users/dev/openclaw", "openclaw"],
     ["C:\\Users\\dev\\openclaw\\", "C:\\Users\\dev\\openclaw", "openclaw"],
@@ -142,6 +159,34 @@ describe("groupCatalogSessionsByProject", () => {
       "second",
       "third",
     ]);
+  });
+
+  it("preserves Windows root kinds while grouping equivalent UNC paths", () => {
+    const result = groupCatalogSessionsByProject([
+      session("unc-first", "\\\\Server\\Share\\Project"),
+      session("unc-second", "\\\\server\\share\\project"),
+      session("current-drive-rooted", "\\Server\\Share\\Project"),
+    ]);
+
+    expect(result.groups).toHaveLength(2);
+    expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual([
+      "unc-first",
+      "unc-second",
+    ]);
+    expect(result.groups[1]?.sessions.map((item) => item.threadId)).toEqual([
+      "current-drive-rooted",
+    ]);
+  });
+
+  it("keeps an UNC share root groupable as a project root", () => {
+    const result = groupCatalogSessionsByProject([
+      session("first", "\\\\Server\\Share\\"),
+      session("second", "\\\\server\\share"),
+    ]);
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["first", "second"]);
+    expect(result.ungrouped).toHaveLength(0);
   });
 
   it("folds case-varied Windows worktree paths into their origin project", () => {

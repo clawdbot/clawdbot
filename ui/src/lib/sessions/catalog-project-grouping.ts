@@ -28,14 +28,15 @@ export function sessionActorGroupId(owner: SessionCreatedActor | undefined): str
 // paths or worktrees with no origin repo.
 export function foldWorktreeCheckoutPath(path: string): string | null {
   const trimmed = path.replace(/[\\/]+$/, "");
-  if (!trimmed) {
+  if (!trimmed || /^[A-Za-z]:$/.test(trimmed)) {
     return null;
   }
   const pattern = isWindowsPath(trimmed)
     ? /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/i
     : /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
   const match = trimmed.match(pattern);
-  return match ? match[1] || null : trimmed;
+  const folded = match ? match[1] || null : trimmed;
+  return folded && !/^[A-Za-z]:$/.test(folded) ? folded : null;
 }
 
 /** Basename shown for a checkout path in project sections. */
@@ -54,15 +55,31 @@ type CatalogProjectGroup = {
   sessions: SessionCatalogSession[];
 };
 
+type WindowsPathRootKind = "drive" | "unc" | "rooted";
+
+function windowsPathRootKind(value: string): WindowsPathRootKind | undefined {
+  if (/^[A-Za-z]:[\\/]/.test(value)) {
+    return "drive";
+  }
+  if (value.startsWith("\\\\")) {
+    return "unc";
+  }
+  if (value.startsWith("\\")) {
+    return "rooted";
+  }
+  return undefined;
+}
+
 function isWindowsPath(value: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\");
+  return windowsPathRootKind(value) !== undefined;
 }
 
 function catalogProjectPathIdentity(value: string): string {
-  if (!isWindowsPath(value)) {
+  const rootKind = windowsPathRootKind(value);
+  if (!rootKind) {
     return value;
   }
-  return `windows:${value
+  return `windows:${rootKind}:${value
     .split(/[\\/]+/)
     .filter(Boolean)
     .map((segment) => segment.toLowerCase())
