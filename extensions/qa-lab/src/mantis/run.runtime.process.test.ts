@@ -57,6 +57,34 @@ function describeSettledRun(settled: SettledRun) {
   return `rejected with ${String(settled.error)}`;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = globalThis.setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      globalThis.clearTimeout(timer);
+    }
+  }
+}
+
+function killKnownProcessPids(pids: ReadonlyArray<number | undefined>) {
+  for (const pid of pids) {
+    if (pid !== undefined && isProcessRunning(pid)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // process exited between liveness check and SIGKILL
+      }
+    }
+  }
+}
+
 async function readPidBeforeSettled(
   filePath: string,
   label: string,
@@ -275,12 +303,11 @@ describe("mantis before/after process runtime", () => {
         ]);
         controller.abort();
 
-        const result = await Promise.race([
+        const result = await withTimeout(
           settled,
-          sleep(4_000).then(() => {
-            throw new Error("timed out waiting for Mantis abort rejection");
-          }),
-        ]);
+          4_000,
+          "timed out waiting for Mantis abort rejection",
+        );
         expect(result.status).toBe("rejected");
         if (result.status === "rejected") {
           expect(result.error).toBeInstanceOf(Error);
@@ -289,16 +316,20 @@ describe("mantis before/after process runtime", () => {
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
       } finally {
         controller.abort();
-        await Promise.race([settled, sleep(4_000)]);
-        if (previousPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = previousPath;
-        }
-        for (const pid of [parentPid, descendantPid]) {
-          if (pid !== undefined && isProcessRunning(pid)) {
-            process.kill(pid, "SIGKILL");
+        killKnownProcessPids([parentPid, descendantPid]);
+        try {
+          await withTimeout(
+            settled,
+            4_000,
+            "timed out waiting for Mantis abort teardown to settle",
+          );
+        } finally {
+          if (previousPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = previousPath;
           }
+          killKnownProcessPids([parentPid, descendantPid]);
         }
       }
     },
@@ -367,12 +398,11 @@ describe("mantis before/after process runtime", () => {
           readPidBeforeSettled(descendantPidPath, "descendant", 5_000, settled),
         ]);
 
-        const result = await Promise.race([
+        const result = await withTimeout(
           settled,
-          sleep(6_000).then(() => {
-            throw new Error("timed out waiting for Mantis QA deadline rejection");
-          }),
-        ]);
+          6_000,
+          "timed out waiting for Mantis QA deadline rejection",
+        );
         expect(result.status).toBe("rejected");
         if (result.status === "rejected") {
           expect(result.error).toBeInstanceOf(Error);
@@ -396,16 +426,20 @@ describe("mantis before/after process runtime", () => {
         );
       } finally {
         controller.abort();
-        await Promise.race([settled, sleep(6_000)]);
-        if (previousPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = previousPath;
-        }
-        for (const pid of [parentPid, descendantPid]) {
-          if (pid !== undefined && isProcessRunning(pid)) {
-            process.kill(pid, "SIGKILL");
+        killKnownProcessPids([parentPid, descendantPid]);
+        try {
+          await withTimeout(
+            settled,
+            6_000,
+            "timed out waiting for Mantis QA deadline teardown to settle",
+          );
+        } finally {
+          if (previousPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = previousPath;
           }
+          killKnownProcessPids([parentPid, descendantPid]);
         }
       }
     },
@@ -461,12 +495,11 @@ describe("mantis before/after process runtime", () => {
           readPidBeforeSettled(descendantPidPath, "descendant", 5_000, settled),
         ]);
 
-        const result = await Promise.race([
+        const result = await withTimeout(
           settled,
-          sleep(4_000).then(() => {
-            throw new Error("timed out waiting for Mantis deadline rejection");
-          }),
-        ]);
+          4_000,
+          "timed out waiting for Mantis deadline rejection",
+        );
         expect(result.status).toBe("rejected");
         if (result.status === "rejected") {
           expect(result.error).toBeInstanceOf(Error);
@@ -477,16 +510,20 @@ describe("mantis before/after process runtime", () => {
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
       } finally {
         controller.abort();
-        await Promise.race([settled, sleep(4_000)]);
-        if (previousPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = previousPath;
-        }
-        for (const pid of [parentPid, descendantPid]) {
-          if (pid !== undefined && isProcessRunning(pid)) {
-            process.kill(pid, "SIGKILL");
+        killKnownProcessPids([parentPid, descendantPid]);
+        try {
+          await withTimeout(
+            settled,
+            4_000,
+            "timed out waiting for Mantis deadline teardown to settle",
+          );
+        } finally {
+          if (previousPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = previousPath;
           }
+          killKnownProcessPids([parentPid, descendantPid]);
         }
       }
     },
