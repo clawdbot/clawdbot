@@ -966,17 +966,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
         if (plugin?.gateway?.stopAccount) {
-          const account = plugin.config.resolveAccount(cfg, id);
-          await plugin.gateway.stopAccount({
-            cfg,
-            accountId: id,
-            account,
-            runtime,
-            abortSignal: abort?.signal ?? new AbortController().signal,
-            log,
-            getStatus: () => getRuntime(channelId, id),
-            setStatus: (next) => setRuntime(channelId, id, next),
-          });
+          try {
+            const account = plugin.config.resolveAccount(cfg, id);
+            await plugin.gateway.stopAccount({
+              cfg,
+              accountId: id,
+              account,
+              runtime,
+              abortSignal: abort?.signal ?? new AbortController().signal,
+              log,
+              getStatus: () => getRuntime(channelId, id),
+              setStatus: (next) => setRuntime(channelId, id, next),
+            });
+          } catch (err) {
+            log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(err)}`);
+            setRuntime(channelId, id, {
+              accountId: id,
+              lastError: formatErrorMessage(err),
+            });
+          }
         }
         const stoppedCleanly = await waitForChannelStopGracefully(
           task,
