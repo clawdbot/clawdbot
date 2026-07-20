@@ -26,10 +26,12 @@ export function isXmlishNameChar(char: string | undefined): boolean {
 // instead of leaking, without matching arbitrary `ns:` tokens in prose. Open and
 // close tags carry the prefix independently, and degraded proxy output routinely
 // drops the prefix on the close, so any open/close prefix combination is intended.
+// The prefix is a capturing group so the scanner can tell a namespace-qualified
+// leak (`antml:`/`mm:`) from a bare `<invoke>` example that must be preserved.
 // The `y` (sticky) matchers anchor at an explicit offset without slicing the tail,
 // keeping the scan linear; the parameter close uses `g` to search forward. All are
 // linear with no nested quantifiers, so they stay ReDoS-safe.
-const TOOL_CALL_TAG_NAMESPACE = "(?:antml:|mm:)?";
+const TOOL_CALL_TAG_NAMESPACE = "(antml:|mm:)?";
 /** Optional `<function_calls>` wrapper that brackets one or more invoke blocks. */
 const XMLISH_FUNCTION_CALLS_OPEN_RE = new RegExp(
   `<\\s*${TOOL_CALL_TAG_NAMESPACE}function_calls\\s*>`,
@@ -60,11 +62,15 @@ const XMLISH_PARAMETER_CLOSE_RE = new RegExp(
   "ig",
 );
 
+/** Sticky-regex match anchored exactly at `at`, or null when it does not match there. */
+function stickyMatch(re: RegExp, text: string, at: number): RegExpExecArray | null {
+  re.lastIndex = at;
+  return re.exec(text);
+}
+
 /** Length of a sticky-regex match anchored exactly at `at`, or null when it does not match there. */
 function stickyMatchLength(re: RegExp, text: string, at: number): number | null {
-  re.lastIndex = at;
-  const match = re.exec(text);
-  return match ? match[0].length : null;
+  return stickyMatch(re, text, at)?.[0].length ?? null;
 }
 
 /** Consumes one attribute/namespaced `<parameter ...>...</parameter>` child. */
@@ -110,6 +116,12 @@ export type StandaloneXmlishInvokeScan =
  * instead of re-scanning the same unclosed tail at every following line start.
  * This dialect is scrubbable but intentionally never promoted to an executable
  * call, so it stays out of `scanXmlishToolCall`.
+ *
+ * Only a namespace-qualified (`antml:`/`mm:`) or `<function_calls>`-wrapped block is
+ * a leaked call; a bare `<invoke>` block is a documentation example and reports
+ * `none` so the caller leaves it untouched (#97750). Qualification is decided before
+ * `complete`, but only after the block is confirmed structurally closed so the
+ * `incomplete` bail that keeps the scan linear still fires for unterminated opens.
  */
 export function scanStandaloneXmlishInvokeBlock(
   text: string,
@@ -121,17 +133,23 @@ export function scanStandaloneXmlishInvokeBlock(
   if (hasWrapper) {
     cursor = skipWhitespace(text, cursor + wrapperOpenLength);
   }
-  const selfCloseLength = stickyMatchLength(XMLISH_INVOKE_SELF_CLOSE_RE, text, cursor);
-  if (selfCloseLength !== null) {
-    return { kind: "complete", end: finishXmlishInvokeBlockEnd(text, cursor + selfCloseLength) };
+  const selfClose = stickyMatch(XMLISH_INVOKE_SELF_CLOSE_RE, text, cursor);
+  if (selfClose !== null) {
+    // Bare `<invoke .../>` with no namespace and no wrapper is a preserved example.
+    if (!hasWrapper && selfClose[1] === undefined) {
+      return { kind: "none" };
+    }
+    const end = finishXmlishInvokeBlockEnd(text, cursor + selfClose[0].length);
+    return { kind: "complete", end };
   }
-  const invokeOpenLength = stickyMatchLength(XMLISH_INVOKE_OPEN_RE, text, cursor);
-  if (invokeOpenLength === null) {
+  const invokeOpen = stickyMatch(XMLISH_INVOKE_OPEN_RE, text, cursor);
+  if (invokeOpen === null) {
     // A bare `<function_calls>` wrapper with no invoke is an unterminated block;
     // anything else here simply is not an invoke block.
     return hasWrapper ? { kind: "incomplete" } : { kind: "none" };
   }
-  cursor = skipWhitespace(text, cursor + invokeOpenLength);
+  const qualified = hasWrapper || invokeOpen[1] !== undefined;
+  cursor = skipWhitespace(text, cursor + invokeOpen[0].length);
   while (true) {
     const parameterEnd = consumeXmlishAttributeParameterEnd(text, cursor);
     if (parameterEnd === null) {
@@ -144,6 +162,10 @@ export function scanStandaloneXmlishInvokeBlock(
   const invokeCloseLength = stickyMatchLength(XMLISH_INVOKE_CLOSE_RE, text, cursor);
   if (invokeCloseLength === null) {
     return { kind: "incomplete" };
+  }
+  // Bare, unqualified block: a documentation example, not a leaked call (#97750).
+  if (!qualified) {
+    return { kind: "none" };
   }
   return { kind: "complete", end: finishXmlishInvokeBlockEnd(text, cursor + invokeCloseLength) };
 }

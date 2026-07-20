@@ -641,7 +641,13 @@ export function stripPlainTextToolCallBlocks(
         text,
       ) &&
       !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<\s*(?:antml:|mm:)?(?:function_calls|invoke)\b/i.test(text))
+      // Only a namespace-qualified invoke or a `<function_calls>` wrapper is a leaked
+      // call; a bare `<invoke>` is a preserved example, so it must not arm the scrub
+      // pass by itself (#97750). The per-block decision still lives in
+      // scanStandaloneXmlishInvokeBlock; this guard only avoids arming on bare invoke.
+      !/(?:^|[\r\n])[^\S\r\n]*<\s*(?:(?:antml:|mm:)?function_calls|(?:antml:|mm:)invoke)\b/i.test(
+        text,
+      ))
   ) {
     return text;
   }
