@@ -80,6 +80,7 @@ const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
+const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
@@ -416,6 +417,7 @@ export function createSessionMcpRuntime(params: {
   let activeLeases = 0;
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
+  let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   let catalogInvalidationGeneration = 0;
   const sessions = new Map<string, BundleMcpSession>();
@@ -511,7 +513,11 @@ export function createSessionMcpRuntime(params: {
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
     if (catalog) {
-      return catalog;
+      if (catalogRetryAfterMs === undefined || Date.now() < catalogRetryAfterMs) {
+        return catalog;
+      }
+      catalog = null;
+      catalogRetryAfterMs = undefined;
     }
     if (catalogInFlight) {
       return catalogInFlight;
@@ -633,6 +639,7 @@ export function createSessionMcpRuntime(params: {
                           }
                           catalogInvalidationGeneration += 1;
                           catalog = null;
+                          catalogRetryAfterMs = undefined;
                           catalogInFlight = undefined;
                         },
                       },
@@ -838,6 +845,9 @@ export function createSessionMcpRuntime(params: {
       failIfDisposed();
       if (catalogInvalidationGeneration === catalogGeneration) {
         catalog = nextCatalog;
+        catalogRetryAfterMs = nextCatalog.diagnostics?.length
+          ? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS
+          : undefined;
       }
       return nextCatalog;
     } finally {
@@ -967,6 +977,7 @@ export function createSessionMcpRuntime(params: {
       }
       disposed = true;
       catalog = null;
+      catalogRetryAfterMs = undefined;
       catalogInFlight = undefined;
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();

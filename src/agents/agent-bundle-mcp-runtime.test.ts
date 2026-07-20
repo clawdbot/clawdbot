@@ -1041,6 +1041,55 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("retries a failed MCP catalog after a short cooldown", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-catalog-retry-"));
+    const serverPath = path.join(tempDir, "retry-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    let nowMs = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      inputSchema: { type: "array", items: { type: "number" } },
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-catalog-retry",
+      sessionKey: "agent:test:session-catalog-retry",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            retryServer: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const failedCatalog = await runtime.getCatalog();
+      expect(failedCatalog.servers).toEqual({});
+      expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
+
+      await writeListToolsMcpServer({ filePath: serverPath, logPath });
+      await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
+
+      nowMs += 5_001;
+      const recoveredCatalog = await runtime.getCatalog();
+
+      expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
+      expect(recoveredCatalog.servers.retryServer).toBeDefined();
+      expect(recoveredCatalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+    } finally {
+      nowSpy.mockRestore();
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("filters listed MCP tools with per-server include and exclude rules", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-tool-filter-"));
     const serverPath = path.join(tempDir, "tool-filter.mjs");
