@@ -132,6 +132,31 @@ async function waitForDead(pid: number, timeoutMs: number) {
   throw new Error(`process ${pid} still alive`);
 }
 
+function shellWord(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function stubbornProcessTreeShellLines(params: {
+  descendantPidPath: string;
+  outputLine?: string;
+  parentPidPath: string;
+}) {
+  const descendantScript = [
+    'printf \'%s\' "$$" > "$1"',
+    "trap '' TERM",
+    "while :; do sleep 1; done",
+  ].join("\n");
+  const outputLoop = params.outputLine
+    ? `while :; do printf ${shellWord(`${params.outputLine}\\n`)}; sleep 0.05; done`
+    : "while :; do sleep 1; done";
+  return [
+    `printf '%s' "$$" > ${shellWord(params.parentPidPath)}`,
+    `/bin/sh -c ${shellWord(descendantScript)} sh ${shellWord(params.descendantPidPath)} &`,
+    "trap '' TERM",
+    outputLoop,
+  ];
+}
+
 async function runGit(repoRoot: string, args: readonly string[]) {
   const result = await runCommandWithTimeout(["git", ...args], {
     cwd: repoRoot,
@@ -989,19 +1014,8 @@ describe("mantis before/after runtime", () => {
       const binDir = path.join(repoRoot, "bin");
       const parentPidPath = path.join(repoRoot, "abort-parent.pid");
       const descendantPidPath = path.join(repoRoot, "abort-descendant.pid");
-      const descendantHelperPath = path.join(repoRoot, "abort-descendant-helper.cjs");
       const gitShimPath = path.join(binDir, "git");
       await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(
-        descendantHelperPath,
-        [
-          "const fs = require('node:fs');",
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1_000);",
-        ].join("\n"),
-        "utf8",
-      );
       await fs.writeFile(
         gitShimPath,
         [
@@ -1023,15 +1037,7 @@ describe("mantis before/after runtime", () => {
           "  printf '\\n' >&2",
           "  exit 1",
           "fi",
-          `printf '%s' "$$" > ${JSON.stringify(parentPidPath)}`,
-          `"${process.execPath}" ${JSON.stringify(descendantHelperPath)} &`,
-          "node_status=$?",
-          'if [ "$node_status" -ne 0 ]; then',
-          "  printf 'failed to launch descendant helper with absolute node\\n' >&2",
-          '  exit "$node_status"',
-          "fi",
-          "trap '' TERM",
-          "while :; do sleep 1; done",
+          ...stubbornProcessTreeShellLines({ descendantPidPath, parentPidPath }),
         ].join("\n"),
         { encoding: "utf8", mode: 0o755 },
       );
@@ -1093,7 +1099,7 @@ describe("mantis before/after runtime", () => {
   it.skipIf(process.platform === "win32")(
     "cleans up a real git worktree after a noisy QA deadline kills its process tree",
     async () => {
-      const qaTimeoutMs = 900;
+      const qaTimeoutMs = 2_500;
       const binDir = path.join(repoRoot, "bin");
       const parentPidPath = path.join(repoRoot, "qa-parent.pid");
       const descendantPidPath = path.join(repoRoot, "qa-descendant.pid");
@@ -1115,11 +1121,11 @@ describe("mantis before/after runtime", () => {
         pnpmShimPath,
         [
           "#!/bin/sh",
-          "trap '' TERM",
-          `printf '%s' "$$" > ${JSON.stringify(parentPidPath)}`,
-          "sh -c 'trap \"\" TERM; while :; do sleep 1; done' &",
-          `printf '%s' "$!" > ${JSON.stringify(descendantPidPath)}`,
-          "while :; do printf 'qa still working\\n'; sleep 0.05; done",
+          ...stubbornProcessTreeShellLines({
+            descendantPidPath,
+            outputLine: "qa still working",
+            parentPidPath,
+          }),
         ].join("\n"),
         { encoding: "utf8", mode: 0o755 },
       );
@@ -1134,6 +1140,7 @@ describe("mantis before/after runtime", () => {
       const run = runMantisBeforeAfter({
         baseline: "HEAD",
         candidate: "HEAD",
+        // Keep the tested deadline after process-tree readiness under loaded CI while still short.
         commandTimeouts: { qa: qaTimeoutMs, "worktree-cleanup": 5_000 },
         outputDir: ".artifacts/qa-e2e/mantis/real-qa-timeout",
         repoRoot,
@@ -1147,8 +1154,8 @@ describe("mantis before/after runtime", () => {
       );
       try {
         [parentPid, descendantPid] = await Promise.all([
-          readPid(parentPidPath, 2_000),
-          readPid(descendantPidPath, 2_000),
+          readPidBeforeSettled(parentPidPath, "parent", 5_000, settled),
+          readPidBeforeSettled(descendantPidPath, "descendant", 5_000, settled),
         ]);
 
         const result = await Promise.race([
@@ -1193,13 +1200,13 @@ describe("mantis before/after runtime", () => {
         }
       }
     },
-    12_000,
+    18_000,
   );
 
   it.skipIf(process.platform === "win32")(
     "stops a noisy lane command at its total deadline and kills its process tree",
     async () => {
-      const worktreeAddTimeoutMs = 1_500;
+      const worktreeAddTimeoutMs = 2_500;
       const binDir = path.join(repoRoot, "bin");
       const parentPidPath = path.join(repoRoot, "parent.pid");
       const descendantPidPath = path.join(repoRoot, "descendant.pid");
@@ -1209,12 +1216,12 @@ describe("mantis before/after runtime", () => {
         gitShimPath,
         [
           "#!/bin/sh",
-          'if [ "$1" = worktree ] && [ "$2" = remove ]; then rm -rf "$5"; exit 0; fi',
-          "trap '' TERM",
-          `printf '%s' \"$$\" > ${JSON.stringify(parentPidPath)}`,
-          "sh -c 'trap \"\" TERM; while :; do sleep 1; done' &",
-          `printf '%s' \"$!\" > ${JSON.stringify(descendantPidPath)}`,
-          "while :; do printf 'still working\\n'; sleep 0.05; done",
+          'if [ "$1" = worktree ] && [ "$2" = remove ]; then rm -rf -- "$5"; exit 0; fi',
+          ...stubbornProcessTreeShellLines({
+            descendantPidPath,
+            outputLine: "still working",
+            parentPidPath,
+          }),
         ].join("\n"),
         { encoding: "utf8", mode: 0o755 },
       );
@@ -1227,6 +1234,7 @@ describe("mantis before/after runtime", () => {
       const run = runMantisBeforeAfter({
         baseline: "baseline-ref",
         candidate: "candidate-ref",
+        // Keep the tested deadline after process-tree readiness under loaded CI while still short.
         commandTimeouts: { "worktree-add": worktreeAddTimeoutMs },
         outputDir: ".artifacts/qa-e2e/mantis/timeout-run",
         repoRoot,
@@ -1240,18 +1248,23 @@ describe("mantis before/after runtime", () => {
       );
       try {
         [parentPid, descendantPid] = await Promise.all([
-          readPid(parentPidPath, 2_000),
-          readPid(descendantPidPath, 2_000),
+          readPidBeforeSettled(parentPidPath, "parent", 5_000, settled),
+          readPidBeforeSettled(descendantPidPath, "descendant", 5_000, settled),
         ]);
 
-        await expect(
-          Promise.race([
-            run,
-            sleep(4_000).then(() => {
-              throw new Error("timed out waiting for Mantis deadline rejection");
-            }),
-          ]),
-        ).rejects.toThrow(`baseline worktree-add timed out after ${worktreeAddTimeoutMs}ms`);
+        const result = await Promise.race([
+          settled,
+          sleep(4_000).then(() => {
+            throw new Error("timed out waiting for Mantis deadline rejection");
+          }),
+        ]);
+        expect(result.status).toBe("rejected");
+        if (result.status === "rejected") {
+          expect(result.error).toBeInstanceOf(Error);
+          expect((result.error as Error).message).toContain(
+            `baseline worktree-add timed out after ${worktreeAddTimeoutMs}ms`,
+          );
+        }
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
       } finally {
         controller.abort();
@@ -1268,5 +1281,6 @@ describe("mantis before/after runtime", () => {
         }
       }
     },
+    15_000,
   );
 });
