@@ -26,6 +26,7 @@ export type MantisBeforeAfterOptions = {
   providerMode?: string;
   repoRoot?: string;
   scenario?: string;
+  signal?: AbortSignal;
   skipBuild?: boolean;
   skipInstall?: boolean;
   transport?: string;
@@ -233,6 +234,17 @@ async function defaultCommandRunner(
   });
 }
 
+function assertCommandNotAborted(params: {
+  args: readonly string[];
+  command: string;
+  execution: MantisCommandExecution;
+  lane: "baseline" | "candidate";
+}): void {
+  if (!params.execution.signal?.aborted) return;
+  const commandLabel = [params.command, ...params.args].join(" ");
+  throw new Error(`${params.lane} ${params.execution.stage} aborted: ${commandLabel}`);
+}
+
 async function runCommand(params: {
   args: readonly string[];
   command: string;
@@ -240,10 +252,8 @@ async function runCommand(params: {
   lane: "baseline" | "candidate";
   runner: CommandRunner;
 }) {
+  assertCommandNotAborted(params);
   const label = [params.command, ...params.args].join(" ");
-  if (params.execution.signal?.aborted) {
-    throw new Error(`${params.lane} ${params.execution.stage} aborted: ${label}`);
-  }
   let result: MantisCommandResult;
   try {
     result = await params.runner(params.command, params.args, params.execution);
@@ -518,6 +528,7 @@ async function runLane(params: {
   repoRoot: string;
   runner: CommandRunner;
   scenario: string;
+  signal?: AbortSignal;
   commandTimeouts: MantisCommandTimeouts;
   worktreeRoot: string;
   opts: Required<
@@ -540,6 +551,7 @@ async function runLane(params: {
     execution: {
       cwd: params.repoRoot,
       env: process.env,
+      signal: params.signal,
       stage: "worktree-add",
       timeoutMs: params.commandTimeouts["worktree-add"],
     },
@@ -553,6 +565,7 @@ async function runLane(params: {
       execution: {
         cwd: params.repoRoot,
         env: process.env,
+        signal: params.signal,
         stage: "install",
         timeoutMs: params.commandTimeouts.install,
       },
@@ -567,6 +580,7 @@ async function runLane(params: {
       execution: {
         cwd: params.repoRoot,
         env: process.env,
+        signal: params.signal,
         stage: "build",
         timeoutMs: params.commandTimeouts.build,
       },
@@ -604,6 +618,7 @@ async function runLane(params: {
     execution: {
       cwd: params.repoRoot,
       env: process.env,
+      signal: params.signal,
       stage: "qa",
       timeoutMs: params.commandTimeouts.qa,
     },
@@ -679,6 +694,7 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
+      signal: opts.signal,
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
@@ -690,6 +706,7 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
+      signal: opts.signal,
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,

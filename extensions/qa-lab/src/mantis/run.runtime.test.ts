@@ -384,6 +384,142 @@ describe("mantis before/after runtime", () => {
     ]);
   });
 
+  it("does not dispatch a lane command when already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const runner = vi.fn(async () => successfulCommandResult());
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/pre-aborted",
+        repoRoot,
+        signal: controller.signal,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow("baseline worktree-add aborted");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("stops an active injected lane command when aborted", async () => {
+    const controller = new AbortController();
+    const stages: string[] = [];
+    const runner = vi.fn(async (_command: string, _args: readonly string[], execution) => {
+      stages.push(execution.stage);
+      if (execution.stage !== "worktree-add") {
+        return successfulCommandResult();
+      }
+      expect(execution.signal).toBe(controller.signal);
+      queueMicrotask(() => controller.abort());
+      return await new Promise<StubCommandResult>((resolve) => {
+        execution.signal?.addEventListener(
+          "abort",
+          () =>
+            resolve({
+              code: null,
+              killed: true,
+              signal: "SIGTERM",
+              stderr: "",
+              stdout: "",
+              termination: "signal",
+            }),
+          { once: true },
+        );
+      });
+    });
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/injected-abort",
+        repoRoot,
+        signal: controller.signal,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow("baseline worktree-add aborted");
+    expect(stages).toEqual(["worktree-add"]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "stops a default-runner lane command process tree when aborted",
+    async () => {
+      const controller = new AbortController();
+      const binDir = path.join(repoRoot, "bin");
+      const parentPidPath = path.join(repoRoot, "abort-parent.pid");
+      const descendantPidPath = path.join(repoRoot, "abort-descendant.pid");
+      const gitShimPath = path.join(binDir, "git");
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(
+        gitShimPath,
+        [
+          "#!/bin/sh",
+          "trap '' TERM",
+          `printf '%s' "$$" > ${JSON.stringify(parentPidPath)}`,
+          "sh -c 'trap \"\" TERM; while :; do sleep 1; done' &",
+          `printf '%s' "$!" > ${JSON.stringify(descendantPidPath)}`,
+          "while :; do sleep 1; done",
+        ].join("\n"),
+        { encoding: "utf8", mode: 0o755 },
+      );
+
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+      let parentPid: number | undefined;
+      let descendantPid: number | undefined;
+      try {
+        const run = runMantisBeforeAfter({
+          baseline: "baseline-ref",
+          candidate: "candidate-ref",
+          outputDir: ".artifacts/qa-e2e/mantis/default-runner-abort",
+          repoRoot,
+          signal: controller.signal,
+          skipBuild: true,
+          skipInstall: true,
+        });
+        const settled = run.then(
+          () => ({ status: "fulfilled" as const }),
+          (error: unknown) => ({ error, status: "rejected" as const }),
+        );
+        [parentPid, descendantPid] = await Promise.all([
+          readPid(parentPidPath, 2_000),
+          readPid(descendantPidPath, 2_000),
+        ]);
+        controller.abort();
+
+        const result = await Promise.race([
+          settled,
+          sleep(4_000).then(() => {
+            throw new Error("timed out waiting for Mantis abort rejection");
+          }),
+        ]);
+        expect(result.status).toBe("rejected");
+        if (result.status === "rejected") {
+          expect(result.error).toBeInstanceOf(Error);
+          expect((result.error as Error).message).toContain("baseline worktree-add aborted");
+        }
+        await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
+      } finally {
+        if (previousPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = previousPath;
+        }
+        for (const pid of [parentPid, descendantPid]) {
+          if (pid !== undefined && isProcessRunning(pid)) {
+            process.kill(pid, "SIGKILL");
+          }
+        }
+      }
+    },
+    10_000,
+  );
+
   it.skipIf(process.platform === "win32")(
     "stops a noisy lane command at its total deadline and kills its process tree",
     async () => {
