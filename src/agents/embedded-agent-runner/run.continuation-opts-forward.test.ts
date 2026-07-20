@@ -155,6 +155,24 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
     expect(attemptParams.requestCompactionOpts).toBe(requestCompactionOpts);
   });
 
+  it("forwards explicit continuation-tool disablement to runEmbeddedAttempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-cron-continuation-disabled",
+      disableContinuationTools: true,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const attemptParams = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as {
+      disableContinuationTools?: boolean;
+    };
+    expect(attemptParams.disableContinuationTools).toBe(true);
+  });
+
   it("forwards callbacks and delegate-drain ownership in the same call", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
