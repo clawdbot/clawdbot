@@ -216,21 +216,37 @@ function defaultOutputDir(repoRoot: string, startedAt: Date) {
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `run-${stamp}`);
 }
 
+function isWorktreeListCommand(command: string, args: readonly string[]): boolean {
+  return (
+    command === "git" &&
+    args.length === 4 &&
+    args[0] === "worktree" &&
+    args[1] === "list" &&
+    args[2] === "--porcelain" &&
+    args[3] === "-z"
+  );
+}
+
 async function defaultCommandRunner(
   command: string,
   args: readonly string[],
   execution: MantisCommandExecution,
 ): Promise<MantisCommandResult> {
+  const capturesWorktreeList = isWorktreeListCommand(command, args);
   return await runCommandWithTimeout([command, ...args], {
     cwd: execution.cwd,
     env: execution.env,
     killProcessTree: true,
-    outputCapture: "discard",
+    outputCapture: capturesWorktreeList ? { stdout: "head", stderr: "tail" } : "discard",
     signal: execution.signal,
     timeoutMs: execution.timeoutMs,
-    onOutputChunk(chunk, stream) {
-      (stream === "stdout" ? process.stdout : process.stderr).write(chunk);
-    },
+    ...(capturesWorktreeList
+      ? {}
+      : {
+          onOutputChunk(chunk, stream) {
+            (stream === "stdout" ? process.stdout : process.stderr).write(chunk);
+          },
+        }),
   });
 }
 
@@ -251,7 +267,7 @@ async function runCommand(params: {
   execution: MantisCommandExecution;
   lane: "baseline" | "candidate";
   runner: CommandRunner;
-}) {
+}): Promise<MantisCommandResult> {
   assertCommandNotAborted(params);
   const label = [params.command, ...params.args].join(" ");
   let result: MantisCommandResult;
@@ -272,7 +288,7 @@ async function runCommand(params: {
     throw new Error(`${params.lane} ${params.execution.stage} aborted: ${label}`);
   }
   if (result.code === 0) {
-    return;
+    return result;
   }
   const detail = result.signal
     ? `signal ${result.signal}`
@@ -286,6 +302,55 @@ async function copyDirContents(sourceDir: string, targetDir: string) {
   await fs.cp(sourceDir, targetDir, { recursive: true });
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function isPathWithinOrEqual(parentPath: string, childPath: string): boolean {
+  const relative = path.relative(parentPath, childPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function normalizeWorktreePath(filePath: string, repoRoot: string): Promise<string> {
+  const resolvedPath = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(repoRoot, filePath);
+  try {
+    return await fs.realpath(resolvedPath);
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+
+  const resolvedRepoRoot = path.resolve(repoRoot);
+  const canonicalRepoRoot = await fs.realpath(resolvedRepoRoot);
+  if (!isPathWithinOrEqual(resolvedRepoRoot, resolvedPath)) {
+    return resolvedPath;
+  }
+  return path.join(canonicalRepoRoot, path.relative(resolvedRepoRoot, resolvedPath));
+}
+
+async function parseRegisteredWorktreePaths(stdout: string, repoRoot: string): Promise<string[]> {
+  const entries = stdout
+    .split("\0")
+    .filter((entry) => entry.startsWith("worktree "))
+    .map((entry) => entry.slice("worktree ".length));
+  return await Promise.all(entries.map((entry) => normalizeWorktreePath(entry, repoRoot)));
+}
+
+function createCleanupVerificationAggregate(params: {
+  errors: [unknown, unknown];
+  lane: "baseline" | "candidate";
+  worktreeDir: string;
+}): AggregateError {
+  return new AggregateError(
+    params.errors,
+    `${params.lane} worktree cleanup could not verify complete registration state for ${params.worktreeDir}`,
+    { cause: params.errors[0] },
+  );
+}
+
 async function removeMantisWorktree(params: {
   commandTimeouts: MantisCommandTimeouts;
   lane: "baseline" | "candidate";
@@ -293,20 +358,84 @@ async function removeMantisWorktree(params: {
   runner: CommandRunner;
   worktreeDir: string;
 }) {
-  // Cleanup does not reuse the outer signal: an aborted run still needs an
-  // independent window to release the Mantis-owned worktree registration.
-  await runCommand({
-    command: "git",
-    args: ["worktree", "remove", "--force", "--", params.worktreeDir],
-    execution: {
-      cwd: params.repoRoot,
-      env: process.env,
-      stage: "worktree-cleanup",
-      timeoutMs: params.commandTimeouts["worktree-cleanup"],
-    },
-    lane: params.lane,
-    runner: params.runner,
-  });
+  const cleanupExecution = {
+    cwd: params.repoRoot,
+    env: process.env,
+    stage: "worktree-cleanup",
+    timeoutMs: params.commandTimeouts["worktree-cleanup"],
+  } satisfies MantisCommandExecution;
+  try {
+    // Cleanup has its own deadline so aborted workload runs can still release registrations.
+    await runCommand({
+      command: "git",
+      args: ["worktree", "remove", "--force", "--", params.worktreeDir],
+      execution: cleanupExecution,
+      lane: params.lane,
+      runner: params.runner,
+    });
+    return;
+  } catch (error) {
+    const removeError = error;
+    let listResult: MantisCommandResult;
+    try {
+      listResult = await runCommand({
+        command: "git",
+        args: ["worktree", "list", "--porcelain", "-z"],
+        execution: cleanupExecution,
+        lane: params.lane,
+        runner: params.runner,
+      });
+    } catch (listError) {
+      throw createCleanupVerificationAggregate({
+        errors: [removeError, listError],
+        lane: params.lane,
+        worktreeDir: params.worktreeDir,
+      });
+    }
+
+    if (listResult.stdoutTruncatedBytes) {
+      const truncationError = new Error(
+        `${params.lane} worktree cleanup truncated registration output for ${params.worktreeDir}`,
+      );
+      throw createCleanupVerificationAggregate({
+        errors: [removeError, truncationError],
+        lane: params.lane,
+        worktreeDir: params.worktreeDir,
+      });
+    }
+
+    let normalizedWorktreeDir: string;
+    let registeredWorktreePaths: string[];
+    try {
+      [normalizedWorktreeDir, registeredWorktreePaths] = await Promise.all([
+        normalizeWorktreePath(params.worktreeDir, params.repoRoot),
+        parseRegisteredWorktreePaths(listResult.stdout, params.repoRoot),
+      ]);
+    } catch (normalizationError) {
+      throw createCleanupVerificationAggregate({
+        errors: [removeError, normalizationError],
+        lane: params.lane,
+        worktreeDir: params.worktreeDir,
+      });
+    }
+
+    if (registeredWorktreePaths.includes(normalizedWorktreeDir)) {
+      throw new Error(
+        `${params.lane} worktree cleanup left registered path ${params.worktreeDir}`,
+        { cause: removeError },
+      );
+    }
+
+    try {
+      await fs.rm(params.worktreeDir, { force: true, recursive: true });
+    } catch (removeDirectoryError) {
+      throw new AggregateError(
+        [removeError, removeDirectoryError],
+        `${params.lane} worktree cleanup could not remove unregistered directory ${params.worktreeDir}`,
+        { cause: removeError },
+      );
+    }
+  }
 }
 
 async function readLaneResult(params: {
@@ -424,6 +553,19 @@ function relativeArtifactPath(outputDir: string, artifactPath: string | undefine
     return undefined;
   }
   return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
+}
+
+function formatMantisFailure(error: unknown): string {
+  const lines: string[] = [];
+  const append = (entry: unknown, pathParts: number[]) => {
+    const prefix = pathParts.length > 0 ? `${pathParts.join(".")}. ` : "";
+    lines.push(`${prefix}${formatErrorMessage(entry)}`);
+    if (entry instanceof AggregateError) {
+      entry.errors.forEach((nestedError, index) => append(nestedError, [...pathParts, index + 1]));
+    }
+  };
+  append(error, []);
+  return lines.join("\n");
 }
 
 function buildEvidenceManifest(params: {
@@ -844,7 +986,11 @@ export async function runMantisBeforeAfter(
       status: comparison.pass ? "pass" : "fail",
     };
   } catch (error) {
-    await fs.writeFile(path.join(outputDir, "error.txt"), `${formatErrorMessage(error)}\n`, "utf8");
+    await fs.writeFile(
+      path.join(outputDir, "error.txt"),
+      `${formatMantisFailure(error)}\n`,
+      "utf8",
+    );
     throw error;
   }
 }
