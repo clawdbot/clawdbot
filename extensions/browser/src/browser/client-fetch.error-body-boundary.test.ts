@@ -40,6 +40,8 @@ describe("fetchHttpJson error body boundary", () => {
   let resolveSmallConnectionClosed: () => void;
   let successStreamClosed: Promise<void>;
   let resolveSuccessStreamClosed: () => void;
+  let malformedConnectionClosed: Promise<void>;
+  let resolveMalformedConnectionClosed: () => void;
   let streamCompleted: boolean;
   let successStreamCompleted: boolean;
 
@@ -64,12 +66,23 @@ describe("fetchHttpJson error body boundary", () => {
     successStreamClosed = new Promise<void>((resolve) => {
       resolveSuccessStreamClosed = resolve;
     });
+    malformedConnectionClosed = new Promise<void>((resolve) => {
+      resolveMalformedConnectionClosed = resolve;
+    });
     streamCompleted = false;
     successStreamCompleted = false;
     server = http.createServer((req, res) => {
       if (req.url === "/success-small") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end('{"payload":"control"}');
+        return;
+      }
+      if (req.url === "/success-malformed-utf8") {
+        req.socket.once("close", () => resolveMalformedConnectionClosed());
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          Buffer.concat([Buffer.from('{"payload":"'), Buffer.from([0xff]), Buffer.from('"}')]),
+        );
         return;
       }
       if (req.url === "/success-large") {
@@ -196,6 +209,19 @@ describe("fetchHttpJson error body boundary", () => {
     await expect(fetchBrowserJson(`${baseUrl}/success-small`)).resolves.toEqual({
       payload: "control",
     });
+  });
+
+  it("rejects malformed UTF-8 JSON and releases the guarded fetch", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/success-malformed-utf8`).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "Browser control response was not valid UTF-8 (HTTP 200)",
+      status: 200,
+    });
+    await expect(malformedConnectionClosed).resolves.toBeUndefined();
   });
 
   it("preserves a complete diagnostic body within the limit", async () => {
