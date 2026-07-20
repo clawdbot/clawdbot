@@ -79,6 +79,8 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+/** Cap for the human-readable resultSummary attached to tool result frames. */
+const TOOL_RESULT_SUMMARY_MAX_CHARS = 400;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
@@ -973,6 +975,9 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        // Human-readable args summary (same meta rendered in item titles) so
+        // clients can label tool frames without re-deriving from raw args.
+        ...(meta ? { argsSummary: meta } : {}),
       },
     });
     const itemData: AgentItemEventData = {
@@ -1304,6 +1309,16 @@ export async function handleToolExecutionEnd(
     }
   }
 
+  // Size-capped human-readable result summary for live tool frames. Errors
+  // prefer the extracted error message; successes use the sanitized result
+  // text. Additive only — full result payloads keep flowing unchanged.
+  const resultSummarySource = isToolError
+    ? (extractToolErrorMessage(sanitizedResult) ?? extractToolResultText(sanitizedResult))
+    : extractToolResultText(sanitizedResult);
+  const trimmedResultSummary = resultSummarySource?.trim();
+  const resultSummary = trimmedResultSummary
+    ? truncateUtf16Safe(trimmedResultSummary, TOOL_RESULT_SUMMARY_MAX_CHARS)
+    : undefined;
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
@@ -1314,6 +1329,7 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(resultSummary ? { resultSummary } : {}),
     },
   });
   const endedAt = Date.now();

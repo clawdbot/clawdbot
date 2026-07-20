@@ -136,7 +136,18 @@ function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
   }
+  const shouldEmitEnd = ctx.state.streamReasoning && ctx.state.reasoningStreamHadEmission;
   ctx.state.reasoningStreamOpen = false;
+  ctx.state.reasoningStreamHadEmission = false;
+  if (shouldEmitEnd) {
+    // Close marker for streamed reasoning so WS clients can end the thinking
+    // bubble immediately instead of waiting for the first assistant text delta.
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "thinking",
+      data: { phase: "end" },
+    });
+  }
   void ctx.params.onReasoningEnd?.();
 }
 

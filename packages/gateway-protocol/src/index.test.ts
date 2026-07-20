@@ -591,6 +591,40 @@ describe("validateChatEvent", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts attributed final and classified error terminals", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-final",
+        sessionKey: "agent:main:main",
+        seq: 3,
+        state: "final",
+        model: "moonshotai/Kimi-K2.5",
+        provider: "deepinfra",
+        message: {
+          role: "assistant",
+          model: "moonshotai/Kimi-K2.5",
+          provider: "deepinfra",
+          content: [{ type: "text", text: "done" }],
+        },
+      }),
+    ).toBe(true);
+
+    for (const errorKind of ["rate_limit", "unknown"]) {
+      expect(
+        validateChatEvent({
+          runId: `run-error-${errorKind}`,
+          sessionKey: "agent:main:main",
+          seq: 4,
+          state: "error",
+          model: "fireworks/kimi-fallback",
+          provider: "fireworks",
+          errorMessage: "provider failed",
+          errorKind,
+        }),
+      ).toBe(true);
+    }
+  });
 });
 
 describe("validateModelsListParams", () => {

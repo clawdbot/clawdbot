@@ -644,6 +644,51 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("relays thinking end markers immediately after flushing buffered thinking deltas", () => {
+    let now = 28_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-thinking-end", {
+      sessionKey: "session-agent-thinking-end",
+      clientRunId: "client-agent-thinking-end",
+    });
+
+    handler({
+      runId: "run-agent-thinking-end",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Think", delta: "Think" },
+    });
+    // Buffered under the delta throttle (within the 150ms window).
+    now = 28_050;
+    handler({
+      runId: "run-agent-thinking-end",
+      seq: 2,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Thinking", delta: "ing" },
+    });
+    // The end marker carries no text payload, so it bypasses coalescing and
+    // must flush the buffered delta first to preserve seq ordering.
+    now = 28_060;
+    handler({
+      runId: "run-agent-thinking-end",
+      seq: 3,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls.map(([, payload]) => (payload as { seq?: number }).seq)).toEqual([1, 2, 3]);
+    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("ing");
+    expect((agentCalls[2]?.[1] as { stream?: string }).stream).toBe("thinking");
+    expect((agentCalls[2]?.[1] as { data?: { phase?: string } }).data?.phase).toBe("end");
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
   it("does not drop non-cumulative assistant agent events while coalescing text", () => {
     let now = 30_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -1363,6 +1408,53 @@ describe("agent event handler", () => {
 
     expect(broadcast).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    resetAgentRunContextForTest();
+  });
+
+  it("passes tool argsSummary and resultSummary through to registered tool recipients", () => {
+    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    registerAgentRunContext("run-tool-summaries", { sessionKey: "session-1", verboseLevel: "on" });
+    toolEventRecipients.add("run-tool-summaries", "conn-1");
+
+    handler({
+      runId: "run-tool-summaries",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "start",
+        name: "read",
+        toolCallId: "t-summary",
+        args: { path: "/tmp/a.txt" },
+        argsSummary: "/tmp/a.txt",
+      },
+    });
+    handler({
+      runId: "run-tool-summaries",
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "result",
+        name: "read",
+        toolCallId: "t-summary",
+        isError: false,
+        resultSummary: "file contents",
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    const startPayload = broadcastToConnIds.mock.calls[0]?.[1] as {
+      data?: { argsSummary?: string };
+    };
+    const resultPayload = broadcastToConnIds.mock.calls[1]?.[1] as {
+      data?: { resultSummary?: string };
+    };
+    expect(startPayload.data?.argsSummary).toBe("/tmp/a.txt");
+    expect(resultPayload.data?.resultSummary).toBe("file contents");
     resetAgentRunContextForTest();
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { chatHandlers } from "./chat.js";
+import { chatHandlers, testing } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
 function createMockContext() {
@@ -21,8 +21,46 @@ function createMockContext() {
   };
 }
 
-describe("chat.send error broadcast", () => {
-  it("should broadcast error when addChatRun throws", async () => {
+function getChatBroadcastPayload(ctx: ReturnType<typeof createMockContext>) {
+  const call = ctx.broadcast.mock.calls.find(([event]) => event === "chat");
+  expect(call).toBeDefined();
+  return call?.[1] as Record<string, unknown>;
+}
+
+describe("chat terminal broadcasts", () => {
+  it("mirrors final attribution at the top level, nested message, and node session", () => {
+    const ctx = createMockContext();
+
+    testing.broadcastChatFinal({
+      context: ctx,
+      runId: "test-final-1",
+      sessionKey: "agent:main:main",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "served by fallback" }],
+      },
+      model: "moonshotai/Kimi-K2.5",
+      provider: "deepinfra",
+    });
+
+    const payload = getChatBroadcastPayload(ctx);
+    expect(payload).toMatchObject({
+      runId: "test-final-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      model: "moonshotai/Kimi-K2.5",
+      provider: "deepinfra",
+      message: {
+        role: "assistant",
+        model: "moonshotai/Kimi-K2.5",
+        provider: "deepinfra",
+      },
+    });
+    expect(ctx.nodeSendToSession).toHaveBeenCalledWith("agent:main:main", "chat", payload);
+    expect(ctx.agentRunSeq.has("test-final-1")).toBe(false);
+  });
+
+  it("classifies a known setup failure and mirrors the same terminal to the node session", async () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
@@ -44,7 +82,6 @@ describe("chat.send error broadcast", () => {
       isWebchatConnect: () => false,
     });
 
-    // Verify respond was called with error
     expect(respond).toHaveBeenCalledWith(
       false,
       expect.objectContaining({ runId: "test-run-1", status: "error" }),
@@ -52,14 +89,42 @@ describe("chat.send error broadcast", () => {
       expect.any(Object),
     );
 
-    // Verify broadcastChatError was called (via context.broadcast)
-    expect(ctx.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: "test-run-1",
-        state: "error",
-        errorMessage: expect.stringContaining("LLM timeout"),
-      }),
-    );
+    const payload = getChatBroadcastPayload(ctx);
+    expect(payload).toMatchObject({
+      runId: "test-run-1",
+      state: "error",
+      errorMessage: expect.stringContaining("LLM timeout"),
+      errorKind: "timeout",
+    });
+    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(expect.any(String), "chat", payload);
+  });
+
+  it("defaults an unclassified setup failure to unknown", async () => {
+    const ctx = createMockContext();
+    const respond = vi.fn();
+    ctx.addChatRun.mockImplementation(() => {
+      throw new Error("opaque provider failure");
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "test-run-2",
+      },
+      respond: respond as never,
+      context: ctx as unknown as GatewayRequestContext,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = getChatBroadcastPayload(ctx);
+    expect(payload).toMatchObject({
+      runId: "test-run-2",
+      state: "error",
+      errorKind: "unknown",
+    });
+    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(expect.any(String), "chat", payload);
   });
 });

@@ -101,6 +101,8 @@ export const ChatFinalEventSchema = Type.Object(
   {
     ...ChatEventBaseSchema,
     state: Type.Literal("final"),
+    model: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
     message: Type.Optional(Type.Unknown()),
     usage: Type.Optional(Type.Unknown()),
     stopReason: Type.Optional(Type.String()),
@@ -122,6 +124,8 @@ export const ChatErrorEventSchema = Type.Object(
   {
     ...ChatEventBaseSchema,
     state: Type.Literal("error"),
+    model: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
     message: Type.Optional(Type.Unknown()),
     errorMessage: Type.Optional(Type.String()),
     errorKind: Type.Optional(ChatEventErrorKindSchema),

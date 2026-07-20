@@ -44,7 +44,12 @@ import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import {
+  detectErrorKind,
+  formatErrorMessage,
+  formatUncaughtError,
+  type ErrorKind,
+} from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -1956,14 +1961,23 @@ function broadcastChatFinal(params: {
   runId: string;
   sessionKey: string;
   message?: Record<string, unknown>;
+  /** Effective serving model/provider for the turn, mirroring emitChatFinal attribution. */
+  model?: string;
+  provider?: string;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
+  const servedFields = {
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.provider ? { provider: params.provider } : {}),
+  };
+  const message = projectChatDisplayMessage(params.message);
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: projectChatDisplayMessage(params.message),
+    ...servedFields,
+    message: message ? { ...message, ...servedFields } : undefined,
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -2002,6 +2016,10 @@ function broadcastChatError(params: {
   runId: string;
   sessionKey: string;
   errorMessage?: string;
+  errorKind?: ErrorKind;
+  /** Effective serving model/provider for the turn, mirroring emitChatFinal attribution. */
+  model?: string;
+  provider?: string;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payload = {
@@ -2010,11 +2028,22 @@ function broadcastChatError(params: {
     seq,
     state: "error" as const,
     errorMessage: params.errorMessage,
+    // Always classify error terminals (parity with emitChatFinal in
+    // server-chat.ts) so clients can branch on the failure class without
+    // sniffing errorMessage text.
+    errorKind: params.errorKind ?? "unknown",
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.provider ? { provider: params.provider } : {}),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
+
+export const testing = {
+  broadcastChatFinal,
+  broadcastChatError,
+};
 
 function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
@@ -2609,6 +2638,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
 
+    // Effective serving model/provider for this turn (set once the run picks a
+    // model, after `/model` overrides and failover). Declared outside the try
+    // so terminal broadcasts in every failure path can attribute the turn.
+    let lastModelSelection: { provider: string; model: string } | undefined;
+
     try {
       const activeRunAbort = registerChatAbortController({
         chatAbortControllers: context.chatAbortControllers,
@@ -2959,6 +2993,12 @@ export const chatHandlers: GatewayRequestHandlers = {
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
               userTurnTranscriptRecorder: userTurnRecorder,
+              // AG1 streaming: a present sink flips streamReasoning on in
+              // embedded-agent-subscribe (reasoningMode "stream" requires a
+              // function sink). Delivery itself rides the emitAgentEvent
+              // "thinking" broadcast relayed by server-chat, so this sink is
+              // intentionally a no-op.
+              onReasoningStream: async () => {},
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 const connId = typeof client?.connId === "string" ? client.connId : undefined;
@@ -2979,6 +3019,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                 }
               },
               onModelSelected: (modelSelection) => {
+                lastModelSelection = {
+                  provider: modelSelection.provider,
+                  model: modelSelection.model,
+                };
                 updateChatRunProvider(context.chatAbortControllers, {
                   runId: clientRunId,
                   providerId: modelSelection.provider,
@@ -3065,6 +3109,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     context,
                     runId: clientRunId,
                     sessionKey,
+                    ...lastModelSelection,
                   });
                 } else {
                   await persistGatewayUserTurnTranscriptBestEffort();
@@ -3227,6 +3272,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     runId: clientRunId,
                     sessionKey,
                     message,
+                    ...lastModelSelection,
                   });
                 }
               } else {
@@ -3527,6 +3573,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       runId: clientRunId,
                       sessionKey,
                       message,
+                      ...lastModelSelection,
                     });
                     broadcastedSourceReplyFinal = true;
                   }
@@ -3535,11 +3582,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               const shouldBroadcastAgentError =
                 returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
               if (shouldBroadcastAgentError) {
+                const returnedAgentErrorKind = detectErrorKind(returnedAgentErrorMessage);
                 broadcastChatError({
                   context,
                   runId: clientRunId,
                   sessionKey,
                   errorMessage: returnedAgentErrorMessage,
+                  ...(returnedAgentErrorKind ? { errorKind: returnedAgentErrorKind } : {}),
+                  ...lastModelSelection,
                 });
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
@@ -3599,11 +3649,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               error,
             },
           });
+          const dispatchErrorKind = detectErrorKind(err);
           broadcastChatError({
             context,
             runId: clientRunId,
             sessionKey,
             errorMessage: String(err),
+            ...(dispatchErrorKind ? { errorKind: dispatchErrorKind } : {}),
+            ...lastModelSelection,
           });
         })
         .finally(() => {
@@ -3633,11 +3686,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         error: formatForLog(err),
       });
+      const setupErrorKind = detectErrorKind(err);
       broadcastChatError({
         context,
         runId: clientRunId,
         sessionKey,
         errorMessage: String(err),
+        ...(setupErrorKind ? { errorKind: setupErrorKind } : {}),
+        ...lastModelSelection,
       });
     }
   },

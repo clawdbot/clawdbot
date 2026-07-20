@@ -1190,6 +1190,139 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send replyOptions carry a reasoning stream sink for thinking streaming", async () => {
+    await withMainSessionStore(async () => {
+      let seenReplyOptions: Record<string, unknown> | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            replyOptions?: Record<string, unknown>;
+            dispatcher: {
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        seenReplyOptions = params.replyOptions;
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: false,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hello there",
+        idempotencyKey: "idem-reasoning-sink-1",
+      });
+
+      expect(res.ok).toBe(true);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalled();
+      });
+      // Sink presence is what flips streamReasoning on in
+      // embedded-agent-subscribe when reasoningMode is "stream"; delivery
+      // itself rides the emitAgentEvent thinking broadcast.
+      expect(typeof seenReplyOptions?.onReasoningStream).toBe("function");
+      await expect(
+        (seenReplyOptions?.onReasoningStream as (payload: unknown) => Promise<void>)({
+          text: "thinking...",
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  test("chat.send attributes the terminal to the last fallback without replacing a user override", async () => {
+    await withMainSessionStore(async (dir) => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            providerOverride: "openai",
+            modelOverride: "gpt-5.4",
+            modelOverrideSource: "user",
+          },
+        },
+      });
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            replyOptions?: {
+              onModelSelected?: (selection: {
+                provider: string;
+                model: string;
+                thinkLevel: string | undefined;
+              }) => void;
+            };
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.replyOptions?.onModelSelected?.({
+          provider: "openai",
+          model: "gpt-5.4",
+          thinkLevel: undefined,
+        });
+        params.replyOptions?.onModelSelected?.({
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          thinkLevel: undefined,
+        });
+        params.dispatcher.sendFinalReply({ text: "served by fallback" });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-last-fallback-1",
+        8000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "use the configured model",
+        idempotencyKey: "idem-last-fallback-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const finalEvent = await finalPromise;
+      const payload = expectRecordFields(finalEvent.payload, {
+        state: "final",
+        model: "moonshotai/Kimi-K2.5",
+        provider: "deepinfra",
+      });
+      expectRecordFields(payload.message, {
+        model: "moonshotai/Kimi-K2.5",
+        provider: "deepinfra",
+      });
+
+      const rawStore = JSON.parse(
+        await fs.readFile(path.join(dir, "sessions.json"), "utf-8"),
+      ) as Record<string, Record<string, unknown>>;
+      expect(rawStore["agent:main:main"]).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+      });
+    });
+  });
+
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(async (dir) => {
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;

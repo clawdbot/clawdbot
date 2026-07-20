@@ -186,6 +186,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     lastDeliveredBlockReplyText: undefined,
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
+    reasoningStreamHadEmission: false,
     assistantMessageIndex: 0,
     lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
@@ -331,6 +332,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
+    state.reasoningStreamHadEmission = false;
     state.suppressBlockChunks = false;
     state.pendingAssistantUsage = undefined;
     state.assistantUsageCommitted = false;
@@ -1080,6 +1082,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         delta,
       },
     });
+    state.reasoningStreamHadEmission = true;
 
     void params.onReasoningStream({
       text: trimmed,

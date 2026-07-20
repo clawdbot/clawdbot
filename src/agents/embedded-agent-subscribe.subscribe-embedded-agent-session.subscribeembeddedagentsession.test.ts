@@ -894,6 +894,203 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAgentEventSpy.mockRestore();
   });
 
+  it("broadcasts a thinking end marker when streamed reasoning ends", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: "stream",
+      onReasoningStream: vi.fn(),
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking files" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Checking files",
+      },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking files" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_end",
+      },
+    });
+
+    const thinkingEvents = emitAgentEventSpy.mock.calls
+      .map((call) => call[0])
+      .filter((evt) => evt?.stream === "thinking");
+    expect(thinkingEvents.length).toBeGreaterThanOrEqual(2);
+    expect(thinkingEvents[0]?.data?.delta).toBe("Checking files");
+    expect(thinkingEvents.at(-1)?.data?.phase).toBe("end");
+    emitAgentEventSpy.mockRestore();
+  });
+
+  it("does not broadcast thinking events in stream mode without a reasoning sink", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: "stream",
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Hidden step" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Hidden step",
+      },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Hidden step" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_end",
+      },
+    });
+
+    const thinkingEvents = emitAgentEventSpy.mock.calls
+      .map((call) => call[0])
+      .filter((evt) => evt?.stream === "thinking");
+    expect(thinkingEvents).toHaveLength(0);
+    emitAgentEventSpy.mockRestore();
+  });
+
+  it("does not broadcast an orphan thinking end marker for silent turns", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({
+      runId: "run-silent-reasoning",
+      reasoningMode: "stream",
+      onReasoningStream: vi.fn(),
+      silentExpected: true,
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Hidden step" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Hidden step",
+      },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Hidden step" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_end",
+      },
+    });
+
+    const thinkingEvents = emitAgentEventSpy.mock.calls
+      .map((call) => call[0])
+      .filter((evt) => evt?.stream === "thinking");
+    expect(thinkingEvents).toHaveLength(0);
+    emitAgentEventSpy.mockRestore();
+  });
+
+  it("attaches argsSummary and resultSummary to tool stream frames", async () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    try {
+      const { emit } = createSubscribedHarness({
+        runId: "run-tool-frames",
+        toolProgressDetail: "raw",
+      });
+
+      emitToolRun({
+        emit,
+        toolName: "exec",
+        toolCallId: "tool-frame-1",
+        args: { command: "echo ok" },
+        isError: false,
+        result: { content: [{ type: "text", text: "ok" }] },
+      });
+
+      const findToolEvent = (phase: string) =>
+        emitAgentEventSpy.mock.calls
+          .map((call) => call[0])
+          .find(
+            (evt) =>
+              evt?.stream === "tool" &&
+              evt?.data?.phase === phase &&
+              evt?.data?.toolCallId === "tool-frame-1",
+          );
+      await vi.waitFor(() => {
+        expect(findToolEvent("result")).toBeTruthy();
+      });
+      const startEvent = findToolEvent("start");
+      const resultEvent = findToolEvent("result");
+      expect(typeof startEvent?.data?.argsSummary).toBe("string");
+      expect(String(startEvent?.data?.argsSummary)).toContain("echo ok");
+      expect(resultEvent?.data?.resultSummary).toBe("ok");
+    } finally {
+      emitAgentEventSpy.mockRestore();
+    }
+  });
+
+  it("caps resultSummary length and uses the error message for failed tools", async () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    try {
+      const { emit } = createSubscribedHarness({ runId: "run-tool-frames-cap" });
+
+      emitToolRun({
+        emit,
+        toolName: "read",
+        toolCallId: "tool-frame-err",
+        args: { path: "/tmp/missing.txt" },
+        isError: true,
+        result: { error: "file not found" },
+      });
+      emitToolRun({
+        emit,
+        toolName: "exec",
+        toolCallId: "tool-frame-long",
+        args: { command: "cat big.txt" },
+        isError: false,
+        result: { content: [{ type: "text", text: "x".repeat(5000) }] },
+      });
+
+      const findResultEvent = (toolCallId: string) =>
+        emitAgentEventSpy.mock.calls
+          .map((call) => call[0])
+          .find(
+            (evt) =>
+              evt?.stream === "tool" &&
+              evt?.data?.phase === "result" &&
+              evt?.data?.toolCallId === toolCallId,
+          );
+      await vi.waitFor(() => {
+        expect(findResultEvent("tool-frame-err")).toBeTruthy();
+        expect(findResultEvent("tool-frame-long")).toBeTruthy();
+      });
+      expect(findResultEvent("tool-frame-err")?.data?.resultSummary).toBe("file not found");
+      const cappedSummary = findResultEvent("tool-frame-long")?.data?.resultSummary;
+      expect(typeof cappedSummary).toBe("string");
+      expect(String(cappedSummary).length).toBeLessThanOrEqual(400);
+      expect(String(cappedSummary).startsWith("xxx")).toBe(true);
+    } finally {
+      emitAgentEventSpy.mockRestore();
+    }
+  });
+
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
     const onReasoningEnd = vi.fn();
 
