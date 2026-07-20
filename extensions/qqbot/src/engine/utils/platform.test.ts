@@ -240,6 +240,12 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
     }
   });
 
+  it("does not use OPENCLAW_STATE_DIR for media path (honors OPENCLAW_HOME only)", () => {
+    const fakeStateDir = makeFakeOpenclawHome();
+    vi.stubEnv("OPENCLAW_STATE_DIR", fakeStateDir);
+    expect(getQQBotMediaPath()).toBe(path.join(realOsHome, ".openclaw", "media", "qqbot"));
+  });
+
   it("keeps persisted QQ Bot data anchored on the OS home (compatibility)", () => {
     const fakeOpenclawHome = makeFakeOpenclawHome();
     vi.stubEnv("OPENCLAW_HOME", fakeOpenclawHome);
