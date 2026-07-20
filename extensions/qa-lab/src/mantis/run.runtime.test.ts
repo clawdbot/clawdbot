@@ -16,6 +16,47 @@ function requireArgAfter(args: readonly string[], flag: string): string {
   return expectDefined(args[index + 1], `${flag} argument value`);
 }
 
+type StubCommandResult = {
+  code: number | null;
+  killed: boolean;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+  stdout: string;
+  stdoutTruncatedBytes?: number;
+  termination: "exit" | "timeout" | "no-output-timeout" | "signal";
+};
+
+function successfulCommandResult(stdout = ""): StubCommandResult {
+  return { code: 0, killed: false, signal: null, stderr: "", stdout, termination: "exit" };
+}
+
+function timedOutCommandResult(): StubCommandResult {
+  return {
+    code: 124,
+    killed: true,
+    signal: "SIGTERM",
+    stderr: "",
+    stdout: "",
+    termination: "timeout",
+  };
+}
+
+async function writeLegacyLaneSummary(params: { args: readonly string[]; scenario: string }) {
+  const repoRootArg = requireArgAfter(params.args, "--repo-root");
+  const outputDirArg = requireArgAfter(params.args, "--output-dir");
+  const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
+  const outputDir = path.join(repoRootArg, outputDirArg);
+  await fs.mkdir(outputDir, { recursive: true });
+  await fs.writeFile(
+    path.join(outputDir, "discord-qa-summary.json"),
+    `${JSON.stringify(
+      { scenarios: [{ id: params.scenario, status: lane === "baseline" ? "fail" : "pass" }] },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
 function isProcessRunning(pid: number) {
   try {
     process.kill(pid, 0);
@@ -68,7 +109,7 @@ describe("mantis before/after runtime", () => {
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
       commands.push({ command, args });
       if (command !== "pnpm" || !args.includes("openclaw")) {
-        return;
+        return successfulCommandResult();
       }
       const repoRootArg = requireArgAfter(args, "--repo-root");
       const outputDirArg = requireArgAfter(args, "--output-dir");
@@ -113,6 +154,7 @@ describe("mantis before/after runtime", () => {
         path.join(outputDir, QA_EVIDENCE_FILENAME),
         `${JSON.stringify(summary, null, 2)}\n`,
       );
+      return successfulCommandResult();
     });
 
     const result = await runMantisBeforeAfter({
@@ -190,7 +232,7 @@ describe("mantis before/after runtime", () => {
   it("supports the Discord thread filePath attachment Mantis scenario", async () => {
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
       if (command !== "pnpm" || !args.includes("openclaw")) {
-        return;
+        return successfulCommandResult();
       }
       const repoRootArg = requireArgAfter(args, "--repo-root");
       const outputDirArg = requireArgAfter(args, "--output-dir");
@@ -219,6 +261,7 @@ describe("mantis before/after runtime", () => {
           2,
         )}\n`,
       );
+      return successfulCommandResult();
     });
 
     const result = await runMantisBeforeAfter({
@@ -259,30 +302,106 @@ describe("mantis before/after runtime", () => {
     expect(candidateArtifact?.alt).toBe("Candidate Discord thread reply with filePath attachment");
   });
 
+  it.each([
+    {
+      qaTimeoutMs: 450_000,
+      scenario: "discord-status-reactions-tool-only",
+    },
+    {
+      qaTimeoutMs: 390_000,
+      scenario: "discord-thread-reply-filepath-attachment",
+    },
+  ])("runs %s commands with stage-owned total deadlines", async ({ qaTimeoutMs, scenario }) => {
+    const executions: { stage: string; timeoutMs: number }[] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      executions.push({ stage: execution.stage, timeoutMs: execution.timeoutMs });
+      if (command === "pnpm" && args.includes("openclaw")) {
+        await writeLegacyLaneSummary({ args, scenario });
+      }
+      return successfulCommandResult();
+    });
+
+    const result = await runMantisBeforeAfter({
+      baseline: "bug-sha",
+      candidate: "fix-sha",
+      commandRunner: runner,
+      now: () => new Date("2026-05-03T12:00:00.000Z"),
+      outputDir: `.artifacts/qa-e2e/mantis/${scenario}-deadlines`,
+      repoRoot,
+      scenario,
+    });
+
+    expect(result.status).toBe("pass");
+    await expect(
+      fs.stat(path.join(result.outputDir, "worktrees", "baseline")),
+    ).resolves.toBeTruthy();
+    await expect(
+      fs.stat(path.join(result.outputDir, "worktrees", "candidate")),
+    ).resolves.toBeTruthy();
+    expect(executions).toEqual([
+      { stage: "worktree-add", timeoutMs: 300_000 },
+      { stage: "install", timeoutMs: 1_800_000 },
+      { stage: "build", timeoutMs: 1_800_000 },
+      { stage: "qa", timeoutMs: qaTimeoutMs },
+      { stage: "worktree-add", timeoutMs: 300_000 },
+      { stage: "install", timeoutMs: 1_800_000 },
+      { stage: "build", timeoutMs: 1_800_000 },
+      { stage: "qa", timeoutMs: qaTimeoutMs },
+    ]);
+  });
+
+  it("normalizes command timeout overrides per stage", async () => {
+    const executions: { stage: string; timeoutMs: number }[] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      executions.push({ stage: execution.stage, timeoutMs: execution.timeoutMs });
+      if (command === "pnpm" && args.includes("openclaw")) {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+      }
+      return successfulCommandResult();
+    });
+
+    await runMantisBeforeAfter({
+      baseline: "bug-sha",
+      candidate: "fix-sha",
+      commandRunner: runner,
+      commandTimeouts: {
+        "worktree-add": 111,
+        install: 222,
+        build: 0,
+        qa: 444,
+        "worktree-cleanup": -1,
+      },
+      now: () => new Date("2026-05-03T12:00:00.000Z"),
+      outputDir: ".artifacts/qa-e2e/mantis/override-deadlines",
+      repoRoot,
+    });
+
+    expect(executions.slice(0, 4)).toEqual([
+      { stage: "worktree-add", timeoutMs: 111 },
+      { stage: "install", timeoutMs: 222 },
+      { stage: "build", timeoutMs: 1_800_000 },
+      { stage: "qa", timeoutMs: 444 },
+    ]);
+  });
+
   it.skipIf(process.platform === "win32")(
-    "stops a silent lane command and kills its process tree",
+    "stops a noisy lane command at its total deadline and kills its process tree",
     async () => {
-      const commandNoOutputTimeoutMs = 1_500;
+      const worktreeAddTimeoutMs = 1_500;
       const binDir = path.join(repoRoot, "bin");
       const parentPidPath = path.join(repoRoot, "parent.pid");
       const descendantPidPath = path.join(repoRoot, "descendant.pid");
-      const descendantScript = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
       const gitShimPath = path.join(binDir, "git");
       await fs.mkdir(binDir, { recursive: true });
       await fs.writeFile(
         gitShimPath,
         [
-          "#!/usr/bin/env node",
-          "const { spawn } = require('node:child_process');",
-          "const { writeFileSync } = require('node:fs');",
-          `writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));`,
-          `const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: 'ignore' });`,
-          `writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
+          "#!/bin/sh",
+          "trap '' TERM",
+          `printf '%s' \"$$\" > ${JSON.stringify(parentPidPath)}`,
+          "sh -c 'trap \"\" TERM; while :; do sleep 1; done' &",
+          `printf '%s' \"$!\" > ${JSON.stringify(descendantPidPath)}`,
+          "while :; do printf 'still working\\n'; sleep 0.05; done",
         ].join("\n"),
         { encoding: "utf8", mode: 0o755 },
       );
@@ -295,7 +414,7 @@ describe("mantis before/after runtime", () => {
         const run = runMantisBeforeAfter({
           baseline: "baseline-ref",
           candidate: "candidate-ref",
-          commandNoOutputTimeoutMs,
+          commandTimeouts: { "worktree-add": worktreeAddTimeoutMs },
           outputDir: ".artifacts/qa-e2e/mantis/timeout-run",
           repoRoot,
           skipBuild: true,
@@ -306,12 +425,14 @@ describe("mantis before/after runtime", () => {
           readPid(descendantPidPath, 2_000),
         ]);
 
-        await expect(run).rejects.toThrow(
-          new RegExp(
-            `git worktree add .* produced no output for ${commandNoOutputTimeoutMs}ms`,
-            "u",
-          ),
-        );
+        await expect(
+          Promise.race([
+            run,
+            sleep(4_000).then(() => {
+              throw new Error("timed out waiting for Mantis deadline rejection");
+            }),
+          ]),
+        ).rejects.toThrow(`baseline worktree-add timed out after ${worktreeAddTimeoutMs}ms`);
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
       } finally {
         if (previousPath === undefined) {
