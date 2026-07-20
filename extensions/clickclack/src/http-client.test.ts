@@ -136,7 +136,7 @@ describe("ClickClack HTTP client", () => {
               reject(new Error("expected ClickClack request signal"));
               return;
             }
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
           }),
       );
       const client = createClickClackClient({
@@ -207,7 +207,7 @@ describe("ClickClack HTTP client", () => {
               reject(new Error("expected ClickClack request signal"));
               return;
             }
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
           }),
       );
       const client = createClickClackClient({
