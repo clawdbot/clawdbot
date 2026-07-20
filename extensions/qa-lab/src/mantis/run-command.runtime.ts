@@ -9,7 +9,7 @@ import {
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { readQaScenarioById } from "../scenario-catalog.js";
 
-export type MantisCommandStage = "worktree-add" | "install" | "build" | "qa" | "worktree-cleanup";
+type MantisCommandStage = "worktree-add" | "install" | "build" | "qa" | "worktree-cleanup";
 export type MantisCommandExecution = {
   cwd: string;
   env: NodeJS.ProcessEnv;
