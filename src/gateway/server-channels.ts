@@ -374,6 +374,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const isHealthMonitorEnabled = (channelId: ChannelId, accountId: string): boolean => {
+    if (knownAccountDeferredToCaller.has(restartKey(channelId, accountId))) {
+      return false;
+    }
+
     const cfg = getRuntimeConfig();
     const channelConfig = cfg.channels?.[channelId] as ChannelHealthMonitorConfig | undefined;
     const accountOverride = resolveAccountHealthMonitorOverride(channelConfig, accountId);
@@ -1487,9 +1491,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
     for (const plugin of listChannelPlugins()) {
       const store = getStore(plugin.id);
+      const listedAccountIds = plugin.config.listAccountIds(cfg);
+      const listedAccountIdSet = new Set(listedAccountIds);
       const accountIds = Array.from(
         new Set([
-          ...plugin.config.listAccountIds(cfg),
+          ...listedAccountIds,
           ...listKnownLiveAccountIds(plugin.id, store),
         ]),
       );
@@ -1500,7 +1506,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       });
       const accounts: Record<string, ChannelAccountSnapshot> = {};
       for (const id of accountIds) {
-        const account = plugin.config.resolveAccount(cfg, id);
+        let account: ReturnType<typeof plugin.config.resolveAccount>;
+        try {
+          account = plugin.config.resolveAccount(cfg, id);
+        } catch (err) {
+          if (!listedAccountIdSet.has(id)) {
+            continue;
+          }
+          throw err;
+        }
         const enabled = plugin.config.isEnabled
           ? plugin.config.isEnabled(account, cfg)
           : isAccountEnabled(account);

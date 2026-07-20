@@ -3258,6 +3258,96 @@ describe("server-channels auto restart", () => {
     expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
   });
 
+  it("filters stale known accounts from runtime snapshots when config removes them", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: (_cfg, accountId) => {
+          if (!accountIds.includes(accountId)) {
+            throw new Error(`unknown account ${accountId}`);
+          }
+          return { enabled: true, configured: true };
+        },
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-b"];
+    const snapshot = manager.getRuntimeSnapshot();
+
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(snapshot.channelAccounts.discord?.["account-b"]).toMatchObject({
+      accountId: "account-b",
+    });
+
+    await manager.stopChannel("discord", "account-a");
+  });
+
+  it("pauses health recovery for private plugin-reload handoffs that remain configured", async () => {
+    const accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+
+    const stoppedSnapshot = manager.getRuntimeSnapshot();
+    expect(stoppedSnapshot.channelAccounts.discord?.["account-a"]).toMatchObject({
+      running: false,
+      restartPending: false,
+    });
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-a",
+    ]);
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(
+      true,
+    );
+
+    await manager.stopChannel("discord");
+  });
+
   it("keeps no-restart plugin handoffs in include-known-account restarts", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
