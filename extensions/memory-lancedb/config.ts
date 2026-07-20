@@ -1,7 +1,9 @@
 // Memory Lancedb helper module supports config behavior.
+import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 export type MemoryConfig = {
   embedding: {
@@ -27,7 +29,33 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 export const DEFAULT_RECALL_MAX_CHARS = 1000;
-const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
+const LEGACY_STATE_DIRS: string[] = [];
+
+function resolveDefaultDbPath(): string {
+  const preferred = join(resolveStateDir(), "memory", "lancedb");
+  try {
+    if (fs.existsSync(preferred)) {
+      return preferred;
+    }
+  } catch {
+    // best-effort
+  }
+
+  for (const legacy of LEGACY_STATE_DIRS) {
+    const candidate = join(homedir(), legacy, "memory", "lancedb");
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  return preferred;
+}
+
+const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
