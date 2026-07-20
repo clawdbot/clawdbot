@@ -1157,7 +1157,13 @@ struct GatewayProcessManagerTests {
             manager._testSetLastObservedGatewayPID(nil)
         }
 
-        #expect(await manager.waitForGatewayReady(timeout: 0.5))
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-retained-pid-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        let ready = await DeviceIdentityStore.withStateDirectory(stateDir) {
+            await manager.waitForGatewayReady(timeout: 0.5)
+        }
+        #expect(ready)
         #expect(manager._testControlChannelRefreshForces().last == true)
         #expect(manager.status == .running(details: "pid 4242"))
 
