@@ -69,11 +69,45 @@ function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
   return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
 }
 
-export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<void> {
+function toMcpAppOperationError(reason: unknown, fallbackMessage: string): Error {
+  return reason instanceof Error ? reason : new Error(fallbackMessage, { cause: reason });
+}
+
+async function waitForMcpAppOperation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(toMcpAppOperationError(signal.reason, "MCP App operation aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toMcpAppOperationError(error, "MCP App operation failed"));
+      },
+    );
+  });
+}
+
+export async function requireMcpAppInteraction(
+  view: McpAppViewLease,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
   if (view.readOnly === true || view.allowedAppToolNames === undefined) {
     throw new Error("MCP App view is read-only");
   }
-  if (view.authorizeAppInteraction && !(await view.authorizeAppInteraction())) {
+  if (
+    view.authorizeAppInteraction &&
+    !(await waitForMcpAppOperation(Promise.resolve(view.authorizeAppInteraction()), signal))
+  ) {
     throw new Error("MCP App widget grant is no longer active");
   }
 }
@@ -101,7 +135,7 @@ async function requireCallableTool(
   toolName: string,
   signal: AbortSignal,
 ): Promise<void> {
-  await requireMcpAppInteraction(view);
+  await requireMcpAppInteraction(view, signal);
   const catalog = await runtime.getCatalog({ signal });
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
@@ -198,7 +232,7 @@ export async function executeMcpAppOperation(
       });
     case "tools/list":
       return await withMcpAppActiveView(active, "read", async () => {
-        await requireMcpAppInteraction(view);
+        await requireMcpAppInteraction(view, signal);
         if (!runtime.listTools) {
           throw new Error("MCP tools/list is unavailable");
         }

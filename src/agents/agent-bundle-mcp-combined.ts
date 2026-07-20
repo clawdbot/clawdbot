@@ -118,6 +118,8 @@ export function createCombinedSessionMcpRuntime(params: {
       return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
     }
     const load = (async () => {
+      // The combined catalog belongs to the runtime. Individual operation
+      // deadlines only detach their waiters; parts keep warming shared caches.
       const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
       if (
         cachedCatalog &&
@@ -265,6 +267,7 @@ export function createCombinedSessionMcpRuntime(params: {
       return await owner.getPrompt(serverName, name, args);
     },
     async dispose() {
+      catalogInFlight = undefined;
       await Promise.allSettled(parts.map((part) => part.dispose()));
     },
   };

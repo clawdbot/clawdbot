@@ -593,6 +593,8 @@ export function createSessionMcpRuntime(params: {
     failIfDisposed();
     options?.signal?.throwIfAborted();
     if (catalogInFlight) {
+      // Catalog refresh is runtime-owned. An operation deadline only detaches
+      // that caller so the shared cache can still finish warming.
       return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
     }
     const retryServerNames = retryBaseCatalog

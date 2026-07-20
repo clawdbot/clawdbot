@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 
 const mocks = vi.hoisted(() => ({
+  acquireMcpAppViewRequest: vi.fn(),
   completeDeferredSessionMcpRuntimeRetirement: vi.fn(),
   getMcpAppViewLease: vi.fn(),
   getMcpAppViewLeaseForSession: vi.fn(),
@@ -14,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../agents/mcp-ui-resource.js", () => ({
   getMcpAppViewLease: mocks.getMcpAppViewLease,
   getMcpAppViewLeaseForSession: mocks.getMcpAppViewLeaseForSession,
-  acquireMcpAppViewRequest: () => () => {},
+  acquireMcpAppViewRequest: mocks.acquireMcpAppViewRequest,
 }));
 vi.mock("../../agents/mcp-app-sandbox.js", () => ({
   buildMcpAppSandboxPath: () => "mcp-app-sandbox",
@@ -121,6 +122,7 @@ describe("MCP App gateway bridge", () => {
     view.allowedAppToolNames = new Set(["shared", "app-only"]);
     view.authorizeAppInteraction = undefined;
     view.readOnly = undefined;
+    mocks.acquireMcpAppViewRequest.mockReset().mockImplementation(() => vi.fn());
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.getMcpAppViewLeaseForSession.mockReset().mockReturnValue(undefined);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
@@ -439,6 +441,40 @@ describe("MCP App gateway bridge", () => {
     expect(denied.mock.calls[0]?.[0]).toBe(false);
     expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
     expect(mocks.peekSessionMcpRuntime.mock.results[0]?.value.callTool).not.toHaveBeenCalled();
+  });
+
+  it("releases the view and runtime leases when tool authorization exceeds the operation deadline", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    view.authorizeAppInteraction = vi.fn(() => new Promise<boolean>(() => {}));
+
+    try {
+      const invocation = invoke("mcp.app.callTool", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+        toolName: "shared",
+      });
+      await vi.waitFor(() => expect(view.authorizeAppInteraction).toHaveBeenCalledOnce());
+
+      controller.abort(new Error("MCP App operation timed out"));
+      await expect(
+        Promise.race([
+          invocation.then(() => "settled"),
+          new Promise<string>((resolve) => {
+            setTimeout(() => resolve("pending"), 50);
+          }),
+        ]),
+      ).resolves.toBe("settled");
+
+      const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
+      expect(activeRuntime.getCatalog).not.toHaveBeenCalled();
+      expect(activeRuntime.callTool).not.toHaveBeenCalled();
+      expect(mocks.acquireMcpAppViewRequest.mock.results[0]?.value).toHaveBeenCalledOnce();
+      expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
+      expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(activeRuntime);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("captures only app-visible tools allowed by the originating view", async () => {

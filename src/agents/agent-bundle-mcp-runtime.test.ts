@@ -14,6 +14,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
@@ -2348,6 +2349,61 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("keeps a runtime-owned paginated catalog refresh alive after its operation waiter aborts", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-catalog-deadline-");
+    const serverPath = path.join(tempDir, "catalog-deadline.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const toolPageCursors = [null, "2", "3", "4", "5", "6", null];
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      delayMs: 50,
+      notifyListChangedAfterFirstList: true,
+      toolPageCursors,
+      tools: [
+        {
+          name: "initial_tool",
+          description: "Initial tool",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-catalog-deadline",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { paged: { command: process.execPath, args: [serverPath] } } },
+      },
+    });
+
+    try {
+      await expect(runtime.getCatalog()).resolves.toMatchObject({
+        tools: [{ toolName: "initial_tool-1" }],
+      });
+      await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForPredicate(
+        () => runtime.peekCatalog() === null,
+        "list_changed to invalidate the catalog",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+
+      await expect(runtime.getCatalog({ signal: AbortSignal.timeout(120) })).rejects.toThrow(
+        /abort/i,
+      );
+      const completedCatalog = await runtime.getCatalog();
+
+      expect(completedCatalog.tools.map((tool) => tool.toolName)).toEqual(
+        Array.from({ length: 6 }, (_, index) => `initial_tool-${index + 2}`),
+      );
+      expect((await fs.readFile(logPath, "utf8")).match(/tools\/list cursor/g)).toHaveLength(
+        toolPageCursors.length,
+      );
+      expect(runtime.peekCatalog()).toBe(completedCatalog);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("isolates a cyclic tool catalog while a healthy bundle MCP sibling survives", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-tool-cycle-");
     const loopingPath = path.join(tempDir, "looping.mjs");
@@ -3918,6 +3974,74 @@ describe("requester-scoped MCP connection resolution", () => {
       await manager.disposeAll();
     },
   );
+
+  it("keeps a combined catalog load alive after its operation waiter aborts", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    let releaseCatalog: (() => void) | undefined;
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    let catalogLoadCount = 0;
+    const createRuntime: RuntimeFactory = (params) => {
+      const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
+      const catalog = {
+        version: 1 as const,
+        generatedAt: 0,
+        servers: {
+          [serverName]: { serverName, launchSummary: serverName, toolCount: 0 },
+        },
+        tools: [],
+      };
+      let currentCatalog: typeof catalog | null = null;
+      return {
+        ...makeRuntime([], serverName),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        peekCatalog: () => currentCatalog,
+        getCatalog: async (options) => {
+          catalogLoadCount += 1;
+          await waitForSessionMcpRequest(catalogGate, options?.signal);
+          currentCatalog = catalog;
+          return catalog;
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-combined-catalog-deadline",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    await expect(runtime.getCatalog({ signal: AbortSignal.timeout(20) })).rejects.toThrow(/abort/i);
+    const backgroundCatalog = runtime.getCatalog();
+    releaseCatalog?.();
+
+    await expect(backgroundCatalog).resolves.toMatchObject({
+      servers: { shared: {}, "user-mail": {} },
+    });
+    expect(catalogLoadCount).toBe(2);
+
+    await manager.disposeAll();
+  });
 
   it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
