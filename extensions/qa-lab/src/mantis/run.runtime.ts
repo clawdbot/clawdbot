@@ -171,7 +171,7 @@ function normalizeRequiredLiteral<T extends string>(
   return normalized;
 }
 
-function resolveQaCommandTimeoutMs(scenarioId: string) {
+function resolveQaCommandTimeoutMs(scenarioId: string): number {
   const scenario = readQaScenarioById(scenarioId);
   const execution = scenario.execution;
   if (execution.kind !== "flow" || !execution.flow) {
@@ -182,7 +182,12 @@ function resolveQaCommandTimeoutMs(scenarioId: string) {
     throw new Error(`Mantis scenario ${scenarioId} must define a positive execution.timeoutMs.`);
   }
   const attemptCount = execution.retryCount === 0 ? 1 : 2;
-  return addTimerTimeoutGraceMs(timeoutMs * attemptCount, QA_COMMAND_TIMEOUT_GRACE_MS);
+  const attemptedTimeoutMs = timeoutMs * attemptCount;
+  const timeoutWithGraceMs = addTimerTimeoutGraceMs(
+    attemptedTimeoutMs,
+    QA_COMMAND_TIMEOUT_GRACE_MS,
+  );
+  return resolvePositiveTimerTimeoutMs(timeoutWithGraceMs, timeoutMs);
 }
 
 function resolveMantisCommandTimeouts(
