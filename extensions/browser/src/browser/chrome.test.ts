@@ -812,6 +812,7 @@ describe("browser chrome helpers", () => {
 describe("chrome executables", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
   });
 
   it("parses odd dotted browser version tokens using the last match", () => {
@@ -852,6 +853,24 @@ describe("chrome executables", () => {
     expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
       kind: "chrome",
       path: "/opt/google/chrome/chrome",
+    });
+  });
+
+  it("skips non-executable Linux browser candidates", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"].includes(
+        String(candidate),
+      );
+    });
+    vi.mocked(fs.accessSync).mockImplementation((candidate) => {
+      if (String(candidate) === "/usr/bin/google-chrome") {
+        throw new Error("EACCES");
+      }
+    });
+
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "chrome",
+      path: "/usr/bin/google-chrome-stable",
     });
   });
 });

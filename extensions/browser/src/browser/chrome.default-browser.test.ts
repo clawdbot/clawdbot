@@ -12,11 +12,12 @@ vi.mock("node:child_process", async () => {
 });
 vi.mock("node:fs", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  const accessSync = vi.fn();
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:fs")>("node:fs"),
-    { existsSync, readFileSync },
+    { accessSync, constants: { X_OK: 1 }, existsSync, readFileSync },
     { mirrorToDefault: true },
   );
 });
@@ -67,6 +68,8 @@ describe("browser default executable detection", () => {
 
   beforeEach(() => {
     vi.mocked(execFileSync).mockReset();
+    vi.mocked(fs.accessSync).mockReset();
+    vi.mocked(fs.accessSync).mockImplementation(() => undefined);
     vi.mocked(fs.existsSync).mockReset();
     vi.mocked(fs.readFileSync).mockReset();
     vi.mocked(os.homedir).mockReset();

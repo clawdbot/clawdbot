@@ -118,6 +118,21 @@ function exists(filePath: string) {
   }
 }
 
+function isExecutable(filePath: string, requireExecutePermission = true): boolean {
+  if (!exists(filePath)) {
+    return false;
+  }
+  if (!requireExecutePermission) {
+    return true;
+  }
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function execText(
   command: string,
   args: string[],
@@ -217,7 +232,7 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
     return null;
   }
   const exePath = path.join(appPath, "Contents", "MacOS", exeName);
-  if (!exists(exePath)) {
+  if (!isExecutable(exePath)) {
     return null;
   }
   return { kind: inferKindFromIdentifier(bundleId), path: exePath };
@@ -298,7 +313,7 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
     return null;
   }
   const resolved = resolveLinuxExecutablePath(command);
-  if (!resolved) {
+  if (!resolved || !isExecutable(resolved)) {
     return null;
   }
   const exeName = normalizeLowercaseStringOrEmpty(path.posix.basename(resolved));
@@ -320,7 +335,7 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   if (!exePath) {
     return null;
   }
-  if (!exists(exePath)) {
+  if (!isExecutable(exePath, false)) {
     return null;
   }
   const directPath = resolveDirectWindowsBrowserExecutable(exePath);
@@ -519,9 +534,12 @@ function extractWindowsExecutablePath(command: string): string | null {
   return null;
 }
 
-function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecutable | null {
+function findFirstExecutable(
+  candidates: Array<BrowserExecutable>,
+  requireExecutePermission = true,
+): BrowserExecutable | null {
   for (const candidate of candidates) {
-    if (exists(candidate.path)) {
+    if (isExecutable(candidate.path, requireExecutePermission)) {
       return candidate;
     }
   }
@@ -529,9 +547,12 @@ function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecu
   return null;
 }
 
-function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | null {
+function findFirstChromeExecutable(
+  candidates: string[],
+  requireExecutePermission = true,
+): BrowserExecutable | null {
   for (const candidate of candidates) {
-    if (exists(candidate)) {
+    if (isExecutable(candidate, requireExecutePermission)) {
       const normalizedPath = normalizeLowercaseStringOrEmpty(candidate);
       return {
         kind:
@@ -758,7 +779,7 @@ function findChromeExecutableWindows(): BrowserExecutable | null {
     path: joinWin(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
   });
 
-  return findFirstExecutable(candidates);
+  return findFirstExecutable(candidates, false);
 }
 
 function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
@@ -774,7 +795,7 @@ function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
   candidates.push(joinWin(programFiles, "Google", "Chrome", "Application", "chrome.exe"));
   candidates.push(joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"));
 
-  return findFirstChromeExecutable(candidates);
+  return findFirstChromeExecutable(candidates, false);
 }
 
 /** Resolve the Google Chrome executable for a named platform when available. */
