@@ -1029,6 +1029,29 @@ describe("board gateway methods", () => {
     expect(oversized.mock.calls[0]?.[0]).toBe(false);
   });
 
+  it("does not split surrogate pairs when truncating board.event notices", async () => {
+    const { invoke } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "counter",
+      content: { kind: "html", html: "ok" },
+    });
+    const prefix = "[dashboard] ";
+    const suffix = " on widget counter";
+    const clippedCodeUnits = 500 - prefix.length - suffix.length - 1;
+
+    await invoke("board.event", {
+      sessionKey: "session",
+      widget: "counter",
+      payload: `${"x".repeat(clippedCodeUnits - 2)}😀tail`,
+    });
+
+    const notice = peekSystemEvents("session")[0] ?? "";
+    expect(notice.length).toBeLessThanOrEqual(500);
+    expect(notice).not.toContain(String.fromCharCode(0xd83d));
+    expect(notice).toMatch(/… on widget counter$/u);
+  });
+
   it("keeps board state across the real sessions.reset handler", async () => {
     const sessionKey = "agent:main:board-reset-proof";
     const stateDir = tempDirs.make("openclaw-board-reset-");
