@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import pLimit from "p-limit";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -1101,10 +1100,23 @@ async function loadHostedCatalogShardBodies(params: {
     }
   }
   const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
-  const limit = pLimit(DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_CONCURRENCY);
-  return await Promise.all(
-    params.root.shards.map((descriptor) =>
-      limit(async () => {
+  const controller = new AbortController();
+  const bodies = Array.from({ length: params.root.shards.length }, () => "");
+  let nextIndex = 0;
+  let firstError: unknown;
+  let failed = false;
+  const worker = async () => {
+    while (!controller.signal.aborted) {
+      const index = nextIndex;
+      if (index >= params.root.shards.length) {
+        return;
+      }
+      nextIndex += 1;
+      const descriptor = params.root.shards[index];
+      if (!descriptor) {
+        return;
+      }
+      try {
         let response: Response | undefined;
         let release: (() => Promise<void>) | undefined;
         try {
@@ -1115,6 +1127,7 @@ async function loadHostedCatalogShardBodies(params: {
             requireHttps: true,
             maxRedirects: 2,
             timeoutMs: params.timeoutMs,
+            signal: controller.signal,
             policy: { hostnameAllowlist: [...params.hostnameAllowlist] },
             auditContext: "official-external-plugin-catalog-shard",
           });
@@ -1126,7 +1139,7 @@ async function loadHostedCatalogShardBodies(params: {
           if (!response.ok) {
             throw new Error(`hosted catalog shard returned HTTP ${response.status}`);
           }
-          return await readHostedCatalogResponseText({
+          bodies[index] = await readHostedCatalogResponseText({
             response,
             maxBytes: descriptor.byteLength,
             chunkTimeoutMs: params.chunkTimeoutMs,
@@ -1137,9 +1150,31 @@ async function loadHostedCatalogShardBodies(params: {
           }
           await release?.().catch(() => undefined);
         }
-      }),
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          firstError = error;
+          controller.abort(error);
+        }
+        return;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      {
+        length: Math.min(
+          DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_CONCURRENCY,
+          params.root.shards.length,
+        ),
+      },
+      worker,
     ),
   );
+  if (failed) {
+    throw firstError;
+  }
+  return bodies;
 }
 
 async function loadHostedOfficialExternalPluginCatalogEntries(params?: {

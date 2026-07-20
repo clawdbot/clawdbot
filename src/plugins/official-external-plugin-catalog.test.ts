@@ -225,59 +225,36 @@ function signedHostedCatalogDocument(params: {
   };
 }
 
-function shardedHostedCatalogFixture() {
-  const shardBodies = [
-    JSON.stringify({
+function shardedHostedCatalogFixture(shardCount = 2) {
+  const shardBodies = Array.from({ length: shardCount }, (_, index) => {
+    const name = index === 0 ? "alpha" : index === 1 ? "beta" : `plugin-${index}`;
+    const title = index === 0 ? "Alpha" : index === 1 ? "Beta" : `Plugin ${index}`;
+    return JSON.stringify({
       schemaVersion: 1,
       feedId: "openclaw-official-external-plugins",
       sequence: 12,
-      index: 0,
+      index,
       entries: [
         {
           type: "plugin",
-          id: "@acme/alpha",
-          title: "Alpha",
-          version: "1.0.0",
+          id: `@acme/${name}`,
+          title,
+          version: `${index + 1}.0.0`,
           state: "available",
           publisher: { id: "acme", trust: "official" },
           install: {
             candidates: [
               {
                 sourceRef: "acme-npm",
-                package: "@acme/alpha",
-                version: "1.0.0",
+                package: `@acme/${name}`,
+                version: `${index + 1}.0.0`,
               },
             ],
           },
         },
       ],
-    }),
-    JSON.stringify({
-      schemaVersion: 1,
-      feedId: "openclaw-official-external-plugins",
-      sequence: 12,
-      index: 1,
-      entries: [
-        {
-          type: "plugin",
-          id: "@acme/beta",
-          title: "Beta",
-          version: "2.0.0",
-          state: "available",
-          publisher: { id: "acme", trust: "official" },
-          install: {
-            candidates: [
-              {
-                sourceRef: "acme-npm",
-                package: "@acme/beta",
-                version: "2.0.0",
-              },
-            ],
-          },
-        },
-      ],
-    }),
-  ];
+    });
+  });
   const shards = shardBodies.map((body, index) => ({
     index,
     url: `https://packages.acme.example/openclaw/shards/${index}.json`,
@@ -294,7 +271,7 @@ function shardedHostedCatalogFixture() {
       generatedAt: "2026-06-22T00:00:12.000Z",
       expiresAt: "2026-06-29T00:00:12.000Z",
       metadata: { description: "Acme plugins" },
-      entryCount: 2,
+      entryCount: shardCount,
       shards,
     },
   });
@@ -985,6 +962,45 @@ describe("official external plugin catalog", () => {
     if (result.source === "bundled-fallback") {
       expect(result.error).toContain("shard bytes do not match their signed descriptor");
     }
+  });
+
+  it("stops queued shard downloads after the first failure", async () => {
+    const fixture = shardedHostedCatalogFixture(8);
+    const fetchedUrls: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      fetchedUrls.push(url);
+      if (url === "https://packages.acme.example/openclaw/feed") {
+        return new Response(fixture.signedRoot.body, { status: 200 });
+      }
+      if (url.endsWith("/0.json")) {
+        return new Response(null, { status: 503 });
+      }
+      if (init?.signal?.aborted) {
+        throw init.signal.reason instanceof Error ? init.signal.reason : new Error("aborted");
+      }
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              init.signal?.reason instanceof Error ? init.signal.reason : new Error("aborted"),
+            ),
+          { once: true },
+        );
+      });
+    });
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(fixture.signedRoot.publicKeyPem),
+      fetchImpl,
+      snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
+      now: () => new Date("2026-06-22T00:00:13.000Z"),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(fetchedUrls.some((url) => /\/[4-7]\.json$/u.test(url))).toBe(false);
   });
 
   it("rejects signed catalog shard URLs outside the root origin before fetching them", async () => {
