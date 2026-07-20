@@ -286,6 +286,29 @@ async function copyDirContents(sourceDir: string, targetDir: string) {
   await fs.cp(sourceDir, targetDir, { recursive: true });
 }
 
+async function removeMantisWorktree(params: {
+  commandTimeouts: MantisCommandTimeouts;
+  lane: "baseline" | "candidate";
+  repoRoot: string;
+  runner: CommandRunner;
+  worktreeDir: string;
+}) {
+  // Cleanup does not reuse the outer signal: an aborted run still needs an
+  // independent window to release the Mantis-owned worktree registration.
+  await runCommand({
+    command: "git",
+    args: ["worktree", "remove", "--force", "--", params.worktreeDir],
+    execution: {
+      cwd: params.repoRoot,
+      env: process.env,
+      stage: "worktree-cleanup",
+      timeoutMs: params.commandTimeouts["worktree-cleanup"],
+    },
+    lane: params.lane,
+    runner: params.runner,
+  });
+}
+
 async function readLaneResult(params: {
   laneOutputDir: string;
   publishedLaneDir: string;
@@ -545,100 +568,154 @@ async function runLane(params: {
 }) {
   const worktreeDir = path.join(params.worktreeRoot, params.lane);
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
-  await runCommand({
-    command: "git",
-    args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
-    execution: {
-      cwd: params.repoRoot,
-      env: process.env,
-      signal: params.signal,
-      stage: "worktree-add",
-      timeoutMs: params.commandTimeouts["worktree-add"],
-    },
-    lane: params.lane,
-    runner: params.runner,
-  });
-  if (!params.opts.skipInstall) {
+  const worktreeAddArgs = ["worktree", "add", "--detach", "--", worktreeDir, params.ref];
+  const worktreeAddExecution = {
+    cwd: params.repoRoot,
+    env: process.env,
+    signal: params.signal,
+    stage: "worktree-add",
+    timeoutMs: params.commandTimeouts["worktree-add"],
+  } satisfies MantisCommandExecution;
+  let worktreeCreationStarted = false;
+  let laneResult: LaneResult | undefined;
+  let workloadFailed = false;
+  let workloadError: unknown;
+  let cleanupFailed = false;
+  let cleanupError: unknown;
+
+  try {
+    assertCommandNotAborted({
+      command: "git",
+      args: worktreeAddArgs,
+      execution: worktreeAddExecution,
+      lane: params.lane,
+    });
+    worktreeCreationStarted = true;
+    await runCommand({
+      command: "git",
+      args: worktreeAddArgs,
+      execution: worktreeAddExecution,
+      lane: params.lane,
+      runner: params.runner,
+    });
+    if (!params.opts.skipInstall) {
+      await runCommand({
+        command: "pnpm",
+        args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
+        execution: {
+          cwd: params.repoRoot,
+          env: process.env,
+          signal: params.signal,
+          stage: "install",
+          timeoutMs: params.commandTimeouts.install,
+        },
+        lane: params.lane,
+        runner: params.runner,
+      });
+    }
+    if (!params.opts.skipBuild) {
+      await runCommand({
+        command: "pnpm",
+        args: ["--dir", worktreeDir, "build"],
+        execution: {
+          cwd: params.repoRoot,
+          env: process.env,
+          signal: params.signal,
+          stage: "build",
+          timeoutMs: params.commandTimeouts.build,
+        },
+        lane: params.lane,
+        runner: params.runner,
+      });
+    }
     await runCommand({
       command: "pnpm",
-      args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
+      args: [
+        "--dir",
+        worktreeDir,
+        "openclaw",
+        "qa",
+        "discord",
+        "--repo-root",
+        worktreeDir,
+        "--output-dir",
+        worktreeOutputDir,
+        "--provider-mode",
+        params.opts.providerMode,
+        "--model",
+        DEFAULT_MODEL,
+        "--alt-model",
+        DEFAULT_MODEL,
+        ...(params.opts.fastMode ? ["--fast"] : []),
+        "--credential-source",
+        params.opts.credentialSource,
+        "--credential-role",
+        params.opts.credentialRole,
+        "--scenario",
+        params.scenario,
+        "--allow-failures",
+      ],
       execution: {
         cwd: params.repoRoot,
         env: process.env,
         signal: params.signal,
-        stage: "install",
-        timeoutMs: params.commandTimeouts.install,
+        stage: "qa",
+        timeoutMs: params.commandTimeouts.qa,
       },
       lane: params.lane,
       runner: params.runner,
     });
-  }
-  if (!params.opts.skipBuild) {
-    await runCommand({
-      command: "pnpm",
-      args: ["--dir", worktreeDir, "build"],
-      execution: {
-        cwd: params.repoRoot,
-        env: process.env,
-        signal: params.signal,
-        stage: "build",
-        timeoutMs: params.commandTimeouts.build,
-      },
-      lane: params.lane,
-      runner: params.runner,
+    const publishedLaneDir = path.join(params.outputDir, params.lane);
+    await copyDirContents(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
+    const result = await readLaneResult({
+      laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
+      publishedLaneDir,
+      scenario: params.scenario,
     });
+    const copiedScreenshot = await copyScreenshot({ lane: params.lane, result });
+    const copiedVideo = await copyVideo({ lane: params.lane, result });
+    laneResult = {
+      ...result,
+      screenshotPath: copiedScreenshot ?? result.screenshotPath,
+      videoPath: copiedVideo ?? result.videoPath,
+    } satisfies LaneResult;
+  } catch (error) {
+    workloadFailed = true;
+    workloadError = error;
+  } finally {
+    if (worktreeCreationStarted) {
+      try {
+        await removeMantisWorktree({
+          commandTimeouts: params.commandTimeouts,
+          lane: params.lane,
+          repoRoot: params.repoRoot,
+          runner: params.runner,
+          worktreeDir,
+        });
+      } catch (error) {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
+    }
   }
-  await runCommand({
-    command: "pnpm",
-    args: [
-      "--dir",
-      worktreeDir,
-      "openclaw",
-      "qa",
-      "discord",
-      "--repo-root",
-      worktreeDir,
-      "--output-dir",
-      worktreeOutputDir,
-      "--provider-mode",
-      params.opts.providerMode,
-      "--model",
-      DEFAULT_MODEL,
-      "--alt-model",
-      DEFAULT_MODEL,
-      ...(params.opts.fastMode ? ["--fast"] : []),
-      "--credential-source",
-      params.opts.credentialSource,
-      "--credential-role",
-      params.opts.credentialRole,
-      "--scenario",
-      params.scenario,
-      "--allow-failures",
-    ],
-    execution: {
-      cwd: params.repoRoot,
-      env: process.env,
-      signal: params.signal,
-      stage: "qa",
-      timeoutMs: params.commandTimeouts.qa,
-    },
-    lane: params.lane,
-    runner: params.runner,
-  });
-  const publishedLaneDir = path.join(params.outputDir, params.lane);
-  await copyDirContents(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
-  const result = await readLaneResult({
-    laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
-    publishedLaneDir,
-    scenario: params.scenario,
-  });
-  const copiedScreenshot = await copyScreenshot({ lane: params.lane, result });
-  const copiedVideo = await copyVideo({ lane: params.lane, result });
-  return {
-    ...result,
-    screenshotPath: copiedScreenshot ?? result.screenshotPath,
-    videoPath: copiedVideo ?? result.videoPath,
-  } satisfies LaneResult;
+
+  if (workloadFailed && cleanupFailed) {
+    throw new AggregateError(
+      [workloadError, cleanupError],
+      "Mantis lane failed and worktree cleanup failed",
+      { cause: workloadError },
+    );
+  }
+  if (workloadFailed) {
+    throw workloadError;
+  }
+  if (cleanupFailed) {
+    throw cleanupError;
+  }
+  if (!laneResult) {
+    throw new Error("Mantis lane completed without a result.");
+  }
+  return laneResult;
 }
 
 export async function runMantisBeforeAfter(
