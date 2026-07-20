@@ -484,6 +484,7 @@ export async function handleAcpCloseAction(
           sessionKey,
           reason: "manual-close",
           allowBackendUnavailable: true,
+          discardPersistentState: true,
           clearMeta: true,
         });
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";

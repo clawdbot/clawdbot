@@ -1893,10 +1893,18 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:binding:test",
     });
 
+    expect(baseStore["save"]).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        acpxRecordId: "stale",
+        closed: true,
+        acpx: expect.objectContaining({ reset_on_next_ensure: true }),
+      }),
+    );
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
-    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
-    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
 
     await wrappedStore.save({
       acpxRecordId: "fresh-record",
@@ -1906,7 +1914,32 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toEqual({
       acpxRecordId: "stale",
     });
-    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a discarded persistent record non-resumable after a runtime restart", async () => {
+    const records = new Map<string, Record<string, unknown>>();
+    records.set("agent:main:main", {
+      acpxRecordId: "agent:main:main",
+      acpSessionId: "sess-old",
+      acpx: {},
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async (sessionId: string) => records.get(sessionId) as never),
+      save: vi.fn(async (record: Record<string, unknown>) => {
+        records.set(String(record.acpxRecordId), record);
+      }),
+    };
+
+    const first = makeRuntime(baseStore);
+    await first.runtime.prepareFreshSession({ sessionKey: "agent:main:main" });
+
+    const second = makeRuntime(baseStore);
+    expect(await second.wrappedStore.load("agent:main:main")).toMatchObject({
+      acpSessionId: "sess-old",
+      closed: true,
+      acpx: { reset_on_next_ensure: true },
+    });
   });
 
   it("marks the session fresh after discardPersistentState close", async () => {
