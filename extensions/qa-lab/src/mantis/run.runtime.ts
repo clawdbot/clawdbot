@@ -2,21 +2,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  addTimerTimeoutGraceMs,
-  resolvePositiveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
 import { trimToValue } from "../mantis-options.runtime.js";
-import { readQaScenarioById } from "../scenario-catalog.js";
+import {
+  assertMantisCommandNotAborted,
+  defaultMantisCommandRunner,
+  removeMantisWorktree,
+  resolveMantisCommandTimeouts,
+  runMantisCommand,
+  type MantisCommandExecution,
+  type MantisCommandRunner,
+  type MantisCommandTimeoutOverrides,
+  type MantisCommandTimeouts,
+} from "./run-command.runtime.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
   baseline?: string;
   candidate?: string;
-  commandRunner?: CommandRunner;
+  commandRunner?: MantisCommandRunner;
   commandTimeouts?: MantisCommandTimeoutOverrides;
   credentialRole?: string;
   credentialSource?: string;
@@ -39,23 +44,6 @@ type MantisBeforeAfterResult = {
   reportPath: string;
   status: "pass" | "fail";
 };
-
-type MantisCommandStage = "worktree-add" | "install" | "build" | "qa" | "worktree-cleanup";
-type MantisCommandExecution = {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
-  stage: MantisCommandStage;
-  timeoutMs: number;
-};
-type MantisCommandResult = Awaited<ReturnType<typeof runCommandWithTimeout>>;
-type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  execution: MantisCommandExecution,
-) => Promise<MantisCommandResult>;
-type MantisCommandTimeoutOverrides = Partial<Record<MantisCommandStage, number>>;
-type MantisCommandTimeouts = Record<MantisCommandStage, number>;
 
 type DiscordQaSummary = {
   scenarios?: {
@@ -127,12 +115,6 @@ const DEFAULT_PROVIDER_MODE = "live-frontier";
 const DEFAULT_MODEL = "openai/gpt-5.4";
 const DEFAULT_CREDENTIAL_SOURCE = "convex";
 const DEFAULT_CREDENTIAL_ROLE = "ci";
-const DEFAULT_WORKTREE_ADD_TIMEOUT_MS = 5 * 60_000;
-const DEFAULT_INSTALL_TIMEOUT_MS = 30 * 60_000;
-const DEFAULT_BUILD_TIMEOUT_MS = 30 * 60_000;
-const DEFAULT_WORKTREE_CLEANUP_TIMEOUT_MS = 2 * 60_000;
-const QA_COMMAND_TIMEOUT_GRACE_MS = 5 * 60_000;
-
 const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
   [DEFAULT_SCENARIO]: {
     baselineExpected: "queued-only",
@@ -171,276 +153,15 @@ function normalizeRequiredLiteral<T extends string>(
   return normalized;
 }
 
-function resolveQaCommandTimeoutMs(scenarioId: string): number {
-  const scenario = readQaScenarioById(scenarioId);
-  const execution = scenario.execution;
-  if (execution.kind !== "flow" || !execution.flow) {
-    throw new Error(`Mantis scenario ${scenarioId} must be a flow QA scenario.`);
-  }
-  const timeoutMs = execution.timeoutMs;
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new Error(`Mantis scenario ${scenarioId} must define a positive execution.timeoutMs.`);
-  }
-  const attemptCount = execution.retryCount === 0 ? 1 : 2;
-  const attemptedTimeoutMs = timeoutMs * attemptCount;
-  const timeoutWithGraceMs = addTimerTimeoutGraceMs(
-    attemptedTimeoutMs,
-    QA_COMMAND_TIMEOUT_GRACE_MS,
-  );
-  return resolvePositiveTimerTimeoutMs(timeoutWithGraceMs, timeoutMs);
-}
-
-function resolveMantisCommandTimeouts(
-  scenarioId: string,
-  overrides: MantisCommandTimeoutOverrides | undefined,
-): MantisCommandTimeouts {
-  const defaults: MantisCommandTimeouts = {
-    "worktree-add": DEFAULT_WORKTREE_ADD_TIMEOUT_MS,
-    install: DEFAULT_INSTALL_TIMEOUT_MS,
-    build: DEFAULT_BUILD_TIMEOUT_MS,
-    qa: resolveQaCommandTimeoutMs(scenarioId),
-    "worktree-cleanup": DEFAULT_WORKTREE_CLEANUP_TIMEOUT_MS,
-  };
-  return {
-    "worktree-add": resolvePositiveTimerTimeoutMs(
-      overrides?.["worktree-add"],
-      defaults["worktree-add"],
-    ),
-    install: resolvePositiveTimerTimeoutMs(overrides?.install, defaults.install),
-    build: resolvePositiveTimerTimeoutMs(overrides?.build, defaults.build),
-    qa: resolvePositiveTimerTimeoutMs(overrides?.qa, defaults.qa),
-    "worktree-cleanup": resolvePositiveTimerTimeoutMs(
-      overrides?.["worktree-cleanup"],
-      defaults["worktree-cleanup"],
-    ),
-  };
-}
-
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `run-${stamp}`);
-}
-
-function isWorktreeListCommand(command: string, args: readonly string[]): boolean {
-  return (
-    command === "git" &&
-    args.length === 4 &&
-    args[0] === "worktree" &&
-    args[1] === "list" &&
-    args[2] === "--porcelain" &&
-    args[3] === "-z"
-  );
-}
-
-async function defaultCommandRunner(
-  command: string,
-  args: readonly string[],
-  execution: MantisCommandExecution,
-): Promise<MantisCommandResult> {
-  const capturesWorktreeList = isWorktreeListCommand(command, args);
-  return await runCommandWithTimeout([command, ...args], {
-    cwd: execution.cwd,
-    env: execution.env,
-    killProcessTree: true,
-    outputCapture: capturesWorktreeList ? { stdout: "head", stderr: "tail" } : "discard",
-    signal: execution.signal,
-    timeoutMs: execution.timeoutMs,
-    ...(capturesWorktreeList
-      ? {}
-      : {
-          onOutputChunk(chunk, stream) {
-            (stream === "stdout" ? process.stdout : process.stderr).write(chunk);
-          },
-        }),
-  });
-}
-
-function assertCommandNotAborted(params: {
-  args: readonly string[];
-  command: string;
-  execution: MantisCommandExecution;
-  lane: "baseline" | "candidate";
-}): void {
-  if (!params.execution.signal?.aborted) return;
-  const commandLabel = [params.command, ...params.args].join(" ");
-  throw new Error(`${params.lane} ${params.execution.stage} aborted: ${commandLabel}`);
-}
-
-async function runCommand(params: {
-  args: readonly string[];
-  command: string;
-  execution: MantisCommandExecution;
-  lane: "baseline" | "candidate";
-  runner: CommandRunner;
-}): Promise<MantisCommandResult> {
-  assertCommandNotAborted(params);
-  const label = [params.command, ...params.args].join(" ");
-  let result: MantisCommandResult;
-  try {
-    result = await params.runner(params.command, params.args, params.execution);
-  } catch (error) {
-    throw new Error(
-      `${params.lane} ${params.execution.stage} failed to run ${label}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
-  if (result.termination === "timeout") {
-    throw new Error(
-      `${params.lane} ${params.execution.stage} timed out after ${params.execution.timeoutMs}ms: ${label}`,
-    );
-  }
-  if (result.termination === "signal" && params.execution.signal?.aborted) {
-    throw new Error(`${params.lane} ${params.execution.stage} aborted: ${label}`);
-  }
-  if (result.code === 0) {
-    return result;
-  }
-  const detail = result.signal
-    ? `signal ${result.signal}`
-    : `exit code ${result.code ?? "unknown"}`;
-  throw new Error(`${params.lane} ${params.execution.stage} failed with ${detail}: ${label}`);
 }
 
 async function copyDirContents(sourceDir: string, targetDir: string) {
   await fs.rm(targetDir, { force: true, recursive: true });
   await fs.mkdir(targetDir, { recursive: true });
   await fs.cp(sourceDir, targetDir, { recursive: true });
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
-function isPathWithinOrEqual(parentPath: string, childPath: string): boolean {
-  const relative = path.relative(parentPath, childPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-async function normalizeWorktreePath(filePath: string, repoRoot: string): Promise<string> {
-  const resolvedPath = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(repoRoot, filePath);
-  try {
-    return await fs.realpath(resolvedPath);
-  } catch (error) {
-    if (!isNotFoundError(error)) {
-      throw error;
-    }
-  }
-
-  const resolvedRepoRoot = path.resolve(repoRoot);
-  const canonicalRepoRoot = await fs.realpath(resolvedRepoRoot);
-  if (!isPathWithinOrEqual(resolvedRepoRoot, resolvedPath)) {
-    return resolvedPath;
-  }
-  return path.join(canonicalRepoRoot, path.relative(resolvedRepoRoot, resolvedPath));
-}
-
-async function parseRegisteredWorktreePaths(stdout: string, repoRoot: string): Promise<string[]> {
-  const entries = stdout
-    .split("\0")
-    .filter((entry) => entry.startsWith("worktree "))
-    .map((entry) => entry.slice("worktree ".length));
-  return await Promise.all(entries.map((entry) => normalizeWorktreePath(entry, repoRoot)));
-}
-
-function createCleanupVerificationAggregate(params: {
-  errors: [unknown, unknown];
-  lane: "baseline" | "candidate";
-  worktreeDir: string;
-}): AggregateError {
-  return new AggregateError(
-    params.errors,
-    `${params.lane} worktree cleanup could not verify complete registration state for ${params.worktreeDir}`,
-    { cause: params.errors[0] },
-  );
-}
-
-async function removeMantisWorktree(params: {
-  commandTimeouts: MantisCommandTimeouts;
-  lane: "baseline" | "candidate";
-  repoRoot: string;
-  runner: CommandRunner;
-  worktreeDir: string;
-}) {
-  const cleanupExecution = {
-    cwd: params.repoRoot,
-    env: process.env,
-    stage: "worktree-cleanup",
-    timeoutMs: params.commandTimeouts["worktree-cleanup"],
-  } satisfies MantisCommandExecution;
-  try {
-    // Cleanup has its own deadline so aborted workload runs can still release registrations.
-    await runCommand({
-      command: "git",
-      args: ["worktree", "remove", "--force", "--", params.worktreeDir],
-      execution: cleanupExecution,
-      lane: params.lane,
-      runner: params.runner,
-    });
-    return;
-  } catch (error) {
-    const removeError = error;
-    let listResult: MantisCommandResult;
-    try {
-      listResult = await runCommand({
-        command: "git",
-        args: ["worktree", "list", "--porcelain", "-z"],
-        execution: cleanupExecution,
-        lane: params.lane,
-        runner: params.runner,
-      });
-    } catch (listError) {
-      throw createCleanupVerificationAggregate({
-        errors: [removeError, listError],
-        lane: params.lane,
-        worktreeDir: params.worktreeDir,
-      });
-    }
-
-    if (listResult.stdoutTruncatedBytes) {
-      const truncationError = new Error(
-        `${params.lane} worktree cleanup truncated registration output for ${params.worktreeDir}`,
-      );
-      throw createCleanupVerificationAggregate({
-        errors: [removeError, truncationError],
-        lane: params.lane,
-        worktreeDir: params.worktreeDir,
-      });
-    }
-
-    let normalizedWorktreeDir: string;
-    let registeredWorktreePaths: string[];
-    try {
-      [normalizedWorktreeDir, registeredWorktreePaths] = await Promise.all([
-        normalizeWorktreePath(params.worktreeDir, params.repoRoot),
-        parseRegisteredWorktreePaths(listResult.stdout, params.repoRoot),
-      ]);
-    } catch (normalizationError) {
-      throw createCleanupVerificationAggregate({
-        errors: [removeError, normalizationError],
-        lane: params.lane,
-        worktreeDir: params.worktreeDir,
-      });
-    }
-
-    if (registeredWorktreePaths.includes(normalizedWorktreeDir)) {
-      throw new Error(
-        `${params.lane} worktree cleanup left registered path ${params.worktreeDir}`,
-        { cause: removeError },
-      );
-    }
-
-    try {
-      await fs.rm(params.worktreeDir, { force: true, recursive: true });
-    } catch (removeDirectoryError) {
-      throw new AggregateError(
-        [removeError, removeDirectoryError],
-        `${params.lane} worktree cleanup could not remove unregistered directory ${params.worktreeDir}`,
-        { cause: removeError },
-      );
-    }
-  }
 }
 
 async function readLaneResult(params: {
@@ -696,7 +417,7 @@ async function runLane(params: {
   outputDir: string;
   ref: string;
   repoRoot: string;
-  runner: CommandRunner;
+  runner: MantisCommandRunner;
   scenario: string;
   signal?: AbortSignal;
   commandTimeouts: MantisCommandTimeouts;
@@ -731,14 +452,14 @@ async function runLane(params: {
   let cleanupError: unknown;
 
   try {
-    assertCommandNotAborted({
+    assertMantisCommandNotAborted({
       command: "git",
       args: worktreeAddArgs,
       execution: worktreeAddExecution,
       lane: params.lane,
     });
     worktreeCreationStarted = true;
-    await runCommand({
+    await runMantisCommand({
       command: "git",
       args: worktreeAddArgs,
       execution: worktreeAddExecution,
@@ -746,7 +467,7 @@ async function runLane(params: {
       runner: params.runner,
     });
     if (!params.opts.skipInstall) {
-      await runCommand({
+      await runMantisCommand({
         command: "pnpm",
         args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
         execution: {
@@ -761,7 +482,7 @@ async function runLane(params: {
       });
     }
     if (!params.opts.skipBuild) {
-      await runCommand({
+      await runMantisCommand({
         command: "pnpm",
         args: ["--dir", worktreeDir, "build"],
         execution: {
@@ -775,7 +496,7 @@ async function runLane(params: {
         runner: params.runner,
       });
     }
-    await runCommand({
+    await runMantisCommand({
       command: "pnpm",
       args: [
         "--dir",
@@ -895,7 +616,7 @@ export async function runMantisBeforeAfter(
   const baseline = trimToValue(opts.baseline) ?? scenarioConfig.defaultBaselineRef;
   const candidate = trimToValue(opts.candidate) ?? DEFAULT_CANDIDATE_REF;
   const commandTimeouts = resolveMantisCommandTimeouts(scenario, opts.commandTimeouts);
-  const runner = opts.commandRunner ?? defaultCommandRunner;
+  const runner = opts.commandRunner ?? defaultMantisCommandRunner;
   const worktreeRoot = path.join(outputDir, "worktrees");
   const comparisonPath = path.join(outputDir, "comparison.json");
   const manifestPath = path.join(outputDir, "mantis-evidence.json");
