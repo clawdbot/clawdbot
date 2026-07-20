@@ -165,6 +165,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
     drainsContinuationDelegateQueue: params.drainsContinuationDelegateQueue,
+    disableContinuationTools: params.disableContinuationTools,
     continueWorkOpts: params.continueWorkOpts,
     requestCompactionOpts: params.requestCompactionOpts,
     conversationRecall: params.conversationRecall,

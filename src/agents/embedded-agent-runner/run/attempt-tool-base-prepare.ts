@@ -305,6 +305,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           onToolOutcome: attempt.onToolOutcome,
           allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
           skillsSnapshot: params.skillsSnapshot,
+          disableContinuationTools: attempt.disableContinuationTools,
           continueWorkOpts: attempt.continueWorkOpts,
           requestCompactionOpts: attempt.requestCompactionOpts,
           drainsContinuationDelegateQueue: attempt.drainsContinuationDelegateQueue,
