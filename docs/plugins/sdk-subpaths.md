@@ -304,6 +304,13 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/html-entity-runtime` | Private-local after July 2026; Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
     | `plugin-sdk/text-utility-runtime` | Private-local after July 2026; Low-level text and path helpers, including five-entity HTML escaping |
+    | `plugin-sdk/agent-core` | Private-local after July 2026; Agent core runtime adapter, `Agent` class, agent loop, context compaction helpers, and agent/tool/message types |
+    | `plugin-sdk/agent-sessions` | Private-local after July 2026; Agent session entry types, persistence/migration helpers, extension runtime, and session manager |
+    | `plugin-sdk/document-extractor` | Private-local after July 2026; Document extractor plugin types for extraction requests, results, and extracted images |
+    | `plugin-sdk/llm` | Private-local after July 2026; LLM streaming, model utilities, validation, and message/tool/usage types |
+    | `plugin-sdk/time-runtime` | Private-local after July 2026; Timezone resolution and UTC/zoned timestamp formatting helpers |
+    | `plugin-sdk/types` | Private-local after July 2026; Plugin hook contract types for before-tool-call and tool-result-persist events |
+    | `plugin-sdk/windows-spawn` | Private-local after July 2026; Windows command spawn resolution, PATH/PATHEXT lookup, and cmd/bat wrapper entrypoint detection |
     | `plugin-sdk/widget-html` | Complete-document detection, size validation, and tool input errors for self-contained HTML widgets |
     | `plugin-sdk/host-runtime` | Private-local after July 2026; Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Private-local after July 2026; Retry config and retry runner helpers |
