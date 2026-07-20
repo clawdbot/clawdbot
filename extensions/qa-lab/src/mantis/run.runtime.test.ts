@@ -446,6 +446,39 @@ describe("mantis before/after runtime", () => {
     expect(stages).toEqual(["worktree-add"]);
   });
 
+  it("keeps signal termination ahead of a normalized successful exit", async () => {
+    const controller = new AbortController();
+    const stages: string[] = [];
+    const runner = vi.fn(async (_command: string, _args: readonly string[], execution) => {
+      stages.push(execution.stage);
+      expect(execution.stage).toBe("worktree-add");
+      expect(execution.signal).toBe(controller.signal);
+      controller.abort();
+      return {
+        code: 0,
+        killed: true,
+        signal: "SIGTERM",
+        stderr: "",
+        stdout: "",
+        termination: "signal",
+      } satisfies StubCommandResult;
+    });
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/signal-exit-zero",
+        repoRoot,
+        signal: controller.signal,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow("baseline worktree-add aborted");
+    expect(stages).toEqual(["worktree-add"]);
+  });
+
   it.skipIf(process.platform === "win32")(
     "stops a default-runner lane command process tree when aborted",
     async () => {
@@ -546,18 +579,24 @@ describe("mantis before/after runtime", () => {
 
       const previousPath = process.env.PATH;
       process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+      const controller = new AbortController();
       let parentPid: number | undefined;
       let descendantPid: number | undefined;
+      const run = runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandTimeouts: { "worktree-add": worktreeAddTimeoutMs },
+        outputDir: ".artifacts/qa-e2e/mantis/timeout-run",
+        repoRoot,
+        signal: controller.signal,
+        skipBuild: true,
+        skipInstall: true,
+      });
+      const settled = run.then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ error, status: "rejected" as const }),
+      );
       try {
-        const run = runMantisBeforeAfter({
-          baseline: "baseline-ref",
-          candidate: "candidate-ref",
-          commandTimeouts: { "worktree-add": worktreeAddTimeoutMs },
-          outputDir: ".artifacts/qa-e2e/mantis/timeout-run",
-          repoRoot,
-          skipBuild: true,
-          skipInstall: true,
-        });
         [parentPid, descendantPid] = await Promise.all([
           readPid(parentPidPath, 2_000),
           readPid(descendantPidPath, 2_000),
@@ -573,6 +612,8 @@ describe("mantis before/after runtime", () => {
         ).rejects.toThrow(`baseline worktree-add timed out after ${worktreeAddTimeoutMs}ms`);
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
       } finally {
+        controller.abort();
+        await Promise.race([settled, sleep(4_000)]);
         if (previousPath === undefined) {
           delete process.env.PATH;
         } else {

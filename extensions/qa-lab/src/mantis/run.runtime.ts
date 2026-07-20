@@ -263,9 +263,6 @@ async function runCommand(params: {
       { cause: error },
     );
   }
-  if (result.code === 0) {
-    return;
-  }
   if (result.termination === "timeout") {
     throw new Error(
       `${params.lane} ${params.execution.stage} timed out after ${params.execution.timeoutMs}ms: ${label}`,
@@ -273,6 +270,9 @@ async function runCommand(params: {
   }
   if (result.termination === "signal" && params.execution.signal?.aborted) {
     throw new Error(`${params.lane} ${params.execution.stage} aborted: ${label}`);
+  }
+  if (result.code === 0) {
+    return;
   }
   const detail = result.signal
     ? `signal ${result.signal}`
