@@ -3306,6 +3306,42 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("lets manual stops cancel private known-account handoffs without plugin stop hooks", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await manager.stopChannel("discord", "account-a");
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a"]);
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+  });
+
   it("clears private known-account handoffs when autostart suppression rejects the paired start", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
