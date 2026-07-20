@@ -14,6 +14,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -85,6 +86,7 @@ function createInitializationContext(): ApplicationContext {
     },
     agentSelection: { state: { selectedId: "main" } },
     agents: { state: { agentsList: null } },
+    initialUserMessage: createInitialUserMessageHandoff(),
     sessions: {},
   } as unknown as ApplicationContext;
 }

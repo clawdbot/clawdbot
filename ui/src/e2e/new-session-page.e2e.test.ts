@@ -228,6 +228,72 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("shows the initial prompt while the newly created session is still running", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:visible-initial-prompt";
+    const message = "keep this prompt visible while the agent works";
+    const activeOutputTimestamp = Date.now() + 60_000;
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: sessionKey, runStarted: true },
+        "chat.history": {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "active-tool-call",
+                  name: "read",
+                  arguments: { path: "SKILL.md" },
+                },
+              ],
+              timestamp: activeOutputTimestamp,
+              __openclaw: { id: "active-assistant", seq: 2 },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "active-tool-call",
+              toolName: "read",
+              content: [{ type: "text", text: "working" }],
+              timestamp: activeOutputTimestamp + 1,
+              __openclaw: { id: "active-tool-result", seq: 3 },
+            },
+          ],
+          sessionId: "visible-initial-prompt",
+          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+      await gateway.waitForRequest("chat.history");
+      await page.getByText("SKILL.md", { exact: true }).waitFor();
+
+      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+      const userRow = await page.locator(".chat-group.user").boundingBox();
+      const toolRow = await page.getByText("SKILL.md", { exact: true }).boundingBox();
+      expect(userRow).not.toBeNull();
+      expect(toolRow).not.toBeNull();
+      if (!userRow || !toolRow) {
+        throw new Error("expected visible prompt and tool rows");
+      }
+      expect(userRow.y).toBeLessThan(toolRow.y);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("waits for pasted image reads before enabling session creation", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -1695,7 +1761,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("creates a session while a canonical session refresh is pending", async () => {
+  it("navigates to a created session while canonical session refresh is pending", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -1761,12 +1827,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         agentId: "main",
         message: "create during refresh",
       });
-      expect(new URL(page.url()).pathname).toBe("/new");
-
-      await gateway.resolveDeferred("sessions.list", listResponse);
       await expect
         .poll(() => new URL(page.url()).search)
         .toContain(`session=${encodeURIComponent(sessionKey)}`);
+
+      await gateway.resolveDeferred("sessions.list", listResponse);
     } finally {
       await context.close();
     }

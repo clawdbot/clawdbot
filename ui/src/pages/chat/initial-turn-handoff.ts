@@ -1,6 +1,13 @@
+import type {
+  ApplicationInitialUserMessage,
+  ApplicationInitialUserMessageHandoff,
+} from "../../app/context.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import {
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
 import {
   markLocalRecoveryItem,
   markVolatileQueuedMessage,
@@ -8,6 +15,8 @@ import {
   type ChatQueueScopedSessionHost,
   writeChatQueueForScope,
 } from "./chat-queue.ts";
+import { messageDisplaySignature } from "./history-merge.ts";
+import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 const INITIAL_TURN_HANDOFF_TTL_MS = 60_000;
 
@@ -37,6 +46,27 @@ export function prepareInitialTurnHandoff(sessionKey: string, item: ChatQueueIte
   pending = { item, sessionKey, timer };
 }
 
+/** Hands the accepted first prompt to chat before transcript persistence catches up. */
+export function prepareInitialUserMessageHandoff(
+  handoff: ApplicationInitialUserMessageHandoff,
+  sessionKey: string,
+  item: Pick<ChatQueueItem, "attachments" | "createdAt" | "text">,
+  owner: object,
+): void {
+  const durableAttachments = item.attachments?.map((attachment) => {
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return dataUrl ? { ...attachment, dataUrl, previewUrl: dataUrl } : attachment;
+  });
+  const message: ApplicationInitialUserMessage = {
+    role: "user",
+    content: buildUserChatMessageContentBlocks(item.text, durableAttachments),
+    timestamp: item.createdAt,
+  };
+  // Keep the projection until terminal history owns it so active first turns
+  // survive later pane/history resets.
+  handoff.prepare({ message, owner, sessionKey });
+}
+
 function consumeInitialTurnHandoff(sessionKey: string): ChatQueueItem | null {
   if (!pending || !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
     return null;
@@ -61,4 +91,47 @@ export function admitInitialTurnHandoff(
   markLocalRecoveryItem(host, item.id);
   markVolatileQueuedMessage(host, item.id);
   return true;
+}
+
+export function admitInitialUserMessageHandoff(
+  handoff: ApplicationInitialUserMessageHandoff,
+  host: { chatMessages: unknown[]; hello?: object | null },
+  sessionKey: string,
+): boolean {
+  const message = handoff.read(sessionKey, host.hello ?? null);
+  if (!message) {
+    return false;
+  }
+  const signature = messageDisplaySignature(message);
+  const matchingMessage = host.chatMessages.find(
+    (candidate) => signature && messageDisplaySignature(candidate) === signature,
+  );
+  if (matchingMessage) {
+    return false;
+  }
+  host.chatMessages = [message, ...host.chatMessages];
+  return true;
+}
+
+/** Keeps the accepted prompt projected until authoritative history owns it. */
+export function reconcileInitialUserMessageHandoff(
+  handoff: ApplicationInitialUserMessageHandoff,
+  host: { chatMessages: unknown[]; hello?: object | null },
+  sessionKey: string,
+  authoritativeMessages: unknown[],
+  runActive: boolean,
+): boolean {
+  const message = handoff.read(sessionKey, host.hello ?? null);
+  if (!message) {
+    return false;
+  }
+  const signature = messageDisplaySignature(message);
+  const historyOwnsMessage = authoritativeMessages.some(
+    (candidate) => signature && messageDisplaySignature(candidate) === signature,
+  );
+  if (historyOwnsMessage && !runActive) {
+    handoff.clear(sessionKey);
+    return false;
+  }
+  return admitInitialUserMessageHandoff(handoff, host, sessionKey);
 }

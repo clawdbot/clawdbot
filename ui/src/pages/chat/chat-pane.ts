@@ -220,6 +220,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
+import { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
@@ -2212,6 +2213,7 @@ class ChatPane extends OpenClawLightDomElement {
           pageState.chatHistoryPagination = snapshot.pagination;
           pageState.currentSessionId = snapshot.sessionId;
         }
+        admitInitialUserMessageHandoff(pageState.initialUserMessage, pageState, initialSessionKey);
       }
     }
     chatState.attach(pageState);

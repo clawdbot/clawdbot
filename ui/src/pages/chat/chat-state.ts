@@ -111,7 +111,7 @@ import {
   storedChatOutboxScopeKey,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
-import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -183,6 +183,7 @@ export type ChatPageHost = ChatHost &
   SessionWorkspaceHost &
   BackgroundTasksHost & {
     sessions: SessionCapability;
+    initialUserMessage: ApplicationContext["initialUserMessage"];
     settings: UiSettings;
     password: string;
     onboarding: boolean;
@@ -552,6 +553,7 @@ export function resetChatStateForRouteSession(
   // switchPaneSession requests an update only after adopting the new baseline.
   syncVisibleChatQueueProjection(state, { requestUpdate: false });
   const initialTurn = admitInitialTurnHandoff(state, sessionKey);
+  admitInitialUserMessageHandoff(state.initialUserMessage, state, sessionKey);
   const { fallback } = resolveChatComposerMemoryFallback(state, sessionKey);
   if (fallback) {
     state.chatMessage = fallback.message;
@@ -1224,6 +1226,7 @@ export function createPageState(
   const appConfig = context.config.current;
   const state = {
     sessions: context.sessions,
+    initialUserMessage: context.initialUserMessage,
     settings,
     password: "",
     onboarding: false,

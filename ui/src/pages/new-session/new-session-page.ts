@@ -19,6 +19,7 @@ import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
+import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
 import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
@@ -687,13 +688,15 @@ class NewSessionPage extends OpenClawLightDomElement {
       ? this.pendingCloud.gatewayUrl
       : context.gateway.connection.gatewayUrl;
     const submissionClient = context.gateway.snapshot.client;
-    if (!submissionClient) {
+    const submissionConnection = context.gateway.snapshot.hello;
+    if (!submissionClient || !submissionConnection) {
       return;
     }
     const submissionRecoveryScope = pendingCloud
       ? this.pendingCloud.recoveryScope
       : submissionClient.recoveryScope;
     const requestId = ++this.submitRequestToken;
+    const submittedAt = Date.now();
     this.submitting = true;
     this.error = null;
     // Retire hidden pickers before their late requests can mutate this submitted draft.
@@ -761,7 +764,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       const result =
         pendingCloud && this.pendingCloud.phase !== "creating"
           ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
-          : await context.sessions.createResult(cloudCreateParams ?? createParams);
+          : await context.sessions.createResult(cloudCreateParams ?? createParams, {
+              reconciliation: "background",
+            });
       if (requestId !== this.submitRequestToken && !cloudProfileId) {
         return;
       }
@@ -859,8 +864,24 @@ class NewSessionPage extends OpenClawLightDomElement {
           this.error = cloudStart.error || t("newSession.createFailed");
           return;
         }
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
+        prepareInitialUserMessageHandoff(
+          context.initialUserMessage,
+          result.key,
+          {
+            text: submissionCloudRecovery.message,
+            attachments,
+            createdAt: submittedAt,
+          },
+          submissionConnection,
+        );
         this.attachmentDraft.clearAfterSubmit(true);
       } else {
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
         const handedOffAttachments =
           result.initialRun.status === "rejected" &&
           retainRejectedInitialTurn({
@@ -871,6 +892,18 @@ class NewSessionPage extends OpenClawLightDomElement {
             message,
             sessionKey: result.key,
           });
+        if (result.initialRun.status === "started") {
+          prepareInitialUserMessageHandoff(
+            context.initialUserMessage,
+            result.key,
+            {
+              text: message,
+              attachments,
+              createdAt: submittedAt,
+            },
+            submissionConnection,
+          );
+        }
         this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
       }
       if (requestId !== this.submitRequestToken) {

@@ -9,6 +9,7 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
+import type { ApplicationInitialUserMessageHandoff } from "../../app/context.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -58,6 +59,7 @@ import {
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
+import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -318,6 +320,7 @@ function collectLateOptimisticTailMessages(
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  initialUserMessage?: ApplicationInitialUserMessageHandoff;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   sessionKey: string;
@@ -1271,6 +1274,15 @@ async function loadChatHistoryUncached(
     );
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
+    }
+    if (state.initialUserMessage) {
+      reconcileInitialUserMessageHandoff(
+        state.initialUserMessage,
+        state,
+        sessionKey,
+        authoritativeMessages,
+        isSessionRunActive(res.sessionInfo ?? {}),
+      );
     }
     retireHistoryProvenSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;

@@ -175,6 +175,8 @@ type SessionConnectionScope = {
   epoch: number;
 };
 
+type SessionCreateReconciliation = "blocking" | "background";
+
 type SessionMessageSubscription = {
   key: string;
   agentId?: string | null;
@@ -194,7 +196,10 @@ export type SessionCapability = {
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
-  createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
+  createResult: (
+    params?: SessionCreateParams,
+    options?: { reconciliation?: SessionCreateReconciliation },
+  ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
@@ -960,7 +965,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return refresh({ ...options, force: true });
   };
 
-  const createResult = async (params: SessionCreateParams = {}) => {
+  const createResult = async (
+    params: SessionCreateParams = {},
+    options: { reconciliation?: SessionCreateReconciliation } = {},
+  ) => {
     const scope = captureConnection();
     if (!scope) {
       return null;
@@ -974,14 +982,28 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      await refreshReplacement(params.agentId);
-      if (!isCurrentConnection(scope)) {
-        return null;
-      }
-      // Creation may overlap read-only list loading. Notify presentation owners
-      // after its queued refresh so they never guess from stale list churn.
-      for (const listener of createdListeners) {
-        listener(result.key);
+      const reconcileCreatedSession = async () => {
+        await refreshReplacement(params.agentId);
+        if (!isCurrentConnection(scope)) {
+          return;
+        }
+        // Creation may overlap read-only list loading. Notify presentation owners
+        // after its queued refresh so they never guess from stale list churn.
+        for (const listener of createdListeners) {
+          listener(result.key);
+        }
+      };
+      if (options.reconciliation === "background") {
+        void reconcileCreatedSession().catch((error: unknown) => {
+          if (isCurrentConnection(scope)) {
+            publish({ ...state, error: String(error) });
+          }
+        });
+      } else {
+        await reconcileCreatedSession();
+        if (!isCurrentConnection(scope)) {
+          return null;
+        }
       }
       return result;
     } catch (error) {

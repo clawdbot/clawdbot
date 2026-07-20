@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -517,6 +518,7 @@ describe("route composer fallback", () => {
       assistantAgentId: "main",
       agentsList: { defaultId: "main", mainKey: "main" },
       hello: null,
+      initialUserMessage: createInitialUserMessageHandoff(),
       sessionKey: "agent:main:first",
       chatMessage,
       chatComposerFallbackByScope: {},

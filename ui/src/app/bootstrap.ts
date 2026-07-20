@@ -35,6 +35,7 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
@@ -324,6 +325,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
+  const initialUserMessage = createInitialUserMessageHandoff();
   applyStartupPresentation(settings);
   const router = createApplicationRouter();
   let pendingGatewayConnection =
@@ -396,6 +398,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     nativeNotifications,
     webPush,
     skillWorkshopRevision,
+    initialUserMessage,
     navigate: (routeId, options) => {
       void router
         .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
@@ -457,6 +460,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
+      initialUserMessage.clear();
     },
   };
 }

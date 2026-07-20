@@ -2341,6 +2341,36 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("hides a pending send after history accepts its idempotency key", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "accepted prompt",
+          timestamp: 1,
+          __openclaw: { idempotencyKey: "accepted-run:user", seq: 1 },
+        },
+      ],
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "accepted prompt",
+          createdAt: 2,
+          sendRunId: "accepted-run",
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
+      idempotencyKey: "accepted-run:user",
+      seq: 1,
+    });
+  });
+
   it("keeps failed queued sends out of the thread", () => {
     const groups = messageGroups({
       queue: [

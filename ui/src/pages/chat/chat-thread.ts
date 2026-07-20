@@ -46,6 +46,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
+import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import type { PlanStatus } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -1291,8 +1292,17 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     });
   }
   const queuedSends = Array.isArray(props.queue) ? props.queue : [];
-  const activeRunQueuedSends = queuedSends.filter((queued) => queued.sendState === "waiting-model");
-  const futureQueuedSends = queuedSends.filter((queued) => !activeRunQueuedSends.includes(queued));
+  // Once authoritative history carries the send id, that message owns the bubble.
+  // Keep the queue row for run progress and delivery retirement, but do not render both copies.
+  const threadQueuedSends = queuedSends.filter(
+    (queued) => !chatMessagesContainQueuedSend(history, queued, true),
+  );
+  const activeRunQueuedSends = threadQueuedSends.filter(
+    (queued) => queued.sendState === "waiting-model",
+  );
+  const futureQueuedSends = threadQueuedSends.filter(
+    (queued) => !activeRunQueuedSends.includes(queued),
+  );
   const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
     (earliest, queued) =>
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
