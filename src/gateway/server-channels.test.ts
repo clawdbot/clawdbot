@@ -1452,6 +1452,47 @@ describe("server-channels auto restart", () => {
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
+  it("records timed-out caller-owned reload stops for the paired restart", async () => {
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseFirstTask.resolve();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected caller-owned timed-out reload stop to restart after the old task settled",
+    );
+
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
   it("does not restart when a timed-out recovery stop settles as terminal", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
@@ -3273,7 +3314,7 @@ describe("server-channels auto restart", () => {
         startAccount,
         listAccountIds: () => accountIds,
         resolveAccount: (_cfg, accountId) => {
-          if (!accountIds.includes(accountId)) {
+          if (typeof accountId !== "string" || !accountIds.includes(accountId)) {
             throw new Error(`unknown account ${accountId}`);
           }
           return { enabled: true, configured: true };
@@ -3341,9 +3382,7 @@ describe("server-channels auto restart", () => {
       "account-a",
     ]);
     expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(true);
-    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(
-      true,
-    );
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(true);
 
     await manager.stopChannel("discord");
   });
