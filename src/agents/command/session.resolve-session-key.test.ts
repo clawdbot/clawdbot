@@ -11,12 +11,17 @@ const hoisted = vi.hoisted(() => ({
     }>
   >(),
   listAgentIdsMock: vi.fn<() => string[]>(),
+  compatReadMock: vi.fn(),
   defaultAgentId: "main",
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   listSessionEntries: (scope?: { storePath?: string; clone?: boolean }) =>
     hoisted.listSessionEntriesMock(scope),
+}));
+
+vi.mock("../../config/sessions/legacy-main-session-key-migration.js", () => ({
+  readUnresolvedLegacyMainSessionCompat: (...args: unknown[]) => hoisted.compatReadMock(...args),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -72,6 +77,7 @@ describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
     hoisted.listSessionEntriesMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
+    hoisted.compatReadMock.mockReset();
     hoisted.defaultAgentId = "main";
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
   });
@@ -94,6 +100,33 @@ describe("resolveSessionKeyForRequest", () => {
 
     expect(result.sessionKey).toBe("agent:ops:main");
     expect(result.sessionStore["agent:ops:main"]).toBeUndefined();
+  });
+
+  it("reads the exact legacy key only while its migration is recorded unresolved", () => {
+    hoisted.defaultAgentId = "ops";
+    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
+    hoisted.compatReadMock.mockReturnValue({
+      canonicalKey: "agent:ops:main",
+      defaultAgentId: "ops",
+      entry: { sessionId: "legacy-main", updatedAt: 10 },
+      legacyKey: "agent:main:main",
+      storePath: "/stores/main.json",
+    });
+    mockSessionStores({ "/stores/shared.json": {} });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "ops", default: true }] },
+        session: { store: "/stores/shared.json" },
+      },
+      to: "+15551234567",
+    });
+
+    expect(hoisted.compatReadMock).toHaveBeenCalledWith({
+      canonicalKey: "agent:ops:main",
+      defaultAgentId: "ops",
+    });
+    expect(result.sessionStore["agent:ops:main"]).toMatchObject({ sessionId: "legacy-main" });
   });
 
   it("does not borrow the explicit main agent's session for another default", () => {

@@ -10,6 +10,7 @@ import {
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { readUnresolvedLegacyMainSessionCompat } from "../../config/sessions/legacy-main-session-key-migration.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
@@ -262,6 +263,17 @@ export function resolveSessionKeyForRequest(opts: {
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+  if (sessionKey && storeAgentId === defaultAgentId && !sessionStore[sessionKey]) {
+    // Compat reads exist only while the recorded migration state is unresolved.
+    // Remove this exact-key bridge after the unresolved claim is resolved or discarded.
+    const compat = readUnresolvedLegacyMainSessionCompat({
+      canonicalKey: sessionKey,
+      defaultAgentId,
+    });
+    if (compat) {
+      sessionStore[sessionKey] = structuredClone(compat.entry);
+    }
+  }
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
   // derived. When duplicates exist across agent stores, pick the same deterministic best match used

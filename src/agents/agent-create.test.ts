@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { LegacyMainSessionKeyMigrationResult } from "../config/sessions/legacy-main-session-key-migration.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,10 +19,7 @@ const mocks = vi.hoisted(() => ({
   claimCompletedAgentDeletion: vi.fn(() => true),
   maybeRepairAgentRoster: vi.fn((config: Record<string, unknown>) => ({ config, changes: [] })),
   migrateLegacyDefaultMainSessionKeys: vi.fn(
-    async (): Promise<{ changes: string[]; warnings: string[] }> => ({
-      changes: [],
-      warnings: [],
-    }),
+    async (): Promise<LegacyMainSessionKeyMigrationResult> => ({ outcomes: [] }),
   ),
 }));
 
@@ -62,6 +60,15 @@ vi.mock("../commands/doctor/shared/agent-roster-repair.js", () => ({
 
 vi.mock("../config/sessions/legacy-main-session-key-migration.js", () => ({
   migrateLegacyDefaultMainSessionKeys: mocks.migrateLegacyDefaultMainSessionKeys,
+  isLegacyMainSessionMigrationUnresolved: (outcome: { resolved: boolean }) => !outcome.resolved,
+  formatLegacyMainSessionMigrationOutcome: (outcome: {
+    canonical?: { sessionId: string };
+    canonicalKey: string;
+    aliases?: Array<{ sessionId: string; sessionKey: string }>;
+  }) =>
+    `Sessions ${outcome.canonical?.sessionId} (${outcome.canonicalKey}) and ${outcome.aliases
+      ?.map((item) => `${item.sessionId} (${item.sessionKey})`)
+      .join(", ")} both claim main.`,
 }));
 
 vi.mock("./workspace.js", async (importOriginal) => {
@@ -93,7 +100,7 @@ describe("createAgent", () => {
     mocks.persisted = {};
     mocks.readAgentDeletionJournal.mockReturnValue(undefined);
     mocks.claimCompletedAgentDeletion.mockReturnValue(true);
-    mocks.migrateLegacyDefaultMainSessionKeys.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.migrateLegacyDefaultMainSessionKeys.mockResolvedValue({ outcomes: [] });
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/default-researcher");
     mocks.resolveAgentDir.mockReturnValue("/tmp/agent-researcher");
     mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
@@ -156,22 +163,58 @@ describe("createAgent", () => {
     });
   });
 
+  it("creates main in its own canonical directory after a differently named default", async () => {
+    mocks.config = {
+      agents: {
+        list: [{ id: "research-buddy", default: true, agentDir: "/agents/research-buddy" }],
+      },
+    };
+    mocks.resolveAgentDir.mockImplementation((_config, agentId) => `/agents/${agentId}`);
+
+    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
+      status: "created",
+      agentId: "main",
+      agentDir: "/agents/main",
+    });
+  });
+
   it("migrates legacy non-main-default keys before creating main", async () => {
     mocks.config = { agents: { list: [{ id: "ops", default: true }] } };
     await expect(createAgent({ name: "main" })).resolves.toMatchObject({ status: "created" });
     expect(mocks.migrateLegacyDefaultMainSessionKeys).toHaveBeenCalledOnce();
   });
 
-  it("rejects main creation when legacy keys need doctor repair", async () => {
+  it("rejects main creation with concrete divergent session details", async () => {
     mocks.config = { agents: { list: [{ id: "ops", default: true }] } };
     mocks.migrateLegacyDefaultMainSessionKeys.mockResolvedValue({
-      changes: [],
-      warnings: ["ambiguous"],
+      outcomes: [
+        {
+          kind: "canonical-exists-different",
+          resolved: false,
+          canonicalKey: "agent:ops:main",
+          defaultAgentId: "ops",
+          targetStorePath: "/state/agents/ops/sessions/sessions.json",
+          canonical: {
+            agentId: "ops",
+            sessionId: "ops-session",
+            sessionKey: "agent:ops:main",
+            storePath: "/state/agents/ops/sessions/sessions.json",
+          },
+          aliases: [
+            {
+              agentId: "main",
+              sessionId: "legacy-session",
+              sessionKey: "agent:main:main",
+              storePath: "/state/agents/main/sessions/sessions.json",
+            },
+          ],
+        },
+      ],
     });
     await expect(createAgent({ name: "main" })).resolves.toMatchObject({
       status: "error",
       reason: "legacy-session-migration-required",
-      message: expect.stringContaining("openclaw doctor --fix"),
+      message: expect.stringMatching(/ops-session.*legacy-session.*agent:main:main/),
     });
   });
 

@@ -23,9 +23,14 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   projectDefaultInferenceRoute,
   sameDefaultInferenceRoute,
+  sameDefaultInferenceRouteIgnoringAgentIdentity,
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
 import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js";
+import {
+  prepareFirstAgentCredentialDir,
+  resolveVerifiedFirstAgentDir,
+} from "./setup-first-agent.js";
 
 /**
  * The whole first-run setup as one approved operation: the user says "yes" in
@@ -287,6 +292,7 @@ export async function applySystemAgentSetup(
     runtime,
   } = params;
   const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
+  const verifiedInferenceRouteAtStart = params.expectedInferenceRoute;
   let expectedInferenceRoute = params.expectedInferenceRoute;
   const commit: SystemAgentSetupApplyHooks["commit"] = hooks
     ? async (effect) => await hooks.commit(effect)
@@ -407,13 +413,17 @@ export async function applySystemAgentSetup(
       setupBaseConfig = applyMergePatch(setupBaseConfig, configPatch) as OpenClawConfig;
     }
     if (!currentHasRoster) {
+      const firstAgentName = agentName?.trim() || "main";
+      const firstAgentId = normalizeAgentId(firstAgentName);
+      const verifiedAgentDir = resolveVerifiedFirstAgentDir({
+        agentId: firstAgentId,
+        verifiedRoute: expectedInferenceRoute,
+      });
       const staged = stageOnboardingAgent({
         config: setupBaseConfig,
-        name: agentName?.trim() || "main",
+        name: firstAgentName,
         workspace,
-        ...(expectedInferenceRoute?.route?.agentDir
-          ? { agentDir: expectedInferenceRoute.route.agentDir }
-          : {}),
+        ...(verifiedAgentDir ? { agentDir: verifiedAgentDir } : {}),
       });
       setupBaseConfig = staged.config;
       stagedAgent = staged.agent;
@@ -513,9 +523,10 @@ export async function applySystemAgentSetup(
             if (!setupCandidate.introducesFirstRoster) {
               return isDeepStrictEqual(expectedSourceRoute.route, expectedInferenceRoute.route);
             }
-            const { agentId: _beforeAgentId, ...beforeRoute } = expectedInferenceRoute.route;
-            const { agentId: _afterAgentId, ...afterRoute } = expectedSourceRoute.route;
-            return isDeepStrictEqual(afterRoute, beforeRoute);
+            return sameDefaultInferenceRouteIgnoringAgentIdentity(
+              expectedSourceRoute,
+              expectedInferenceRoute,
+            );
           })();
           if (!routeMatches) {
             throw new Error(
@@ -568,12 +579,17 @@ export async function applySystemAgentSetup(
     nextConfig = created.config;
     finalConfigHash = resolveConfigSnapshotHash(await readConfigFileSnapshot()) ?? finalConfigHash;
     if (created.agentId) {
-      const { resolveAgentDir } = await import("../agents/agent-scope.js");
+      const verifiedAgentDir = verifiedInferenceRouteAtStart?.route?.agentDir;
+      const agentDir = await prepareFirstAgentCredentialDir({
+        agentId: created.agentId,
+        config: nextConfig,
+        verifiedAgentDir,
+      });
       stagedAgent = {
         agentId: created.agentId,
         name: agentName?.trim() || "main",
         workspace: setupResult.workspace,
-        agentDir: resolveAgentDir(nextConfig, created.agentId),
+        agentDir,
       };
     }
   }
@@ -597,9 +613,27 @@ export async function applySystemAgentSetup(
     }
     const expectedPersistedRoute = await projectDefaultInferenceRoute(expectedRuntime.config);
     await assertVerifiedRoute(afterSnapshot, expectedPersistedRoute, "after");
+    const movedFirstAgentDir =
+      setupResult.introducesFirstRoster &&
+      verifiedInferenceRouteAtStart?.route?.agentDir !== expectedPersistedRoute.route?.agentDir;
+    if (movedFirstAgentDir) {
+      const { verifySetupInferenceConfig } = await import("./setup-inference.js");
+      const verification = await verifySetupInferenceConfig({
+        config: expectedRuntime.config,
+        runtime,
+      });
+      if (!verification.ok || verification.modelRef !== expectedPersistedRoute.route?.modelLabel) {
+        throw new Error(
+          `The renamed first agent could not verify inference from ${expectedPersistedRoute.route?.agentDir ?? "its canonical agent directory"}.`,
+        );
+      }
+    }
     // Plugin defaults are part of the access-tested runtime route. Reject a
     // metadata change that would make the committed config run differently.
-    if (!isDeepStrictEqual(expectedPersistedRoute.route, expectedInferenceRoute.route)) {
+    if (
+      !movedFirstAgentDir &&
+      !isDeepStrictEqual(expectedPersistedRoute.route, expectedInferenceRoute.route)
+    ) {
       throw new Error(
         "The materialized inference route no longer matches the exact verified route, so no further setup effects were applied. Retry setup from the current OpenClaw session.",
       );

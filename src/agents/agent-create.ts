@@ -156,13 +156,19 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           (entry) => entry.default === true && normalizeAgentId(entry.id) !== "main",
         )
       ) {
-        const { migrateLegacyDefaultMainSessionKeys } =
-          await import("../config/sessions/legacy-main-session-key-migration.js");
+        const {
+          formatLegacyMainSessionMigrationOutcome,
+          isLegacyMainSessionMigrationUnresolved,
+          migrateLegacyDefaultMainSessionKeys,
+        } = await import("../config/sessions/legacy-main-session-key-migration.js");
         const migration = await migrateLegacyDefaultMainSessionKeys(lockedConfig);
-        if (migration.warnings.length > 0) {
+        const unresolved = migration.outcomes.filter(isLegacyMainSessionMigrationUnresolved);
+        if (unresolved.length > 0) {
           return createError(
             "legacy-session-migration-required",
-            `Cannot create agent "main" until legacy session ownership is repaired. Run \`openclaw doctor --fix\` first.`,
+            `Cannot create agent "main" while legacy main-session ownership diverges. ${unresolved
+              .map((outcome) => formatLegacyMainSessionMigrationOutcome(outcome))
+              .join(" ")} Export or delete one of the named session keys, then retry.`,
             agentId,
           );
         }

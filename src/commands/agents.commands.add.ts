@@ -15,6 +15,7 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { copyPortableAuthProfiles } from "../agents/auth-profiles/copy-portable.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -57,29 +58,6 @@ type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
 
 function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
   return { config, added: [], updated: [], skipped: [], conflicts: [] };
-}
-
-async function copyPortableAuthProfiles(params: {
-  destAgentDir: string;
-  sourceAgentDir: string;
-}): Promise<{ copied: number; skipped: number }> {
-  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir);
-  if (!sourceStore || Object.keys(sourceStore.profiles).length === 0) {
-    return { copied: 0, skipped: 0 };
-  }
-  const portable = buildPortableAuthProfileStoreForAgentCopy(sourceStore);
-  if (portable.copiedProfileIds.length === 0) {
-    return { copied: 0, skipped: portable.skippedProfileIds.length };
-  }
-  await fs.mkdir(params.destAgentDir, { recursive: true });
-  saveAuthProfileStore(portable.store, params.destAgentDir, {
-    filterExternalAuthProfiles: false,
-    syncExternalCli: false,
-  });
-  return {
-    copied: portable.copiedProfileIds.length,
-    skipped: portable.skippedProfileIds.length,
-  };
 }
 
 function formatSkippedOAuthProfilesMessage(params: {

@@ -1,6 +1,10 @@
 import { migrateOrphanedSessionKeys } from "../../infra/state-migrations.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { ensureLegacyDefaultMainSessionKeysMigrated } from "./legacy-main-session-key-migration.js";
+import {
+  ensureLegacyDefaultMainSessionKeysMigrated,
+  formatLegacyMainSessionMigrationOutcome,
+  isLegacyMainSessionMigrationUnresolved,
+} from "./legacy-main-session-key-migration.js";
 import { sweepOrphanSessionStoreTemps } from "./store-temp-cleanup.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
@@ -83,14 +87,24 @@ export async function runLegacyMainSessionKeyStartupMigration(params: {
     ensureLegacyDefaultMainSessionKeysMigrated;
   try {
     const result = await migrate(params.cfg, params.env ?? process.env);
-    if (result.changes.length > 0) {
+    const resolved = result.outcomes.filter(
+      (outcome) => !isLegacyMainSessionMigrationUnresolved(outcome),
+    );
+    const unresolved = result.outcomes.filter(isLegacyMainSessionMigrationUnresolved);
+    const resolvedLines = resolved.flatMap((outcome) => {
+      const message = formatLegacyMainSessionMigrationOutcome(outcome);
+      return message ? [message] : [];
+    });
+    if (resolvedLines.length > 0) {
       params.log.info(
-        `session: migrated legacy main-session keys:\n${result.changes.map((change) => `- ${change}`).join("\n")}`,
+        `session: migrated legacy main-session keys:\n${resolvedLines.map((line) => `- ${line}`).join("\n")}`,
       );
     }
-    if (result.warnings.length > 0) {
+    if (unresolved.length > 0) {
       params.log.warn(
-        `session: legacy main-session key migration diagnostics:\n${result.warnings.map((warning) => `- ${warning}`).join("\n")}`,
+        `session: unresolved legacy main-session key migration:\n${unresolved
+          .map((outcome) => `- ${formatLegacyMainSessionMigrationOutcome(outcome)}`)
+          .join("\n")}`,
       );
     }
   } catch (error) {

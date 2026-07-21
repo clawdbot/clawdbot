@@ -45,11 +45,21 @@ const mocks = vi.hoisted(() => ({
   refreshPluginRegistry: vi.fn(),
   updateExecApprovals: vi.fn(),
   ensureOnboardingAgent: vi.fn(),
+  copyPortableAuthProfiles: vi.fn(),
+  verifySetupInferenceConfig: vi.fn(),
 }));
 
 vi.mock("../commands/onboard-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/onboard-agent.js")>()),
   ensureOnboardingAgent: mocks.ensureOnboardingAgent,
+}));
+
+vi.mock("../agents/auth-profiles/copy-portable.js", () => ({
+  copyPortableAuthProfiles: mocks.copyPortableAuthProfiles,
+}));
+
+vi.mock("./setup-inference.js", () => ({
+  verifySetupInferenceConfig: mocks.verifySetupInferenceConfig,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -352,6 +362,12 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
     mocks.refreshPluginRegistry.mockResolvedValue(undefined);
     mocks.updateExecApprovals.mockResolvedValue(undefined);
+    mocks.copyPortableAuthProfiles.mockResolvedValue({ copied: 1, skipped: 0 });
+    mocks.verifySetupInferenceConfig.mockResolvedValue({
+      ok: true,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 1,
+    });
   });
 
   it.each([

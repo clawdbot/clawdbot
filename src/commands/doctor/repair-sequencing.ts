@@ -4,7 +4,11 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import { migrateLegacyDefaultMainSessionKeys } from "../../config/sessions/legacy-main-session-key-migration.js";
+import {
+  formatLegacyMainSessionMigrationOutcome,
+  isLegacyMainSessionMigrationUnresolved,
+  migrateLegacyDefaultMainSessionKeys,
+} from "../../config/sessions/legacy-main-session-key-migration.js";
 import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
@@ -86,11 +90,14 @@ export async function runDoctorRepairSequence(params: {
 
   applyMutation(maybeRepairAgentRoster(state.candidate, env));
   const mainSessionKeyMigration = await migrateLegacyDefaultMainSessionKeys(state.candidate, env);
-  if (mainSessionKeyMigration.changes.length > 0) {
-    changeNotes.push(sanitizeLines(mainSessionKeyMigration.changes));
-  }
-  if (mainSessionKeyMigration.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(mainSessionKeyMigration.warnings));
+  for (const outcome of mainSessionKeyMigration.outcomes) {
+    const message = formatLegacyMainSessionMigrationOutcome(outcome);
+    if (!message) {
+      continue;
+    }
+    (isLegacyMainSessionMigrationUnresolved(outcome) ? warningNotes : changeNotes).push(
+      sanitizeLines([message]),
+    );
   }
 
   for (const mutation of await collectChannelDoctorRepairMutations({
