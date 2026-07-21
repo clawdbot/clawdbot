@@ -295,7 +295,7 @@ export async function applySystemAgentSetup(
     onboardHelpers,
     { applyLocalSetupWorkspaceConfig, resolveOnboardingWorkspaceConflict },
     { transformConfigWithPendingPluginInstalls },
-    { stageOnboardingAgent },
+    { ensureOnboardingAgent, stageOnboardingAgent },
   ] = await Promise.all([
     import("../wizard/setup.shared.js"),
     import("../commands/onboard-helpers.js"),
@@ -416,8 +416,7 @@ export async function applySystemAgentSetup(
       setupBaseConfig = staged.config;
       stagedAgent = staged.agent;
     }
-    const introducesFirstRoster =
-      !currentHasRoster && (setupBaseConfig.agents?.list?.length ?? 0) > 0;
+    const introducesFirstRoster = Boolean(stagedAgent);
     if (currentHasRoster) {
       setupBaseConfig = {
         ...setupBaseConfig,
@@ -520,19 +519,29 @@ export async function applySystemAgentSetup(
           // This is the auth/config operation's linearization point. Never hold
           // the synchronous cross-store guard across async config I/O.
           assertCommitPreconditions?.();
+          const configToCommit = setupCandidate.introducesFirstRoster
+            ? {
+                ...finalizedConfig,
+                agents: {
+                  ...finalizedConfig.agents,
+                  list: currentConfig.agents?.list,
+                },
+              }
+            : finalizedConfig;
           return {
-            nextConfig: finalizedConfig,
+            nextConfig: configToCommit,
             result: {
               settings: setupCandidate.settings,
               workspace: setupCandidate.workspace,
               stagedAgent: setupCandidate.stagedAgent,
+              introducesFirstRoster: setupCandidate.introducesFirstRoster,
               expectedInferenceRoute: expectedSourceRoute,
             },
           };
         },
       }),
   );
-  const nextConfig = committed.nextConfig;
+  let nextConfig = committed.nextConfig;
   const setupResult = committed.result;
   const settings = setupResult?.settings;
   if (!settings) {
@@ -540,7 +549,24 @@ export async function applySystemAgentSetup(
   }
   const onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const effectiveWorkspace = setupResult.workspace;
-  const stagedAgent = setupResult.stagedAgent;
+  let stagedAgent = setupResult.stagedAgent;
+  if (setupResult.introducesFirstRoster) {
+    const created = await ensureOnboardingAgent({
+      config: nextConfig,
+      name: agentName?.trim() || "main",
+      workspace: setupResult.workspace,
+    });
+    nextConfig = created.config;
+    if (created.agentId) {
+      const { resolveAgentDir } = await import("../agents/agent-scope.js");
+      stagedAgent = {
+        agentId: created.agentId,
+        name: agentName?.trim() || "main",
+        workspace: setupResult.workspace,
+        agentDir: resolveAgentDir(nextConfig, created.agentId),
+      };
+    }
+  }
   if (setupResult.expectedInferenceRoute) {
     expectedInferenceRoute = setupResult.expectedInferenceRoute;
   }
@@ -548,7 +574,7 @@ export async function applySystemAgentSetup(
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();
     const afterSnapshot = afterRead.snapshot;
     requireValidSystemAgentSetupSnapshot(afterSnapshot);
-    const expectedRuntime = validateConfigObjectWithPlugins(committed.nextConfig, {
+    const expectedRuntime = validateConfigObjectWithPlugins(nextConfig, {
       env: process.env,
       pluginMetadataSnapshot: afterRead.pluginMetadataSnapshot,
     });

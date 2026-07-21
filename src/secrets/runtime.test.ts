@@ -600,6 +600,26 @@ describe("secrets runtime snapshot", () => {
     });
   });
 
+  it("keeps defaults sandbox ssh refs inactive before the first agent exists", async () => {
+    const ref = { source: "env" as const, provider: "default", id: "SSH_IDENTITY_DATA" };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          list: [],
+          defaults: {
+            sandbox: { mode: "all", backend: "ssh", ssh: { identityData: ref } },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(ref);
+  });
+
   it("resolves active bundled Codex app-server plugin SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

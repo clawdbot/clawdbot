@@ -44,6 +44,12 @@ const mocks = vi.hoisted(() => ({
   ensureGatewayService: vi.fn(),
   refreshPluginRegistry: vi.fn(),
   updateExecApprovals: vi.fn(),
+  ensureOnboardingAgent: vi.fn(),
+}));
+
+vi.mock("../commands/onboard-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-agent.js")>()),
+  ensureOnboardingAgent: mocks.ensureOnboardingAgent,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -278,6 +284,18 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     mocks.state.commitSnapshot = snapshot("probe", config);
     mocks.state.commitPreviousHash = "probe";
     mocks.state.persistedConfig = undefined;
+    mocks.ensureOnboardingAgent.mockImplementation(async ({ config: current, name, workspace }) => {
+      const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
+      const next = {
+        ...current,
+        agents: {
+          ...current.agents,
+          list: [{ id, default: true, workspace, agentDir: `/agents/${id}` }],
+        },
+      };
+      mocks.state.persistedConfig = next;
+      return { config: next, agentId: id, bootstrapPending: true };
+    });
     mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
@@ -367,7 +385,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig).toMatchObject({
       agents: {
         defaults: { workspace: "/tmp/openclaw-workspace" },
-        list: [{ id: "main", default: true }],
+        list: [expect.objectContaining({ id: "main", default: true })],
       },
     });
     expect(result.agentId).toBe("main");
@@ -415,10 +433,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       baseParams({ expectedConfigHash: null, agentName: "Research Buddy" }),
     );
 
-    expect(candidates.map((candidate) => candidate.agents?.list)).toEqual([
-      [expect.objectContaining({ id: "research-buddy", default: true })],
-      [expect.objectContaining({ id: "research-buddy", default: true })],
-    ]);
+    expect(candidates.map((candidate) => candidate.agents?.list)).toEqual([undefined, undefined]);
     expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
   });
 

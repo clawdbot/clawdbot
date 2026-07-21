@@ -18,18 +18,29 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     const storePath = path.join("tmp", "stores", "shared-sessions.json");
 
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" })).toMatchObject({
-      path: path.resolve("tmp", "stores", "shared-sessions.main.sqlite"),
+      path: path.resolve("tmp", "stores", "shared-sessions.sqlite"),
     });
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
       path: path.resolve("tmp", "stores", "shared-sessions.work.sqlite"),
     });
   });
 
+  it("keeps a basename matching a non-main id distinct from main", () => {
+    const storePath = path.join("tmp", "stores", "ops.json");
+
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path).toBe(
+      path.resolve("tmp", "stores", "ops.sqlite"),
+    );
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path).toBe(
+      path.resolve("tmp", "stores", "ops.ops.sqlite"),
+    );
+  });
+
   it("keeps shared custom sessions.json targets distinct by agent", () => {
     const storePath = path.join("tmp", "stores", "sessions.json");
 
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" })).toMatchObject({
-      path: path.resolve("tmp", "stores", "openclaw-agent.main.sqlite"),
+      path: path.resolve("tmp", "stores", "openclaw-agent.sqlite"),
     });
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
       path: path.resolve("tmp", "stores", "openclaw-agent.work.sqlite"),

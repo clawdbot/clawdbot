@@ -1,7 +1,6 @@
 // Agents add tests cover agent creation, workspace setup, channel binding, and onboarding integration.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
@@ -19,19 +18,8 @@ const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined
 const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
 );
-const withConfigMutationExclusiveMock = vi.hoisted(() =>
-  vi.fn(async (fn: () => Promise<unknown>) => await fn()),
-);
 const createAgentMock = vi.hoisted(() => vi.fn());
-const authPathMocks = vi.hoisted(() => ({
-  defaultAgentDir: "/tmp/openclaw-main-agent",
-}));
-const assignSoleDefaultAgentMock = vi.hoisted(() => vi.fn());
-const claimLegacyAgentCreationDefaultMock = vi.hoisted(() => vi.fn(async () => false));
-const completeLegacyAgentCreationMock = vi.hoisted(() => vi.fn(async () => {}));
-const prepareLegacyAgentCreationMock = vi.hoisted(() => vi.fn());
-const releaseLegacyAgentCreationDefaultMock = vi.hoisted(() => vi.fn(async () => {}));
-const shouldTransferLegacyMainDefaultMock = vi.hoisted(() => vi.fn(async () => false));
+const authPathMocks = vi.hoisted(() => ({ defaultAgentDir: "/tmp/openclaw-main-agent" }));
 const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
     await writeConfigFileMock(params.nextConfig);
@@ -98,18 +86,9 @@ vi.mock("../config/config.js", async () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   writeConfigFile: writeConfigFileMock,
   replaceConfigFile: replaceConfigFileMock,
-  withConfigMutationExclusive: withConfigMutationExclusiveMock,
 }));
 
-vi.mock("../agents/agent-create.js", () => ({
-  assignSoleDefaultAgent: assignSoleDefaultAgentMock,
-  claimLegacyAgentCreationDefault: claimLegacyAgentCreationDefaultMock,
-  completeLegacyAgentCreation: completeLegacyAgentCreationMock,
-  createAgent: createAgentMock,
-  prepareLegacyAgentCreation: prepareLegacyAgentCreationMock,
-  releaseLegacyAgentCreationDefault: releaseLegacyAgentCreationDefaultMock,
-  shouldTransferLegacyMainDefault: shouldTransferLegacyMainDefaultMock,
-}));
+vi.mock("../agents/agent-create.js", () => ({ createAgent: createAgentMock }));
 
 vi.mock("../agents/agent-scope-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/agent-scope-config.js")>();
@@ -176,33 +155,12 @@ describe("agents add command", () => {
   });
 
   beforeEach(() => {
-    authPathMocks.defaultAgentDir = "/tmp/openclaw-main-agent";
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     replaceConfigFileMock.mockClear();
-    withConfigMutationExclusiveMock.mockClear();
     commitConfigWithPendingPluginInstallsMock.mockClear();
     transformConfigWithPendingPluginInstallsMock.mockClear();
     createAgentMock.mockReset();
-    assignSoleDefaultAgentMock.mockReset();
-    claimLegacyAgentCreationDefaultMock.mockReset();
-    prepareLegacyAgentCreationMock.mockReset();
-    releaseLegacyAgentCreationDefaultMock.mockClear();
-    shouldTransferLegacyMainDefaultMock.mockReset();
-    assignSoleDefaultAgentMock.mockImplementation((config) => config);
-    claimLegacyAgentCreationDefaultMock.mockResolvedValue(false);
-    completeLegacyAgentCreationMock.mockClear();
-    prepareLegacyAgentCreationMock.mockImplementation(async () => {
-      const snapshot = (await readConfigFileSnapshotMock()) as {
-        config?: Record<string, unknown>;
-        sourceConfig?: Record<string, unknown>;
-      };
-      return {
-        config: snapshot.sourceConfig ?? snapshot.config ?? {},
-        makeDefault: false,
-      };
-    });
-    shouldTransferLegacyMainDefaultMock.mockResolvedValue(false);
     createAgentMock.mockImplementation(
       async (params: { name: string; workspace: string; bindingSpecs?: string[] }) => {
         const agentId = params.name.toLowerCase();
@@ -253,9 +211,7 @@ describe("agents add command", () => {
   ): Promise<void> {
     const root = await suiteTempDirs.make(prefix);
     authPathMocks.defaultAgentDir = path.join(root, "default", "agent");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      await run(root);
-    });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
   }
 
   it("requires --workspace when flags are present", async () => {
@@ -341,8 +297,8 @@ describe("agents add command", () => {
   it("uses the explicit agent target and skips catalog validation", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
-      config: { agents: { list: [{ id: "main", default: true }] } },
-      sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { list: [] } },
+      sourceConfig: { agents: { list: [] } },
     });
     wizardMocks.createClackPrompter.mockReturnValue({
       intro: vi.fn(),
@@ -368,71 +324,6 @@ describe("agents add command", () => {
       runtime,
       expect.objectContaining({ agentId: "jon" }),
     );
-  });
-
-  it("repairs legacy main before interactive creation and transfers the default", async () => {
-    await withTempHome(async (home) => {
-      const workspace = path.join(home, "ops-workspace");
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        hash: "legacy-hash",
-        config: { agents: { list: [] } },
-        sourceConfig: { agents: { list: [] } },
-      });
-      prepareLegacyAgentCreationMock.mockResolvedValue({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "main",
-                default: true,
-                agentDir: path.join(home, "main-agent"),
-              },
-            ],
-          },
-        },
-        makeDefault: true,
-        persistedHash: "repair-hash",
-      });
-      shouldTransferLegacyMainDefaultMock.mockResolvedValue(true);
-      claimLegacyAgentCreationDefaultMock.mockResolvedValue(true);
-      assignSoleDefaultAgentMock.mockImplementation(
-        (config: { agents?: { list?: Array<{ id: string; default?: boolean }> } }) => ({
-          ...config,
-          agents: {
-            ...config.agents,
-            list: config.agents?.list?.map((entry) =>
-              entry.id === "ops" ? { ...entry, default: true } : { ...entry, default: undefined },
-            ),
-          },
-        }),
-      );
-      wizardMocks.createClackPrompter.mockReturnValue({
-        intro: vi.fn(),
-        text: vi.fn().mockResolvedValue(workspace),
-        confirm: vi.fn().mockResolvedValue(false),
-        note: vi.fn(),
-        outro: vi.fn(),
-      });
-
-      await agentsAddCommand({ name: "Ops" }, runtime);
-
-      expect(prepareLegacyAgentCreationMock).toHaveBeenCalledWith({
-        transformConfig: transformConfigWithPendingPluginInstallsMock,
-      });
-      expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledWith({
-        baseHash: "repair-hash",
-        nextConfig: expect.objectContaining({
-          agents: {
-            list: [
-              expect.objectContaining({ id: "main", default: undefined }),
-              expect.objectContaining({ id: "ops", default: true }),
-            ],
-          },
-        }),
-      });
-      expect(completeLegacyAgentCreationMock).toHaveBeenCalledOnce();
-    });
   });
 
   it("copies only portable auth profiles when seeding a new agent store", async () => {
@@ -570,7 +461,6 @@ describe("agents add command", () => {
         } as never,
         sourceAgentDir,
       );
-
       const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
         destAgentDir,
@@ -581,11 +471,11 @@ describe("agents add command", () => {
     });
   });
 
-  it("does not claim skipped OAuth profiles stay shared from a non-default source agent", () => {
+  it("does not claim skipped OAuth profiles stay shared from a non-main source agent", () => {
     expect(
       testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "default-work",
-        sourceIsInheritedDefault: false,
+        sourceIsInheritedMain: false,
       }),
     ).toBe(
       'OAuth profiles were not copied from "default-work"; sign in separately for this agent.',
@@ -593,7 +483,7 @@ describe("agents add command", () => {
     expect(
       testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "main",
-        sourceIsInheritedDefault: true,
+        sourceIsInheritedMain: true,
       }),
     ).toBe('OAuth profiles stay shared from "main" unless this agent signs in separately.');
   });

@@ -86,4 +86,28 @@ describe("onboarding agent creation", () => {
     expect(result.agent).toMatchObject({ agentId: "research-buddy" });
     expect(mocks.createAgent).not.toHaveBeenCalled();
   });
+
+  it("accepts main when legacy repair materialized it before duplicate detection", async () => {
+    const repaired = {
+      exists: true,
+      valid: true,
+      sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { list: [{ id: "main", default: true }] } },
+    };
+    mocks.createAgent.mockResolvedValue({
+      status: "error",
+      reason: "already-exists",
+      agentId: "main",
+      message: 'agent "main" already exists',
+    });
+    mocks.readConfigFileSnapshot.mockReset();
+    mocks.readConfigFileSnapshot
+      .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {}, config: {} })
+      .mockResolvedValueOnce(repaired)
+      .mockResolvedValueOnce(repaired);
+
+    await expect(
+      ensureOnboardingAgent({ config: {}, name: "main", workspace: "/tmp/work" }),
+    ).resolves.toMatchObject({ agentId: "main", config: repaired.config });
+  });
 });

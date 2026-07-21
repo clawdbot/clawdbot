@@ -173,7 +173,8 @@ export function collectAgentSandboxAssignments(params: {
     }
     // Unlisted agents and stale registry entries still resolve through defaults,
     // even when every current list entry overrides this credential.
-    const active = defaultsBackend === "ssh";
+    const hasRoster = (params.context.sourceConfig.agents?.list?.length ?? 0) > 0;
+    const active = hasRoster && defaultsBackend === "ssh";
     collectAssignment({
       target: defaultsSsh,
       key,
@@ -182,9 +183,15 @@ export function collectAgentSandboxAssignments(params: {
       context: params.context,
       active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
-      owner: sandboxSecretOwner(resolveDefaultAgentId(params.config), {
-        defaults: defaultsSandbox,
-      }),
+      owner: hasRoster
+        ? sandboxSecretOwner(resolveDefaultAgentId(params.config), { defaults: defaultsSandbox })
+        : {
+            ownerKind: "capability",
+            ownerId: "sandbox-ssh:defaults",
+            requiredForGateway: false,
+            disposition: "isolate",
+            contract: { defaults: defaultsSandbox },
+          },
     });
   }
 }

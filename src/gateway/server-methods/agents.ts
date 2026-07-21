@@ -1058,9 +1058,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
       typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
     try {
       const result = await withConfigMutationExclusive(async (lockedConfig) => {
-        const { reconcileLegacyMainFirstAgentDefaultIntent } =
-          await import("../../commands/doctor/shared/legacy-main-session-migration.js");
-        reconcileLegacyMainFirstAgentDefaultIntent(lockedConfig);
         if (agentId === resolveDefaultAgentId(lockedConfig)) {
           throw new AgentConfigPreconditionError(
             `agent "${agentId}" is the default; reassign default first`,

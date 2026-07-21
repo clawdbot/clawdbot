@@ -17,10 +17,10 @@ function resolveCustomStoreSqlitePath(params: {
   const sqliteBaseName =
     params.sqliteBaseName ?? (path.basename(resolved, path.extname(resolved)) || "openclaw-agent");
   const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  // Existing main-agent installs ship the unsuffixed derived database name.
+  // Keep that on-disk contract canonical; only other agents use id suffixes.
   const sqliteName =
-    agentId && normalizeAgentId(sqliteBaseName) !== agentId
-      ? `${sqliteBaseName}.${agentId}`
-      : sqliteBaseName;
+    agentId && agentId !== "main" ? `${sqliteBaseName}.${agentId}` : sqliteBaseName;
   return path.join(sessionsDir, `${sqliteName}.sqlite`);
 }
 

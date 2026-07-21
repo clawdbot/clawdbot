@@ -75,7 +75,18 @@ export async function ensureOnboardingAgent(params: {
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
   });
   if (result.status === "error") {
-    throw new Error(result.message);
+    const requestedId = normalizeAgentId(params.name);
+    if (result.reason !== "already-exists" || result.agentId !== requestedId) {
+      throw new Error(result.message);
+    }
+    const repaired = await readConfigFileSnapshot();
+    const repairedConfig = repaired.sourceConfig ?? repaired.config;
+    const repairedEntry = repairedConfig.agents?.list?.find(
+      (entry) => normalizeAgentId(entry.id) === requestedId,
+    );
+    if (!repaired.valid || !repairedEntry || requestedId !== "main") {
+      throw new Error(result.message);
+    }
   }
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -91,7 +102,7 @@ export async function ensureOnboardingAgent(params: {
         list: persisted.agents?.list,
       },
     },
-    agentId: result.agentId,
-    bootstrapPending: result.bootstrapPending,
+    agentId: result.status === "created" ? result.agentId : normalizeAgentId(params.name),
+    bootstrapPending: result.status === "created" ? result.bootstrapPending : undefined,
   };
 }
