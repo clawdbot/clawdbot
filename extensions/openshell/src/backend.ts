@@ -975,7 +975,7 @@ async function moveProtectedSkillRootAside(params: {
     return undefined;
   }
   const shadowStats = await fs.lstat(shadowPath).catch(() => null);
-  if (!shadowStats || shadowStats.isSymbolicLink()) {
+  if (!shadowStats?.isDirectory() || shadowStats.isSymbolicLink()) {
     return undefined;
   }
   const preserveRoot = await fs.mkdtemp(

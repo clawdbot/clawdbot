@@ -538,6 +538,43 @@ describe("openshell backend manager", () => {
     );
   });
 
+  it("syncs a non-directory skills entry like ordinary workspace files", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    await fs.writeFile(path.join(workspaceDir, "skills"), "local file", "utf8");
+    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+      if (args[0] === "sandbox" && args[1] === "download") {
+        const tmpDir = expectDefined(args[4], "OpenShell download destination");
+        await fs.writeFile(path.join(tmpDir, "skills"), "sandbox edit", "utf8");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "openshell",
+        mode: "mirror",
+      }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: undefined,
+    });
+
+    await expect(fs.readFile(path.join(workspaceDir, "skills"), "utf8")).resolves.toBe(
+      "sandbox edit",
+    );
+  });
+
   it("drops non-directory materialized sandbox skills from mirror downloads", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
     cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
