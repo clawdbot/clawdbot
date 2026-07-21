@@ -1,6 +1,7 @@
 // Filesystem session transcript helpers.
 // Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
@@ -169,6 +170,9 @@ export function resolveSessionTranscriptCandidates(
 
   // Keep the legacy global sessions directory as a final candidate so tagged
   // upgrades can still find transcripts created before per-agent paths.
+  // This must honor OPENCLAW_HOME (via resolveRequiredHomeDir) because
+  // pre-per-agent sessions lived under OPENCLAW_HOME/.openclaw/sessions,
+  // not under the canonical state dir.
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
