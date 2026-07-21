@@ -18,7 +18,7 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     const storePath = path.join("tmp", "stores", "shared-sessions.json");
 
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" })).toMatchObject({
-      path: path.resolve("tmp", "stores", "shared-sessions.sqlite"),
+      path: path.resolve("tmp", "stores", "shared-sessions.main.sqlite"),
     });
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
       path: path.resolve("tmp", "stores", "shared-sessions.work.sqlite"),
@@ -29,7 +29,7 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     const storePath = path.join("tmp", "stores", "sessions.json");
 
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" })).toMatchObject({
-      path: path.resolve("tmp", "stores", "openclaw-agent.sqlite"),
+      path: path.resolve("tmp", "stores", "openclaw-agent.main.sqlite"),
     });
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
       path: path.resolve("tmp", "stores", "openclaw-agent.work.sqlite"),
