@@ -156,9 +156,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           (entry) => entry.default === true && normalizeAgentId(entry.id) !== "main",
         )
       ) {
-        const { maybeMigrateLegacyDefaultMainSessionKeys } =
-          await import("../commands/doctor/shared/legacy-main-session-keys.js");
-        const migration = await maybeMigrateLegacyDefaultMainSessionKeys(lockedConfig);
+        const { migrateLegacyDefaultMainSessionKeys } =
+          await import("../config/sessions/legacy-main-session-key-migration.js");
+        const migration = await migrateLegacyDefaultMainSessionKeys(lockedConfig);
         if (migration.warnings.length > 0) {
           return createError(
             "legacy-session-migration-required",

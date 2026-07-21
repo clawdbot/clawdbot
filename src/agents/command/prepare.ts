@@ -5,6 +5,7 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { runLegacyMainSessionKeyStartupMigration } from "../../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -142,6 +143,13 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
         ? { channel: recipientChannel, accountId: opts.accountId }
         : undefined,
+  });
+  // Gateway boot and embedded TUI call the same cached owner earlier; direct CLI
+  // reaches it here before resolveSession performs the first store read.
+  await runLegacyMainSessionKeyStartupMigration({
+    cfg,
+    env: process.env,
+    log: { info: runtime.log, warn: runtime.error },
   });
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,

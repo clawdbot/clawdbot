@@ -20,6 +20,7 @@ import {
   assertSqliteSessionEntrySelectionUnchanged,
   collectSessionEntryLookupKeys,
   deleteLegacySessionEntryRows,
+  readExactSessionEntryRow,
   readSessionEntryRow,
   readSqliteSessionEntrySelectionSnapshot,
   readSqliteSessionIdentitySnapshot,
@@ -84,12 +85,14 @@ type SqliteSessionImportRowsParams = {
   storePath?: string;
   sessionKey: string;
   entry: SessionEntry;
+  skipIfExists?: boolean;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void;
   transcriptMtimeMs?: number;
 };
 
 /** Summary of rows written by an internal doctor/migration import. */
 type SqliteSessionImportRowsResult = {
+  imported: boolean;
   sessionId: string;
   sessionKey: string;
   transcriptEvents: number;
@@ -228,8 +231,12 @@ export async function importSqliteSessionRows(
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let imported = false;
     let transcriptEvents = 0;
     runOpenClawAgentWriteTransaction((database) => {
+      if (params.skipIfExists && readExactSessionEntryRow(database, resolved.sessionKey)) {
+        return;
+      }
       const currentEntry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
       const preservedHarnessId =
         params.entry.agentHarnessId === undefined &&
@@ -283,8 +290,10 @@ export async function importSqliteSessionRows(
       } else if (transcriptEvents > 0) {
         touchTranscriptMutationInTransaction(database, params.entry.sessionId);
       }
+      imported = true;
     }, toDatabaseOptions(resolved));
     return {
+      imported,
       sessionId: params.entry.sessionId,
       sessionKey: resolved.sessionKey,
       transcriptEvents,

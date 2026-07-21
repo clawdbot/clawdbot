@@ -485,7 +485,6 @@ export async function executeSetup(
   if (!hasValidRawAgentIdCharacters(rawAgentName)) {
     throw new Error(`Agent id "${rawAgentName}" has no valid id characters.`);
   }
-  const requestedAgentName = normalizeAgentId(rawAgentName);
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
@@ -502,7 +501,7 @@ export async function executeSetup(
           await applySetup(
             {
               workspace,
-              agentName: requestedAgentName,
+              agentName: rawAgentName,
               expectedInferenceRoute: verified.route,
               surface,
               runtime: ctx.runtime,

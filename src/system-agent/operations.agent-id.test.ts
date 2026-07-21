@@ -75,4 +75,38 @@ describe("system-agent raw agent ids", () => {
     expect(applySetup).not.toHaveBeenCalled();
     expect(lines.join("\n")).not.toContain("[openclaw] running:");
   });
+
+  it("preserves the raw setup display name while creation normalizes its id", async () => {
+    const { runtime } = createSystemAgentTestRuntime();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "mock-hash",
+      configHashAfter: "next-hash",
+      bootstrapPending: true,
+      agentId: "research-buddy",
+      lines: [],
+    }));
+
+    await executeSystemAgentOperation(
+      { kind: "setup", agentId: "Research Buddy", workspace: "/tmp/research" },
+      runtime,
+      {
+        approved: true,
+        deps: {
+          applySetup,
+          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
+          verifyInferenceConfig: async () => ({
+            ok: true as const,
+            modelRef: "openai/gpt-5.5",
+            latencyMs: 5,
+          }),
+        },
+      },
+    );
+
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName: "Research Buddy", workspace: "/tmp/research" }),
+      { commit: expect.any(Function) },
+    );
+  });
 });
