@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveUserPath } from "../../../utils.js";
 
@@ -35,6 +37,20 @@ function hasLegacyImplicitMainState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv)
   ];
   if (stateDirs.some(directoryHasEntries)) {
     return true;
+  }
+  const configuredStore = cfg.session?.store?.trim();
+  if (configuredStore) {
+    const storePath = resolveStorePath(configuredStore, {
+      agentId: LEGACY_IMPLICIT_AGENT_ID,
+      env,
+    });
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+    if (fs.existsSync(storePath) || fs.existsSync(sqlitePath)) {
+      return true;
+    }
+    // A fixed custom store was a legacy single-agent surface even before its
+    // first session write; materialize its owner before runtime opens it.
+    return !configuredStore.includes("{agentId}");
   }
   const configuredWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspace = configuredWorkspace

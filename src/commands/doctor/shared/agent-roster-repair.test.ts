@@ -66,4 +66,44 @@ describe("legacy implicit agent doctor repair", () => {
         .config.agents?.list,
     ).toEqual([{ id: "main", default: true }]);
   });
+
+  it("materializes main for a configured custom session store before its first write", () => {
+    const env = fixtureEnv();
+    const config = { session: { store: "~/custom/sessions.json" } };
+
+    expect(maybeRepairAgentRoster(config, env).config.agents?.list).toEqual([
+      { id: "main", default: true },
+    ]);
+  });
+
+  it("detects a derived SQLite custom session store without legacy JSON", () => {
+    const env = fixtureEnv();
+    const sqlitePath = path.join(env.HOME!, "custom", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    fs.writeFileSync(sqlitePath, "sqlite");
+
+    expect(
+      maybeRepairAgentRoster({ session: { store: "~/custom/sessions.json" } }, env).config.agents
+        ?.list,
+    ).toEqual([{ id: "main", default: true }]);
+  });
+
+  it("does not infer main from an unused per-agent store template", () => {
+    const env = fixtureEnv();
+    const config = { session: { store: "~/custom/{agentId}/sessions.json" } };
+
+    expect(maybeRepairAgentRoster(config, env)).toEqual({ config, changes: [] });
+  });
+
+  it("detects an existing main store behind a per-agent template", () => {
+    const env = fixtureEnv();
+    const storePath = path.join(env.HOME!, "custom", "main", "sessions.json");
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(storePath, "{}\n");
+
+    expect(
+      maybeRepairAgentRoster({ session: { store: "~/custom/{agentId}/sessions.json" } }, env).config
+        .agents?.list,
+    ).toEqual([{ id: "main", default: true }]);
+  });
 });

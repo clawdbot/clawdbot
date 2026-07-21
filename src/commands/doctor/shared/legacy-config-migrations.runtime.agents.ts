@@ -22,37 +22,34 @@ import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-pr
 
 const LEGACY_IMPLICIT_AGENT_ID = "main";
 
-function containsLegacyMainAgentReference(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsLegacyMainAgentReference(entry));
+function isLegacyMainId(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === LEGACY_IMPLICIT_AGENT_ID;
+}
+
+function listIncludesLegacyMain(value: unknown): boolean {
+  return Array.isArray(value) && value.some(isLegacyMainId);
+}
+
+function containsLegacyMainAgentReference(raw: Record<string, unknown>): boolean {
+  const bindings = Array.isArray(raw.bindings) ? raw.bindings : [];
+  if (bindings.some((binding) => isLegacyMainId(getRecord(binding)?.agentId))) {
+    return true;
   }
-  const record = getRecord(value);
-  if (!record) {
-    return false;
+  const hookMappings = Array.isArray(getRecord(raw.hooks)?.mappings)
+    ? (getRecord(raw.hooks)?.mappings as unknown[])
+    : [];
+  if (hookMappings.some((mapping) => isLegacyMainId(getRecord(mapping)?.agentId))) {
+    return true;
   }
-  for (const [key, entry] of Object.entries(record)) {
-    if (
-      typeof entry === "string" &&
-      entry.trim().toLowerCase() === LEGACY_IMPLICIT_AGENT_ID &&
-      (key === "agentId" || key.endsWith("AgentId"))
-    ) {
-      return true;
-    }
-    if (
-      key === "allowAgents" &&
-      Array.isArray(entry) &&
-      entry.some(
-        (item) =>
-          typeof item === "string" && item.trim().toLowerCase() === LEGACY_IMPLICIT_AGENT_ID,
-      )
-    ) {
-      return true;
-    }
-    if (containsLegacyMainAgentReference(entry)) {
-      return true;
-    }
+  const tools = getRecord(raw.tools);
+  if (isLegacyMainId(getRecord(tools?.swarm)?.defaultAgentId)) {
+    return true;
   }
-  return false;
+  if (listIncludesLegacyMain(getRecord(tools?.agentToAgent)?.allow)) {
+    return true;
+  }
+  const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  return listIncludesLegacyMain(getRecord(defaults?.subagents)?.allowAgents);
 }
 
 function repairLegacyAgentRoster(raw: Record<string, unknown>, changes: string[]): void {

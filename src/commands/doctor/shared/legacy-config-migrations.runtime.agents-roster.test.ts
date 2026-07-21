@@ -36,4 +36,24 @@ describe("legacy agent roster migration", () => {
       changes: [],
     });
   });
+
+  it("does not infer a roster from plugin-owned agentId-like fields", () => {
+    expect(
+      applyLegacyDoctorMigrations({
+        plugins: { entries: { example: { config: { agentId: "main" } } } },
+      }),
+    ).toEqual({ next: null, changes: [] });
+  });
+
+  it("recognizes explicit core hook and tool agent references", () => {
+    for (const config of [
+      { hooks: { mappings: [{ action: "agent", agentId: "main" }] } },
+      { tools: { swarm: { enabled: true, defaultAgentId: "main" } } },
+      { agents: { defaults: { subagents: { allowAgents: ["main"] } } } },
+    ]) {
+      expect(applyLegacyDoctorMigrations(config).next?.agents).toMatchObject({
+        list: [{ id: "main", default: true }],
+      });
+    }
+  });
 });
