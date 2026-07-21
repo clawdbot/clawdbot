@@ -373,6 +373,40 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
+        name: "winget-stale-node-registration",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'winget') { return $true }",
+          "  return $null",
+          "}",
+          "filter Out-Host { }",
+          "function Refresh-ProcessPath { }",
+          "function Add-InstalledNodeToProcessPath { return $false }",
+          "$script:wingetCalls = @()",
+          "function winget {",
+          "  $script:wingetCalls += ($args -join ' ')",
+          "  if ($script:wingetCalls.Count -eq 1) {",
+          "    $global:LASTEXITCODE = -1978335189",
+          "  } else {",
+          "    $global:LASTEXITCODE = 0",
+          "  }",
+          "  Write-Output 'winget output'",
+          "}",
+          "function Check-Node { return ($script:wingetCalls.Count -ge 2) }",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if ($script:wingetCalls.Count -ne 2) { throw \"Calls=$($script:wingetCalls -join '|')\" }",
+          "if ($script:wingetCalls[1] -ne 'install OpenJS.NodeJS.LTS --source winget --force --accept-package-agreements --accept-source-agreements') {",
+          '  throw "ForceCall=$($script:wingetCalls[1])"',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "chocolatey-node-upgrade",
         source: [
           scriptWithoutEntryPoint,
@@ -632,6 +666,7 @@ describe("install.ps1 failure handling", () => {
 
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {
     expectBatchedPowerShellCase("winget-node-delayed-path");
+    expectBatchedPowerShellCase("winget-stale-node-registration");
     expectBatchedPowerShellCase("chocolatey-node-upgrade");
     expectBatchedPowerShellCase("scoop-node-update");
     expectBatchedPowerShellCase("package-manager-node-validation-failure");
