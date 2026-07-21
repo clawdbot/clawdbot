@@ -79,7 +79,6 @@
   "migration-runtime",
   "music-generation",
   "node-host",
-  "number-runtime",
   "outbound-media",
   "pair-loop-guard-runtime",
   "plugin-state-runtime",
