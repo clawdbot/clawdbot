@@ -2,10 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   hasAgentScopeColumn,
   memoryAgentPredicate,
