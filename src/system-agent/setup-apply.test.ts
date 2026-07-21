@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { projectDefaultInferenceRoute } from "./inference-route.js";
+import { projectDefaultInferenceRoute as projectDefaultInferenceRouteImpl } from "./inference-route.js";
 
 type ConfigSnapshot = {
   exists: boolean;
@@ -111,16 +111,46 @@ const runtime: RuntimeEnv = {
 };
 
 function snapshot(hash: string | null, config: OpenClawConfig): ConfigSnapshot {
+  const canonicalConfig = hash === null ? config : withMainRoster(config);
   return {
     exists: hash !== null,
     valid: true,
     path: "/tmp/openclaw.json",
     hash,
-    config,
-    sourceConfig: config,
-    runtimeConfig: config,
+    config: canonicalConfig,
+    sourceConfig: canonicalConfig,
+    runtimeConfig: canonicalConfig,
     issues: [],
   };
+}
+
+function withMainRoster(config: OpenClawConfig): OpenClawConfig {
+  const list = config.agents?.list;
+  if (Array.isArray(list) && list.length > 0) {
+    if (list.filter((agent) => agent.default === true).length === 1) {
+      return config;
+    }
+    const nextList = structuredClone(list);
+    for (const entry of nextList) {
+      delete entry.default;
+    }
+    nextList[0]!.default = true;
+    return {
+      ...config,
+      agents: {
+        ...config.agents,
+        list: nextList,
+      },
+    };
+  }
+  return {
+    ...config,
+    agents: { ...config.agents, list: [{ id: "main", default: true }] },
+  };
+}
+
+async function projectDefaultInferenceRoute(config: OpenClawConfig) {
+  return await projectDefaultInferenceRouteImpl(withMainRoster(config));
 }
 
 function codexPluginMetadataSnapshot(homeScope: "agent" | "user") {
@@ -218,7 +248,12 @@ describe("applySystemAgentModelSelection", () => {
 
   it("pins the verified credential without creating a global visibility map", async () => {
     const result = await applySystemAgentModelSelection({
-      config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-5.5" },
+          list: [{ id: "main", default: true }],
+        },
+      },
       model: "openai/gpt-5.5",
       authProfileId: "openai:verified",
     });
@@ -233,7 +268,10 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     vi.resetAllMocks();
     mocks.events.length = 0;
     const config: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        list: [{ id: "main", default: true }],
+      },
     };
     mocks.state.initialSnapshot = snapshot("probe", config);
     mocks.state.commitConfig = structuredClone(config);
@@ -246,11 +284,15 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       snapshot: await mocks.readVerifiedSnapshot(),
     }));
     mocks.commit.mockImplementation(async (params: { transform: CommitTransform }) => {
-      const result = await params.transform(structuredClone(mocks.state.commitConfig), {
-        previousHash: mocks.state.commitPreviousHash,
-        snapshot: mocks.state.commitSnapshot,
-        attempt: 0,
-      });
+      const currentConfig = structuredClone(mocks.state.commitConfig);
+      const result = await params.transform(
+        mocks.state.commitPreviousHash === null ? currentConfig : withMainRoster(currentConfig),
+        {
+          previousHash: mocks.state.commitPreviousHash,
+          snapshot: mocks.state.commitSnapshot,
+          attempt: 0,
+        },
+      );
       mocks.events.push("commit");
       mocks.state.persistedConfig = result.nextConfig;
       return {
@@ -323,8 +365,101 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(result.configHashBefore).toBeNull();
     expect(result.bootstrapPending).toBe(true);
     expect(mocks.state.persistedConfig).toMatchObject({
-      agents: { defaults: { workspace: "/tmp/openclaw-workspace" } },
+      agents: {
+        defaults: { workspace: "/tmp/openclaw-workspace" },
+        list: [{ id: "main", default: true }],
+      },
     });
+    expect(result.agentId).toBe("main");
+  });
+
+  it("stages first-agent creation independently on every transaction attempt", async () => {
+    const absent = snapshot(null, {});
+    mocks.state.initialSnapshot = absent;
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = absent;
+    mocks.state.commitPreviousHash = null;
+    const candidates: OpenClawConfig[] = [];
+    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
+      const first = await params.transform(
+        {},
+        {
+          previousHash: null,
+          snapshot: absent,
+          attempt: 0,
+        },
+      );
+      candidates.push(first.nextConfig);
+      expect(mocks.state.persistedConfig).toBeUndefined();
+      expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+      const second = await params.transform(
+        {},
+        {
+          previousHash: null,
+          snapshot: absent,
+          attempt: 1,
+        },
+      );
+      candidates.push(second.nextConfig);
+      mocks.state.persistedConfig = second.nextConfig;
+      return {
+        nextConfig: second.nextConfig,
+        path: "/tmp/openclaw.json",
+        previousHash: null,
+        persistedHash: "persisted",
+        result: second.result,
+      };
+    });
+
+    await applySystemAgentSetup(
+      baseParams({ expectedConfigHash: null, agentName: "Research Buddy" }),
+    );
+
+    expect(candidates.map((candidate) => candidate.agents?.list)).toEqual([
+      [expect.objectContaining({ id: "research-buddy", default: true })],
+      [expect.objectContaining({ id: "research-buddy", default: true })],
+    ]);
+    expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the fleet unchanged when the first-agent candidate fails", async () => {
+    const absent = snapshot(null, {});
+    mocks.state.initialSnapshot = absent;
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = absent;
+    mocks.state.commitPreviousHash = null;
+    mocks.configureGateway.mockRejectedValueOnce(new Error("gateway candidate failed"));
+
+    await expect(
+      applySystemAgentSetup(baseParams({ expectedConfigHash: null, agentName: "Research Buddy" })),
+    ).rejects.toThrow("gateway candidate failed");
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("uses the roster supplied by the setup patch instead of stale staged metadata", async () => {
+    const absent = snapshot(null, {});
+    mocks.state.initialSnapshot = absent;
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = absent;
+    mocks.state.commitPreviousHash = null;
+
+    const result = await applySystemAgentSetup(
+      baseParams({
+        expectedConfigHash: null,
+        agentName: "Research Buddy",
+        configPatch: { agents: { list: [{ id: "ops", default: true }] } },
+      }),
+    );
+
+    expect(result.agentId).toBe("ops");
+    expect(mocks.state.persistedConfig?.agents?.list).toEqual([{ id: "ops", default: true }]);
+    expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
+      "/tmp/openclaw-workspace",
+      runtime,
+      expect.objectContaining({ agentId: "ops" }),
+    );
   });
 
   it("does not mistake a proposal-created roster for an existing fleet", async () => {
@@ -338,13 +473,13 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       baseParams({
         expectedConfigHash: null,
         workspace: "/tmp/requested-workspace",
-        configPatch: { agents: { entries: { main: {} } } },
+        configPatch: { agents: { entries: { main: { default: true } } } },
       }),
     );
 
     expect(mocks.state.persistedConfig?.agents).toMatchObject({
       defaults: { workspace: "/tmp/requested-workspace" },
-      entries: { main: {} },
+      entries: { main: { default: true } },
     });
   });
 
@@ -517,7 +652,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig).toMatchObject({
       agents: {
         defaults: {
-          workspace: "/tmp/openclaw-workspace",
           maxConcurrent: 7,
           model: { primary: "openai/gpt-5.5" },
         },
@@ -633,12 +767,12 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       return snapshot("persisted", mocks.state.persistedConfig ?? concurrent);
     });
     mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
-      await params.transform(initial, {
+      await params.transform(withMainRoster(initial), {
         previousHash: "hash-1",
         snapshot: initialSnapshot,
         attempt: 0,
       });
-      const result = await params.transform(concurrent, {
+      const result = await params.transform(withMainRoster(concurrent), {
         previousHash: "hash-2",
         snapshot: concurrentSnapshot,
         attempt: 1,
@@ -660,7 +794,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.configureGateway).toHaveBeenCalledTimes(2);
     expect(mocks.configureGateway).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        baseConfig: concurrent,
+        baseConfig: withMainRoster(concurrent),
         localPort: 19000,
         quickstartGateway: expect.objectContaining({ port: 19000, bind: "lan" }),
       }),
@@ -696,14 +830,15 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(driftedSnapshot);
     mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
-      const result = await params.transform(initial, {
+      const result = await params.transform(withMainRoster(initial), {
         previousHash: "probe",
         snapshot: initialSnapshot,
         attempt: 0,
       });
-      mocks.state.persistedConfig = drifted;
+      const persistedDrift = withMainRoster(drifted);
+      mocks.state.persistedConfig = persistedDrift;
       return {
-        nextConfig: drifted,
+        nextConfig: persistedDrift,
         path: "/tmp/openclaw.json",
         previousHash: "probe",
         persistedHash: "persisted",
@@ -735,13 +870,16 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     } satisfies OpenClawConfig;
     const initialSnapshot = {
       ...snapshot("probe", sourceConfig),
-      runtimeConfig: materializePluginDefaults(sourceConfig, pluginMetadataSnapshot),
+      runtimeConfig: materializePluginDefaults(
+        withMainRoster(sourceConfig),
+        pluginMetadataSnapshot,
+      ),
     };
     const persistedSnapshot = () => {
       const persisted = mocks.state.persistedConfig ?? sourceConfig;
       return {
         ...snapshot("persisted", persisted),
-        runtimeConfig: materializePluginDefaults(persisted, pluginMetadataSnapshot),
+        runtimeConfig: materializePluginDefaults(withMainRoster(persisted), pluginMetadataSnapshot),
       };
     };
     mocks.state.initialSnapshot = initialSnapshot;
@@ -776,7 +914,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       const persisted = mocks.state.persistedConfig ?? sourceConfig;
       return {
         ...snapshot("persisted", persisted),
-        runtimeConfig: materializedConfig,
+        runtimeConfig: withMainRoster(materializedConfig),
       };
     };
     mocks.state.initialSnapshot = verifiedSnapshot;
@@ -791,7 +929,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     }));
     const validate = vi
       .spyOn(configModule, "validateConfigObjectWithPlugins")
-      .mockReturnValue({ ok: true, config: materializedConfig, warnings: [] });
+      .mockReturnValue({ ok: true, config: withMainRoster(materializedConfig), warnings: [] });
 
     try {
       await expect(
@@ -826,7 +964,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
     mocks.readVerifiedSnapshot.mockImplementation(async () => snapshot(currentHash, currentConfig));
     mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
-      const result = await params.transform(currentConfig, {
+      const result = await params.transform(withMainRoster(currentConfig), {
         previousHash: currentHash,
         snapshot: snapshot(currentHash, currentConfig),
         attempt: 0,

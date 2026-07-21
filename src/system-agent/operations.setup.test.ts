@@ -12,35 +12,17 @@ import {
   isPersistentSystemAgentOperation,
   type SystemAgentCommandDeps,
 } from "./operations.js";
+import {
+  expectAuditRecord,
+  expectRecordFields,
+  requireRecord,
+} from "./operations.setup.test-support.js";
 import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
 function readLastAuditEntry(): unknown {
   return listSystemAgentAuditEntriesForTests().at(-1)?.value;
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectAuditRecord(
-  audit: unknown,
-  fields: Record<string, unknown>,
-  detailFields: Record<string, unknown>,
-) {
-  const auditRecord = requireRecord(audit, "audit record");
-  expectRecordFields(auditRecord, fields);
-  expectRecordFields(requireRecord(auditRecord.details, "audit details"), detailFields);
 }
 
 const mockConfig = vi.hoisted(() => {
@@ -191,6 +173,7 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: true,
+      agentId: "main",
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -338,7 +321,10 @@ describe("parseSystemAgentOperation", () => {
 
   it("preserves unrelated concurrent edits after re-verifying the same setup route", async () => {
     mockConfig.setConfig({
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        list: [{ id: "ops", default: true }],
+      },
       gateway: { port: 18789 },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -347,6 +333,7 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      agentId: "ops",
       lines: [],
     }));
 
@@ -360,7 +347,10 @@ describe("parseSystemAgentOperation", () => {
           loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
           verifyInferenceConfig: async () => {
             mockConfig.setConfig({
-              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+              agents: {
+                defaults: { model: { primary: "openai/gpt-5.5" } },
+                list: [{ id: "ops", default: true }],
+              },
               gateway: { port: 19000 },
             });
             return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
@@ -370,6 +360,7 @@ describe("parseSystemAgentOperation", () => {
     );
 
     expect(result.applied).toBe(true);
+    expect(result.agentId).toBe("ops");
     expect(mockConfig.currentConfig()).toMatchObject({ gateway: { port: 19000 } });
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ expectedInferenceRoute: expect.any(Object) }),
@@ -410,6 +401,7 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      agentId: "main",
       lines: ["Workspace: /tmp/work"],
     }));
 

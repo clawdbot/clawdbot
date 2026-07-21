@@ -106,6 +106,7 @@ function setupApplyResult() {
     configHashBefore: null,
     configHashAfter: null,
     bootstrapPending: false,
+    agentId: "main",
     lines: [],
   };
 }

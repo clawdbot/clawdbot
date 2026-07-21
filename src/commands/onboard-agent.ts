@@ -1,7 +1,58 @@
 // First-run onboarding agent creation through the canonical agent service.
 import { createAgent } from "../agents/agent-create.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
+import { createAgentIdentityConfig, sanitizeAgentIdentityLine } from "../agents/identity-file.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { createMergePatch } from "../config/io.write-prepare.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { resolveUserPath } from "../utils.js";
+import { applyAgentConfig } from "./agents.config.js";
+
+export type StagedOnboardingAgent = {
+  agentId: string;
+  name: string;
+  workspace: string;
+  agentDir: string;
+};
+
+/** Stage a first roster entry without mutating config or workspace state. */
+export function stageOnboardingAgent(params: {
+  config: OpenClawConfig;
+  name: string;
+  workspace: string;
+  agentDir?: string;
+}): { config: OpenClawConfig; agent?: StagedOnboardingAgent } {
+  if ((params.config.agents?.list?.length ?? 0) > 0) {
+    return { config: params.config };
+  }
+  const rawName = params.name.trim();
+  if (!rawName) {
+    throw new Error("agent name is required");
+  }
+  const agentId = normalizeAgentId(rawName);
+  if (isReservedSystemAgentId(agentId)) {
+    throw new Error(`"${agentId}" is reserved`);
+  }
+  const name = sanitizeAgentIdentityLine(rawName);
+  const workspace = resolveUserPath(params.workspace);
+  const agentDir = params.agentDir?.trim()
+    ? resolveUserPath(params.agentDir)
+    : resolveAgentDir(params.config, agentId);
+  const identity = createAgentIdentityConfig({ name }) ?? { name };
+  return {
+    config: applyAgentConfig(params.config, {
+      agentId,
+      name,
+      workspace,
+      agentDir,
+      identity,
+    }),
+    agent: { agentId, name, workspace, agentDir },
+  };
+}
 
 export async function ensureOnboardingAgent(params: {
   config: OpenClawConfig;
@@ -11,6 +62,12 @@ export async function ensureOnboardingAgent(params: {
   if ((params.config.agents?.list?.length ?? 0) > 0) {
     return { config: params.config };
   }
+  const before = await readConfigFileSnapshot();
+  if (before.exists && !before.valid) {
+    throw new Error("Cannot create the first agent from an invalid OpenClaw config.");
+  }
+  const baseConfig = before.exists ? (before.sourceConfig ?? before.config) : {};
+  const proposalPatch = createMergePatch(baseConfig, params.config);
   const result = await createAgent({
     name: params.name,
     workspace: params.workspace,
@@ -24,8 +81,16 @@ export async function ensureOnboardingAgent(params: {
   if (!snapshot.valid) {
     throw new Error("Agent creation wrote an invalid OpenClaw config.");
   }
+  const persisted = snapshot.sourceConfig ?? snapshot.config;
+  const merged = applyMergePatch(persisted, proposalPatch) as OpenClawConfig;
   return {
-    config: snapshot.sourceConfig ?? snapshot.config,
+    config: {
+      ...merged,
+      agents: {
+        ...merged.agents,
+        list: persisted.agents?.list,
+      },
+    },
     agentId: result.agentId,
     bootstrapPending: result.bootstrapPending,
   };

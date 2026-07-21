@@ -402,6 +402,7 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: true,
+      agentId: "main",
       lines: ["Workspace: /tmp/hatch-work"],
     }));
     const engine = new SystemAgentChatEngine({
@@ -466,6 +467,7 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: false,
+      agentId: "main",
       lines: ["Workspace: /tmp/established-work"],
     }));
     const engine = new SystemAgentChatEngine({
@@ -507,6 +509,7 @@ describe("SystemAgentChatEngine", () => {
         configHashBefore: "before",
         configHashAfter: "after",
         bootstrapPending: true,
+        agentId: "main",
         lines: ["Workspace: /tmp/hatch-work"],
       };
     });
@@ -602,6 +605,7 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: null,
       configHashAfter: "after",
       bootstrapPending: false,
+      agentId: "main",
       lines: ["Workspace: /tmp/work"],
     }));
     expect(
@@ -1624,6 +1628,7 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: false,
+      agentId: "main",
       lines: ["Workspace: /tmp/new-work"],
     }));
     let pendingOperation = "";

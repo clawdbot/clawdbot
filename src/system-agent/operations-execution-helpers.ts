@@ -480,7 +480,7 @@ export async function executeSetup(
     );
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
-  const agentId = normalizeAgentId(operation.agentId?.trim() || "main");
+  const requestedAgentName = normalizeAgentId(operation.agentId?.trim() || "main");
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
@@ -497,7 +497,7 @@ export async function executeSetup(
           await applySetup(
             {
               workspace,
-              agentName: agentId,
+              agentName: requestedAgentName,
               expectedInferenceRoute: verified.route,
               surface,
               runtime: ctx.runtime,
@@ -506,6 +506,7 @@ export async function executeSetup(
           ),
       );
       const after = await readConfigFileSnapshotLazy();
+      const agentId = applied.agentId;
       ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
         ctx.runtime.log(line);

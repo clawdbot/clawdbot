@@ -115,6 +115,7 @@ function setupDeps(params: {
         configHashBefore: null,
         configHashAfter: null,
         bootstrapPending: false,
+        agentId: "main",
         lines: [],
       })),
     launchHatchTui: vi.fn(async () => undefined),
