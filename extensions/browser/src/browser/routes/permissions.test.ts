@@ -1,6 +1,5 @@
 // Browser tests cover permissions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "../errors.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const cdpMocks = vi.hoisted(() => ({
@@ -43,6 +42,11 @@ vi.mock("../pw-ai-module.js", () => ({
   getPwAiModule: pwMocks.getPwAiModule,
 }));
 
+// The Browser Vitest project is non-isolated. Reload after installing mocks so
+// an earlier routes/index import cannot retain the real CDP dependencies.
+vi.resetModules();
+
+const { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } = await import("../errors.js");
 const { registerBrowserPermissionRoutes } = await import("./permissions.js");
 
 function createProfileContext(overrides: Record<string, unknown> = {}) {
