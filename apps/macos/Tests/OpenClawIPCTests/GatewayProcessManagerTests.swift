@@ -960,7 +960,7 @@ struct GatewayProcessManagerTests {
                         task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                     })
             })
-        let url = try #require(URL(string: "ws://example.invalid"))
+        let url = try #require(URL(string: "ws://127.0.0.1:9"))
         let connection = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
@@ -1120,7 +1120,7 @@ struct GatewayProcessManagerTests {
                         task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                     })
             })
-        let url = try #require(URL(string: "ws://example.invalid"))
+        let url = try #require(URL(string: "ws://127.0.0.1:9"))
         let connection = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))

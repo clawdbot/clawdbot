@@ -439,6 +439,27 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: response)
     }
 
+    func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        let request = OpenClawChatGatewayRequests.listSessionBranches(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID)
+        let response = try await self.gateway.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionBranchesResponse.self, from: response)
+    }
+
+    func switchSessionBranch(sessionKey: String, agentID: String?, leafEntryId: String) async throws {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.switchSessionBranch(
+            sessionKey: target.sessionKey,
+            agentID: agentID ?? target.agentID,
+            leafEntryId: leafEntryId)
+        _ = try await self.requestSessionMutation(request)
+    }
+
     func setActiveSessionKey(_ sessionKey: String) async throws {
         let target = self.sessionTarget(for: sessionKey)
         let request = OpenClawChatGatewayRequests.subscribeSessionMessages(

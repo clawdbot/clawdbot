@@ -571,6 +571,40 @@ public struct OpenClawChatForkAtMessageResponse: Codable, Sendable {
     public let editorText: String?
 }
 
+public struct OpenClawChatSessionBranch: Codable, Sendable, Equatable, Identifiable {
+    public let leafEntryId: String
+    public let headline: String
+    public let messageCount: Int
+    public let updatedAt: String?
+    public let active: Bool
+
+    public var id: String {
+        self.leafEntryId
+    }
+
+    public init(
+        leafEntryId: String,
+        headline: String,
+        messageCount: Int,
+        updatedAt: String?,
+        active: Bool)
+    {
+        self.leafEntryId = leafEntryId
+        self.headline = headline
+        self.messageCount = messageCount
+        self.updatedAt = updatedAt
+        self.active = active
+    }
+}
+
+public struct OpenClawChatSessionBranchesResponse: Codable, Sendable {
+    public let branches: [OpenClawChatSessionBranch]
+
+    public init(branches: [OpenClawChatSessionBranch]) {
+        self.branches = branches
+    }
+}
+
 public struct OpenClawChatEventPayload: Codable, Sendable {
     public let runId: String?
     public let sessionKey: String?

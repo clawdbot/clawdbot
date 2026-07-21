@@ -359,6 +359,36 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: self.mutationTimeoutMs)
     }
 
+    public static func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) -> OpenClawChatGatewayRequest
+    {
+        let params = self.sessionParams(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            key: "sessionKey")
+        return OpenClawChatGatewayRequest(
+            method: "sessions.branches.list",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func switchSessionBranch(
+        sessionKey: String,
+        agentID: String?,
+        leafEntryId: String) -> OpenClawChatGatewayRequest
+    {
+        var params = self.sessionParams(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            key: "sessionKey")
+        self.add(leafEntryId, to: &params, key: "leafEntryId")
+        return OpenClawChatGatewayRequest(
+            method: "sessions.branches.switch",
+            params: params,
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
     public static func subscribeSessionMessages(
         sessionKey: String,
         agentID: String?) -> OpenClawChatGatewayRequest

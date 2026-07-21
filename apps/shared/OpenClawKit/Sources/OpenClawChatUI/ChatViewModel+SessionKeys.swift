@@ -218,6 +218,29 @@ extension OpenClawChatViewModel {
         return "\(provider)/\(modelID)"
     }
 
+    func placeholderSession(key: String) -> OpenClawChatSessionEntry {
+        OpenClawChatSessionEntry(
+            key: key,
+            kind: nil,
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: nil,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: nil)
+    }
+
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
@@ -232,7 +255,7 @@ extension OpenClawChatViewModel {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(placeholderSession(key: mainSessionKey))
+            result.append(self.placeholderSession(key: mainSessionKey))
             included.insert(mainSessionKey)
         }
 
@@ -250,7 +273,7 @@ extension OpenClawChatViewModel {
             if let current = sorted.first(where: { $0.key == self.sessionKey }) {
                 result.append(current)
             } else {
-                result.append(placeholderSession(key: sessionKey))
+                result.append(self.placeholderSession(key: sessionKey))
             }
         }
 

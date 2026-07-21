@@ -2,8 +2,10 @@
 
 ## Install
 
-- App: Preferences -> Advanced -> Install CLI
-- Repo: ./bin/install-codexbar-cli.sh
+- macOS and Linux Homebrew formula: `brew install steipete/tap/codexbar`
+- Linux AUR package: `yay -S codexbar-cli`
+- macOS and Linux tarballs: [CodexBar releases](https://github.com/steipete/CodexBar/releases)
+- macOS app: Preferences -> Advanced -> Install CLI
 
 ## Commands
 

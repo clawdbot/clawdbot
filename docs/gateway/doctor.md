@@ -283,6 +283,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `browser.profiles.*.driver: "extension"`                                                         | `"existing-session"`                                                          |
     | `browser.relayBindHost`                                                                          | removed (legacy Chrome extension relay setting)                             |
     | `mcp.servers.*.type` (CLI-native aliases)                                                        | `mcp.servers.*.transport`                                                    |
+    | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
     | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |
     | top-level `defaultModel`                                                                         | `agents.defaults.model`                                                      |
     | `messages.messagePrefix`                                                                         | `channels.whatsapp.messagePrefix`                                            |

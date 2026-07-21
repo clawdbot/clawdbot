@@ -1508,7 +1508,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     raw = await readStdinText();
   } else {
     try {
-      raw = readConfigMutationFileSync(file as string);
+      raw = readConfigMutationFileSync(file as string, "--file");
     } catch (err) {
       if (hasErrnoCode(err, "ENOENT")) {
         throw new Error(`--file not found: ${file}`, { cause: err });

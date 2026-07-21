@@ -80,6 +80,22 @@ public final class OpenClawChatViewModel {
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
     /// session rows and would otherwise stay stale until reconnect.
     public internal(set) var sessionGroupsRevision = 0
+    public internal(set) var sessionBranches: [OpenClawChatSessionBranch] = []
+    public internal(set) var isLoadingSessionBranches = false
+    @ObservationIgnored
+    var sessionBranchesRefreshGeneration: UInt64 = 0
+    struct SessionBranchSwitchActivity: Equatable {
+        let session: SessionSnapshot
+        let generation: UInt64
+    }
+
+    var sessionBranchSwitchActivity: SessionBranchSwitchActivity?
+    @ObservationIgnored
+    var nextSessionBranchSwitchGeneration: UInt64 = 0
+
+    var isSwitchingSessionBranch: Bool {
+        self.sessionBranchSwitchActivity != nil
+    }
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
@@ -139,6 +155,10 @@ public final class OpenClawChatViewModel {
     var outboxCommandIDsByMessageID: [UUID: String] = [:]
     @ObservationIgnored
     var outboxMessageIDsByCommandID: [String: UUID] = [:]
+    @ObservationIgnored
+    var outboxFailureVersionsByMessageID: [
+        UUID: (attemptVersion: Int, retryCount: Int, lastError: String?)
+    ] = [:]
     /// Recent canonical keys let the MainActor resolve proof that arrives
     /// after SQLite cancellation commits but before its UI continuation runs.
     @ObservationIgnored
@@ -147,6 +167,25 @@ public final class OpenClawChatViewModel {
     var isFlushingOutbox = false
     @ObservationIgnored
     var isOutboxFlushRequestedWhileActive = false
+    @ObservationIgnored
+    var reconciledOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
+    @ObservationIgnored
+    var reconcilingOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
+    @ObservationIgnored
+    var outboxBranchReconcileRetryAttempts: [OpenClawChatOutboxScope: Int] = [:]
+    @ObservationIgnored
+    var outboxBranchReconcileRetryTasks: [OpenClawChatOutboxScope: Task<Void, Never>] = [:]
+    @ObservationIgnored
+    var outboxBranchReconcileRetryDelaysMs: [UInt64] = [250, 1000, 4000, 16000, 30000]
+    @ObservationIgnored
+    var outboxBranchConnectionGeneration: UInt64 = 0
+    @ObservationIgnored
+    var hasEstablishedTransportHealth = false
+    @ObservationIgnored
+    var bootstrapOutboxBranchStateCapture: (
+        generation: UInt64,
+        session: SessionSnapshot,
+        task: Task<OpenClawChatOutboxBranchState?, Never>)?
     @ObservationIgnored
     var cancelingOutboxCommandIDs: Set<String> = []
     @ObservationIgnored
@@ -160,7 +199,6 @@ public final class OpenClawChatViewModel {
     /// visible session. Until then the in-memory outbox state is blind to
     /// rows persisted by an earlier process, so the FIFO send gate must
     /// assume a backlog exists.
-    @ObservationIgnored
     var hasRestoredOutboxMessages = false
     @ObservationIgnored
     nonisolated(unsafe) var outboxRetryTask: Task<Void, Never>?
@@ -498,6 +536,9 @@ public final class OpenClawChatViewModel {
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
         self.outboxRetryTask?.cancel()
+        for task in self.outboxBranchReconcileRetryTasks.values {
+            task.cancel()
+        }
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
         self.questionRefreshRetryTask?.cancel()
@@ -641,7 +682,7 @@ public final class OpenClawChatViewModel {
             contractRoutingChanged
         guard bootstrapIdentityChanged else {
             if contractChanged, self.healthOK {
-                flushOutboxIfNeeded()
+                reconcilePendingOutboxBranchScopes()
             }
             return
         }
@@ -775,11 +816,75 @@ extension OpenClawChatViewModel {
             (!contractSensitive || self.sessionRoutingContract == snapshot.sessionRoutingContract)
     }
 
+    func beginSessionBranchSwitchActivity(for session: SessionSnapshot) -> SessionBranchSwitchActivity {
+        self.nextSessionBranchSwitchGeneration &+= 1
+        let activity = SessionBranchSwitchActivity(
+            session: session,
+            generation: self.nextSessionBranchSwitchGeneration)
+        self.sessionBranchSwitchActivity = activity
+        return activity
+    }
+
+    func isCurrentSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) -> Bool {
+        self.sessionBranchSwitchActivity == activity && self.isCurrentSession(activity.session)
+    }
+
+    func endSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) {
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        self.sessionBranchSwitchActivity = nil
+        self.flushOutboxIfNeeded()
+    }
+
+    func reconcileSessionBranchChange(
+        _ activity: SessionBranchSwitchActivity,
+        confirmedLeafEntryID: String? = nil,
+        confirmFromBranchRefresh: Bool = false) async
+    {
+        var stateApplied = true
+        if let confirmedLeafEntryID {
+            stateApplied = await self.confirmOutboxBranchChange(
+                activity.session,
+                activeLeafEntryID: confirmedLeafEntryID)
+            if !stateApplied {
+                await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                    activity.session,
+                    branchingUnsupported: false)
+            }
+        } else if confirmFromBranchRefresh {
+            stateApplied = await self.refreshSessionBranches(confirmingBranchChange: true)
+        }
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        if stateApplied {
+            for _ in 0..<2 {
+                stateApplied = await self.refreshHistoryAfterRun(
+                    historyRequest: self.beginHistoryRequest(for: activity.session)).applied
+                guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+                if stateApplied { break }
+            }
+        }
+        if stateApplied, !confirmFromBranchRefresh {
+            stateApplied = await self.refreshSessionBranches()
+        }
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        guard stateApplied else {
+            // After the server-side branch changes, never keep partially consistent local state.
+            // Either install the new state completely or reload the session from scratch.
+            self.advanceSessionGeneration()
+            self.clearSessionOwnedState()
+            self.startBootstrap(paintCachedTranscript: false)
+            return
+        }
+        self.errorText = nil
+    }
+
     private func isCurrentBootstrap(_ context: BootstrapContext) -> Bool {
         self.bootstrapGeneration == context.id && self.isCurrentSession(context.session)
     }
 
-    private func startBootstrap(sessionKey requestedSessionKey: String? = nil) {
+    private func startBootstrap(
+        sessionKey requestedSessionKey: String? = nil,
+        paintCachedTranscript: Bool = true)
+    {
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard sessionKey == self.sessionKey else { return }
         self.unreadPatchGuard.activate(key: self.sessionMutationIdentity(for: sessionKey))
@@ -788,6 +893,7 @@ extension OpenClawChatViewModel {
         self.isLoading = true
         self.errorText = nil
         self.invalidateSessionMetadataReadiness()
+        self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
         clearPendingRuns(reason: nil)
         self.pendingToolCallsById = [:]
@@ -799,7 +905,17 @@ extension OpenClawChatViewModel {
         let context = BootstrapContext(
             id: bootstrapGeneration,
             historyRequest: historyRequest)
-        paintFromCacheIfNeeded(session: context.session)
+        let captureTask = Task { [weak self] in
+            await self?.captureOutboxBranchState(for: context.session)
+        }
+        self.bootstrapOutboxBranchStateCapture = (
+            generation: context.id,
+            session: context.session,
+            task: captureTask)
+        self.pauseOutboxBranchScope(context.session)
+        if paintCachedTranscript {
+            paintFromCacheIfNeeded(session: context.session)
+        }
         restoreOutboxMessages(session: context.session)
         self.bootstrapTask = Task { [weak self] in
             guard let self else { return }
@@ -815,6 +931,15 @@ extension OpenClawChatViewModel {
             }
         }
         do {
+            guard let capture = self.bootstrapOutboxBranchStateCapture,
+                  capture.generation == context.id
+            else { return }
+            let preBootstrapBranchState = await capture.task.value
+            guard self.isCurrentBootstrap(context) else { return }
+            async let branchRefresh = self.refreshSessionBranches(
+                for: context.session,
+                preBootstrapBranchState: preBootstrapBranchState)
+
             await self.syncActiveSessionSubscription(startingWith: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
 
@@ -827,6 +952,8 @@ extension OpenClawChatViewModel {
                 for: context.historyRequest,
                 preservingOptimisticLocalMessages: false,
                 syncThinkingOptions: true)
+            _ = await branchRefresh
+            guard self.isCurrentBootstrap(context) else { return }
             await pollHealthIfNeeded(
                 force: true,
                 sessionSnapshot: context.session,
@@ -1005,7 +1132,7 @@ extension OpenClawChatViewModel {
             persistSessionsToCache(organized)
             self.readySessionMetadataGeneration = metadataGeneration
             if self.healthOK {
-                flushOutboxIfNeeded()
+                reconcilePendingOutboxBranchScopes()
             }
             return
         }
@@ -1141,6 +1268,9 @@ extension OpenClawChatViewModel {
         clearPlan()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         resetSlashCommandCatalog()
+        self.sessionBranches = []
+        self.isLoadingSessionBranches = false
+        self.sessionBranchSwitchActivity = nil
         clearPendingRuns(reason: nil)
     }
 
@@ -1386,29 +1516,6 @@ extension OpenClawChatViewModel {
         await withCheckedContinuation { continuation in
             self.settingsPatchWaitersByTarget[target, default: []].append(continuation)
         }
-    }
-
-    func placeholderSession(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
     }
 
     func syncSelectedModel() {

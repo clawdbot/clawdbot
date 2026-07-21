@@ -43,15 +43,32 @@ extension OpenClawChatViewModel {
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
                 return
             }
-            if change.reason == "rewind" {
+            if change.reason == "rewind" || change.reason == "branch-switch" {
                 guard let sessionKey = change.sessionKey,
                       self.matchesCurrentSessionKey(
                           incoming: sessionKey,
                           agentId: change.agentId,
                           current: self.sessionKey)
                 else { return }
+                self.replyTarget = nil
+                self.runMessageScopesByRunID.removeAll()
+                self.provisionalFinalMessagesByID.removeAll()
                 let context = self.beginHistoryRequest()
-                Task { await self.refreshHistoryAfterRun(historyRequest: context) }
+                if change.reason == "branch-switch" {
+                    let switchActivity = self.beginSessionBranchSwitchActivity(for: context.session)
+                    Task {
+                        defer { self.endSessionBranchSwitchActivity(switchActivity) }
+                        await self.reconcileSessionBranchChange(
+                            switchActivity,
+                            confirmFromBranchRefresh: true)
+                    }
+                    return
+                }
+                Task {
+                    await self.refreshHistoryAfterRun(historyRequest: context)
+                    guard self.isCurrentSession(context.session) else { return }
+                    await self.refreshSessionBranches(confirmingBranchChange: true)
+                }
                 return
             }
             guard change.reason == "patch" || change.reason == "command-metadata" else { return }
@@ -99,6 +116,7 @@ extension OpenClawChatViewModel {
         // still retire its durable row before this handler returns early.
         confirmOutboxCommands(in: [sanitized])
         guard isCurrentSession else { return }
+        self.observeOutboxTranscriptTip(sanitized, session: self.currentSessionSnapshot())
 
         self.invalidateHistorySnapshots()
         // The active client also receives the gateway's echo of the user turn it

@@ -39,6 +39,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     public let directoryURL: URL
     let cacheQueue: DatabaseQueue
     let stateQueue: DatabaseQueue
+    let outboxChangeHub = OutboxChangeHub()
     private let legacyDirectoryURLs: [URL]
 
     public init(
@@ -106,7 +107,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// removed. No gateway payload is deleted until the registry owner commits.
     public func stageGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try self.stateQueue.read { db in
+        let existingPhase = try stateQueue.read { db in
             try Int.fetchOne(
                 db,
                 sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
@@ -151,7 +152,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// metadata. A failed commit remains staged for startup reconciliation.
     public func commitGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try self.stateQueue.read { db in
+        let existingPhase = try stateQueue.read { db in
             try Int.fetchOne(
                 db,
                 sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
@@ -191,6 +192,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                     ])
             }
             try db.execute(sql: "DELETE FROM outbox_commands WHERE gateway_id = ?", arguments: [gatewayID])
+            try db.execute(sql: "DELETE FROM outbox_branch_scopes WHERE gateway_id = ?", arguments: [gatewayID])
             try db.execute(
                 sql: "DELETE FROM gateway_routing_identity WHERE gateway_id = ?",
                 arguments: [gatewayID])
@@ -341,6 +343,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// Closes both installation-wide handles before a full reset removes the
     /// files. Gateway-scoped deletion keeps the shared handles open.
     public func close() throws {
+        self.outboxChangeHub.finish()
         try self.cacheQueue.close()
         try self.stateQueue.close()
     }
@@ -353,7 +356,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
             try self.removeDatabaseFilesChecked(
                 at: directoryURL.appendingPathComponent(filename, isDirectory: false))
         }
-        for legacyURL in self.legacyDatabaseURLs(in: directoryURL) {
+        for legacyURL in legacyDatabaseURLs(in: directoryURL) {
             try self.removeDatabaseFilesChecked(at: legacyURL)
         }
     }
@@ -386,7 +389,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     }
 
     private func removeLegacyGatewayDatabaseFiles(gatewayID: String) throws {
-        let directories = Set([self.directoryURL] + self.legacyDirectoryURLs)
+        let directories = Set([directoryURL] + self.legacyDirectoryURLs)
         for directoryURL in directories {
             try Self.removeDatabaseFilesChecked(at: Self.legacyPerGatewayDatabaseURL(
                 gatewayID: gatewayID,
@@ -395,7 +398,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     }
 
     private func rejectPreservedSharedLegacyDatabase() throws {
-        let directories = Set([self.directoryURL] + self.legacyDirectoryURLs)
+        let directories = Set([directoryURL] + self.legacyDirectoryURLs)
         guard directories.contains(where: { directoryURL in
             FileManager.default.fileExists(
                 atPath: directoryURL.appendingPathComponent("chat-cache.sqlite").path)
@@ -481,6 +484,54 @@ extension OpenClawClientDatabases {
                     REFERENCES outbox_commands(gateway_id, client_uuid)
                     ON DELETE CASCADE
             );
+            """)
+        }
+        // Additive branch ownership remains local client state. Older app
+        // builds ignore these fields while newer builds fail replay closed.
+        migrator.registerMigration("client-state-branch-ownership-v2") { db in
+            try db.execute(sql: """
+            ALTER TABLE outbox_commands ADD COLUMN branch_epoch INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE outbox_commands ADD COLUMN attempt_version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE outbox_commands ADD COLUMN parked_was_accepted INTEGER NOT NULL DEFAULT 0;
+            CREATE TABLE outbox_branch_scopes(
+                gateway_id TEXT NOT NULL,
+                session_key TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT '',
+                branch_epoch INTEGER NOT NULL DEFAULT 0,
+                last_active_leaf_id TEXT,
+                switch_pending_since REAL,
+                needs_reconciliation INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(gateway_id, session_key, agent_id)
+            );
+            """)
+        }
+        migrator.registerMigration("client-state-branch-revision-v3") { db in
+            try db.execute(sql: """
+            ALTER TABLE outbox_branch_scopes
+                ADD COLUMN branch_state_revision INTEGER NOT NULL DEFAULT 0;
+            """)
+        }
+        migrator.registerMigration("client-state-agent-id-v4") { db in
+            try db.execute(sql: "UPDATE outbox_commands SET agent_id = '' WHERE agent_id IS NULL")
+            try db.execute(sql: "UPDATE outbox_branch_scopes SET agent_id = '' WHERE agent_id IS NULL")
+        }
+        migrator.registerMigration("client-state-outbox-attempt-scope-v5") { db in
+            try db
+                .execute(
+                    sql: "ALTER TABLE outbox_commands ADD COLUMN had_unacknowledged_send INTEGER NOT NULL DEFAULT 0")
+            // Legacy rows with prior attempts may have reached the gateway before a
+            // transport failure; without this evidence a post-park retry would reuse an
+            // idempotency key the old branch may already own.
+            try db.execute(
+                sql: """
+                UPDATE outbox_commands SET had_unacknowledged_send = 1
+                WHERE retry_count > 0 OR status IN ('sending', 'awaiting_confirmation')
+                """)
+            try db.execute(sql: """
+            INSERT OR IGNORE INTO outbox_branch_scopes(
+                gateway_id, session_key, agent_id, branch_epoch, needs_reconciliation
+            )
+            SELECT gateway_id, session_key, agent_id, 0, 1 FROM outbox_commands
             """)
         }
         try migrator.migrate(queue)
@@ -621,7 +672,7 @@ extension OpenClawClientDatabases {
                 try self.writeLegacySnapshot(ownedSnapshot)
                 // Preserve bytes for unregistered gateways rather than
                 // importing or destroying state whose ownership is unknown.
-                let forgottenGatewayHashes = try self.forgottenGatewayHashesForLegacyImport()
+                let forgottenGatewayHashes = try forgottenGatewayHashesForLegacyImport()
                 let allLegacyGatewaysAccountedFor = legacyGatewayIDs.allSatisfy { gatewayID in
                     registeredGatewayIDs?.contains(gatewayID) == true ||
                         forgottenGatewayHashes.contains(Self.gatewayIdentityHash(gatewayID))
@@ -652,7 +703,9 @@ extension OpenClawClientDatabases {
                   name != self.gatewayCacheFilename,
                   name != self.clientStateFilename
             else { return false }
-            if name == "chat-cache.sqlite" { return true }
+            if name == "chat-cache.sqlite" {
+                return true
+            }
             let stem = String(name.dropLast(".sqlite".count))
             return stem.count == 64 && stem.allSatisfy(\.isHexDigit)
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
@@ -802,6 +855,13 @@ extension OpenClawClientDatabases {
                         attachmentBytes,
                     ])
                 guard db.changesCount > 0 else { continue }
+                try db.execute(
+                    sql: """
+                    INSERT OR IGNORE INTO outbox_branch_scopes(
+                        gateway_id, session_key, agent_id, branch_epoch, needs_reconciliation
+                    ) VALUES (?, ?, ?, 0, 1)
+                    """,
+                    arguments: [command.gatewayID, command.sessionKey, command.agentID])
                 for (position, attachment) in command.attachments.enumerated() {
                     try db.execute(
                         sql: """

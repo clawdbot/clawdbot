@@ -5,7 +5,7 @@ import OSLog
 
 private let cacheLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatTranscriptCache")
 
-private final class OutboxChangeHub: @unchecked Sendable {
+final class OutboxChangeHub: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<OpenClawChatOutboxChange>.Continuation] = [:]
 
@@ -96,16 +96,42 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public static let outboxUnknownTargetError = "delivery_target_unknown"
     public static let outboxChangedTargetError = "delivery_target_changed"
 
+    static func outboxDisplayError(_ lastError: String?) -> String? {
+        guard let lastError,
+              let marker = lastError.range(of: "\n# branch-park:")
+        else { return lastError }
+        return String(lastError[..<marker.lowerBound])
+    }
+
     private let databases: OpenClawClientDatabases
     public nonisolated let gatewayID: String
     private var isRetired = false
     private var hasRecoveredInterruptedSends = false
-    private nonisolated let outboxChangeHub = OutboxChangeHub()
+    private nonisolated var outboxChangeHub: OutboxChangeHub {
+        self.databases.outboxChangeHub
+    }
+
+    private nonisolated let storeChangeHub: OutboxChangeHub
+    private nonisolated let storeChangeRelay: Task<Void, Never>
+
     private nonisolated let canonicalMessageProofHub = CanonicalMessageProofHub()
 
     init(databases: OpenClawClientDatabases, gatewayID: String) {
         self.databases = databases
         self.gatewayID = gatewayID
+        let storeChangeHub = OutboxChangeHub()
+        self.storeChangeHub = storeChangeHub
+        let upstream = databases.outboxChangeHub.stream()
+        self.storeChangeRelay = Task {
+            for await change in upstream where change.gatewayID == gatewayID {
+                storeChangeHub.yield(change)
+            }
+        }
+    }
+
+    deinit {
+        storeChangeRelay.cancel()
+        storeChangeHub.finish()
     }
 
     // MARK: - Gateway cache
@@ -235,7 +261,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             else { return true }
             return canonicalMessageIdempotencyKeys.contains(key)
         }
-        await self.writeTranscript(sessionKey: sessionKey, agentID: agentID, messages: canonicalOnly)
+        await writeTranscript(sessionKey: sessionKey, agentID: agentID, messages: canonicalOnly)
     }
 
     public func mergeCanonicalTranscriptMessage(
@@ -328,7 +354,8 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     public func retire() async {
         self.isRetired = true
-        self.outboxChangeHub.finish()
+        self.storeChangeRelay.cancel()
+        self.storeChangeHub.finish()
     }
 }
 
@@ -362,8 +389,8 @@ extension OpenClawChatSQLiteTranscriptCache {
         agentID: String,
         messages: [OpenClawChatMessage]) throws
     {
-        let bounded = self.cacheableMessages(messages)
-        let encoded = try bounded.map(self.encodeJSON)
+        let bounded = cacheableMessages(messages)
+        let encoded = try bounded.map(encodeJSON)
         try db.execute(
             sql: """
             DELETE FROM cached_transcripts
@@ -421,7 +448,7 @@ extension OpenClawChatSQLiteTranscriptCache {
     // MARK: - Client-state outbox
 
     public nonisolated func changes() -> AsyncStream<OpenClawChatOutboxChange> {
-        self.outboxChangeHub.stream()
+        self.storeChangeHub.stream()
     }
 
     public func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
@@ -448,13 +475,18 @@ extension OpenClawChatSQLiteTranscriptCache {
                           commandBytes: attachmentByteCount,
                           queuedBytes: queuedBytes)
                 else { return false }
+                let scope = OpenClawChatOutboxScope(
+                    sessionKey: command.sessionKey,
+                    agentID: command.agentID)
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                let branchState = try Self.readBranchState(db, gatewayID: gatewayID, scope: scope)
                 try db.execute(
                     sql: """
                     INSERT INTO outbox_commands(
                         gateway_id, client_uuid, session_key, delivery_session_key,
                         routing_contract, agent_id, text, thinking, created_at,
-                        status, retry_count, last_error, attachment_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        status, attempt_version, branch_epoch, retry_count, last_error, attachment_bytes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         gatewayID,
@@ -462,11 +494,13 @@ extension OpenClawChatSQLiteTranscriptCache {
                         command.sessionKey,
                         command.deliverySessionKey,
                         command.routingContract ?? "",
-                        command.agentID ?? "",
+                        Self.normalizedAgentID(command.agentID),
                         command.text,
                         command.thinking,
                         command.createdAt,
                         command.status.rawValue,
+                        command.attemptVersion,
+                        branchState.epoch,
                         command.retryCount,
                         command.lastError ?? "",
                         attachmentByteCount,
@@ -519,13 +553,18 @@ extension OpenClawChatSQLiteTranscriptCache {
     @discardableResult
     public func recoverInterruptedSends() async -> Bool {
         guard !self.isRetired else { return false }
-        if self.hasRecoveredInterruptedSends { return true }
+        if self.hasRecoveredInterruptedSends {
+            return true
+        }
         let gatewayID = self.gatewayID
         do {
             try await self.databases.stateQueue.write { db in
+                // A send interrupted by process death may have reached the gateway;
+                // keep that uncertainty so a post-park retry mints a fresh identity.
                 try db.execute(
                     sql: """
-                    UPDATE outbox_commands SET status = 'failed', last_error = ?
+                    UPDATE outbox_commands
+                    SET status = 'failed', last_error = ?, had_unacknowledged_send = 1
                     WHERE gateway_id = ? AND status = 'sending'
                     """,
                     arguments: [Self.outboxUnconfirmedError, gatewayID])
@@ -541,8 +580,11 @@ extension OpenClawChatSQLiteTranscriptCache {
         guard !self.isRetired else { return nil }
         let gatewayID = self.gatewayID
         do {
-            return try await self.databases.stateQueue.write { db in
+            let result = try await databases.stateQueue.write { db -> (
+                OpenClawChatOutboxCommand?,
+                [OpenClawChatOutboxScope]) in
                 try Self.applyOutboxStaleness(db, gatewayID: gatewayID)
+                let expiredScopes = try Self.expireBranchSwitchLeases(db, gatewayID: gatewayID)
                 let active = try Int.fetchOne(
                     db,
                     sql: """
@@ -554,12 +596,18 @@ extension OpenClawChatSQLiteTranscriptCache {
                       let row = try Row.fetchOne(
                           db,
                           sql: """
-                          SELECT * FROM outbox_commands
-                          WHERE gateway_id = ? AND status = 'queued'
+                          SELECT c.*, s.branch_epoch AS scope_branch_epoch
+                          FROM outbox_commands c
+                          LEFT JOIN outbox_branch_scopes s
+                            ON s.gateway_id = c.gateway_id AND s.session_key = c.session_key
+                              AND s.agent_id = c.agent_id
+                          WHERE c.gateway_id = ? AND c.status = 'queued'
+                            AND s.switch_pending_since IS NULL
+                            AND COALESCE(s.needs_reconciliation, 1) = 0
                           ORDER BY created_at, enqueue_sequence LIMIT 1
                           """,
                           arguments: [gatewayID])
-                else { return nil }
+                else { return (nil, expiredScopes) }
                 let id: String = row["client_uuid"]
                 try db.execute(
                     sql: """
@@ -567,24 +615,42 @@ extension OpenClawChatSQLiteTranscriptCache {
                     WHERE gateway_id = ? AND client_uuid = ? AND status = 'queued'
                     """,
                     arguments: [gatewayID, id])
-                guard db.changesCount > 0 else { return nil }
+                guard db.changesCount > 0 else { return (nil, expiredScopes) }
                 var command = try Self.command(from: row, in: db, gatewayID: gatewayID)
                 command.status = .sending
-                return command
+                return (command, expiredScopes)
             }
+            for scope in result.1 {
+                self.outboxChangeHub.yield(.invalidated(gatewayID: gatewayID, scope: scope))
+            }
+            return result.0
         } catch {
             cacheLogger.error("outbox claim failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
 
-    public func markCommandQueued(id: String, retryCount: Int, lastError: String?) async {
-        await self.updateCommandStatus(id: id, status: .queued, retryCount: retryCount, lastError: lastError)
+    public func markCommandQueued(
+        id: String,
+        attemptVersion: Int,
+        retryCount: Int,
+        lastError: String?) async -> OpenClawChatOutboxUpdateResult
+    {
+        await transitionClaimedCommand(
+            id: id,
+            attemptVersion: attemptVersion,
+            status: .queued,
+            retryCount: retryCount,
+            lastError: lastError)
     }
 
-    public func markCommandAwaitingConfirmation(id: String) async -> OpenClawChatOutboxUpdateResult {
-        await self.transitionClaimedCommand(
+    public func markCommandAwaitingConfirmation(
+        id: String,
+        attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult
+    {
+        await transitionClaimedCommand(
             id: id,
+            attemptVersion: attemptVersion,
             status: .awaitingConfirmation,
             retryCount: 0,
             lastError: nil)
@@ -592,11 +658,13 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     public func markCommandFailedIfPresent(
         id: String,
+        attemptVersion: Int,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
-        await self.transitionClaimedCommand(
+        await transitionClaimedCommand(
             id: id,
+            attemptVersion: attemptVersion,
             status: .failed,
             retryCount: retryCount,
             lastError: lastError)
@@ -604,9 +672,11 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     public func markCommandRetriedIfPresent(
         id: String,
+        expectation: OpenClawChatOutboxRetryExpectation,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String,
+        replacementID: String?) async -> OpenClawChatOutboxUpdateResult
     {
         guard !self.isRetired else { return .unavailable }
         let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
@@ -621,22 +691,63 @@ extension OpenClawChatSQLiteTranscriptCache {
         let gatewayID = self.gatewayID
         do {
             return try await self.databases.stateQueue.write { db in
+                guard let row = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT session_key, parked_was_accepted, had_unacknowledged_send, last_error
+                    FROM outbox_commands
+                    WHERE gateway_id = ? AND client_uuid = ? AND status = 'failed'
+                      AND attempt_version = ? AND retry_count = ? AND last_error = ?
+                    """,
+                    arguments: [
+                        gatewayID,
+                        id,
+                        expectation.attemptVersion,
+                        expectation.retryCount,
+                        expectation.lastError ?? "",
+                    ])
+                else { return .superseded }
+                let previousSessionKey: String = row["session_key"]
+                let retryScope = OpenClawChatOutboxScope(
+                    sessionKey: previousSessionKey,
+                    agentID: normalizedAgentID)
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: retryScope)
+                let branchState = try Self.readBranchState(db, gatewayID: gatewayID, scope: retryScope)
+                let lastError: String = row["last_error"]
+                let wasBranchParked = lastError.contains("\n# branch-park:")
+                let parkedWasAccepted: Int = row["parked_was_accepted"]
+                let hadUnacknowledgedSend: Int = row["had_unacknowledged_send"]
+                let wasPossiblyAccepted = wasBranchParked &&
+                    (parkedWasAccepted != 0 || hadUnacknowledgedSend != 0)
+                let normalizedReplacementID = replacementID?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let nextID = normalizedReplacementID?.isEmpty == false ? normalizedReplacementID! : UUID().uuidString
+                let updateID = wasPossiblyAccepted ? nextID : id
                 try db.execute(
                     sql: """
                     UPDATE outbox_commands
-                    SET status = 'queued', retry_count = 0, last_error = '', created_at = ?,
+                    SET client_uuid = ?, status = 'queued',
+                        attempt_version = ?,
+                        branch_epoch = ?, parked_was_accepted = 0, had_unacknowledged_send = 0,
+                        retry_count = 0, last_error = '', created_at = ?,
                         agent_id = ?, delivery_session_key = ?, routing_contract = ?
                     WHERE gateway_id = ? AND client_uuid = ? AND status = 'failed'
+                      AND attempt_version = ? AND retry_count = ? AND last_error = ?
                     """,
                     arguments: [
+                        updateID,
+                        wasPossiblyAccepted ? 1 : expectation.attemptVersion + 1,
+                        branchState.epoch,
                         Date().timeIntervalSince1970,
                         normalizedAgentID,
                         normalizedDeliverySessionKey,
                         normalizedRoutingContract,
                         gatewayID,
                         id,
+                        expectation.attemptVersion,
+                        expectation.retryCount,
+                        expectation.lastError ?? "",
                     ])
-                return db.changesCount > 0 ? .updated : .missing
+                return db.changesCount > 0 ? .updated : .superseded
             }
         } catch {
             return .unavailable
@@ -649,7 +760,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         let gatewayID = self.gatewayID
         let proofHub = self.canonicalMessageProofHub
         do {
-            let (deleted, isProven) = try await self.databases.stateQueue.writeWithoutTransaction { db in
+            let (deleted, isProven) = try await databases.stateQueue.writeWithoutTransaction { db in
                 let isProven = proofHub.lockProofDecision(for: messageKey)
                 defer { proofHub.unlockProofDecision() }
                 var deleted = false
@@ -667,38 +778,292 @@ extension OpenClawChatSQLiteTranscriptCache {
             }
             guard deleted else { return isProven ? .confirmed : .missing }
             if isProven {
-                self.outboxChangeHub.yield(.confirmed(id: id))
+                self.outboxChangeHub.yield(.confirmed(gatewayID: gatewayID, id: id))
                 return .confirmed
             }
-            self.outboxChangeHub.yield(.canceled(id: id))
+            self.outboxChangeHub.yield(.canceled(gatewayID: gatewayID, id: id))
             return .updated
         } catch {
             return .unavailable
         }
     }
 
-    public func confirmCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
+    public func confirmCommand(
+        id: String,
+        attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult
+    {
         guard !self.isRetired else { return .unavailable }
         let gatewayID = self.gatewayID
         do {
-            let deleted = try await self.databases.stateQueue.write { db in
+            let deleted = try await databases.stateQueue.write { db in
                 try db.execute(
-                    sql: "DELETE FROM outbox_commands WHERE gateway_id = ? AND client_uuid = ?",
-                    arguments: [gatewayID, id])
+                    sql: """
+                    DELETE FROM outbox_commands
+                    WHERE gateway_id = ? AND client_uuid = ? AND attempt_version = ?
+                    """,
+                    arguments: [gatewayID, id, attemptVersion])
                 return db.changesCount > 0
             }
             guard deleted else { return .missing }
-            self.outboxChangeHub.yield(.confirmed(id: id))
+            self.outboxChangeHub.yield(.confirmed(gatewayID: gatewayID, id: id))
             return .updated
         } catch {
             return .unavailable
         }
+    }
+
+    public func branchState(
+        for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState?
+    {
+        guard !self.isRetired else { return nil }
+        let gatewayID = self.gatewayID
+        do {
+            return try await self.databases.stateQueue.write { db in
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                var state = try Self.readBranchState(db, gatewayID: gatewayID, scope: scope)
+                state = try OpenClawChatOutboxBranchState(
+                    epoch: state.epoch,
+                    lastActiveLeafEntryID: state.lastActiveLeafEntryID,
+                    hadPendingCommands: Self.unconfirmedCommandCount(
+                        db, gatewayID: gatewayID, scope: scope, includingFailed: true) > 0,
+                    switchPendingSince: state.switchPendingSince,
+                    needsReconciliation: state.needsReconciliation,
+                    revision: state.revision)
+                return state
+            }
+        } catch { return nil }
+    }
+
+    public func beginBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool {
+        guard !self.isRetired else { return false }
+        let gatewayID = self.gatewayID
+        do {
+            let result = try await databases.stateQueue.write { db -> Int in
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                let expired = try Self.expireBranchSwitchLeases(db, gatewayID: gatewayID, scope: scope)
+                guard expired.isEmpty else { return 1 }
+                let state = try Self.readBranchState(db, gatewayID: gatewayID, scope: scope)
+                guard !state.needsReconciliation,
+                      state.switchPendingSince == nil,
+                      try Self.unconfirmedCommandCount(db, gatewayID: gatewayID, scope: scope) == 0
+                else { return 0 }
+                try db.execute(
+                    sql: """
+                    UPDATE outbox_branch_scopes
+                    SET switch_pending_since = ?, branch_state_revision = branch_state_revision + 1
+                    WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+                      AND switch_pending_since IS NULL
+                    """,
+                    arguments: [
+                        Date().timeIntervalSince1970,
+                        gatewayID,
+                        scope.sessionKey,
+                        Self.normalizedAgentID(scope.agentID),
+                    ])
+                return db.changesCount > 0 ? 2 : 0
+            }
+            if result == 1 {
+                self.outboxChangeHub.yield(.invalidated(gatewayID: gatewayID, scope: scope))
+            }
+            return result == 2
+        } catch { return false }
+    }
+
+    public func cancelBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool {
+        guard !self.isRetired else { return false }
+        let gatewayID = self.gatewayID
+        do {
+            let changed = try await databases.stateQueue.write { db -> Bool in
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                try db.execute(
+                    sql: """
+                    UPDATE outbox_branch_scopes
+                    SET switch_pending_since = NULL, branch_state_revision = branch_state_revision + 1
+                    WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+                    """,
+                    arguments: [gatewayID, scope.sessionKey, Self.normalizedAgentID(scope.agentID)])
+                return db.changesCount > 0
+            }
+            if changed {
+                self.outboxChangeHub.yield(.invalidated(gatewayID: gatewayID, scope: scope))
+            }
+            return true
+        } catch { return false }
+    }
+
+    public func demoteBranchSwitchToReconcile(_ scope: OpenClawChatOutboxScope) async -> Bool {
+        guard !self.isRetired else { return false }
+        let gatewayID = self.gatewayID
+        do {
+            let changed = try await databases.stateQueue.write { db -> Bool in
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                try db.execute(
+                    sql: """
+                    UPDATE outbox_branch_scopes
+                    SET switch_pending_since = NULL, needs_reconciliation = 1,
+                        branch_state_revision = branch_state_revision + 1
+                    WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+                    """,
+                    arguments: [gatewayID, scope.sessionKey, Self.normalizedAgentID(scope.agentID)])
+                return db.changesCount > 0
+            }
+            if changed {
+                self.outboxChangeHub.yield(.invalidated(gatewayID: gatewayID, scope: scope))
+            }
+            return true
+        } catch { return false }
+    }
+
+    public func updateLastActiveLeafEntryID(
+        _ leafEntryID: String,
+        expectedEpoch: Int,
+        for scope: OpenClawChatOutboxScope) async -> Bool
+    {
+        let leaf = leafEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !self.isRetired, !leaf.isEmpty else { return false }
+        let gatewayID = self.gatewayID
+        do {
+            return try await self.databases.stateQueue.write { db in
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                try db.execute(
+                    sql: """
+                    UPDATE outbox_branch_scopes
+                    SET last_active_leaf_id = ?, branch_state_revision = branch_state_revision + 1
+                    WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+                      AND branch_epoch = ? AND switch_pending_since IS NULL
+                      AND needs_reconciliation = 0
+                      AND NOT EXISTS (
+                          SELECT 1 FROM outbox_commands
+                          WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+                            AND status IN ('queued', 'sending', 'awaiting_confirmation')
+                      )
+                    """,
+                    arguments: [
+                        leaf,
+                        gatewayID,
+                        scope.sessionKey,
+                        Self.normalizedAgentID(scope.agentID),
+                        expectedEpoch,
+                        gatewayID,
+                        scope.sessionKey,
+                        Self.normalizedAgentID(scope.agentID),
+                    ])
+                return db.changesCount > 0
+            }
+        } catch { return false }
+    }
+
+    public func reconcileBranchScope(
+        _ scope: OpenClawChatOutboxScope,
+        previousState: OpenClawChatOutboxBranchState,
+        activeLeafEntryID: String?,
+        branchLeafEntryIDs: Set<String>,
+        activeTranscriptEntryIDs: Set<String> = [],
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        let leaf = activeLeafEntryID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !self.isRetired, activeLeafEntryID == nil || leaf?.isEmpty == false else { return nil }
+        let gatewayID = self.gatewayID
+        do {
+            let result = try await databases.stateQueue.write { db -> ([OpenClawChatOutboxCommand], Bool) in
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                _ = try Self.expireBranchSwitchLeases(db, gatewayID: gatewayID, scope: scope)
+                let state = try Self.readBranchState(db, gatewayID: gatewayID, scope: scope)
+                guard state.revision == previousState.revision, state.switchPendingSince == nil else {
+                    throw DatabaseError(message: "stale branch reconciliation")
+                }
+                let pending = try Self.unconfirmedCommandCount(
+                    db, gatewayID: gatewayID, scope: scope, includingFailed: true)
+                var invalidated = false
+                // A cross-client switch can win after this reconciliation but before send reaches the gateway.
+                // Sends, like the web client, carry no branch precondition and land on the active branch at arrival.
+                // Close this only with a protocol-level expectedActiveLeaf precondition.
+                if let leaf,
+                   let lastLeaf = previousState.lastActiveLeafEntryID,
+                   lastLeaf != leaf,
+                   branchLeafEntryIDs.contains(lastLeaf)
+                {
+                    try Self.installConfirmedBranchChange(
+                        db,
+                        gatewayID: gatewayID,
+                        scope: scope,
+                        previousEpoch: state.epoch,
+                        activeLeafEntryID: leaf,
+                        lastError: lastError)
+                    invalidated = true
+                } else {
+                    let advancedOnActivePath = previousState.lastActiveLeafEntryID.map {
+                        activeTranscriptEntryIDs.contains($0)
+                    } ?? false
+                    if previousState.lastActiveLeafEntryID != leaf,
+                       !advancedOnActivePath,
+                       pending > 0 || leaf == nil
+                    {
+                        try Self.parkPendingCommands(db, gatewayID: gatewayID, scope: scope, lastError: lastError)
+                        invalidated = true
+                    }
+                    try Self.writeBranchState(
+                        db,
+                        gatewayID: gatewayID,
+                        scope: scope,
+                        epoch: state.epoch,
+                        lastActiveLeafEntryID: leaf,
+                        expectedRevision: previousState.revision)
+                }
+                return try (Self.readCommands(db, gatewayID: gatewayID), invalidated)
+            }
+            if result.1 {
+                self.outboxChangeHub.yield(.invalidated(gatewayID: gatewayID, scope: scope))
+            }
+            return result.0
+        } catch { return nil }
+    }
+
+    public func confirmBranchChange(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        let leaf = activeLeafEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !self.isRetired, !leaf.isEmpty else { return nil }
+        let gatewayID = self.gatewayID
+        do {
+            let result = try await databases.stateQueue.write { db -> ([OpenClawChatOutboxCommand], Bool) in
+                try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
+                let state = try Self.readBranchState(db, gatewayID: gatewayID, scope: scope)
+                let invalidated: Bool
+                if state.lastActiveLeafEntryID == leaf {
+                    try Self.writeBranchState(
+                        db,
+                        gatewayID: gatewayID,
+                        scope: scope,
+                        epoch: state.epoch,
+                        lastActiveLeafEntryID: leaf)
+                    invalidated = state.switchPendingSince != nil
+                } else {
+                    try Self.installConfirmedBranchChange(
+                        db,
+                        gatewayID: gatewayID,
+                        scope: scope,
+                        previousEpoch: state.epoch,
+                        activeLeafEntryID: leaf,
+                        lastError: lastError)
+                    invalidated = true
+                }
+                return try (Self.readCommands(db, gatewayID: gatewayID), invalidated)
+            }
+            if result.1 {
+                self.outboxChangeHub.yield(.invalidated(gatewayID: gatewayID, scope: scope))
+            }
+            return result.0
+        } catch { return nil }
     }
 }
 
 extension OpenClawChatSQLiteTranscriptCache {
     private func transitionClaimedCommand(
         id: String,
+        attemptVersion: Int,
         status: OpenClawChatOutboxCommand.Status,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
@@ -709,19 +1074,24 @@ extension OpenClawChatSQLiteTranscriptCache {
         }
         let gatewayID = self.gatewayID
         do {
-            let updated = try await self.databases.stateQueue.write { db in
+            let updated = try await databases.stateQueue.write { db in
                 try db.execute(
                     sql: """
                     UPDATE outbox_commands
-                    SET status = ?, retry_count = ?, last_error = ?
-                    WHERE gateway_id = ? AND client_uuid = ? AND status = 'sending'
+                    SET status = ?, had_unacknowledged_send = 1,
+                        attempt_version = CASE WHEN ? = 'queued' THEN attempt_version + 1 ELSE attempt_version END,
+                        retry_count = ?, last_error = ?
+                    WHERE gateway_id = ? AND client_uuid = ? AND attempt_version = ?
+                      AND status = 'sending'
                     """,
                     arguments: [
+                        status.rawValue,
                         status.rawValue,
                         retryCount,
                         lastError ?? "",
                         gatewayID,
                         id,
+                        attemptVersion,
                     ])
                 return db.changesCount > 0
             }
@@ -729,38 +1099,6 @@ extension OpenClawChatSQLiteTranscriptCache {
         } catch {
             self.hasRecoveredInterruptedSends = false
             return .unavailable
-        }
-    }
-
-    private func updateCommandStatus(
-        id: String,
-        status: OpenClawChatOutboxCommand.Status,
-        retryCount: Int,
-        lastError: String?) async
-    {
-        guard !self.isRetired else {
-            self.hasRecoveredInterruptedSends = false
-            return
-        }
-        let gatewayID = self.gatewayID
-        do {
-            try await self.databases.stateQueue.write { db in
-                try db.execute(
-                    sql: """
-                    UPDATE outbox_commands
-                    SET status = ?, retry_count = ?, last_error = ?
-                    WHERE gateway_id = ? AND client_uuid = ?
-                    """,
-                    arguments: [
-                        status.rawValue,
-                        retryCount,
-                        lastError ?? "",
-                        gatewayID,
-                        id,
-                    ])
-            }
-        } catch {
-            self.hasRecoveredInterruptedSends = false
         }
     }
 
@@ -794,8 +1132,13 @@ extension OpenClawChatSQLiteTranscriptCache {
         let rows = try Row.fetchAll(
             db,
             sql: """
-            SELECT * FROM outbox_commands WHERE gateway_id = ?
-            ORDER BY created_at, enqueue_sequence
+            SELECT c.*, s.branch_epoch AS scope_branch_epoch
+            FROM outbox_commands c
+            LEFT JOIN outbox_branch_scopes s
+              ON s.gateway_id = c.gateway_id AND s.session_key = c.session_key
+                AND s.agent_id = c.agent_id
+            WHERE c.gateway_id = ?
+            ORDER BY c.created_at, c.enqueue_sequence
             """,
             arguments: [gatewayID])
         return try rows.map { try self.command(from: $0, in: db, gatewayID: gatewayID) }
@@ -833,14 +1176,214 @@ extension OpenClawChatSQLiteTranscriptCache {
             sessionKey: row["session_key"],
             deliverySessionKey: row["delivery_session_key"],
             routingContract: row["routing_contract"],
-            agentID: row["agent_id"],
+            agentID: Self.optionalAgentID(row["agent_id"]),
+            branchEpoch: row["branch_epoch"],
+            scopeBranchEpoch: row["scope_branch_epoch"],
             text: row["text"],
             attachments: attachments,
             thinking: row["thinking"],
             createdAt: row["created_at"],
             status: status,
+            attemptVersion: row["attempt_version"],
             retryCount: row["retry_count"],
             lastError: lastError.isEmpty ? nil : lastError)
+    }
+
+    private nonisolated static func normalizedAgentID(_ agentID: String?) -> String {
+        agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    private nonisolated static func optionalAgentID(_ agentID: String) -> String? {
+        let normalized = self.normalizedAgentID(agentID)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private nonisolated static func ensureBranchScope(
+        _ db: Database,
+        gatewayID: String,
+        scope: OpenClawChatOutboxScope) throws
+    {
+        try db.execute(
+            sql: """
+            INSERT OR IGNORE INTO outbox_branch_scopes(
+                gateway_id, session_key, agent_id, branch_epoch, last_active_leaf_id, needs_reconciliation
+            ) VALUES (?, ?, ?, 0, NULL, 0)
+            """,
+            arguments: [gatewayID, scope.sessionKey, self.normalizedAgentID(scope.agentID)])
+    }
+
+    private nonisolated static func readBranchState(
+        _ db: Database,
+        gatewayID: String,
+        scope: OpenClawChatOutboxScope) throws -> OpenClawChatOutboxBranchState
+    {
+        guard let row = try Row.fetchOne(
+            db,
+            sql: """
+            SELECT branch_epoch, last_active_leaf_id, switch_pending_since, needs_reconciliation, branch_state_revision
+            FROM outbox_branch_scopes
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+            """,
+            arguments: [gatewayID, scope.sessionKey, normalizedAgentID(scope.agentID)])
+        else { throw DatabaseError(message: "missing branch scope") }
+        return OpenClawChatOutboxBranchState(
+            epoch: row["branch_epoch"],
+            lastActiveLeafEntryID: row["last_active_leaf_id"],
+            switchPendingSince: row["switch_pending_since"],
+            needsReconciliation: row["needs_reconciliation"],
+            revision: row["branch_state_revision"])
+    }
+
+    /// `includingFailed` widens the count for branch-reconcile decisions: failed rows
+    /// still hold a retryable idempotency identity, so a branch change must observe and
+    /// park them. The mutation lease gate stays narrow — a visible failed message must
+    /// not block rewind/fork/switch.
+    private nonisolated static func unconfirmedCommandCount(
+        _ db: Database,
+        gatewayID: String,
+        scope: OpenClawChatOutboxScope,
+        includingFailed: Bool = false) throws -> Int
+    {
+        let statuses = includingFailed
+            ? "'queued', 'sending', 'awaiting_confirmation', 'failed'"
+            : "'queued', 'sending', 'awaiting_confirmation'"
+        return try Int.fetchOne(
+            db,
+            sql: """
+            SELECT COUNT(*) FROM outbox_commands
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+              AND status IN (\(statuses))
+            """,
+            arguments: [gatewayID, scope.sessionKey, self.normalizedAgentID(scope.agentID)]) ?? 0
+    }
+
+    private nonisolated static func expireBranchSwitchLeases(
+        _ db: Database,
+        gatewayID: String,
+        scope: OpenClawChatOutboxScope? = nil) throws -> [OpenClawChatOutboxScope]
+    {
+        let cutoff = Date().timeIntervalSince1970 - 5 * 60
+        // if/else keeps these SQL literals out of the ternary shape the native
+        // i18n extractor treats as user-facing conditional text.
+        let sql: String
+        let arguments: StatementArguments
+        if let scope {
+            sql = """
+            SELECT session_key, agent_id FROM outbox_branch_scopes
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ? AND switch_pending_since <= ?
+            """
+            arguments = [gatewayID, scope.sessionKey, Self.normalizedAgentID(scope.agentID), cutoff]
+        } else {
+            sql = """
+            SELECT session_key, agent_id FROM outbox_branch_scopes
+            WHERE gateway_id = ? AND switch_pending_since <= ?
+            """
+            arguments = [gatewayID, cutoff]
+        }
+        let rows = try Row.fetchAll(db, sql: sql, arguments: arguments)
+        guard !rows.isEmpty else { return [] }
+        for row in rows {
+            let sessionKey: String = row["session_key"]
+            let agentID: String = row["agent_id"]
+            try db.execute(
+                sql: """
+                UPDATE outbox_branch_scopes
+                SET switch_pending_since = NULL, needs_reconciliation = 1,
+                    branch_state_revision = branch_state_revision + 1
+                WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+                """,
+                arguments: [gatewayID, sessionKey, agentID])
+        }
+        return rows.map { row in
+            OpenClawChatOutboxScope(sessionKey: row["session_key"], agentID: row["agent_id"])
+        }
+    }
+
+    private nonisolated static func writeBranchState(
+        _ db: Database,
+        gatewayID: String,
+        scope: OpenClawChatOutboxScope,
+        epoch: Int,
+        lastActiveLeafEntryID: String?,
+        expectedRevision: Int? = nil) throws
+    {
+        try db.execute(
+            sql: """
+            UPDATE outbox_branch_scopes
+            SET branch_epoch = ?, last_active_leaf_id = ?, switch_pending_since = NULL,
+                needs_reconciliation = 0, branch_state_revision = branch_state_revision + 1
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+              AND (? IS NULL OR branch_state_revision = ?)
+            """,
+            arguments: [
+                epoch,
+                lastActiveLeafEntryID,
+                gatewayID,
+                scope.sessionKey,
+                self.normalizedAgentID(scope.agentID),
+                expectedRevision,
+                expectedRevision,
+            ])
+        guard db.changesCount > 0 else { throw DatabaseError(message: "stale branch state") }
+    }
+
+    private nonisolated static func installConfirmedBranchChange(
+        _ db: Database,
+        gatewayID: String,
+        scope: OpenClawChatOutboxScope,
+        previousEpoch: Int,
+        activeLeafEntryID: String,
+        lastError: String) throws
+    {
+        let nextEpoch = previousEpoch + 1
+        try Self.writeBranchState(
+            db,
+            gatewayID: gatewayID,
+            scope: scope,
+            epoch: nextEpoch,
+            lastActiveLeafEntryID: activeLeafEntryID)
+        try db.execute(
+            sql: """
+            UPDATE outbox_commands
+            SET parked_was_accepted = CASE
+                    WHEN status IN ('sending', 'awaiting_confirmation') OR had_unacknowledged_send = 1
+                    THEN 1 ELSE parked_was_accepted END,
+                status = 'failed', last_error = ?
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+              AND branch_epoch <> ?
+              AND status IN ('queued', 'sending', 'awaiting_confirmation', 'failed')
+            """,
+            arguments: [
+                lastError + "\n# branch-park:" + UUID().uuidString,
+                gatewayID,
+                scope.sessionKey,
+                Self.normalizedAgentID(scope.agentID),
+                nextEpoch,
+            ])
+    }
+
+    private nonisolated static func parkPendingCommands(
+        _ db: Database,
+        gatewayID: String,
+        scope: OpenClawChatOutboxScope,
+        lastError: String) throws
+    {
+        try db.execute(
+            sql: """
+            UPDATE outbox_commands
+            SET parked_was_accepted = CASE
+                    WHEN status IN ('sending', 'awaiting_confirmation') OR had_unacknowledged_send = 1
+                    THEN 1 ELSE parked_was_accepted END,
+                status = 'failed', last_error = ?
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+              AND status IN ('queued', 'sending', 'awaiting_confirmation', 'failed')
+            """,
+            arguments: [
+                lastError + "\n# branch-park:" + UUID().uuidString,
+                gatewayID,
+                scope.sessionKey,
+                self.normalizedAgentID(scope.agentID),
+            ])
     }
 }
 
@@ -933,10 +1476,6 @@ extension OpenClawChatSQLiteTranscriptCache {
             sessions
                 .sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
                 .prefix(self.maxCachedSessions))
-    }
-
-    private static func normalizedAgentID(_ agentID: String?) -> String {
-        agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     }
 
     private static func attachmentByteCount(_ attachments: [OpenClawChatOutboxAttachment]) -> Int? {

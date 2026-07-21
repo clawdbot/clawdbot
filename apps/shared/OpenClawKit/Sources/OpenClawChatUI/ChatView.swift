@@ -1215,9 +1215,7 @@ extension OpenClawChatView {
     }
 
     private var messageSessionActionsDisabled: Bool {
-        self.viewModel.hasBlockingRunActivity ||
-            self.viewModel.isSending ||
-            self.viewModel.isAborting
+        !self.viewModel.canPerformMessageSessionAction
     }
 
     @ViewBuilder

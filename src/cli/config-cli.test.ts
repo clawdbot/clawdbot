@@ -2591,7 +2591,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      expectErrorIncludes("File exceeds 8388608 bytes");
+      expectErrorIncludes("--file exceeds the 8 MiB supported maximum (8388608 bytes)");
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 

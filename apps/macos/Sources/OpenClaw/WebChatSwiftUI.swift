@@ -128,10 +128,11 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         }
     }
 
-    func sessionTarget(for sessionKey: String) -> SessionTarget {
+    func sessionTarget(for sessionKey: String, overrideAgentID: String? = nil) -> SessionTarget {
         OpenClawChatSessionTarget.resolve(
             sessionKey,
             selectedAgentID: self.routingIdentity.currentAgentID(),
+            overrideAgentID: overrideAgentID,
             policy: .preserveBareKeys)
     }
 

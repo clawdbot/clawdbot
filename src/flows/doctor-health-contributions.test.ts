@@ -3367,6 +3367,32 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("preserves a single-file include write by omitting wizard metadata", async () => {
+    const cfg = { mcp: { servers: { local: { command: "node", enabled: false } } } };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await requireDoctorContribution("doctor:write-config").run({
+      cfg,
+      cfgForPersistence: cfg,
+      configResult: {
+        cfg,
+        shouldWriteConfig: true,
+        skipWizardMetadataForIncludeWrite: true,
+      },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime,
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext);
+
+    expect(mocks.applyWizardMetadata).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: cfg }),
+    );
+  });
+
   describe("config size drops during update", () => {
     beforeEach(() => {
       mocks.replaceConfigFile.mockReset();

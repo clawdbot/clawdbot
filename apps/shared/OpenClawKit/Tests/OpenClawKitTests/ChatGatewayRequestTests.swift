@@ -160,6 +160,29 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["key"] == nil)
     }
 
+    @Test func `branch list and switch requests preserve routing identity`() {
+        let list = OpenClawChatGatewayRequests.listSessionBranches(
+            sessionKey: "agent:reviewer:telegram:group:1",
+            agentID: " reviewer ")
+        let switchBranch = OpenClawChatGatewayRequests.switchSessionBranch(
+            sessionKey: "global",
+            agentID: nil,
+            leafEntryId: " leaf-42 ")
+
+        #expect(list.method == "sessions.branches.list")
+        #expect(list.timeoutMs == 15000)
+        #expect(list.params["sessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
+        #expect(list.params["agentId"]?.value as? String == "reviewer")
+        #expect(list.params["key"] == nil)
+
+        #expect(switchBranch.method == "sessions.branches.switch")
+        #expect(switchBranch.timeoutMs == 15000)
+        #expect(switchBranch.params["sessionKey"]?.value as? String == "global")
+        #expect(switchBranch.params["agentId"] == nil)
+        #expect(switchBranch.params["leafEntryId"]?.value as? String == "leaf-42")
+        #expect(switchBranch.params["key"] == nil)
+    }
+
     @Test func `session group requests encode exact gateway contracts`() {
         let list = OpenClawChatGatewayRequests.sessionGroupsList()
         let put = OpenClawChatGatewayRequests.sessionGroupsPut(names: ["Work", "Personal"])

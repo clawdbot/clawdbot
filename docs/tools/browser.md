@@ -228,7 +228,10 @@ retroactively adopted; close those tabs manually.
 
 Cleanup is best-effort, not a guarantee that every eligible tab closes
 immediately. A transient ownership check or close failure leaves durable
-cleanup pending for a later retry.
+cleanup pending for a later retry. Retries are not unbounded: when the browser
+stays unreachable and the tab has gone unused for over a day, the tracking row
+is retired so the durable store cannot fill up with tabs that can never be
+verified again.
 
 ### Screenshot vision (text-only model support)
 
