@@ -20,6 +20,84 @@ import {
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
+const LEGACY_IMPLICIT_AGENT_ID = "main";
+
+function containsLegacyMainAgentReference(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsLegacyMainAgentReference(entry));
+  }
+  const record = getRecord(value);
+  if (!record) {
+    return false;
+  }
+  for (const [key, entry] of Object.entries(record)) {
+    if (
+      typeof entry === "string" &&
+      entry.trim().toLowerCase() === LEGACY_IMPLICIT_AGENT_ID &&
+      (key === "agentId" || key.endsWith("AgentId"))
+    ) {
+      return true;
+    }
+    if (
+      key === "allowAgents" &&
+      Array.isArray(entry) &&
+      entry.some(
+        (item) =>
+          typeof item === "string" && item.trim().toLowerCase() === LEGACY_IMPLICIT_AGENT_ID,
+      )
+    ) {
+      return true;
+    }
+    if (containsLegacyMainAgentReference(entry)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function repairLegacyAgentRoster(raw: Record<string, unknown>, changes: string[]): void {
+  const agents = getRecord(raw.agents);
+  const list = agents?.list;
+  if (!Array.isArray(list) || list.length === 0) {
+    if (!containsLegacyMainAgentReference(raw)) {
+      return;
+    }
+    const nextAgents = agents ?? ensureRecord(raw, "agents");
+    nextAgents.list = [{ id: LEGACY_IMPLICIT_AGENT_ID, default: true }];
+    changes.push(
+      'Added agents.list entry { id: "main", default: true } for legacy config that referenced the implicit main agent.',
+    );
+    return;
+  }
+
+  const entries = list.map((entry) => getRecord(entry));
+  const defaultIndexes = entries.flatMap((entry, index) =>
+    entry?.default === true ? [index] : [],
+  );
+  if (defaultIndexes.length === 1) {
+    return;
+  }
+  const effectiveIndex = defaultIndexes[0] ?? entries.findIndex(Boolean);
+  if (effectiveIndex < 0) {
+    return;
+  }
+  for (const [index, entry] of entries.entries()) {
+    if (!entry) {
+      continue;
+    }
+    if (index === effectiveIndex) {
+      entry.default = true;
+    } else {
+      delete entry.default;
+    }
+  }
+  changes.push(
+    defaultIndexes.length === 0
+      ? `Marked agents.list.${effectiveIndex} as the default agent.`
+      : `Kept agents.list.${effectiveIndex} as the default agent and cleared ${defaultIndexes.length - 1} duplicate default marker(s).`,
+  );
+}
+
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
   "activeHours",
@@ -1262,6 +1340,11 @@ function addProfileConfiguredSectionGrantsWithConfiguredGrants(
 
 /** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.explicit-roster-default",
+    describe: "Materialize the legacy implicit agent and repair default markers",
+    apply: repairLegacyAgentRoster,
+  }),
   defineLegacyConfigMigration({
     id: "tools.profile-configured-sections-alsoAllow",
     describe: "Repair explicit configured-section tool grants filtered by profiles",

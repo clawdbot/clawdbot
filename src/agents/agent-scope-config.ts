@@ -8,7 +8,7 @@ import type {
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
@@ -48,18 +48,6 @@ export type ResolvedAgentConfig = {
   tools?: AgentEntry["tools"];
 };
 
-let defaultAgentWarned = false;
-
-function warnMultipleDefaultAgents(): void {
-  void import("../logging/subsystem.js")
-    .then(({ createSubsystemLogger }) => {
-      createSubsystemLogger("agent-scope").warn(
-        "Multiple agents marked default=true; using the first entry as default.",
-      );
-    })
-    .catch(() => undefined);
-}
-
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
@@ -78,12 +66,9 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   return list.filter((entry): entry is AgentEntry => entry !== null && typeof entry === "object");
 }
 
-/** Lists unique configured agent ids, falling back to the default agent id. */
+/** Lists unique configured agent ids. */
 export function listAgentIds(cfg: OpenClawConfig): string[] {
   const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    return [DEFAULT_AGENT_ID];
-  }
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const entry of agents) {
@@ -94,22 +79,22 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
     seen.add(id);
     ids.push(id);
   }
-  return ids.length > 0 ? ids : [DEFAULT_AGENT_ID];
+  return ids;
 }
 
-/** Resolves the default agent id, warning once when multiple defaults exist. */
+/** Resolves the sole configured default agent id. */
 export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
-    return DEFAULT_AGENT_ID;
+    throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
   }
   const defaults = agents.filter((agent) => agent?.default);
-  if (defaults.length > 1 && !defaultAgentWarned) {
-    defaultAgentWarned = true;
-    warnMultipleDefaultAgents();
+  if (defaults.length !== 1) {
+    throw new Error(
+      `Invalid agent roster: expected exactly one default=true entry, found ${defaults.length}. Run \`openclaw doctor --fix\`.`,
+    );
   }
-  const chosen = (defaults[0] ?? agents[0])?.id?.trim();
-  return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
+  return normalizeAgentId(defaults[0].id);
 }
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {

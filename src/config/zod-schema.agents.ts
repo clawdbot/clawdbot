@@ -17,6 +17,20 @@ export const AgentsSchema = z
       .optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    const agents = value.list ?? [];
+    if (agents.length === 0) {
+      return;
+    }
+    const defaultCount = agents.filter((agent) => agent.default === true).length;
+    if (defaultCount !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["list"],
+        message: `agents.list must contain exactly one default=true entry (found ${defaultCount})`,
+      });
+    }
+  })
   .optional();
 
 const BindingMatchSchema = z

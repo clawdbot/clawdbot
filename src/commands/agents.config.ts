@@ -130,7 +130,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   });
 }
 
-/** Add or update one agent entry while preserving the default-agent placeholder when needed. */
+/** Add or update one agent entry. The first roster entry becomes the explicit default. */
 export function applyAgentConfig(
   cfg: OpenClawConfig,
   params: {
@@ -146,7 +146,10 @@ export function applyAgentConfig(
   const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
-  const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
+  const base = (index >= 0 ? list[index] : undefined) ?? {
+    id: agentId,
+    ...(list.length === 0 ? { default: true } : {}),
+  };
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,
@@ -165,9 +168,6 @@ export function applyAgentConfig(
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
-    if (nextList.length === 0 && agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))) {
-      nextList.push({ id: resolveDefaultAgentId(cfg) });
-    }
     nextList.push(nextEntry);
   }
   return {
