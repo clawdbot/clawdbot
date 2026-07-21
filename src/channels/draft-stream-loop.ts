@@ -84,7 +84,9 @@ export function createDraftStreamLoop<T = string>(params: {
         throw err;
       }
       if (sent === false) {
-        pendingValue = value;
+        if (!hasPendingValue(pendingValue)) {
+          pendingValue = value;
+        }
         return;
       }
       lastSentAt = Date.now();
