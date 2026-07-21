@@ -210,12 +210,11 @@ function hasVerifiedApkZipEntries(buffer: Buffer): boolean {
       /^classes\d*\.dex$/u.test(fileName) ||
       fileName === "resources.arsc" ||
       /^lib\/[^/]+\/[^/]+\.so$/u.test(fileName);
-    if (hasManifest && hasAndroidPayload) {
-      return true;
-    }
     cursor = entryEnd;
   }
-  return false;
+  // Do not accept an APK-shaped prefix of a malformed central directory: the
+  // host-read boundary promises complete archive verification.
+  return cursor === centralDirectoryEnd && hasManifest && hasAndroidPayload;
 }
 
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
@@ -321,12 +320,20 @@ export async function detectMime(opts: {
   filePath?: string;
   requireCompleteApkVerification?: boolean;
 }): Promise<string | undefined> {
+  const requireCompleteApkVerification = opts.requireCompleteApkVerification === true;
   const extMime = MIME_BY_EXT[getFileExtension(opts.filePath) ?? ""];
-  const mimeHints = [opts.headerMime, ...(opts.additionalMimeHints ?? [])]
+  const rawMimeHints = [opts.headerMime, ...(opts.additionalMimeHints ?? [])]
     .map((mime) => normalizeMimeType(mime))
     .filter((mime): mime is string => Boolean(mime));
+  // An APK header/filename is only a hint. At the host-read boundary it must
+  // never restore APK classification after complete ZIP validation failed.
+  const hasVerifiedApk = opts.buffer ? hasVerifiedApkZipEntries(opts.buffer) : false;
+  const rejectUnverifiedApk = requireCompleteApkVerification && !hasVerifiedApk;
+  const mimeHints = rejectUnverifiedApk
+    ? rawMimeHints.filter((mime) => mime !== APK_MIME)
+    : rawMimeHints;
   const headerMime = mimeHints[0];
-  const sniffed = await sniffMime(opts.buffer, opts.requireCompleteApkVerification === true);
+  const sniffed = await sniffMime(opts.buffer, requireCompleteApkVerification);
   const sniffedGenericContainer =
     sniffed === "application/octet-stream" || sniffed === "application/zip";
 
@@ -334,20 +341,23 @@ export async function detectMime(opts: {
   // specific extension or known container metadata (e.g. XLSX vs ZIP).
   const specificExtMime =
     extMime && extMime !== sniffed && !extMime.startsWith("image/") ? extMime : undefined;
+  const effectiveExtMime = rejectUnverifiedApk && extMime === APK_MIME ? undefined : extMime;
   const genericContainerMime =
     sniffed === "application/zip"
-      ? [extMime, ...mimeHints].find(
+      ? [effectiveExtMime, ...mimeHints].find(
           (mime) =>
             mime &&
             (mime !== APK_MIME || opts.requireCompleteApkVerification !== true) &&
             isZipContainerMime(mime),
         )
       : sniffed === "application/octet-stream"
-        ? (specificExtMime ?? mimeHints.find((mime) => mime !== "application/octet-stream"))
+        ? specificExtMime && !(rejectUnverifiedApk && specificExtMime === APK_MIME)
+          ? specificExtMime
+          : mimeHints.find((mime) => mime !== "application/octet-stream")
         : undefined;
   const inferred = sniffedGenericContainer
     ? (genericContainerMime ?? sniffed)
-    : (sniffed ?? extMime);
+    : (sniffed ?? effectiveExtMime);
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
   const audioContainerHint =
