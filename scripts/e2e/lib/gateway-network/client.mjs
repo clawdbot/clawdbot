@@ -148,6 +148,19 @@ export function assertReadySuspensionResponse(response, now = Date.now()) {
   return payload;
 }
 
+function readRetryableSuspensionDelay(response) {
+  if (response?.status !== 503 || response.body?.ok !== false || !isRecord(response.body.error)) {
+    return null;
+  }
+  const error = response.body.error;
+  if (error.retryable !== true) {
+    return null;
+  }
+  return typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+    ? Math.max(1, Math.floor(error.retryAfterMs))
+    : 100;
+}
+
 export async function prepareReadySuspension(
   { deadline, requestId, rpc },
   { delayImpl = delay, now = Date.now } = {},
@@ -158,7 +171,12 @@ export async function prepareReadySuspension(
     }
     const response = await rpc("gateway.suspend.prepare", { requestId });
     if (response?.status !== 200 || response.body?.ok !== true) {
-      return assertReadySuspensionResponse(response, now());
+      const retryAfterMs = readRetryableSuspensionDelay(response);
+      if (retryAfterMs === null) {
+        return assertReadySuspensionResponse(response, now());
+      }
+      await delayImpl(Math.min(retryAfterMs, Math.max(1, deadline - now())));
+      continue;
     }
     const payload = response.body.payload;
     if (payload?.status !== "busy") {
