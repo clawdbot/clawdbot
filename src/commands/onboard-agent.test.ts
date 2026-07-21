@@ -95,15 +95,16 @@ describe("onboarding agent creation", () => {
       config: { agents: { list: [{ id: "main", default: true }] } },
     };
     mocks.createAgent.mockResolvedValue({
-      status: "error",
-      reason: "already-exists",
+      status: "existing",
       agentId: "main",
-      message: 'agent "main" already exists',
+      name: "main",
+      workspace: "/tmp/work",
+      agentDir: "/tmp/agent",
+      bootstrapPending: false,
     });
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot
       .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {}, config: {} })
-      .mockResolvedValueOnce(repaired)
       .mockResolvedValueOnce(repaired);
 
     await expect(

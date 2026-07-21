@@ -9,6 +9,7 @@ import {
 import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -25,7 +26,7 @@ import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js"
 
 type CreateAgentResult =
   | {
-      status: "created";
+      status: "created" | "existing";
       agentId: string;
       name: string;
       workspace: string;
@@ -48,9 +49,11 @@ type CreateAgentResult =
     };
 
 type CreateError = Extract<CreateAgentResult, { status: "error" }>;
+export type CreateAgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 type CreateAgentParams = {
-  name: string;
+  name?: string;
+  entry?: CreateAgentEntry;
   workspace?: string;
   model?: string;
   emoji?: unknown;
@@ -107,30 +110,34 @@ async function writeIdentityFile(params: {
 }
 
 export async function createAgent(params: CreateAgentParams): Promise<CreateAgentResult> {
-  const rawName = params.name.trim();
+  const rawName = (params.entry?.name?.trim() || params.entry?.id || params.name || "").trim();
   if (!rawName) {
     return createError("invalid-name", "agent name is required");
   }
-  const agentId = normalizeAgentId(rawName);
+  const agentId = normalizeAgentId(params.entry?.id ?? rawName);
   if (isReservedSystemAgentId(agentId)) {
     return createError("reserved-id", `"${agentId}" is reserved`, agentId);
   }
 
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
-  const identity = createAgentIdentityConfig({
-    name: safeName,
-    emoji: params.emoji,
-    avatar: params.avatar,
-  }) ?? { name: safeName };
-  const explicitWorkspace = params.workspace?.trim()
-    ? resolveUserPath(params.workspace.trim())
+  const identity = params.entry?.identity ??
+    createAgentIdentityConfig({
+      name: safeName,
+      emoji: params.emoji,
+      avatar: params.avatar,
+    }) ?? { name: safeName };
+  const requestedWorkspace = params.entry?.workspace ?? params.workspace;
+  const explicitWorkspace = requestedWorkspace?.trim()
+    ? resolveUserPath(requestedWorkspace.trim())
     : undefined;
-  const explicitAgentDir = params.agentDir?.trim()
-    ? resolveUserPath(params.agentDir.trim())
+  const requestedAgentDir = params.entry?.agentDir ?? params.agentDir;
+  const explicitAgentDir = requestedAgentDir?.trim()
+    ? resolveUserPath(requestedAgentDir.trim())
     : undefined;
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
 
+  let repairedMainMaterialized = false;
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
       const deletion = readAgentDeletionJournal(agentId);
@@ -151,10 +158,18 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           maxAttempts: 1,
           transform: async (currentConfig) => {
             const repair = maybeRepairAgentRoster(currentConfig);
-            return { nextConfig: repair.config, result: repair.changes.length > 0 };
+            let nextConfig = repair.config;
+            if (params.entry && repair.changes.length > 0) {
+              const list = listAgentEntries(nextConfig);
+              const index = findAgentEntryIndex(list, agentId);
+              list[index] = { ...list[index], ...params.entry, id: agentId };
+              nextConfig = { ...nextConfig, agents: { ...nextConfig.agents, list } };
+            }
+            return { nextConfig, result: repair.changes.length > 0 };
           },
         });
         repairedLegacyMain = repaired.result === true;
+        repairedMainMaterialized = repairedLegacyMain;
       }
       let tombstoneClaimed = false;
       if (
@@ -188,6 +203,20 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             model,
             identity,
           });
+          if (params.entry) {
+            const list = listAgentEntries(nextConfig);
+            const index = findAgentEntryIndex(list, agentId);
+            list[index] = {
+              ...list[index],
+              ...params.entry,
+              id: agentId,
+              name: safeName,
+              workspace: workspaceDir,
+              agentDir,
+              identity,
+            };
+            nextConfig = { ...nextConfig, agents: { ...nextConfig.agents, list } };
+          }
           if (repairedLegacyMain) {
             nextConfig = transferDefault(nextConfig, agentId);
           }
@@ -256,6 +285,20 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {
+      if (repairedMainMaterialized && agentId === "main") {
+        const snapshot = await import("../config/config.js").then((module) =>
+          module.readConfigFileSnapshot(),
+        );
+        const config = snapshot.sourceConfig ?? snapshot.config;
+        return {
+          status: "existing",
+          agentId,
+          name: safeName,
+          workspace: resolveAgentWorkspaceDir(config, agentId),
+          agentDir: resolveAgentDir(config, agentId),
+          bootstrapPending: false,
+        };
+      }
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
     }
     if (error instanceof InvalidAgentBindingsError) {

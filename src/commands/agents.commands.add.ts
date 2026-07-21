@@ -410,6 +410,9 @@ export async function agentsAddCommand(
     }
 
     const firstAgent = listAgentEntries(cfg).length === 0;
+    const stagedFirstAgentEntry = firstAgent
+      ? listAgentEntries(nextConfig).find((entry) => normalizeAgentId(entry.id) === agentId)
+      : undefined;
     const configToCommit = firstAgent
       ? { ...nextConfig, agents: { ...nextConfig.agents, list: undefined } }
       : nextConfig;
@@ -419,7 +422,11 @@ export async function agentsAddCommand(
     });
     nextConfig = committed.config;
     if (firstAgent) {
-      const created = await createAgent({ name: agentName, workspace: workspaceDir });
+      const created = await createAgent({
+        ...(stagedFirstAgentEntry ? { entry: stagedFirstAgentEntry } : {}),
+        name: agentName,
+        workspace: workspaceDir,
+      });
       if (created.status === "error") {
         throw new Error(created.message);
       }

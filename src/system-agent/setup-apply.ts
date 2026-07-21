@@ -1,6 +1,7 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import type { CreateAgentEntry } from "../agents/agent-create.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { StagedOnboardingAgent } from "../commands/onboard-agent.js";
 import {
@@ -394,6 +395,7 @@ export async function applySystemAgentSetup(
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;
     let stagedAgent: StagedOnboardingAgent | undefined;
+    let stagedEntry: CreateAgentEntry | undefined;
     if (enablePluginId) {
       const enabled = enablePluginInConfig(setupBaseConfig, enablePluginId);
       if (!enabled.enabled) {
@@ -415,6 +417,9 @@ export async function applySystemAgentSetup(
       });
       setupBaseConfig = staged.config;
       stagedAgent = staged.agent;
+      stagedEntry = setupBaseConfig.agents?.list?.find(
+        (entry) => normalizeAgentId(entry.id) === stagedAgent?.agentId,
+      );
     }
     const introducesFirstRoster = Boolean(stagedAgent);
     if (currentHasRoster) {
@@ -469,6 +474,7 @@ export async function applySystemAgentSetup(
       settings: gateway.settings,
       workspace: resolveOnboardingAgentTarget(gateway.nextConfig).workspaceDir,
       stagedAgent,
+      stagedEntry,
       introducesFirstRoster,
     };
   };
@@ -534,6 +540,7 @@ export async function applySystemAgentSetup(
               settings: setupCandidate.settings,
               workspace: setupCandidate.workspace,
               stagedAgent: setupCandidate.stagedAgent,
+              stagedEntry: setupCandidate.stagedEntry,
               introducesFirstRoster: setupCandidate.introducesFirstRoster,
               expectedInferenceRoute: expectedSourceRoute,
             },
@@ -542,6 +549,7 @@ export async function applySystemAgentSetup(
       }),
   );
   let nextConfig = committed.nextConfig;
+  let finalConfigHash = committed.persistedHash;
   const setupResult = committed.result;
   const settings = setupResult?.settings;
   if (!settings) {
@@ -553,10 +561,12 @@ export async function applySystemAgentSetup(
   if (setupResult.introducesFirstRoster) {
     const created = await ensureOnboardingAgent({
       config: nextConfig,
+      ...(setupResult.stagedEntry ? { entry: setupResult.stagedEntry } : {}),
       name: agentName?.trim() || "main",
       workspace: setupResult.workspace,
     });
     nextConfig = created.config;
+    finalConfigHash = resolveConfigSnapshotHash(await readConfigFileSnapshot()) ?? finalConfigHash;
     if (created.agentId) {
       const { resolveAgentDir } = await import("../agents/agent-scope.js");
       stagedAgent = {
@@ -728,7 +738,7 @@ export async function applySystemAgentSetup(
   return {
     configPath: committed.path,
     configHashBefore: committed.previousHash,
-    configHashAfter: committed.persistedHash,
+    configHashAfter: finalConfigHash,
     bootstrapPending: workspaceResult?.bootstrapPending === true,
     agentId: effectiveAgentId,
     lines,

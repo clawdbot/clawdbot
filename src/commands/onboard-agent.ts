@@ -1,5 +1,5 @@
 // First-run onboarding agent creation through the canonical agent service.
-import { createAgent } from "../agents/agent-create.js";
+import { createAgent, type CreateAgentEntry } from "../agents/agent-create.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createAgentIdentityConfig, sanitizeAgentIdentityLine } from "../agents/identity-file.js";
 import { readConfigFileSnapshot } from "../config/config.js";
@@ -56,6 +56,7 @@ export function stageOnboardingAgent(params: {
 
 export async function ensureOnboardingAgent(params: {
   config: OpenClawConfig;
+  entry?: CreateAgentEntry;
   name: string;
   workspace: string;
 }): Promise<{ config: OpenClawConfig; agentId?: string; bootstrapPending?: boolean }> {
@@ -68,25 +69,25 @@ export async function ensureOnboardingAgent(params: {
   }
   const baseConfig = before.exists ? (before.sourceConfig ?? before.config) : {};
   const proposalPatch = createMergePatch(baseConfig, params.config);
+  const staged = stageOnboardingAgent({
+    config: params.config,
+    name: params.name,
+    workspace: params.workspace,
+  });
+  const stagedEntry =
+    params.entry ??
+    staged.config.agents?.list?.find(
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(params.name),
+    );
   const result = await createAgent({
+    ...(stagedEntry ? { entry: stagedEntry } : {}),
     name: params.name,
     workspace: params.workspace,
     skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
   });
   if (result.status === "error") {
-    const requestedId = normalizeAgentId(params.name);
-    if (result.reason !== "already-exists" || result.agentId !== requestedId) {
-      throw new Error(result.message);
-    }
-    const repaired = await readConfigFileSnapshot();
-    const repairedConfig = repaired.sourceConfig ?? repaired.config;
-    const repairedEntry = repairedConfig.agents?.list?.find(
-      (entry) => normalizeAgentId(entry.id) === requestedId,
-    );
-    if (!repaired.valid || !repairedEntry || requestedId !== "main") {
-      throw new Error(result.message);
-    }
+    throw new Error(result.message);
   }
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -102,7 +103,7 @@ export async function ensureOnboardingAgent(params: {
         list: persisted.agents?.list,
       },
     },
-    agentId: result.status === "created" ? result.agentId : normalizeAgentId(params.name),
-    bootstrapPending: result.status === "created" ? result.bootstrapPending : undefined,
+    agentId: result.agentId,
+    bootstrapPending: result.bootstrapPending,
   };
 }

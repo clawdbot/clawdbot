@@ -33,6 +33,11 @@ type EnsureAgentWorkspace = (params: {
 }) => Promise<{ dir: string }>;
 
 type SetupCommandDeps = {
+  createAgent?: (params: {
+    entry: { id: string; default: true; name: string; workspace: string };
+  }) => Promise<
+    { status: "created" | "existing"; agentId: string } | { status: "error"; message: string }
+  >;
   createConfigIO?: () => ConfigIO;
   defaultAgentWorkspaceDir?: string | (() => string | Promise<string>);
   ensureAgentWorkspace?: EnsureAgentWorkspace;
@@ -151,7 +156,7 @@ export async function setupCommand(
   const workspace =
     desiredWorkspace ?? defaults.workspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
 
-  const next: OpenClawConfig = {
+  let next: OpenClawConfig = {
     ...cfg,
     agents: {
       ...cfg.agents,
@@ -202,6 +207,25 @@ export async function setupCommand(
     runtime.log(`Config OK: ${await formatConfigPath(configPath)}`);
   }
 
+  let createdAgentId: string | undefined;
+  if ((next.agents?.list?.length ?? 0) === 0) {
+    const create = deps.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
+    const created = await create({
+      entry: { id: "main", default: true, name: "main", workspace },
+    });
+    if (created.status === "error") {
+      throw new Error(created.message);
+    }
+    createdAgentId = created.agentId;
+    next = {
+      ...next,
+      agents: {
+        ...next.agents,
+        list: [{ id: created.agentId, default: true, name: "main", workspace }],
+      },
+    };
+  }
+
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
     dir: workspace,
     ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
@@ -212,7 +236,7 @@ export async function setupCommand(
   const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )(resolveDefaultAgentId(next));
+  )(createdAgentId ?? resolveDefaultAgentId(next));
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");

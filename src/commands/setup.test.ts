@@ -16,6 +16,15 @@ function createSetupDeps(home: string) {
     logger: { error: vi.fn(), warn: vi.fn() },
   });
   return {
+    createAgent: vi.fn(async ({ entry }) => {
+      const current = JSON.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
+      const agents = (current.agents ?? {}) as Record<string, unknown>;
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ ...current, agents: { ...agents, list: [entry] } }, null, 2),
+      );
+      return { status: "created" as const, agentId: "main" };
+    }),
     createConfigIO: () => ({
       configPath,
       readConfigFileSnapshotForWrite: configIO.readConfigFileSnapshotForWrite,
@@ -76,6 +85,7 @@ describe("setupCommand", () => {
           defaults: {
             workspace,
           },
+          list: [{ id: "main", default: true, name: "main", workspace }],
         },
         gateway: {
           mode: "local",
