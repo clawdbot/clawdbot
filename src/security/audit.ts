@@ -3,9 +3,11 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -33,6 +35,7 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
+import { resolveUserPath } from "../utils.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -621,6 +624,12 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
+function resolveAuditDefaultAgentId(cfg: OpenClawConfig): string | undefined {
+  const agents = listAgentEntries(cfg);
+  const defaults = agents.filter((agent) => agent.default === true);
+  return defaults.length === 1 ? defaults[0]?.id : undefined;
+}
+
 function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
@@ -642,7 +651,8 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     });
   }
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
+  const defaultAgentId = resolveAuditDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -672,7 +682,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     new Map(
       [
         {
-          id: resolveDefaultAgentId(cfg),
+          id: defaultAgentId ?? "global",
           security: resolveExecModePolicy({
             mode: cfg.tools?.exec?.mode,
             security: cfg.tools?.exec?.security ?? "deny",
@@ -1001,11 +1011,11 @@ function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
 }
 
 function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const agents = listAgentEntries(cfg);
+  const defaultAgentId = resolveAuditDefaultAgentId(cfg);
   const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
   const candidates = [
-    ...(defaultsHaveSkillAllowlist
+    ...(defaultsHaveSkillAllowlist && defaultAgentId
       ? [
           {
             id: defaultAgentId,
@@ -1252,8 +1262,15 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
+  const defaultAgentId = resolveAuditDefaultAgentId(cfg);
+  const configuredDefaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspaceDir =
-    opts.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    opts.workspaceDir ??
+    (defaultAgentId
+      ? resolveAgentWorkspaceDir(cfg, defaultAgentId)
+      : configuredDefaultWorkspace
+        ? resolveUserPath(configuredDefaultWorkspace, env)
+        : resolveDefaultAgentWorkspaceDir(env));
   const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
   const configSnapshot = includeFilesystem
     ? opts.configSnapshot !== undefined

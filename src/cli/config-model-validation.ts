@@ -1,7 +1,6 @@
 import {
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
-  resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -140,6 +139,17 @@ function modelRefComparisonKey(ref: TouchedModelRef): string {
   return `path:${ref.path}`;
 }
 
+function resolveValidRosterDefaultId(config: OpenClawConfig | undefined): string | undefined {
+  const list = config?.agents?.list;
+  if (!Array.isArray(list) || list.length === 0) {
+    return undefined;
+  }
+  const defaults = list.filter((agent) => agent?.default === true);
+  return defaults.length === 1 && typeof defaults[0]?.id === "string"
+    ? normalizeAgentId(defaults[0].id)
+    : undefined;
+}
+
 function collectTouchedTextModelRefs(params: {
   config: OpenClawConfig;
   previousConfig?: OpenClawConfig;
@@ -158,11 +168,16 @@ function collectTouchedTextModelRefs(params: {
   const previousRefsByIdentity = previousRefs
     ? new Map(previousRefs.map((ref) => [modelRefComparisonKey(ref), ref]))
     : undefined;
+  const previousDefaultAgentId = resolveValidRosterDefaultId(params.previousConfig);
   const defaultPrimaryProviderChanged =
     defaultPrimaryTouched &&
     (!previousRefs ||
+      !previousDefaultAgentId ||
       resolveDefaultModelForAgent({ cfg: params.config }).provider !==
-        resolveDefaultModelForAgent({ cfg: params.previousConfig ?? {} }).provider);
+        resolveDefaultModelForAgent({
+          cfg: params.previousConfig!,
+          agentId: previousDefaultAgentId,
+        }).provider);
   const touchedRefs = refs.filter((ref) => {
     if (ref.fallback && defaultPrimaryProviderChanged) {
       const previousRef = previousRefsByIdentity?.get(modelRefComparisonKey(ref));
@@ -212,7 +227,17 @@ function collectTouchedTextModelRefs(params: {
     if (!entriesTouched || !previousEntries || Object.keys(previousEntries).length === 0) {
       return touchedRefs;
     }
-    const previousDefaultAgentId = resolveDefaultAgentId(params.previousConfig ?? {});
+    if (!previousDefaultAgentId) {
+      for (const defaultRef of defaultRefs) {
+        const alreadySelected = touchedRefs.some(
+          (ref) => ref.agentIndex === undefined && ref.path === defaultRef.path,
+        );
+        if (!alreadySelected) {
+          touchedRefs.push({ ...defaultRef, dependency: true });
+        }
+      }
+      return touchedRefs;
+    }
     for (const defaultRef of defaultRefs) {
       const previouslyInherited = params.previousConfig
         ? defaultRef.fallback
@@ -335,7 +360,10 @@ function expandInheritedDefaultRefs(
   if (!agentEntries) {
     return refs;
   }
-  const defaultAgentId = resolveDefaultAgentId(config);
+  const defaultAgentId = resolveValidRosterDefaultId(config);
+  if (!defaultAgentId) {
+    return refs;
+  }
   const expanded: TouchedModelRef[] = [];
   const seen = new Set<string>();
   const push = (ref: TouchedModelRef) => {
@@ -413,19 +441,19 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     ]));
 
   return async ({ config, ref }) => {
-    const targetAgentId = ref.agentId ?? agentScope.resolveDefaultAgentId(config);
-    const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
-    const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
     const resolvedRef = ref.fallback
       ? resolveCanonicalFallbackRef(config, ref.value)
       : resolveCanonicalPrimaryRef(config, ref.value);
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
-    // CLI backends own model validation; their model ids do not need embedded catalog rows.
+    // CLI backends validate their own ids and do not require a roster-owned catalog.
     if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
       return undefined;
     }
+    const targetAgentId = ref.agentId ?? agentScope.resolveDefaultAgentId(config);
+    const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
+    const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
     const [modelRuntime, preparedCatalog] = await loadModelModules();
 
     let prepared = preparedByAgent.get(targetAgentId);

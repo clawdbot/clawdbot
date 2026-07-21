@@ -549,6 +549,31 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("accepts an empty previous roster during first-agent onboarding", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => "Unknown model");
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "provider-a/default" } },
+          list: [{ id: "main", default: true }],
+        },
+      },
+      previousConfig: { agents: { defaults: { model: { primary: "provider-a/default" } } } },
+      touchedPaths: [["agents", "list"]],
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([expect.stringContaining("Unknown model")]);
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: expect.objectContaining({
+        agentId: "main",
+        dependency: true,
+        path: "agents.defaults.model.primary",
+      }),
+    });
+  });
+
   it("revalidates a slash-shaped alias whose bare target changes provider", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
@@ -599,7 +624,7 @@ describe("config model validation", () => {
             fallbacks: ["backup"],
           },
         },
-        entries: { ops: { model: { fallbacks: ["agent-backup"] } } },
+        entries: { ops: { default: true, model: { fallbacks: ["agent-backup"] } } },
       },
     };
 
@@ -721,7 +746,7 @@ describe("config model validation", () => {
       config: {
         agents: {
           entries: {
-            beta: { model: "provider-a/model" },
+            beta: { default: true, model: "provider-a/model" },
             alpha: { model: "provider-b/model" },
           },
         },
@@ -729,7 +754,7 @@ describe("config model validation", () => {
       previousConfig: {
         agents: {
           entries: {
-            alpha: { model: "provider-a/model" },
+            alpha: { default: true, model: "provider-a/model" },
             beta: { model: "provider-b/model" },
           },
         },
@@ -747,12 +772,12 @@ describe("config model validation", () => {
 
     const result = await checkTouchedTextModelRefs({
       config: {
-        agents: { entries: { beta: { model: "provider-b/model" } } },
+        agents: { entries: { beta: { default: true, model: "provider-b/model" } } },
       },
       previousConfig: {
         agents: {
           entries: {
-            alpha: { model: "provider-a/model" },
+            alpha: { default: true, model: "provider-a/model" },
             beta: { model: "provider-b/model" },
           },
         },
@@ -770,10 +795,10 @@ describe("config model validation", () => {
 
     const result = await checkTouchedTextModelRefs({
       config: {
-        agents: { entries: { next: { model: "provider-a/model" } } },
+        agents: { entries: { next: { default: true, model: "provider-a/model" } } },
       },
       previousConfig: {
-        agents: { entries: { current: { model: "provider-a/model" } } },
+        agents: { entries: { current: { default: true, model: "provider-a/model" } } },
       },
       touchedPaths: [["agents", "entries"]],
       resolveModelRef,
@@ -804,7 +829,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          entries: { ops: {} },
+          entries: { ops: { default: true } },
         },
       },
       previousConfig: {
@@ -815,7 +840,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          entries: { ops: { model: "provider-b/override" } },
+          entries: { ops: { default: true, model: "provider-b/override" } },
         },
       },
       touchedPaths: [["agents", "entries", "ops", "model"]],
@@ -853,7 +878,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          entries: { ops: { workspace: "/tmp/ops" } },
+          entries: { ops: { default: true, workspace: "/tmp/ops" } },
         },
       },
       previousConfig: {
@@ -918,13 +943,13 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "provider-a/default" } },
-          entries: { ops: { model: { fallbacks: ["provider-b/next"] } } },
+          entries: { ops: { default: true, model: { fallbacks: ["provider-b/next"] } } },
         },
       },
       previousConfig: {
         agents: {
           defaults: { model: { primary: "provider-a/default" } },
-          entries: { ops: { model: { fallbacks: ["provider-b/current"] } } },
+          entries: { ops: { default: true, model: { fallbacks: ["provider-b/current"] } } },
         },
       },
       touchedPaths: [["agents", "entries", "ops", "model", "fallbacks"]],
