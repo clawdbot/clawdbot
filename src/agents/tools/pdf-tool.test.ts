@@ -335,6 +335,29 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("clamps pathological maxBytesMb while preserving operator defaults", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      // A pathological model input (1e9 MB ≈ 1 PB) must not allocate.
+      await tool.execute("t1", {
+        prompt: "ocr",
+        pdf: "/tmp/doc.pdf",
+        maxBytesMb: "1000000000",
+      });
+
+      const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+      // Clamped to MAX_PDF_MB_CAP=100 → 100 * 1024 * 1024
+      expectFields(loadOptions, { maxBytes: 100 * 1024 * 1024 });
+    });
+  });
+
   it("respects fsPolicy.workspaceOnly for non-sandbox pdf paths", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
@@ -988,6 +1011,7 @@ describe("createPdfTool", () => {
       expect(schema.properties?.maxBytesMb).toMatchObject({
         type: "number",
         exclusiveMinimum: 0,
+        maximum: 100,
       });
     });
   });
