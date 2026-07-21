@@ -4,35 +4,12 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 /** Stable presentation category for a session row. */
-export const SessionPresentationFamilySchema = Type.Union([
-  Type.Literal("main"),
-  Type.Literal("direct"),
-  Type.Literal("group"),
-  Type.Literal("channel"),
-  Type.Literal("thread"),
-  Type.Literal("cron"),
-  Type.Literal("heartbeat"),
-  Type.Literal("subagent"),
-  Type.Literal("acp"),
-  Type.Literal("dashboard"),
-  Type.Literal("tui"),
-  Type.Literal("explicit"),
-  Type.Literal("hook"),
-  Type.Literal("harness"),
-  Type.Literal("voice"),
-  Type.Literal("dreaming"),
-  Type.Literal("system"),
-  Type.Literal("custom"),
-  Type.Literal("global"),
-  Type.Literal("unknown"),
-]);
-
-export const SessionPresentationTitleSourceSchema = Type.Union([
-  Type.Literal("label"),
-  Type.Literal("displayName"),
-  Type.Literal("generated"),
-  Type.Literal("worktree"),
-]);
+// Presentation taxonomies can grow independently of native clients. Keep their
+// wire representation open so a newer Gateway cannot make an older client fail
+// to decode an otherwise compatible sessions.list response.
+export const SessionPresentationFamilySchema = NonEmptyString;
+export const SessionPresentationTitleSourceSchema = NonEmptyString;
+export const SessionPresentationPeerKindSchema = NonEmptyString;
 
 /** Non-sensitive, client-ready identity and display metadata for a session row. */
 export const SessionPresentationSchema = closedObject({
@@ -43,9 +20,7 @@ export const SessionPresentationSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   channel: Type.Optional(NonEmptyString),
   accountId: Type.Optional(NonEmptyString),
-  peerKind: Type.Optional(
-    Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
-  ),
+  peerKind: Type.Optional(SessionPresentationPeerKindSchema),
   isMain: Type.Boolean(),
   isBackground: Type.Boolean(),
 });

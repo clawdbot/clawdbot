@@ -4196,6 +4196,56 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionPresentation: Codable, Sendable {
+    public let title: String
+    public let titlesource: String
+    public let subtitle: String?
+    public let family: String
+    public let agentid: String?
+    public let channel: String?
+    public let accountid: String?
+    public let peerkind: String?
+    public let ismain: Bool
+    public let isbackground: Bool
+
+    public init(
+        title: String,
+        titlesource: String,
+        subtitle: String? = nil,
+        family: String,
+        agentid: String? = nil,
+        channel: String? = nil,
+        accountid: String? = nil,
+        peerkind: String? = nil,
+        ismain: Bool,
+        isbackground: Bool)
+    {
+        self.title = title
+        self.titlesource = titlesource
+        self.subtitle = subtitle
+        self.family = family
+        self.agentid = agentid
+        self.channel = channel
+        self.accountid = accountid
+        self.peerkind = peerkind
+        self.ismain = ismain
+        self.isbackground = isbackground
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title
+        case titlesource = "titleSource"
+        case subtitle
+        case family
+        case agentid = "agentId"
+        case channel
+        case accountid = "accountId"
+        case peerkind = "peerKind"
+        case ismain = "isMain"
+        case isbackground = "isBackground"
+    }
+}
+
 public struct SessionCatalogCapabilities: Codable, Sendable {
     public let continuesession: Bool
     public let archive: Bool

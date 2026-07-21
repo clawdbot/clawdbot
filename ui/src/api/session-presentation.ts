@@ -1,32 +1,12 @@
 export type SessionPresentation = {
   title: string;
-  titleSource: "label" | "displayName" | "generated" | "worktree";
+  titleSource: string;
   subtitle?: string;
-  family:
-    | "main"
-    | "direct"
-    | "group"
-    | "channel"
-    | "thread"
-    | "cron"
-    | "heartbeat"
-    | "subagent"
-    | "acp"
-    | "dashboard"
-    | "tui"
-    | "explicit"
-    | "hook"
-    | "harness"
-    | "voice"
-    | "dreaming"
-    | "system"
-    | "custom"
-    | "global"
-    | "unknown";
+  family: string;
   agentId?: string;
   channel?: string;
   accountId?: string;
-  peerKind?: "direct" | "group" | "channel";
+  peerKind?: string;
   isMain: boolean;
   isBackground: boolean;
 };

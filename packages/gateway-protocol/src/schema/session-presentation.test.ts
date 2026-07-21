@@ -20,16 +20,17 @@ describe("SessionPresentationSchema", () => {
     ).toBe(true);
   });
 
-  it("rejects unknown families and peer identifiers", () => {
+  it("accepts future classification values but rejects peer identifiers", () => {
     expect(
       Value.Check(SessionPresentationSchema, {
         title: "Session",
         titleSource: "generated",
         family: "plugin-owned",
+        peerKind: "topic",
         isMain: false,
         isBackground: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       Value.Check(SessionPresentationSchema, {
         title: "Session",
