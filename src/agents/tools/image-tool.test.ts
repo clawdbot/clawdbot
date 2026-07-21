@@ -2071,8 +2071,8 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
-          maxImages: { type: "integer", minimum: 1 },
+          maxBytesMb: { type: "number", exclusiveMinimum: 0, maximum: 100 },
+          maxImages: { type: "integer", minimum: 1, maximum: 100 },
         },
       });
     });
@@ -2772,6 +2772,46 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps pathological maxImages to prevent unbounded gate bypass", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    // Eleven unique small PNGs exceed the user-set maxImages=3 but are
+    // well below the DEFAULT_MAX_IMAGES=20 floor and the MAX_IMAGES_CAP=100.
+    // Without clamping, maxImages=1_000_000_000 would pass through and
+    // silently accept millions of image references.
+    const many = await tool.execute("t1", {
+      prompt: "Describe.",
+      images: [
+        `data:image/png;base64,${createLargeColorBlockPng(1).toString("base64")}`,
+        `data:image/png;base64,${createLargeColorBlockPng(2).toString("base64")}`,
+        `data:image/png;base64,${createLargeColorBlockPng(3).toString("base64")}`,
+      ],
+      maxImages: 1_000_000_000,
+    });
+
+    // With 3 unique images and a clamped cap of 100, each image is loaded
+    // and described individually by the MiniMax VLM. The pathological
+    // maxImages=1_000_000_000 does not cause a crash or unexpected rejection.
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect((many.details as { images?: unknown[] } | undefined)?.images).toHaveLength(3);
+  });
+
+  it("clamps pathological maxBytesMb to a safe upper bound", async () => {
+    // pickMaxBytes receives the megabytes value and converts to bytes.
+    // A pathological model input (1e9 MB ≈ 1 PB) must not allocate.
+    const api = (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.imageToolTestApi")
+    ] as { pickMaxBytes: (cfg: undefined, maxBytesMb: number) => number | undefined } | undefined;
+    expect(api?.pickMaxBytes).toBeDefined();
+
+    const normal = api!.pickMaxBytes(undefined, 10);
+    expect(normal).toBe(10 * 1024 * 1024);
+
+    const clamped = api!.pickMaxBytes(undefined, 1_000_000_000);
+    // 1e9 MB clamped to MAX_IMAGE_MB_CAP=100 → 100 * 1024 * 1024 bytes
+    expect(clamped).toBe(100 * 1024 * 1024);
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

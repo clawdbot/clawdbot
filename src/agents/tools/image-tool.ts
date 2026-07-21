@@ -89,6 +89,8 @@ import {
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
+const MAX_IMAGES_CAP = 100;
+const MAX_IMAGE_MB_CAP = 100;
 
 type ImageToolLoadWebMediaOptions = {
   maxBytes?: number;
@@ -403,6 +405,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
     ...testing,
     resolveImageModelConfigForTool,
+    pickMaxBytes,
   };
 }
 
@@ -422,7 +425,9 @@ function resolveImageModelConfigForOverride(params: {
 
 function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
   if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
-    return Math.floor(maxBytesMb * 1024 * 1024);
+    // Model-supplied maxBytesMb is clamped to prevent pathological allocations in
+    // image compression pipelines. Operator config (mediaMaxMb) is not clamped here.
+    return Math.floor(Math.min(maxBytesMb, MAX_IMAGE_MB_CAP) * 1024 * 1024);
   }
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
@@ -915,8 +920,8 @@ export function createImageTool(options?: {
         }),
       ),
       ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
-      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
-      maxImages: optionalPositiveIntegerSchema(),
+      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0, maximum: MAX_IMAGE_MB_CAP }),
+      maxImages: optionalPositiveIntegerSchema({ maximum: MAX_IMAGES_CAP }),
     }),
     execute: async (_toolCallId, args, signal) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -948,7 +953,13 @@ export function createImageTool(options?: {
       }
 
       // MARK: - Enforce max images cap
-      const maxImages = readPositiveIntegerParam(record, "maxImages") ?? DEFAULT_MAX_IMAGES;
+      // Model-supplied maxImages is clamped to prevent pathological gate bypass
+      // in image processing loops. The DEFAULT_MAX_IMAGES floor is unchanged.
+      const maxImagesRaw = readPositiveIntegerParam(record, "maxImages");
+      const maxImages =
+        maxImagesRaw === undefined
+          ? DEFAULT_MAX_IMAGES
+          : Math.min(maxImagesRaw, MAX_IMAGES_CAP);
       if (imageInputs.length > maxImages) {
         return {
           content: [
