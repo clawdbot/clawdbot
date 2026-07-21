@@ -3936,8 +3936,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     let downloadedPath: string | undefined;
     let downloadedPaths: string[] = [];
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
-        downloadedPath = ctx.media[0]?.path;
+      async ({ ctx }: { ctx: { media: Array<{ path: string }> } }) => {
+        downloadedPath = expectDefined(ctx.media[0], "preflight audio media").path;
         return "Bill /new please review this";
       },
     );
@@ -4062,8 +4062,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     slackCtx.historyLimit = 5;
     let downloadedPath: string | undefined;
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
-        downloadedPath = ctx.media[0]?.path;
+      async ({ ctx }: { ctx: { media: Array<{ path: string }> } }) => {
+        downloadedPath = expectDefined(ctx.media[0], "preflight audio media").path;
         return "please review this";
       },
     );
