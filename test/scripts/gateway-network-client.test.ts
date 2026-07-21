@@ -120,6 +120,67 @@ describe("gateway network client", () => {
     expect(delayImpl).toHaveBeenCalledWith(250);
   });
 
+  it("retries retryable suspension recovery responses using the server delay", async () => {
+    const expiresAtMs = Date.now() + 10_000;
+    const rpc = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 503,
+        body: {
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            retryable: true,
+            retryAfterMs: 125,
+            details: { reason: "scheduler-resume-failed" },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          ok: true,
+          payload: {
+            status: "ready",
+            suspensionId: "lease-recovered",
+            expiresAtMs,
+            activeCount: 0,
+            blockers: [],
+          },
+        },
+      });
+    const delayImpl = vi.fn(async () => undefined);
+
+    await expect(
+      prepareReadySuspension(
+        { deadline: Date.now() + 5_000, requestId: "request-recovery", rpc },
+        { delayImpl },
+      ),
+    ).resolves.toMatchObject({ status: "ready", suspensionId: "lease-recovered" });
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(delayImpl).toHaveBeenCalledWith(125);
+  });
+
+  it("rejects non-retryable suspension errors immediately", async () => {
+    const rpc = vi.fn(async () => ({
+      status: 503,
+      body: {
+        ok: false,
+        error: { code: "UNAVAILABLE", retryable: false },
+      },
+    }));
+    const delayImpl = vi.fn(async () => undefined);
+
+    await expect(
+      prepareReadySuspension(
+        { deadline: Date.now() + 5_000, requestId: "request-rejected", rpc },
+        { delayImpl },
+      ),
+    ).rejects.toThrow("suspension prepare must return HTTP 200");
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(delayImpl).not.toHaveBeenCalled();
+  });
+
   it("stops busy suspension retries at the client deadline", async () => {
     let nowMs = 1_000;
     const rpc = vi.fn(async () => ({
