@@ -2875,7 +2875,7 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("rejects deleting a nonexistent agent", async () => {
+  it("returns the normal not-found response when the roster is empty", async () => {
     mocks.findAgentEntryIndex.mockReturnValue(-1);
 
     const { respond, promise } = makeCall("agents.delete", {

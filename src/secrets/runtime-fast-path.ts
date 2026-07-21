@@ -67,8 +67,11 @@ export function collectCandidateAgentDirs(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): string[] {
   const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveDefaultAgentDir(config, env), env));
-  for (const agentId of listAgentIds(config)) {
+  const agentIds = listAgentIds(config);
+  if (agentIds.length > 0) {
+    dirs.add(resolveUserPath(resolveDefaultAgentDir(config, env), env));
+  }
+  for (const agentId of agentIds) {
     dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
   }
   return [...dirs];

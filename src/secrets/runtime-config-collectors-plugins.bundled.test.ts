@@ -1,7 +1,7 @@
 /** Tests bundled plugin config secret collectors. */
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDirForConfigInspection } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
@@ -90,7 +90,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        workspaceDir: resolveAgentWorkspaceDirForConfigInspection(config, {}),
         env: {},
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
@@ -190,7 +190,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        workspaceDir: resolveAgentWorkspaceDirForConfigInspection(config, {}),
         env: {},
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,

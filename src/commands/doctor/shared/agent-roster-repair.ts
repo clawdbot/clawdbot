@@ -48,9 +48,6 @@ function hasLegacyImplicitMainState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv)
     if (fs.existsSync(storePath) || fs.existsSync(sqlitePath)) {
       return true;
     }
-    // A fixed custom store was a legacy single-agent surface even before its
-    // first session write; materialize its owner before runtime opens it.
-    return !configuredStore.includes("{agentId}");
   }
   const configuredWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspace = configuredWorkspace
@@ -63,8 +60,9 @@ export function maybeRepairAgentRoster(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): { config: OpenClawConfig; changes: string[] } {
-  const list = cfg.agents?.list ?? [];
-  if (list.length > 0 || !hasLegacyImplicitMainState(cfg, env)) {
+  const hasExplicitList = Boolean(cfg.agents && Object.hasOwn(cfg.agents, "list"));
+  const list = cfg.agents?.list;
+  if (hasExplicitList || (list?.length ?? 0) > 0 || !hasLegacyImplicitMainState(cfg, env)) {
     return { config: cfg, changes: [] };
   }
   return {

@@ -337,8 +337,10 @@ async function collectSecurityPermissionTargets(params: {
   }
 
   const ids = new Set<string>();
-  ids.add(resolveDefaultAgentId(params.cfg));
   const list = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
+  if (list.length > 0) {
+    ids.add(resolveDefaultAgentId(params.cfg));
+  }
   for (const agent of list ?? []) {
     if (!agent || typeof agent !== "object") {
       continue;

@@ -162,6 +162,9 @@ export async function readConfigFileSnapshotInternal(
     }));
     const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
     const sourceRosterMigration = migratePersistedImplicitMainRoster(effectiveParsed);
+    envVarWarnings.push(
+      ...rosterMigration.diagnostics.map((message) => ({ path: "agents.list", message })),
+    );
     if (
       rosterMigration.changed &&
       sourceRosterMigration.changed &&

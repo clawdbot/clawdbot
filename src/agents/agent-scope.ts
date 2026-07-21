@@ -38,6 +38,7 @@ export {
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
+  resolveAgentWorkspaceDirForConfigInspection,
   resolveDefaultAgentId,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";

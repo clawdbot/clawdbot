@@ -20,6 +20,7 @@ import {
 import { importSqliteSessionRows } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
+import type { SessionEntry } from "./types.js";
 
 const openDatabases = new Set<string>();
 
@@ -47,13 +48,18 @@ async function seedSession(params: {
   sessionKey: string;
   storePath: string;
   updatedAt?: number;
+  entry?: Partial<SessionEntry>;
 }): Promise<void> {
   trackStore(params.storePath, params.agentId);
   await importSqliteSessionRows({
     agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
-    entry: { sessionId: params.sessionId, updatedAt: params.updatedAt ?? 10 },
+    entry: {
+      sessionId: params.sessionId,
+      updatedAt: params.updatedAt ?? 10,
+      ...params.entry,
+    },
   });
   await replaceTranscriptEvents(
     {
@@ -299,6 +305,29 @@ describe("legacy non-main default session key migration", () => {
         kind: "store-unreadable",
         resolved: false,
         sourceStorePath: storePath,
+      }),
+    ]);
+  });
+
+  it("keeps a cross-store cleanup failure unresolved for retry", async () => {
+    const { env } = createFixture("openclaw-main-key-cleanup-failure-");
+    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
+    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
+    await seedSession({
+      agentId: "main",
+      sessionId: "locked-legacy",
+      sessionKey: "agent:main:main",
+      storePath: legacyStorePath,
+      entry: { modelSelectionLocked: true },
+    });
+
+    const result = await ensureLegacyDefaultMainSessionKeysMigrated(cfg, env);
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        kind: "store-unreadable",
+        resolved: false,
+        sourceStorePath: legacyStorePath,
       }),
     ]);
   });

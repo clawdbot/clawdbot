@@ -67,13 +67,21 @@ describe("legacy implicit agent doctor repair", () => {
     ).toEqual([{ id: "main", default: true }]);
   });
 
-  it("materializes main for a configured custom session store before its first write", () => {
+  it("does not infer main from a configured custom session store before its first write", () => {
     const env = fixtureEnv();
     const config = { session: { store: "~/custom/sessions.json" } };
 
-    expect(maybeRepairAgentRoster(config, env).config.agents?.list).toEqual([
-      { id: "main", default: true },
-    ]);
+    expect(maybeRepairAgentRoster(config, env)).toEqual({ config, changes: [] });
+  });
+
+  it("preserves an explicit empty roster even when legacy main state exists", () => {
+    const env = fixtureEnv();
+    const sessionsDir = path.join(env.OPENCLAW_STATE_DIR!, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}\n");
+    const config = { agents: { list: [] } };
+
+    expect(maybeRepairAgentRoster(config, env)).toEqual({ config, changes: [] });
   });
 
   it("detects a derived SQLite custom session store without legacy JSON", () => {

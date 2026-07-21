@@ -308,7 +308,10 @@ async function migrateFromStore(params: {
       if (!imported.imported) {
         return await migrateFromStore(params);
       }
-      await removeAliases({ aliases, source });
+      const cleanupError = await removeAliases({ aliases, source });
+      if (cleanupError) {
+        return unreadableOutcome({ ...params, error: cleanupError });
+      }
     }
     return { ...params.base, kind: "migrated", resolved: true, source: source.claim };
   } catch (error) {

@@ -1034,6 +1034,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
+    const existingJournal = readAgentDeletionJournal(agentId);
+    if (
+      !isConfiguredAgent(cfg, agentId) &&
+      (!existingJournal || existingJournal.cleanupCompleted)
+    ) {
+      respondAgentNotFound(respond, agentId);
+      return;
+    }
     if (agentId === resolveDefaultAgentId(cfg)) {
       respond(
         false,
@@ -1045,28 +1053,20 @@ export const agentsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const existingJournal = readAgentDeletionJournal(agentId);
-    if (
-      !isConfiguredAgent(cfg, agentId) &&
-      (!existingJournal || existingJournal.cleanupCompleted)
-    ) {
-      respondAgentNotFound(respond, agentId);
-      return;
-    }
 
     const requestedDeleteFiles =
       typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
     try {
       const result = await withConfigMutationExclusive(async (lockedConfig) => {
-        if (agentId === resolveDefaultAgentId(lockedConfig)) {
-          throw new AgentConfigPreconditionError(
-            `agent "${agentId}" is the default; reassign default first`,
-          );
-        }
         let lockedJournal = readAgentDeletionJournal(agentId);
         const configured = isConfiguredAgent(lockedConfig, agentId);
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
+        }
+        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(
+            `agent "${agentId}" is the default; reassign default first`,
+          );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
           const claimed = claimCompletedAgentDeletion(agentId, lockedJournal.operationId);

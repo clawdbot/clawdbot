@@ -55,7 +55,10 @@ function containsLegacyMainAgentReference(raw: Record<string, unknown>): boolean
 function repairLegacyAgentRoster(raw: Record<string, unknown>, changes: string[]): void {
   const agents = getRecord(raw.agents);
   const list = agents?.list;
-  if (!Array.isArray(list) || list.length === 0) {
+  if (Array.isArray(list) && list.length === 0) {
+    return;
+  }
+  if (!Array.isArray(list)) {
     if (!containsLegacyMainAgentReference(raw)) {
       return;
     }

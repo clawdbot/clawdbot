@@ -37,6 +37,7 @@ describe("persisted implicit-main roster migration", () => {
     expect(migratePersistedImplicitMainRoster({ agents: "invalid" })).toEqual({
       config: { agents: "invalid" },
       changed: false,
+      diagnostics: [],
     });
   });
 
@@ -51,6 +52,34 @@ describe("persisted implicit-main roster migration", () => {
 
       expect(snapshot.sourceConfig.agents?.list).toEqual([]);
       expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents: { list: [] } });
+    });
+  });
+
+  it.each([
+    {
+      label: "missing default",
+      list: [{ id: "ops" }, { id: "research" }],
+      expected: [{ id: "ops", default: true }, { id: "research" }],
+    },
+    {
+      label: "duplicate defaults",
+      list: [{ id: "ops" }, { id: "research", default: true }, { id: "writer", default: true }],
+      expected: [{ id: "ops" }, { id: "research", default: true }, { id: "writer" }],
+    },
+  ])("persists repaired $label markers before validation", async ({ list, expected }) => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({ agents: { list } }));
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.sourceConfig.agents?.list).toEqual(expected);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+        agents: { list: expected },
+      });
     });
   });
 });

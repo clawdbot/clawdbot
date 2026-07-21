@@ -75,6 +75,9 @@ export function loadConfigFromContext(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
     }
+    for (const diagnostic of rosterMigration.diagnostics) {
+      deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
+    }
     warnOnConfigMiskeys(validationConfigRaw, deps.logger);
     if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
       loggedConfigWarningFingerprints.delete(configPath);
