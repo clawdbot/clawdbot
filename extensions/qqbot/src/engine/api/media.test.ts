@@ -39,14 +39,16 @@ function mockGuardedResponse(
   body: BodyInit = MEDIA_BYTES,
   init?: ResponseInit,
 ): {
+  response: Response;
   release: ReturnType<typeof vi.fn>;
 } {
   const release = vi.fn(async () => {});
+  const response = new Response(body, init);
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
-    response: new Response(body, init),
+    response,
     release,
   });
-  return { release };
+  return { response, release };
 }
 
 function mockApiClient(): ApiClient {
@@ -428,7 +430,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
 
   it("rejects HTTP errors from guarded direct-upload downloads before calling the QQ API", async () => {
     fetchWithSsrFGuardMock.mockReset();
-    mockGuardedResponse("not found", { status: 404 });
+    const { response, release } = mockGuardedResponse("not found", { status: 404 });
+    const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
@@ -443,6 +446,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       ),
     ).rejects.toThrow("Direct-upload media URL returned HTTP 404");
 
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
     expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
     expect(client["request"]).not.toHaveBeenCalled();
   });
