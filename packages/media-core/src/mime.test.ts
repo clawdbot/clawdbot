@@ -45,7 +45,7 @@ async function makeApkZip(opts: { signed?: boolean } = {}): Promise<Buffer> {
 describe("mime detection", () => {
   async function expectDetectedMime(params: {
     input: Parameters<typeof detectMime>[0];
-    expected: string;
+    expected: string | undefined;
   }) {
     expect(await detectMime(params.input)).toBe(params.expected);
   }
@@ -104,8 +104,32 @@ describe("mime detection", () => {
     },
     {
       name: "verifies a signed APK even when file-type stops at the JAR manifest",
-      input: async () => ({ buffer: await makeApkZip({ signed: true }) }),
+      input: async () => ({
+        buffer: await makeApkZip({ signed: true }),
+        requireCompleteApkVerification: true,
+      }),
       expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "preserves dependency APK detection for bounded prefix callers",
+      input: async () => {
+        const apk = await makeApkZip();
+        const centralDirectoryOffset = apk.lastIndexOf(Buffer.from("PK\u0001\u0002", "binary"));
+        return { buffer: apk.subarray(0, centralDirectoryOffset) };
+      },
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "requires a complete APK directory at security boundaries",
+      input: async () => {
+        const apk = await makeApkZip();
+        const centralDirectoryOffset = apk.lastIndexOf(Buffer.from("PK\u0001\u0002", "binary"));
+        return {
+          buffer: apk.subarray(0, centralDirectoryOffset),
+          requireCompleteApkVerification: true,
+        };
+      },
+      expected: "application/zip",
     },
     {
       name: "rejects an ordinary JAR renamed to APK",
@@ -131,6 +155,11 @@ describe("mime detection", () => {
         };
       },
       expected: "application/zip",
+    },
+    {
+      name: "does not classify a path-only APK from its extension",
+      input: async () => ({ filePath: "/tmp/unread.apk" }),
+      expected: undefined,
     },
     {
       name: "does not let image extensions override generic zip bytes",

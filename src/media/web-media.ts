@@ -1234,8 +1234,13 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const sniffedMime = await detectMime({ buffer: data });
-  const mime = await detectMime({ buffer: data, filePath: mediaUrl });
+  const requireCompleteApkVerification = hostReadCapability;
+  const sniffedMime = await detectMime({ buffer: data, requireCompleteApkVerification });
+  const mime = await detectMime({
+    buffer: data,
+    filePath: mediaUrl,
+    requireCompleteApkVerification,
+  });
   const kind = kindFromMime(mime);
   if (hostReadCapability) {
     assertHostReadMediaAllowed({

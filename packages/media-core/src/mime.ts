@@ -72,6 +72,11 @@ const EXT_BY_MIME: Record<string, string> = {
 function buildMimeByExt(): Record<string, string> {
   const byExt: Record<string, string> = {};
   for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
+    // APK is content-verified. Keep MIME -> extension naming without making a
+    // path-only `.apk` claim in the reverse extension lookup.
+    if (mime === APK_MIME) {
+      continue;
+    }
     byExt[ext] ??= mime;
   }
   return byExt;
@@ -230,7 +235,10 @@ export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
   return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
 }
 
-async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
+async function sniffMime(
+  buffer?: Buffer,
+  requireCompleteApkVerification = false,
+): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
@@ -248,7 +256,10 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
         // central directory so the host-read gate can trust the same result.
         return APK_MIME;
       }
-      if (sniffed === APK_MIME) {
+      // file-type identifies APKs from a local classes*.dex entry and is
+      // intentionally useful on bounded prefixes. Only security boundaries
+      // with the complete file should require central-directory verification.
+      if (sniffed === APK_MIME && requireCompleteApkVerification) {
         return "application/zip";
       }
       return sniffed;
@@ -305,13 +316,14 @@ export async function detectMime(opts: {
   headerMime?: string | null;
   additionalMimeHints?: readonly (string | null | undefined)[];
   filePath?: string;
+  requireCompleteApkVerification?: boolean;
 }): Promise<string | undefined> {
   const extMime = MIME_BY_EXT[getFileExtension(opts.filePath) ?? ""];
   const mimeHints = [opts.headerMime, ...(opts.additionalMimeHints ?? [])]
     .map((mime) => normalizeMimeType(mime))
     .filter((mime): mime is string => Boolean(mime));
   const headerMime = mimeHints[0];
-  const sniffed = await sniffMime(opts.buffer);
+  const sniffed = await sniffMime(opts.buffer, opts.requireCompleteApkVerification === true);
   const sniffedGenericContainer =
     sniffed === "application/octet-stream" || sniffed === "application/zip";
 
