@@ -323,8 +323,8 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     canonicalKey,
     defaultAgentId: agentId,
   });
-  if (compat && (!store[canonicalKey] || key === compat.legacyKey)) {
-    store[key === compat.legacyKey ? key : canonicalKey] = structuredClone(compat.entry);
+  if (compat?.storePath === storePath && !store[canonicalKey]) {
+    store[canonicalKey] = structuredClone(compat.entry);
   }
 
   if (canonicalKey === "global" || canonicalKey === "unknown") {

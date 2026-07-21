@@ -12,6 +12,7 @@ import {
 } from "./legacy-main-session-key-migration.js";
 import { resolveStorePath } from "./paths.js";
 import {
+  appendTranscriptEvent,
   loadExactSessionEntry,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -174,6 +175,41 @@ describe("legacy non-main default session key migration", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("imports JSON-only legacy main history before the automatic key migration", async () => {
+    const { env } = createFixture("openclaw-main-key-json-startup-");
+    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
+    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
+    const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
+    const sessionId = "json-only-legacy";
+    const transcriptPath = path.join(path.dirname(legacyStorePath), `${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(legacyStorePath), { recursive: true });
+    fs.writeFileSync(
+      legacyStorePath,
+      `${JSON.stringify({
+        "agent:main:main": {
+          sessionFile: transcriptPath,
+          sessionId,
+          updatedAt: 20,
+        },
+      })}\n`,
+    );
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", sessionId }),
+        JSON.stringify({ type: "custom", timestamp: "1970-01-01T00:00:00.020Z" }),
+      ].join("\n") + "\n",
+    );
+    trackStore(legacyStorePath, "main");
+    trackStore(defaultStorePath, "ops");
+
+    const log = await runAutomaticStartup(cfg, env);
+
+    await expectCanonicalSession({ agentId: "ops", sessionId, storePath: defaultStorePath });
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("legacy main-session keys"));
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it("keeps an existing canonical collision and emits a diagnostic", async () => {
     const { env } = createFixture("openclaw-main-key-collision-");
     const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
@@ -212,7 +248,7 @@ describe("legacy non-main default session key migration", () => {
         canonicalKey: "agent:ops:main",
         defaultAgentId: "ops",
       }),
-    ).toMatchObject({ legacyKey: "agent:main:main", entry: { sessionId: "legacy" } });
+    ).toBeUndefined();
   });
 
   it("removes a same-store alias when the canonical session identity is identical", async () => {
@@ -284,6 +320,85 @@ describe("legacy non-main default session key migration", () => {
     expect(
       readUnresolvedLegacyMainSessionCompat({
         canonicalKey: "agent:ops:unrelated",
+        defaultAgentId: "ops",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("materializes divergent cross-store history before keeping the claim unresolved", async () => {
+    const { env } = createFixture("openclaw-main-key-divergent-cross-store-");
+    const cfg = {
+      agents: { list: [{ id: "ops", default: true }] },
+      session: { mainKey: "primary" },
+    } satisfies OpenClawConfig;
+    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
+    const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
+    await seedSession({
+      agentId: "main",
+      sessionId: "older",
+      sessionKey: "agent:main:primary",
+      storePath: legacyStorePath,
+      updatedAt: 10,
+    });
+    await seedSession({
+      agentId: "main",
+      sessionId: "newer",
+      sessionKey: "agent:main:main",
+      storePath: legacyStorePath,
+      updatedAt: 20,
+    });
+    trackStore(defaultStorePath, "ops");
+
+    const log = await runAutomaticStartup(cfg, env);
+    await expect(migrateLegacyDefaultMainSessionKeys(cfg, env)).resolves.toEqual({
+      outcomes: expect.arrayContaining([
+        expect.objectContaining({ kind: "aliases-disagree", resolved: false }),
+      ]),
+    });
+    expect(
+      loadExactSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:primary",
+        storePath: legacyStorePath,
+      }),
+    ).toBeDefined();
+    expect(
+      loadExactSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: legacyStorePath,
+      }),
+    ).toBeDefined();
+    await appendTranscriptEvent(
+      {
+        agentId: "ops",
+        sessionId: "newer",
+        sessionKey: "agent:ops:primary",
+        storePath: defaultStorePath,
+      },
+      { type: "custom", timestamp: "1970-01-01T00:00:00.030Z" },
+    );
+
+    await expect(
+      loadTranscriptEvents({
+        agentId: "ops",
+        sessionId: "newer",
+        sessionKey: "agent:ops:primary",
+        storePath: defaultStorePath,
+      }),
+    ).resolves.toHaveLength(3);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "newer",
+        sessionKey: "agent:main:main",
+        storePath: legacyStorePath,
+      }),
+    ).resolves.toHaveLength(2);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("Legacy main aliases diverge"));
+    expect(
+      readUnresolvedLegacyMainSessionCompat({
+        canonicalKey: "agent:ops:primary",
         defaultAgentId: "ops",
       }),
     ).toBeUndefined();

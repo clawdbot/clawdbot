@@ -1218,6 +1218,39 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("finalizes a custom first agent under its staged roster owner", async () => {
+    ensureWorkspaceAndSessions.mockClear();
+    const workspaceDir = await makeCaseDir("custom-first-agent-");
+    const prompter = buildWizardPrompter({
+      text: vi.fn(async (params) =>
+        params.message === "What should we call your first agent?" ? "Research Buddy" : "",
+      ),
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      workspaceDir,
+      expect.anything(),
+      expect.objectContaining({ agentId: "research-buddy" }),
+    );
+  });
+
   it("runs memory import after workspace bootstrap in QuickStart", async () => {
     const workspaceDir = await makeCaseDir("memory-import-step-");
     const prompter = buildWizardPrompter();

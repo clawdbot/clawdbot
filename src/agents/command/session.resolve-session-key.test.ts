@@ -102,7 +102,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore["agent:ops:main"]).toBeUndefined();
   });
 
-  it("reads the exact legacy key only while its migration is recorded unresolved", () => {
+  it("does not project a cross-store unresolved entry without its transcript", () => {
     hoisted.defaultAgentId = "ops";
     hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
     hoisted.compatReadMock.mockReturnValue({
@@ -126,6 +126,29 @@ describe("resolveSessionKeyForRequest", () => {
       canonicalKey: "agent:ops:main",
       defaultAgentId: "ops",
     });
+    expect(result.sessionStore["agent:ops:main"]).toBeUndefined();
+  });
+
+  it("reads an exact same-store key only while its migration is recorded unresolved", () => {
+    hoisted.defaultAgentId = "ops";
+    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
+    hoisted.compatReadMock.mockReturnValue({
+      canonicalKey: "agent:ops:main",
+      defaultAgentId: "ops",
+      entry: { sessionId: "legacy-main", updatedAt: 10 },
+      legacyKey: "agent:main:main",
+      storePath: "/stores/shared.json",
+    });
+    mockSessionStores({ "/stores/shared.json": {} });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "ops", default: true }] },
+        session: { store: "/stores/shared.json" },
+      },
+      to: "+15551234567",
+    });
+
     expect(result.sessionStore["agent:ops:main"]).toMatchObject({ sessionId: "legacy-main" });
   });
 

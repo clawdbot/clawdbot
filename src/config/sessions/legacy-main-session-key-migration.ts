@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
+import { readLegacySessionStoreTarget } from "./legacy-store-readonly.js";
+import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
 import {
   deleteSqliteSessionEntryLifecycle,
   importSqliteSessionRows,
@@ -140,6 +142,56 @@ function loadClaims(params: {
   });
 }
 
+function readLegacyTranscriptEvents(params: {
+  agentId: string;
+  entry: SessionEntry;
+  storePath: string;
+}): ((append: (event: unknown) => void) => void) | undefined {
+  const transcriptPath = resolveSessionFilePath(params.entry.sessionId, params.entry, {
+    agentId: params.agentId,
+    sessionsDir: path.dirname(params.storePath),
+  });
+  if (!fs.existsSync(transcriptPath)) {
+    return undefined;
+  }
+  return (append) => {
+    for (const line of fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/u)) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        append(JSON.parse(trimmed) as unknown);
+      }
+    }
+  };
+}
+
+async function importLegacyJsonAliases(params: {
+  agentId: string;
+  legacyKeys: string[];
+  storePath: string;
+}): Promise<void> {
+  const legacyStore = readLegacySessionStoreTarget(params.storePath, params.agentId);
+  if (!legacyStore) {
+    return;
+  }
+  for (const sessionKey of params.legacyKeys) {
+    const entry = legacyStore[sessionKey];
+    if (!entry) {
+      continue;
+    }
+    await importSqliteSessionRows({
+      agentId: params.agentId,
+      entry,
+      sessionKey,
+      storePath: params.storePath,
+      readTranscriptEvents: readLegacyTranscriptEvents({
+        agentId: params.agentId,
+        entry,
+        storePath: params.storePath,
+      }),
+    });
+  }
+}
+
 async function removeAliases(params: {
   aliases: Array<{ claim: LegacyMainSessionClaim; entry: SessionEntry }>;
   source: { claim: LegacyMainSessionClaim; entry: SessionEntry };
@@ -234,6 +286,13 @@ async function migrateFromStore(params: {
 }): Promise<LegacyMainSessionKeyMigrationOutcome> {
   let aliases: ReturnType<typeof loadClaims>;
   try {
+    // The shared startup owner runs on command and TUI paths that do not run the full doctor
+    // importer. Import the exact shipped main aliases before deciding this source is empty.
+    await importLegacyJsonAliases({
+      agentId: params.sourceAgentId,
+      legacyKeys: params.legacyKeys,
+      storePath: params.sourceStorePath,
+    });
     aliases = loadClaims({
       agentId: params.sourceAgentId,
       legacyKeys: params.legacyKeys,
@@ -245,15 +304,8 @@ async function migrateFromStore(params: {
   if (aliases.length === 0) {
     return { ...params.base, kind: "not-needed", resolved: true, reason: "no-legacy-rows" };
   }
-  if (new Set(aliases.map(({ claim: item }) => item.sessionId)).size > 1) {
-    return {
-      ...params.base,
-      kind: "aliases-disagree",
-      resolved: false,
-      aliases: aliases.map(({ claim: item }) => item),
-    };
-  }
   const source = selectSource(aliases);
+  const aliasesDisagree = new Set(aliases.map(({ claim: item }) => item.sessionId)).size > 1;
   let canonicalEntry: ReturnType<typeof loadExactSqliteSessionEntry>;
   try {
     canonicalEntry = loadExactSqliteSessionEntry({
@@ -265,6 +317,14 @@ async function migrateFromStore(params: {
     return unreadableOutcome({ ...params, error });
   }
   if (canonicalEntry) {
+    if (aliasesDisagree && canonicalEntry.entry.sessionId === source.entry.sessionId) {
+      return {
+        ...params.base,
+        kind: "aliases-disagree",
+        resolved: false,
+        aliases: aliases.map(({ claim: item }) => item),
+      };
+    }
     return await classifyCanonical({
       aliases,
       base: params.base,
@@ -278,6 +338,35 @@ async function migrateFromStore(params: {
         entry: canonicalEntry.entry,
       },
     });
+  }
+
+  if (aliasesDisagree) {
+    try {
+      const transcriptEvents = loadSqliteTranscriptEventsSync({
+        agentId: params.sourceAgentId,
+        sessionId: source.entry.sessionId,
+        storePath: params.sourceStorePath,
+      });
+      const imported = await importSqliteSessionRows({
+        agentId: params.defaultAgentId,
+        entry: source.entry,
+        sessionKey: params.base.canonicalKey,
+        skipIfExists: true,
+        storePath: params.base.targetStorePath,
+        readTranscriptEvents: (append) => transcriptEvents.forEach(append),
+      });
+      if (!imported.imported) {
+        return await migrateFromStore(params);
+      }
+    } catch (error) {
+      return unreadableOutcome({ ...params, error });
+    }
+    return {
+      ...params.base,
+      kind: "aliases-disagree",
+      resolved: false,
+      aliases: aliases.map(({ claim: item }) => item),
+    };
   }
 
   try {
@@ -344,10 +433,11 @@ export async function migrateLegacyDefaultMainSessionKeys(
   }).path;
   const base = { canonicalKey, defaultAgentId: target.defaultAgentId, targetStorePath };
   const sources = [
-    ...(fs.existsSync(targetSqlitePath)
+    ...(fs.existsSync(targetSqlitePath) || fs.existsSync(targetStorePath)
       ? [{ sourceAgentId: target.defaultAgentId, sourceStorePath: targetStorePath }]
       : []),
-    ...(legacySqlitePath !== targetSqlitePath && fs.existsSync(legacySqlitePath)
+    ...(legacySqlitePath !== targetSqlitePath &&
+    (fs.existsSync(legacySqlitePath) || fs.existsSync(legacyStorePath))
       ? [{ sourceAgentId: LEGACY_AGENT_ID, sourceStorePath: legacyStorePath }]
       : []),
   ];
@@ -455,17 +545,21 @@ export function readUnresolvedLegacyMainSessionCompat(params: {
   // Remove this path once every recorded claim is resolved or explicitly discarded.
   const candidates = outcomes.flatMap((outcome) => {
     if (outcome.kind === "store-unreadable") {
-      return outcome.legacyKeys.map((sessionKey) => ({
-        agentId: outcome.sourceAgentId,
-        sessionKey,
-        storePath: outcome.sourceStorePath,
-      }));
+      return outcome.sourceStorePath === outcome.targetStorePath
+        ? outcome.legacyKeys.map((sessionKey) => ({
+            agentId: outcome.sourceAgentId,
+            sessionKey,
+            storePath: outcome.sourceStorePath,
+          }))
+        : [];
     }
-    return outcome.aliases.map((item) => ({
-      agentId: item.agentId,
-      sessionKey: item.sessionKey,
-      storePath: item.storePath,
-    }));
+    return outcome.aliases
+      .filter((item) => item.storePath === outcome.targetStorePath)
+      .map((item) => ({
+        agentId: item.agentId,
+        sessionKey: item.sessionKey,
+        storePath: item.storePath,
+      }));
   });
   const readable = candidates.flatMap((candidate) => {
     try {
