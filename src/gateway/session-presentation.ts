@@ -75,7 +75,7 @@ function fallbackTitle(params: {
   family: SessionPresentationFamily;
   rest: string;
   channel?: string;
-  worktree?: SessionEntry["worktree"];
+  worktreeTitle?: string;
 }): string {
   const channel = params.channel ? capitalize(params.channel) : undefined;
   switch (params.family) {
@@ -102,7 +102,7 @@ function fallbackTitle(params: {
     case "acp":
       return "ACP session";
     case "dashboard":
-      return formatWorktree(params.worktree) ?? "New session";
+      return params.worktreeTitle ?? "New session";
     case "tui":
       return "Terminal session";
     case "explicit":
@@ -158,9 +158,14 @@ export function buildGatewaySessionPresentation(params: {
   const rest = parsedAgent?.rest ?? key;
   const parsedThread = parseThreadSessionSuffix(key);
   const route = parseSessionDeliveryRoute(key);
-  const perPeerKind = /^((?:direct|dm)):(.+)$/i.exec(
+  const hasLegacyDirectPeer = /^(?:direct|dm):.+$/i.test(
     parseAgentSessionKey(parsedThread.baseSessionKey)?.rest ?? "",
-  )?.[1];
+  );
+  const hasDirectPeer =
+    route?.peerKind === "direct" ||
+    route?.peerKind === "dm" ||
+    hasLegacyDirectPeer ||
+    entry?.chatType === "direct";
 
   let family: SessionPresentationFamily;
   if (key === "global") {
@@ -183,7 +188,7 @@ export function buildGatewaySessionPresentation(params: {
     family = "group";
   } else if (route?.peerKind === "channel") {
     family = "channel";
-  } else if (route?.peerKind === "direct" || route?.peerKind === "dm" || perPeerKind) {
+  } else if (hasDirectPeer) {
     family = "direct";
   } else if (
     entry?.chatType === "direct" ||
@@ -197,24 +202,29 @@ export function buildGatewaySessionPresentation(params: {
 
   const channel = entry?.channel ?? route?.channel;
   const accountId = route?.accountId;
-  const peerKind = route?.peerKind
-    ? route.peerKind === "dm"
-      ? "direct"
-      : route.peerKind
-    : perPeerKind
-      ? "direct"
-      : undefined;
+  let peerKind: SessionPresentation["peerKind"];
+  if (route?.peerKind === "dm" || hasLegacyDirectPeer) {
+    peerKind = "direct";
+  } else {
+    peerKind = route?.peerKind;
+  }
   const label = normalizeTitle(entry?.label, key);
-  const displayName = normalizeDisplayName(params.displayName, key);
-  const title =
-    label ?? displayName ?? fallbackTitle({ family, rest, channel, worktree: entry?.worktree });
-  const titleSource = label
-    ? "label"
-    : displayName
-      ? "displayName"
-      : family === "dashboard" && formatWorktree(entry?.worktree)
-        ? "worktree"
-        : "generated";
+  const hasDirectPeerDisplay = family === "direct" || (family === "thread" && hasDirectPeer);
+  // Direct-session display names may be transport-derived peer ids; explicit labels remain safe.
+  let displayName: string | undefined;
+  if (!hasDirectPeerDisplay) {
+    displayName = normalizeDisplayName(params.displayName, key);
+  }
+  const worktreeTitle = formatWorktree(entry?.worktree);
+  const title = label ?? displayName ?? fallbackTitle({ family, rest, channel, worktreeTitle });
+  let titleSource: SessionPresentation["titleSource"] = "generated";
+  if (label) {
+    titleSource = "label";
+  } else if (displayName) {
+    titleSource = "displayName";
+  } else if (family === "dashboard" && worktreeTitle) {
+    titleSource = "worktree";
+  }
 
   const subtitleParts: string[] = [];
   if (channel) subtitleParts.push(capitalize(channel));

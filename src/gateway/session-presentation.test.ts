@@ -61,6 +61,42 @@ describe("buildGatewaySessionPresentation", () => {
     expect(JSON.stringify(presentation)).not.toContain("491234567890");
   });
 
+  it.each(["U123ABC45", "person@example.com"])(
+    "does not use a transport-derived direct display name: %s",
+    (peerId) => {
+      const presentation = buildGatewaySessionPresentation({
+        key: `agent:main:slack:main:direct:${peerId}`,
+        isMain: false,
+        entry: entry({ chatType: "direct", channel: "slack", displayName: peerId }),
+        displayName: peerId,
+      });
+
+      expect(presentation).toMatchObject({
+        title: "Slack direct message",
+        titleSource: "generated",
+        family: "direct",
+      });
+      expect(JSON.stringify(presentation)).not.toContain(peerId);
+    },
+  );
+
+  it("does not use a direct display name for an opaque provider thread", () => {
+    const peerId = "person@example.com";
+    const presentation = buildGatewaySessionPresentation({
+      key: "agent:main:provider-owned-key:thread:reply",
+      isMain: false,
+      entry: entry({ chatType: "direct", channel: "custom-channel", displayName: peerId }),
+      displayName: peerId,
+    });
+
+    expect(presentation).toMatchObject({
+      title: "Custom-channel thread",
+      titleSource: "generated",
+      family: "thread",
+    });
+    expect(JSON.stringify(presentation)).not.toContain(peerId);
+  });
+
   it("projects group and thread families with an opaque base key", () => {
     expect(
       buildGatewaySessionPresentation({
