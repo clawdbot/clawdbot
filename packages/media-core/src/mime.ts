@@ -187,7 +187,7 @@ function hasVerifiedApkZipEntries(buffer: Buffer): boolean {
   }
 
   let hasManifest = false;
-  let hasDex = false;
+  let hasAndroidPayload = false;
   let cursor = centralDirectoryOffset;
   const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
   for (let index = 0; index < entryCount; index += 1) {
@@ -206,8 +206,11 @@ function hasVerifiedApkZipEntries(buffer: Buffer): boolean {
     }
     const fileName = buffer.toString("utf8", cursor + 46, cursor + 46 + fileNameLength);
     hasManifest ||= fileName === "AndroidManifest.xml";
-    hasDex ||= /^classes\d*\.dex$/u.test(fileName);
-    if (hasManifest && hasDex) {
+    hasAndroidPayload ||=
+      /^classes\d*\.dex$/u.test(fileName) ||
+      fileName === "resources.arsc" ||
+      /^lib\/[^/]+\/[^/]+\.so$/u.test(fileName);
+    if (hasManifest && hasAndroidPayload) {
       return true;
     }
     cursor = entryEnd;
@@ -334,7 +337,10 @@ export async function detectMime(opts: {
   const genericContainerMime =
     sniffed === "application/zip"
       ? [extMime, ...mimeHints].find(
-          (mime) => mime && mime !== APK_MIME && isZipContainerMime(mime),
+          (mime) =>
+            mime &&
+            (mime !== APK_MIME || opts.requireCompleteApkVerification !== true) &&
+            isZipContainerMime(mime),
         )
       : sniffed === "application/octet-stream"
         ? (specificExtMime ?? mimeHints.find((mime) => mime !== "application/octet-stream"))

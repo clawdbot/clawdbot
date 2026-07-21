@@ -42,6 +42,13 @@ async function makeApkZip(opts: { signed?: boolean } = {}): Promise<Buffer> {
   return await zip.generateAsync({ type: "nodebuffer" });
 }
 
+async function makeSplitApkZip(payloadPath: string): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file("AndroidManifest.xml", "manifest");
+  zip.file(payloadPath, "payload");
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
+
 describe("mime detection", () => {
   async function expectDetectedMime(params: {
     input: Parameters<typeof detectMime>[0];
@@ -111,6 +118,22 @@ describe("mime detection", () => {
       expected: "application/vnd.android.package-archive",
     },
     {
+      name: "verifies a resource-only split APK without classes.dex",
+      input: async () => ({
+        buffer: await makeSplitApkZip("resources.arsc"),
+        requireCompleteApkVerification: true,
+      }),
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "verifies an ABI split APK without classes.dex",
+      input: async () => ({
+        buffer: await makeSplitApkZip("lib/arm64-v8a/libexample.so"),
+        requireCompleteApkVerification: true,
+      }),
+      expected: "application/vnd.android.package-archive",
+    },
+    {
       name: "preserves dependency APK detection for bounded prefix callers",
       input: async () => {
         const apk = await makeApkZip();
@@ -126,6 +149,34 @@ describe("mime detection", () => {
         const centralDirectoryOffset = apk.lastIndexOf(Buffer.from("PK\u0001\u0002", "binary"));
         return {
           buffer: apk.subarray(0, centralDirectoryOffset),
+          requireCompleteApkVerification: true,
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "preserves a trusted APK header for bounded-prefix callers",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("AndroidManifest.xml", "manifest");
+        zip.file("padding.bin", Buffer.alloc(32 * 1024));
+        zip.file("classes.dex", "dex");
+        const apk = await zip.generateAsync({ type: "nodebuffer", compression: "STORE" });
+        return {
+          buffer: apk.subarray(0, 16 * 1024),
+          headerMime: "application/vnd.android.package-archive",
+        };
+      },
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "does not trust an APK header at a complete-verification boundary",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "application/vnd.android.package-archive",
           requireCompleteApkVerification: true,
         };
       },
