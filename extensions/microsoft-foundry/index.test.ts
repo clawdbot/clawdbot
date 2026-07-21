@@ -2109,6 +2109,36 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
     expect(stdoutWriteSpy).toHaveBeenCalledWith("🚀");
     expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
   });
+
+  it("kills the child and rejects when az login exceeds 5 minutes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { EventEmitter } = await import("node:events");
+
+      const child = Object.assign(new EventEmitter(), {
+        stdout: { setEncoding: vi.fn(), on: vi.fn() },
+        stderr: { setEncoding: vi.fn(), on: vi.fn() },
+        pid: 99999,
+        kill: vi.fn(),
+      });
+
+      spawnMock.mockReturnValue(child);
+
+      const loginPromise = azLoginDeviceCodeWithOptions({});
+
+      // Advance past the 5-minute timeout
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+      expect(child.kill).toHaveBeenCalledOnce();
+
+      child.emit("close", null);
+      const err = await loginPromise.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe("az login timed out after 5 minutes");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -143,6 +143,8 @@ export async function getAccessTokenResultAsync(
   ) as AzAccessToken;
 }
 
+const AZ_LOGIN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function azLoginDeviceCode(): Promise<void> {
   return azLoginDeviceCodeWithOptions({});
 }
@@ -163,6 +165,11 @@ export async function azLoginDeviceCodeWithOptions(params: {
       stdio: ["inherit", "pipe", "pipe"],
       shell: process.platform === "win32",
     });
+    let timedOut = false;
+    const loginTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, AZ_LOGIN_TIMEOUT_MS);
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
     let stdoutLen = 0;
@@ -194,6 +201,11 @@ export async function azLoginDeviceCodeWithOptions(params: {
       process.stderr.write(text);
     });
     child.on("close", (code) => {
+      clearTimeout(loginTimer);
+      if (timedOut) {
+        reject(new Error("az login timed out after 5 minutes"));
+        return;
+      }
       if (code === 0) {
         resolve();
         return;
@@ -207,6 +219,9 @@ export async function azLoginDeviceCodeWithOptions(params: {
         ),
       );
     });
-    child.on("error", reject);
+    child.on("error", (err) => {
+      clearTimeout(loginTimer);
+      reject(err);
+    });
   });
 }
