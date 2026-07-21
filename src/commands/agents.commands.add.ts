@@ -11,6 +11,7 @@ import {
   completeLegacyAgentCreation,
   createAgent,
   prepareLegacyAgentCreation,
+  releaseLegacyAgentCreationDefault,
   shouldTransferLegacyMainDefault,
 } from "../agents/agent-create.js";
 import {
@@ -26,6 +27,7 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { withConfigMutationExclusive } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
   commitConfigWithPendingPluginInstalls,
@@ -426,16 +428,32 @@ export async function agentsAddCommand(
       }
     }
 
-    const claimedLegacyDefault = legacyPreparation.makeDefault
-      ? await claimLegacyAgentCreationDefault(agentId)
-      : false;
-    if (claimedLegacyDefault && (await shouldTransferLegacyMainDefault(cfg, agentId))) {
-      nextConfig = assignSoleDefaultAgent(nextConfig, agentId);
-    }
-
-    const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig,
-      ...(baseHash !== undefined ? { baseHash } : {}),
+    const { claimedLegacyDefault, committed } = await withConfigMutationExclusive(async () => {
+      let claimed = false;
+      try {
+        claimed = legacyPreparation.makeDefault
+          ? await claimLegacyAgentCreationDefault(agentId)
+          : false;
+        if (claimed && (await shouldTransferLegacyMainDefault(cfg, agentId))) {
+          nextConfig = assignSoleDefaultAgent(nextConfig, agentId);
+        }
+        return {
+          claimedLegacyDefault: claimed,
+          committed: await commitConfigWithPendingPluginInstalls({
+            nextConfig,
+            ...(baseHash !== undefined ? { baseHash } : {}),
+          }),
+        };
+      } catch (error) {
+        if (claimed) {
+          try {
+            await releaseLegacyAgentCreationDefault(agentId);
+          } catch {
+            // Preserve the wizard failure; the owner-checked claim remains recoverable.
+          }
+        }
+        throw error;
+      }
     });
     nextConfig = committed.config;
     if (claimedLegacyDefault) {

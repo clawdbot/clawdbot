@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   migrateLegacyMainSessionStateOrThrow: vi.fn(async () => ({ changed: false })),
   readPendingLegacyMainFirstAgentDefaultIntent: vi.fn(() => undefined as string | undefined),
   reconcileLegacyMainFirstAgentDefaultIntent: vi.fn(),
+  releaseLegacyMainFirstAgentDefaultIntent: vi.fn((_agentId: string) => {}),
   recordLegacyMainFirstAgentDefaultIntent: vi.fn(),
 }));
 
@@ -73,6 +74,7 @@ vi.mock("../commands/doctor/shared/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionStateOrThrow: mocks.migrateLegacyMainSessionStateOrThrow,
   readPendingLegacyMainFirstAgentDefaultIntent: mocks.readPendingLegacyMainFirstAgentDefaultIntent,
   reconcileLegacyMainFirstAgentDefaultIntent: mocks.reconcileLegacyMainFirstAgentDefaultIntent,
+  releaseLegacyMainFirstAgentDefaultIntent: mocks.releaseLegacyMainFirstAgentDefaultIntent,
   recordLegacyMainFirstAgentDefaultIntent: mocks.recordLegacyMainFirstAgentDefaultIntent,
 }));
 

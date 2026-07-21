@@ -124,6 +124,23 @@ export function claimLegacyMainFirstAgentDefaultIntent(agentId: string): boolean
   });
 }
 
+export function releaseLegacyMainFirstAgentDefaultIntent(agentId: string): void {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const intent = readIntentFromDatabase(db);
+    if (!intent.pending || intent.agentId !== normalizedAgentId) {
+      return;
+    }
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<MigrationRunDatabase>(db)
+        .updateTable("migration_runs")
+        .set({ report_json: "{}" })
+        .where("id", "=", FIRST_AGENT_DEFAULT_INTENT_RUN_ID),
+    );
+  });
+}
+
 export function completeLegacyMainFirstAgentDefaultIntent(): void {
   if (!hasPendingLegacyMainFirstAgentDefaultIntent()) {
     return;

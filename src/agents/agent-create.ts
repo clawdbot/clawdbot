@@ -158,6 +158,12 @@ export async function claimLegacyAgentCreationDefault(agentId: string): Promise<
   return claimLegacyMainFirstAgentDefaultIntent(agentId);
 }
 
+export async function releaseLegacyAgentCreationDefault(agentId: string): Promise<void> {
+  const { releaseLegacyMainFirstAgentDefaultIntent } =
+    await import("../commands/doctor/shared/legacy-main-session-migration.js");
+  releaseLegacyMainFirstAgentDefaultIntent(agentId);
+}
+
 export function assignSoleDefaultAgent(config: OpenClawConfig, agentId: string): OpenClawConfig {
   const list = structuredClone(listAgentEntries(config));
   for (const entry of list) {
@@ -242,121 +248,135 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
 
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
-      const deletion = readAgentDeletionJournal(agentId);
-      if (deletion && !deletion.cleanupCompleted) {
-        return createError(
-          "deletion-pending",
-          `agent "${agentId}" deletion cleanup is still pending`,
-          agentId,
-        );
-      }
-      const legacyPreparation = await prepareLegacyAgentCreationFromConfig({
-        config: lockedConfig,
-        transformConfig,
-      });
-      const claimedLegacyDefault = legacyPreparation.makeDefault
-        ? await claimLegacyAgentCreationDefault(agentId)
-        : false;
-      let tombstoneClaimed = false;
-      if (
-        deletion?.cleanupCompleted &&
-        findAgentEntryIndex(listAgentEntries(lockedConfig), agentId) >= 0
-      ) {
-        if (!claimCompletedAgentDeletion(agentId, deletion.operationId)) {
-          throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
+      let claimedLegacyDefault = false;
+      let configCommitted = false;
+      try {
+        const deletion = readAgentDeletionJournal(agentId);
+        if (deletion && !deletion.cleanupCompleted) {
+          return createError(
+            "deletion-pending",
+            `agent "${agentId}" deletion cleanup is still pending`,
+            agentId,
+          );
         }
-        tombstoneClaimed = true;
-      }
-      const committed = await transformConfig<CreateAgentResult>({
-        afterWrite: { mode: "auto" },
-        maxAttempts: 1,
-        transform: async (currentConfig) => {
-          if (findAgentEntryIndex(listAgentEntries(currentConfig), agentId) >= 0) {
-            throw new DuplicateAgentError();
+        const legacyPreparation = await prepareLegacyAgentCreationFromConfig({
+          config: lockedConfig,
+          transformConfig,
+        });
+        let tombstoneClaimed = false;
+        if (
+          deletion?.cleanupCompleted &&
+          findAgentEntryIndex(listAgentEntries(lockedConfig), agentId) >= 0
+        ) {
+          if (!claimCompletedAgentDeletion(agentId, deletion.operationId)) {
+            throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
           }
+          tombstoneClaimed = true;
+        }
+        const committed = await transformConfig<CreateAgentResult>({
+          afterWrite: { mode: "auto" },
+          maxAttempts: 1,
+          transform: async (currentConfig) => {
+            if (findAgentEntryIndex(listAgentEntries(currentConfig), agentId) >= 0) {
+              throw new DuplicateAgentError();
+            }
 
-          const workspaceDir =
-            explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
-          const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
-          let nextConfig = applyAgentConfig(currentConfig, {
-            agentId,
-            name: safeName,
-            workspace: workspaceDir,
-            agentDir,
-            model,
-            identity,
-          });
-          if (
-            claimedLegacyDefault &&
-            (await shouldTransferLegacyMainDefault(currentConfig, agentId))
-          ) {
-            nextConfig = assignSoleDefaultAgent(nextConfig, agentId);
-          }
-          const bindingParse = parseBindingSpecs({
-            agentId,
-            specs: params.bindingSpecs,
-            config: nextConfig,
-          });
-          if (bindingParse.errors.length > 0) {
-            throw new InvalidAgentBindingsError(bindingParse.errors.join("\n"));
-          }
-          const bindingResult = bindingParse.bindings.length
-            ? applyAgentBindings(nextConfig, bindingParse.bindings)
-            : undefined;
-          nextConfig = bindingResult?.config ?? nextConfig;
-
-          // The outer lock makes this result-bearing transform single-attempt: setup
-          // finishes before the final entry becomes visible to readers or delete flows.
-          const workspace = await ensureAgentWorkspace({
-            dir: workspaceDir,
-            ensureBootstrapFiles:
-              params.skipBootstrap === undefined
-                ? !nextConfig.agents?.defaults?.skipBootstrap
-                : !params.skipBootstrap,
-            skipOptionalBootstrapFiles:
-              params.skipOptionalBootstrapFiles ??
-              nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-          });
-          if (workspace.dir !== workspaceDir) {
-            nextConfig = applyAgentConfig(nextConfig, {
-              agentId,
-              workspace: workspace.dir,
-            });
-          }
-          await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
-          // A creation-time name is config, not proof that the fresh workspace hatched.
-          // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
-          if (!workspace.bootstrapPending) {
-            await writeIdentityFile({ workspaceDir: workspace.dir, identity });
-          }
-
-          return {
-            nextConfig,
-            result: {
-              status: "created",
+            const workspaceDir =
+              explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
+            const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
+            let nextConfig = applyAgentConfig(currentConfig, {
               agentId,
               name: safeName,
-              workspace: workspace.dir,
+              workspace: workspaceDir,
               agentDir,
-              ...(model ? { model } : {}),
-              bootstrapPending: workspace.bootstrapPending === true,
-              ...(bindingResult ? { bindingResult } : {}),
-            },
-          };
-        },
-      });
-      if (
-        deletion?.cleanupCompleted &&
-        !tombstoneClaimed &&
-        committed.result?.status === "created" &&
-        !claimCompletedAgentDeletion(agentId, deletion.operationId)
-      ) {
-        throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
+              model,
+              identity,
+            });
+            const bindingParse = parseBindingSpecs({
+              agentId,
+              specs: params.bindingSpecs,
+              config: nextConfig,
+            });
+            if (bindingParse.errors.length > 0) {
+              throw new InvalidAgentBindingsError(bindingParse.errors.join("\n"));
+            }
+            const bindingResult = bindingParse.bindings.length
+              ? applyAgentBindings(nextConfig, bindingParse.bindings)
+              : undefined;
+            nextConfig = bindingResult?.config ?? nextConfig;
+
+            // The outer lock makes this result-bearing transform single-attempt: setup
+            // finishes before the final entry becomes visible to readers or delete flows.
+            const workspace = await ensureAgentWorkspace({
+              dir: workspaceDir,
+              ensureBootstrapFiles:
+                params.skipBootstrap === undefined
+                  ? !nextConfig.agents?.defaults?.skipBootstrap
+                  : !params.skipBootstrap,
+              skipOptionalBootstrapFiles:
+                params.skipOptionalBootstrapFiles ??
+                nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+            });
+            if (workspace.dir !== workspaceDir) {
+              nextConfig = applyAgentConfig(nextConfig, {
+                agentId,
+                workspace: workspace.dir,
+              });
+            }
+            await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
+            // A creation-time name is config, not proof that the fresh workspace hatched.
+            // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
+            if (!workspace.bootstrapPending) {
+              await writeIdentityFile({ workspaceDir: workspace.dir, identity });
+            }
+            claimedLegacyDefault = legacyPreparation.makeDefault
+              ? await claimLegacyAgentCreationDefault(agentId)
+              : false;
+            if (
+              claimedLegacyDefault &&
+              (await shouldTransferLegacyMainDefault(currentConfig, agentId))
+            ) {
+              nextConfig = assignSoleDefaultAgent(nextConfig, agentId);
+            }
+
+            return {
+              nextConfig,
+              result: {
+                status: "created",
+                agentId,
+                name: safeName,
+                workspace: workspace.dir,
+                agentDir,
+                ...(model ? { model } : {}),
+                bootstrapPending: workspace.bootstrapPending === true,
+                ...(bindingResult ? { bindingResult } : {}),
+              },
+            };
+          },
+        });
+        configCommitted = true;
+        if (
+          deletion?.cleanupCompleted &&
+          !tombstoneClaimed &&
+          committed.result?.status === "created" &&
+          !claimCompletedAgentDeletion(agentId, deletion.operationId)
+        ) {
+          throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
+        }
+        if (claimedLegacyDefault && committed.result?.status === "created") {
+          await completeLegacyAgentCreation();
+        }
+        return committed.result!;
+      } catch (error) {
+        if (claimedLegacyDefault && !configCommitted) {
+          try {
+            await releaseLegacyAgentCreationDefault(agentId);
+          } catch {
+            // Preserve the creation failure; the owner-checked claim remains recoverable.
+          }
+        }
+        throw error;
       }
-      if (claimedLegacyDefault && committed.result?.status === "created") {
-        await completeLegacyAgentCreation();
-      }
-      return committed.result!;
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {

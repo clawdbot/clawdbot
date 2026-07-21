@@ -19,6 +19,9 @@ const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined
 const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
 );
+const withConfigMutationExclusiveMock = vi.hoisted(() =>
+  vi.fn(async (fn: () => Promise<unknown>) => await fn()),
+);
 const createAgentMock = vi.hoisted(() => vi.fn());
 const authPathMocks = vi.hoisted(() => ({
   defaultAgentDir: "/tmp/openclaw-main-agent",
@@ -27,6 +30,7 @@ const assignSoleDefaultAgentMock = vi.hoisted(() => vi.fn());
 const claimLegacyAgentCreationDefaultMock = vi.hoisted(() => vi.fn(async () => false));
 const completeLegacyAgentCreationMock = vi.hoisted(() => vi.fn(async () => {}));
 const prepareLegacyAgentCreationMock = vi.hoisted(() => vi.fn());
+const releaseLegacyAgentCreationDefaultMock = vi.hoisted(() => vi.fn(async () => {}));
 const shouldTransferLegacyMainDefaultMock = vi.hoisted(() => vi.fn(async () => false));
 const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
@@ -94,6 +98,7 @@ vi.mock("../config/config.js", async () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   writeConfigFile: writeConfigFileMock,
   replaceConfigFile: replaceConfigFileMock,
+  withConfigMutationExclusive: withConfigMutationExclusiveMock,
 }));
 
 vi.mock("../agents/agent-create.js", () => ({
@@ -102,6 +107,7 @@ vi.mock("../agents/agent-create.js", () => ({
   completeLegacyAgentCreation: completeLegacyAgentCreationMock,
   createAgent: createAgentMock,
   prepareLegacyAgentCreation: prepareLegacyAgentCreationMock,
+  releaseLegacyAgentCreationDefault: releaseLegacyAgentCreationDefaultMock,
   shouldTransferLegacyMainDefault: shouldTransferLegacyMainDefaultMock,
 }));
 
@@ -174,12 +180,14 @@ describe("agents add command", () => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     replaceConfigFileMock.mockClear();
+    withConfigMutationExclusiveMock.mockClear();
     commitConfigWithPendingPluginInstallsMock.mockClear();
     transformConfigWithPendingPluginInstallsMock.mockClear();
     createAgentMock.mockReset();
     assignSoleDefaultAgentMock.mockReset();
     claimLegacyAgentCreationDefaultMock.mockReset();
     prepareLegacyAgentCreationMock.mockReset();
+    releaseLegacyAgentCreationDefaultMock.mockClear();
     shouldTransferLegacyMainDefaultMock.mockReset();
     assignSoleDefaultAgentMock.mockImplementation((config) => config);
     claimLegacyAgentCreationDefaultMock.mockResolvedValue(false);
