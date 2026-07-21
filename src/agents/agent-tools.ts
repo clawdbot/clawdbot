@@ -422,6 +422,13 @@ type OpenClawCodingToolsOptions = {
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;
+  /**
+   * True when this run is processing a sessions_send agent-to-agent message. The
+   * target's reply already returns through the sessions_send tool result, so the
+   * routed turn omits sessions_send to stop the target reverse-calling the
+   * requester and duplicating content (issue #39476).
+   */
+  interAgentSendTurn?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Collector runs never open operator approval flows. */
@@ -1044,6 +1051,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sourceReplyOnly,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,
+            interAgentSendTurn: options?.interAgentSendTurn,
             disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
             swarmCollector: options?.swarmCollector,
             swarmOutputSchema: options?.swarmOutputSchema,

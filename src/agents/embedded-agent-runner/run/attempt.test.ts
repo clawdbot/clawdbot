@@ -136,6 +136,33 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
   });
+
+  it("flags sessions_send A2A turns so tool construction can drop sessions_send", () => {
+    const context = buildEmbeddedAttemptToolRunContext({
+      trigger: "manual",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:requester:discord:source",
+        sourceTool: "sessions_send",
+      },
+    });
+    expect(context.interAgentSendTurn).toBe(true);
+  });
+
+  it("does not flag normal user turns or non-send inter-session handoffs", () => {
+    expect(
+      buildEmbeddedAttemptToolRunContext({
+        trigger: "manual",
+        inputProvenance: { kind: "external_user", sourceChannel: "discord" },
+      }).interAgentSendTurn,
+    ).toBeUndefined();
+    expect(
+      buildEmbeddedAttemptToolRunContext({
+        trigger: "manual",
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      }).interAgentSendTurn,
+    ).toBeUndefined();
+  });
 });
 
 describe("resolvePromptBuildHookResult", () => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
   isAgentMediatedCompletionSourceTool,
+  isAgentToAgentSendInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
@@ -95,6 +96,32 @@ describe("isAgentMediatedCompletionSourceTool", () => {
       expect(isAgentMediatedCompletionSourceTool(sourceTool)).toBe(false);
     },
   );
+});
+
+describe("isAgentToAgentSendInputProvenance", () => {
+  it("identifies an inter-session sessions_send turn", () => {
+    expect(
+      isAgentToAgentSendInputProvenance({
+        kind: "inter_session",
+        sourceSessionKey: "agent:other:discord:source",
+        sourceTool: "sessions_send",
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["subagent_announce", "agent_harness_task", "image_generate"])(
+    "does not flag inter-session %s turns",
+    (sourceTool) => {
+      expect(isAgentToAgentSendInputProvenance({ kind: "inter_session", sourceTool })).toBe(false);
+    },
+  );
+
+  it("does not flag external-user sessions_send provenance or missing provenance", () => {
+    expect(
+      isAgentToAgentSendInputProvenance({ kind: "external_user", sourceTool: "sessions_send" }),
+    ).toBe(false);
+    expect(isAgentToAgentSendInputProvenance(undefined)).toBe(false);
+  });
 });
 
 describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {

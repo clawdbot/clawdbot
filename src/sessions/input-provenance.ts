@@ -119,6 +119,18 @@ export function shouldPreserveUserFacingSessionStateForInputProvenance(value: un
   return sourceTool ? USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS.has(sourceTool) : false;
 }
 
+// True when this turn is processing a sessions_send agent-to-agent message. The
+// target's reply already flows back through the sessions_send tool result, so the
+// routed turn must not expose sessions_send again: otherwise the target can
+// reverse-call the requester and post the same content twice (issue #39476).
+export function isAgentToAgentSendInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  if (provenance?.kind !== "inter_session") {
+    return false;
+  }
+  return provenance.sourceTool === "sessions_send";
+}
+
 export function hasInterSessionUserProvenance(
   message: { role?: unknown; provenance?: unknown } | undefined,
 ): boolean {
