@@ -46,6 +46,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedAttemptSessionLockController,
@@ -53,7 +54,6 @@ import {
   installPromptSubmissionLockRelease,
 } from "../../agents/embedded-agent-runner/run/attempt.session-lock.js";
 import { isNonProviderRuntimeCoordinationError } from "../../agents/failover-error.js";
-import { createOpenAICompletionsTransportStreamFn } from "../../agents/openai-transport-stream.js";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
