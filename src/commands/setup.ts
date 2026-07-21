@@ -42,7 +42,7 @@ type SetupCommandDeps = {
     opts: { path?: string; suffix?: string },
   ) => void | Promise<void>;
   mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
-  resolveSessionTranscriptsDir?: () => string | Promise<string>;
+  resolveSessionTranscriptsDir?: (agentId: string) => string | Promise<string>;
   replaceConfigFile?: ReplaceConfigFile;
 };
 
@@ -116,9 +116,9 @@ async function logDefaultConfigUpdated(
   logConfigUpdated(runtime, opts);
 }
 
-async function resolveDefaultSessionTranscriptsDir(): Promise<string> {
-  const { resolveSessionTranscriptsDir } = await import("../config/sessions.js");
-  return resolveSessionTranscriptsDir();
+async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<string> {
+  const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
+  return resolveSessionTranscriptsDirForAgent(agentId);
 }
 
 /** Prepares config, workspace, and session directories for a usable installation. */
@@ -209,9 +209,10 @@ export async function setupCommand(
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
+  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )();
+  )(resolveDefaultAgentId(next));
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");

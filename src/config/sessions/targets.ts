@@ -1,11 +1,10 @@
 // Session store target discovery maps configured and on-disk agent stores to canonical targets.
 import fsSync from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import {
-  DEFAULT_AGENT_ID,
+  isValidAgentId,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
@@ -71,12 +70,7 @@ function isWithinRoot(realPath: string, realRoot: string): boolean {
 }
 
 function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boolean {
-  // Avoid collapsing arbitrary directory names like "###" into the default main agent.
-  // Human-friendly names like "Retired Agent" are still allowed because they normalize to
-  // a non-default stable id and preserve the intended retired-store discovery behavior.
-  return (
-    agentId === DEFAULT_AGENT_ID && normalizeLowercaseStringOrEmpty(dirName) !== DEFAULT_AGENT_ID
-  );
+  return !/[a-z0-9]/i.test(dirName) || !isValidAgentId(agentId);
 }
 
 function resolveValidatedManagedFilePathSync(params: {
@@ -575,7 +569,6 @@ export function resolveSessionStoreTargets(
   params: { env?: NodeJS.ProcessEnv } = {},
 ): SessionStoreTarget[] {
   const env = params.env ?? process.env;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   const hasAgent = Boolean(opts.agent?.trim());
   const allAgents = opts.allAgents === true;
   if (hasAgent && allAgents) {
@@ -584,6 +577,7 @@ export function resolveSessionStoreTargets(
   if (opts.store && (hasAgent || allAgents)) {
     throw new Error("--store cannot be combined with --agent or --all-agents");
   }
+  const defaultAgentId = resolveDefaultAgentId(cfg);
 
   if (opts.store) {
     return [resolveExplicitSessionStoreTarget({ defaultAgentId, env, store: opts.store })];

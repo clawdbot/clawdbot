@@ -267,7 +267,7 @@ function resolveSessionConversationTranscriptTarget(params: {
   if (!sessionKey) {
     return {};
   }
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
   const entry = loadSessionEntryReadOnly({ agentId, sessionKey, storePath });
   if (!entry?.sessionId) {

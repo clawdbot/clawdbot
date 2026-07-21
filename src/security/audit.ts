@@ -31,7 +31,6 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
@@ -673,7 +672,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     new Map(
       [
         {
-          id: DEFAULT_AGENT_ID,
+          id: resolveDefaultAgentId(cfg),
           security: resolveExecModePolicy({
             mode: cfg.tools?.exec?.mode,
             security: cfg.tools?.exec?.security ?? "deny",
@@ -768,7 +767,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   const interpreterAllowlistHits = collectInterpreterAllowlistHits({
     approvals,
     strictInlineEvalForAgentId: (agentId) => {
-      if (!agentId || agentId === "*" || agentId === DEFAULT_AGENT_ID) {
+      if (!agentId || agentId === "*") {
         return globalStrictInlineEval;
       }
       const agent = agents.find((entry) => entry?.id === agentId);
@@ -1003,14 +1002,15 @@ function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
 
 function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
   const candidates = [
     ...(defaultsHaveSkillAllowlist
       ? [
           {
-            id: DEFAULT_AGENT_ID,
+            id: defaultAgentId,
             skillSource: "agents.defaults.skills",
-            agentId: undefined,
+            agentId: defaultAgentId,
           },
         ]
       : []),

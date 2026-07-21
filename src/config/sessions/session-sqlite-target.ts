@@ -1,5 +1,5 @@
 import path from "node:path";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 
 /** SQLite database target resolved from a legacy session store path. */
 type ResolvedSqliteStoreTarget = {
@@ -18,7 +18,7 @@ function resolveCustomStoreSqlitePath(params: {
     params.sqliteBaseName ?? (path.basename(resolved, path.extname(resolved)) || "openclaw-agent");
   const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
   const sqliteName =
-    agentId && agentId !== DEFAULT_AGENT_ID && normalizeAgentId(sqliteBaseName) !== agentId
+    agentId && normalizeAgentId(sqliteBaseName) !== agentId
       ? `${sqliteBaseName}.${agentId}`
       : sqliteBaseName;
   return path.join(sessionsDir, `${sqliteName}.sqlite`);

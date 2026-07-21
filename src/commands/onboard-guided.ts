@@ -141,7 +141,7 @@ async function runGuidedOnboardingFlow(
     runtime.exit(1);
     return null;
   }
-  let existingConfig =
+  const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const acknowledgedConfig = await requireRiskAcknowledgement({
     opts,

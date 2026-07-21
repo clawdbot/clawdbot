@@ -20,6 +20,7 @@ import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
 import type { WizardPrompter } from "./prompts.js";
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
+import { ensureSetupWizardAgent } from "./setup.agent.js";
 import {
   detectSetupMigrationSources,
   listSetupMigrationOptions,
@@ -501,40 +502,19 @@ async function runSetupWizardOnce(
     workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
   );
 
-  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
-    await loadOnboardConfigModule();
-  const { allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
+  const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
     prompter,
   });
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
-    baseConfig,
+  let nextConfig = await ensureSetupWizardAgent({
+    config: baseConfig,
+    prompter,
+    workspaceDir,
     requestedWorkspaceDir,
-    { allowWorkspaceChange },
-  );
-  if (opts.skipBootstrap) {
-    nextConfig = applySkipBootstrapConfig(nextConfig);
-  }
-  if ((nextConfig.agents?.list?.length ?? 0) === 0) {
-    const agentName = await prompter.text({
-      message: "What should we call your first agent?",
-      initialValue: "main",
-      validate: (value) => (value?.trim() ? undefined : "Agent name is required"),
-    });
-    const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
-    const created = await ensureOnboardingAgent({
-      config: nextConfig,
-      name: agentName.trim() || "main",
-      workspace: workspaceDir,
-    });
-    nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir, {
-      allowWorkspaceChange,
-    });
-    if (opts.skipBootstrap) {
-      nextConfig = applySkipBootstrapConfig(nextConfig);
-    }
-  }
+    allowWorkspaceChange,
+    skipBootstrap: opts.skipBootstrap,
+  });
 
   if (!keepExistingModelConfig) {
     const modelAuth = await runSetupModelAuthStep({

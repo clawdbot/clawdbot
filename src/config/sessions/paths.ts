@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
@@ -13,16 +13,12 @@ function resolveAgentSessionsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
+  if (!agentId?.trim()) {
+    throw new Error("Session storage path requires an explicit agent id.");
+  }
   const root = resolveStateDir(env, homedir);
-  const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
+  const id = normalizeAgentId(agentId);
   return path.join(root, "agents", id, "sessions");
-}
-
-export function resolveSessionTranscriptsDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
-): string {
-  return resolveAgentSessionsDir(DEFAULT_AGENT_ID, env, homedir);
 }
 
 export function resolveSessionTranscriptsDirForAgent(
@@ -318,7 +314,10 @@ export function resolveStorePath(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  const agentId = normalizeAgentId(opts?.agentId ?? DEFAULT_AGENT_ID);
+  if (!opts?.agentId?.trim()) {
+    throw new Error("Session store path requires an explicit agent id.");
+  }
+  const agentId = normalizeAgentId(opts.agentId);
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {

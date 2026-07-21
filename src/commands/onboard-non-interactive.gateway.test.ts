@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js";
+import {
+  createThrowingRuntime,
+  mockOnboardingAgent,
+} from "./onboard-non-interactive.test-helpers.js";
+import type { WaitForGatewayReachableMock } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
@@ -29,18 +33,7 @@ const gatewayServiceMock = vi.hoisted(() => ({
 const readLastGatewayErrorLineMock = vi.hoisted(() =>
   vi.fn(async () => "Gateway failed to start: required secrets are unavailable."),
 );
-let waitForGatewayReachableMock:
-  | ((params: {
-      url: string;
-      token?: string;
-      password?: string;
-      deadlineMs?: number;
-      probeTimeoutMs?: number;
-    }) => Promise<{
-      ok: boolean;
-      detail?: string;
-    }>)
-  | undefined;
+let waitForGatewayReachableMock: WaitForGatewayReachableMock;
 
 function resolveTestConfigPath() {
   const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
@@ -108,27 +101,7 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
 }));
 
-vi.mock("./onboard-agent.js", () => ({
-  ensureOnboardingAgent: async ({
-    config,
-    name,
-    workspace,
-  }: {
-    config: OpenClawConfig;
-    name: string;
-    workspace: string;
-  }) => ({
-    config: {
-      ...config,
-      agents: {
-        ...config.agents,
-        list: [{ id: name, name, workspace, default: true }],
-      },
-    },
-    agentId: name,
-    bootstrapPending: true,
-  }),
-}));
+vi.mock("./onboard-agent.js", () => ({ ensureOnboardingAgent: mockOnboardingAgent }));
 
 vi.mock("./onboard-helpers.js", () => {
   const normalizeGatewayTokenInput = (value: unknown): string => {

@@ -11,10 +11,24 @@ import {
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
-import { runSecurityAudit } from "./audit.js";
+import { runSecurityAudit as runSecurityAuditImpl } from "./audit.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
 const execFileAsync = promisify(execFile);
+
+async function runSecurityAudit(
+  params: Parameters<typeof runSecurityAuditImpl>[0],
+): ReturnType<typeof runSecurityAuditImpl> {
+  const config = structuredClone(params.config);
+  config.agents ??= {};
+  config.agents.list ??= [];
+  if (config.agents.list.length === 0) {
+    config.agents.list.push({ id: "main", default: true });
+  } else if (!config.agents.list.some((agent) => agent.default === true)) {
+    config.agents.list[0]!.default = true;
+  }
+  return runSecurityAuditImpl({ ...params, config });
+}
 
 function captureSecurityEvents(): {
   events: DiagnosticSecurityEvent[];

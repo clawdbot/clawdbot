@@ -20,7 +20,7 @@ import {
   listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
-  DEFAULT_AGENT_ID,
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isValidAgentId,
   normalizeAgentId,

@@ -32,7 +32,10 @@ import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../../routing/session-key.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
+  normalizeAgentId,
+} from "../../../routing/session-key.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,

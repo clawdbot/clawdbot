@@ -87,14 +87,8 @@ const mockConfig = vi.hoisted(() => {
       return cloneConfig();
     },
     setConfig(config: TestConfig) {
-      const agents =
-        typeof config.agents === "object" && config.agents !== null
-          ? (config.agents as Record<string, unknown>)
-          : {};
-      if (!Object.hasOwn(agents, "list")) {
-        agents.list = [{ id: "main", default: true }];
-      }
-      config.agents = agents;
+      const agents = (config.agents ?? {}) as Record<string, unknown>;
+      config.agents = { ...agents, list: agents.list ?? [{ id: "main", default: true }] };
       state.config = structuredClone(config);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
@@ -727,6 +721,10 @@ describe("parseSystemAgentOperation", () => {
         mockConfig.setConfig(change(mockConfig.currentConfig()));
         return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
       });
+      const expectedError =
+        field === "default marker"
+          ? "expected exactly one default=true entry"
+          : "inference route changed during verification";
 
       await expect(
         executeSystemAgentOperation(
@@ -737,11 +735,7 @@ describe("parseSystemAgentOperation", () => {
             deps: { verifyInferenceConfig },
           },
         ),
-      ).rejects.toThrow(
-        field === "default marker"
-          ? "expected exactly one default=true entry"
-          : "inference route changed during verification",
-      );
+      ).rejects.toThrow(expectedError);
 
       expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
       expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");

@@ -44,6 +44,17 @@ describe("legacy implicit agent doctor repair", () => {
     expect(maybeRepairAgentRoster(config, env)).toEqual({ config, changes: [] });
   });
 
+  it("writes an explicit main roster for non-empty legacy agent state", () => {
+    const env = fixtureEnv();
+    const agentDir = path.join(env.OPENCLAW_STATE_DIR!, "agents", "main", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "auth-profiles.json"), "{}\n");
+
+    expect(maybeRepairAgentRoster({}, env).config.agents?.list).toEqual([
+      { id: "main", default: true },
+    ]);
+  });
+
   it("expands a configured home-relative legacy workspace", () => {
     const env = fixtureEnv();
     const workspace = path.join(env.HOME!, "legacy-workspace");

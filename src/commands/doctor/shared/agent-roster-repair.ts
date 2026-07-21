@@ -28,11 +28,12 @@ function directoryHasEntries(dir: string): boolean {
 
 function hasLegacyImplicitMainState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const stateDir = resolveStateDir(env);
-  const sessionsDirs = [
+  const stateDirs = [
+    path.join(stateDir, "agents", LEGACY_IMPLICIT_AGENT_ID, "agent"),
     path.join(stateDir, "agents", LEGACY_IMPLICIT_AGENT_ID, "sessions"),
     path.join(stateDir, "sessions"),
   ];
-  if (sessionsDirs.some(directoryHasEntries)) {
+  if (stateDirs.some(directoryHasEntries)) {
     return true;
   }
   const configuredWorkspace = cfg.agents?.defaults?.workspace?.trim();

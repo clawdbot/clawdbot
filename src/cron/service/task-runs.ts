@@ -1,11 +1,14 @@
 /** Detached task-ledger integration for cron runs. */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import {
-  DEFAULT_AGENT_ID,
-  normalizeAgentId,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+
+function requireCronAgentId(agentId: string | undefined): string {
+  if (!agentId?.trim()) {
+    throw new Error("Cron task run requires an agent id or prepared configured default.");
+  }
+  return normalizeAgentId(agentId);
+}
 import {
   createRunningTaskRun,
   finalizeTaskRunById,
@@ -43,9 +46,15 @@ export function normalizeCronLaneSegment(value: string | undefined, fallback: st
 }
 
 /** Builds the main-session child key used to isolate one cron run's task transcript. */
-export function resolveMainSessionCronRunSessionKey(job: CronJob, startedAt: number): string {
+export function resolveMainSessionCronRunSessionKey(
+  job: CronJob,
+  startedAt: number,
+  configuredDefaultAgentId: string | undefined,
+): string {
   const explicitAgentId = job.agentId?.trim();
-  const agentId = normalizeAgentId(explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey));
+  const agentId = explicitAgentId
+    ? normalizeAgentId(explicitAgentId)
+    : resolveAgentIdFromSessionKey(job.sessionKey, requireCronAgentId(configuredDefaultAgentId));
   const jobSegment = normalizeCronLaneSegment(job.id, "job");
   const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
   return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
@@ -57,12 +66,16 @@ function resolveCronTaskChildSessionKey(params: {
   startedAt: number;
 }): string | undefined {
   if (params.job.sessionTarget === "main") {
-    return resolveMainSessionCronRunSessionKey(params.job, params.startedAt);
+    return resolveMainSessionCronRunSessionKey(
+      params.job,
+      params.startedAt,
+      params.state.deps.defaultAgentId,
+    );
   }
   if (params.job.sessionTarget === "current") {
     return resolveCronAgentSessionKey({
       sessionKey: `cron:${params.job.id}`,
-      agentId: params.job.agentId ?? params.state.deps.defaultAgentId ?? DEFAULT_AGENT_ID,
+      agentId: requireCronAgentId(params.job.agentId ?? params.state.deps.defaultAgentId),
     });
   }
   const explicitSessionKey = params.job.sessionKey?.trim();
@@ -76,7 +89,7 @@ function resolveCronTaskChildSessionKey(params: {
   }
   return resolveCronAgentSessionKey({
     sessionKey: `cron:${params.job.id}`,
-    agentId: params.job.agentId ?? params.state.deps.defaultAgentId ?? DEFAULT_AGENT_ID,
+    agentId: requireCronAgentId(params.job.agentId ?? params.state.deps.defaultAgentId),
   });
 }
 
@@ -216,9 +229,9 @@ function tryCreateCronTaskRunRecord(params: {
           : undefined),
       agentId:
         params.job?.agentId ??
-        resolveAgentIdFromSessionKey(params.childSessionKey) ??
-        params.state.deps.defaultAgentId ??
-        DEFAULT_AGENT_ID,
+        (params.childSessionKey
+          ? resolveAgentIdFromSessionKey(params.childSessionKey, params.state.deps.defaultAgentId)
+          : requireCronAgentId(params.state.deps.defaultAgentId)),
       runId: params.runId,
       label: params.job?.name,
       task: params.job?.name || params.jobId,

@@ -5,13 +5,9 @@
  */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  DEFAULT_AGENT_ID,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
-import { listAgentIds } from "../agent-scope-config.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
@@ -102,7 +98,7 @@ export function createAgentsListTool(opts?: {
       const requesterAgentId = normalizeAgentId(
         opts?.requesterAgentIdOverride ??
           parseAgentSessionKey(requesterInternalKey)?.agentId ??
-          DEFAULT_AGENT_ID,
+          resolveDefaultAgentId(cfg),
       );
 
       const allowAgents =

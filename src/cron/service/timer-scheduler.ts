@@ -4,7 +4,6 @@ import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
 } from "../../process/gateway-work-admission.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -179,6 +178,15 @@ async function onAdmittedTimer(state: CronServiceState) {
     // See: https://github.com/openclaw/openclaw/issues/12025
     armRunningRecheckTimer(state);
     return;
+  }
+  const hasSessionReaperStore = Boolean(
+    state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
+  );
+  const sessionReaperDefaultAgentId = hasSessionReaperStore
+    ? state.deps.defaultAgentId?.trim()
+    : undefined;
+  if (hasSessionReaperStore && !sessionReaperDefaultAgentId) {
+    throw new Error("Cron session reaper requires the prepared configured default agent id.");
   }
   state.running = true;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
@@ -619,27 +627,31 @@ async function onAdmittedTimer(state: CronServiceState) {
     // Placed in `finally` so the reaper runs even when a long-running job keeps
     // `state.running` true across multiple timer ticks — the early return at the
     // top of onTimer would otherwise skip the reaper indefinitely.
-    const storePaths = new Set<string>();
+    const storeTargets = new Map<string, { agentId: string; storePath: string }>();
+    const addStoreTarget = (agentId: string, storePath: string) => {
+      storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
+    };
     if (state.deps.resolveSessionStorePath) {
-      const defaultAgentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
+      const defaultAgentId = sessionReaperDefaultAgentId!;
       if (state.store?.jobs?.length) {
         for (const job of state.store.jobs) {
           const agentId =
             typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
-          storePaths.add(state.deps.resolveSessionStorePath(agentId));
+          addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
         }
       } else {
-        storePaths.add(state.deps.resolveSessionStorePath(defaultAgentId));
+        addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
       }
     } else if (state.deps.sessionStorePath) {
-      storePaths.add(state.deps.sessionStorePath);
+      addStoreTarget(sessionReaperDefaultAgentId!, state.deps.sessionStorePath);
     }
 
-    if (storePaths.size > 0) {
+    if (storeTargets.size > 0) {
       const nowMs = state.deps.nowMs();
-      for (const storePath of storePaths) {
+      for (const { agentId, storePath } of storeTargets.values()) {
         try {
           await sweepCronRunSessions({
+            agentId,
             cronConfig: state.deps.cronConfig,
             sessionStorePath: storePath,
             nowMs,

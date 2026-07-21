@@ -1,8 +1,9 @@
 /** Collects agent-scoped sandbox SSH SecretRefs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { runtimeSandboxSecretOwnerId } from "./runtime-sandbox-secret-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -73,16 +74,13 @@ export function collectAgentSandboxAssignments(params: {
       configuredAgents.push({ entry, entryId });
     }
   });
-  const candidates: Array<{
-    entry: Record<string, unknown> | undefined;
-    entryId: string | undefined;
-  }> = configuredAgents.length > 0 ? configuredAgents : [{ entry: undefined, entryId: undefined }];
+  const candidates = configuredAgents;
   const activeDefaultKeys = new Set<SandboxSshSecretKey>();
   const seenAgentIds = new Set<string>();
 
   for (const candidate of candidates) {
     const rawAgent = candidate.entry;
-    const agentId = normalizeAgentId(candidate.entryId ?? DEFAULT_AGENT_ID);
+    const agentId = normalizeAgentId(candidate.entryId);
     if (seenAgentIds.has(agentId)) {
       continue;
     }
@@ -184,7 +182,9 @@ export function collectAgentSandboxAssignments(params: {
       context: params.context,
       active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
-      owner: sandboxSecretOwner(DEFAULT_AGENT_ID, { defaults: defaultsSandbox }),
+      owner: sandboxSecretOwner(resolveDefaultAgentId(params.config), {
+        defaults: defaultsSandbox,
+      }),
     });
   }
 }

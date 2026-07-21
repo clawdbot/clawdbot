@@ -48,6 +48,7 @@ type ReaperResult = {
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
+  agentId: string;
   /** Resolved path to sessions.json — required. */
   sessionStorePath: string;
   nowMs?: number;
@@ -80,7 +81,10 @@ export async function sweepCronRunSessions(params: {
     const cutoff = now - retentionMs;
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
-    for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
+    for (const { sessionKey, entry } of listSessionEntries({
+      agentId: params.agentId,
+      storePath,
+    })) {
       if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }
@@ -111,6 +115,7 @@ export async function sweepCronRunSessions(params: {
       // retention policy (null = keep until the disk budget evicts).
       const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
+        agentId: params.agentId,
         storePath,
         removals,
         preserveActiveWork: true,

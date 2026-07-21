@@ -70,6 +70,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       requestHeartbeat: vi.fn(),
       // This will throw, simulating a failure during job execution.
       runIsolatedAgentJob: vi.fn().mockRejectedValue(new Error("gateway down")),
+      defaultAgentId: "main",
       sessionStorePath,
     });
 
@@ -87,16 +88,20 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
-  it("session reaper runs when resolveSessionStorePath is provided", async () => {
+  it("keeps same-path session reaper targets distinct by agent", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
 
     await saveCronStore(store.storePath, {
       version: 1,
-      jobs: [createDueIsolatedJob({ id: "ok-job", nowMs: now })],
+      jobs: [
+        createDueIsolatedJob({ id: "default-job", nowMs: now }),
+        { ...createDueIsolatedJob({ id: "worker-job", nowMs: now }), agentId: "worker" },
+      ],
     });
 
-    const resolvedPaths: string[] = [];
+    const resolvedAgentIds: string[] = [];
+    const sharedStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
     const state = createCronServiceState({
       storePath: store.storePath,
       cronEnabled: true,
@@ -105,19 +110,20 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
+      defaultAgentId: "main",
       resolveSessionStorePath: (agentId) => {
-        const p = path.join(path.dirname(store.storePath), `${agentId}-sessions`, "sessions.json");
-        resolvedPaths.push(p);
-        return p;
+        if (!agentId) {
+          throw new Error("expected prepared agent id");
+        }
+        resolvedAgentIds.push(agentId);
+        return sharedStorePath;
       },
     });
 
     await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
 
-      // The resolveSessionStorePath callback should have been invoked to build
-      // the set of store paths for the session reaper.
-      expect(resolvedPaths.length).toBeGreaterThan(0);
+      expect([...new Set(resolvedAgentIds)].toSorted()).toEqual(["main", "worker"]);
       expect(state.running).toBe(false);
     });
   });
@@ -149,13 +155,16 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
+      defaultAgentId: "agent-default",
       sessionStorePath,
     });
 
     await withCronServiceStateForTest(state, async () => {
       await expect(onTimer(state)).resolves.toBeUndefined();
 
-      expect(listSessionEntries({ storePath: sessionStorePath })).toStrictEqual([]);
+      expect(
+        listSessionEntries({ agentId: "agent-default", storePath: sessionStorePath }),
+      ).toStrictEqual([]);
       expect(state.running).toBe(false);
     });
   });

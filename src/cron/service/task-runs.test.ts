@@ -15,14 +15,21 @@ import { cronStoreKey } from "../store/key.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
-import { createCronServiceState } from "./state.js";
+import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
+  resolveMainSessionCronRunSessionKey,
   tryCreateCronTaskRun,
   tryFindCronTaskRunIdForRecovery,
   tryFindFinalizedCronTaskRun,
   tryFinishCronTaskRun,
   tryFinishCronTaskRunWithoutHistory,
 } from "./task-runs.js";
+
+function createCronServiceState(
+  params: Parameters<typeof createCronServiceStateBase>[0],
+): ReturnType<typeof createCronServiceStateBase> {
+  return createCronServiceStateBase({ defaultAgentId: "main", ...params });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -31,6 +38,20 @@ afterEach(() => {
 });
 
 describe("cron task run terminal records", () => {
+  it("uses the prepared configured default for a main-session run", () => {
+    const job = {
+      id: "default-owner",
+      sessionTarget: "main",
+    } as CronJob;
+
+    expect(resolveMainSessionCronRunSessionKey(job, 1_500, "ops")).toBe(
+      "agent:ops:cron:default-owner:run:1500",
+    );
+    expect(() => resolveMainSessionCronRunSessionKey(job, 1_500, undefined)).toThrow(
+      "Cron task run requires an agent id or prepared configured default.",
+    );
+  });
+
   it("persists canonical history directly when a detached runtime is registered", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-core-ledger-runtime-" },

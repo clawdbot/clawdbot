@@ -15,7 +15,7 @@ import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-m
 import { containsEnvVarReference, resolveConfigEnvVars } from "../config/env-substitution.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { formatCliCommand } from "./command-format.js";
 
 type TouchedModelRef = {
@@ -214,15 +214,13 @@ function collectTouchedTextModelRefs(params: {
     }
     const previousDefaultAgentId = resolveDefaultAgentId(params.previousConfig ?? {});
     for (const defaultRef of defaultRefs) {
-      const sameOwner = normalizeAgentId(previousDefaultAgentId) === DEFAULT_AGENT_ID;
-      const previouslyInherited =
-        sameOwner && params.previousConfig
-          ? defaultRef.fallback
-            ? resolveAgentModelFallbacksOverride(params.previousConfig, previousDefaultAgentId) ===
-              undefined
-            : resolveAgentExplicitModelPrimary(params.previousConfig, previousDefaultAgentId) ===
-              undefined
-          : false;
+      const previouslyInherited = params.previousConfig
+        ? defaultRef.fallback
+          ? resolveAgentModelFallbacksOverride(params.previousConfig, previousDefaultAgentId) ===
+            undefined
+          : resolveAgentExplicitModelPrimary(params.previousConfig, previousDefaultAgentId) ===
+            undefined
+        : false;
       const alreadySelected = touchedRefs.some(
         (ref) => ref.agentId === undefined && ref.path === defaultRef.path,
       );

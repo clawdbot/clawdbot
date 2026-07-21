@@ -1,6 +1,6 @@
 /** Collects per-agent memory search secret refs from runtime config. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { runtimeMemorySecretOwnerId } from "./runtime-memory-secret-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -40,15 +40,15 @@ export function collectAgentMemorySearchAssignments(params: {
   let defaultApiKeyAssignmentCollected = false;
   const collectedDefaultHeaderKeys = new Set<string>();
   const collectForAgent = (
-    rawAgent: Record<string, unknown> | undefined,
-    entryId?: string,
+    rawAgent: Record<string, unknown>,
+    entryId: string,
     container = "entries",
     pathId = entryId,
   ) => {
-    const agentMemory = isRecord(rawAgent?.memory) ? rawAgent.memory : undefined;
+    const agentMemory = isRecord(rawAgent.memory) ? rawAgent.memory : undefined;
     const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
     const remote = isRecord(memorySearch?.remote) ? memorySearch.remote : undefined;
-    const agentId = normalizeAgentId(entryId ?? DEFAULT_AGENT_ID);
+    const agentId = normalizeAgentId(entryId);
     const active =
       rawAgent?.enabled !== false &&
       (memorySearch?.enabled ?? defaultsMemorySearch?.enabled ?? true) !== false;
@@ -114,15 +114,11 @@ export function collectAgentMemorySearchAssignments(params: {
     }
   };
 
-  if (entries.length === 0) {
-    collectForAgent(undefined);
-  } else {
-    entries.forEach(([entryId, rawAgent, container, pathId]) => {
-      if (isRecord(rawAgent)) {
-        collectForAgent(rawAgent, entryId, container, pathId);
-      }
-    });
-  }
+  entries.forEach(([entryId, rawAgent, container, pathId]) => {
+    if (isRecord(rawAgent)) {
+      collectForAgent(rawAgent, entryId, container, pathId);
+    }
+  });
 
   if (defaultRemote && !defaultApiKeyAssignmentCollected) {
     collectRuntimeSecretInputAssignment({

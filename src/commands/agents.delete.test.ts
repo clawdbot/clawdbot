@@ -365,7 +365,9 @@ describe("agents delete command", () => {
       expect(replaceConfigFileCalls[0]?.[0].nextConfig).toEqual({
         agents: {
           defaults: undefined,
-          entries: { main: { workspace: path.join(stateDir, "workspace-main") } },
+          entries: {
+            main: { default: true, workspace: path.join(stateDir, "workspace-main") },
+          },
         },
         bindings: undefined,
         tools: undefined,

@@ -11,7 +11,6 @@ import {
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   clearCronJobActive,
@@ -564,11 +563,11 @@ function resolveEffectiveJobAgentId(
   job: { agentId?: string | null },
   defaultAgentId: string | undefined,
 ) {
-  return (
-    normalizeOptionalAgentId(job.agentId) ??
-    normalizeOptionalAgentId(defaultAgentId) ??
-    DEFAULT_AGENT_ID
-  );
+  const agentId = normalizeOptionalAgentId(job.agentId) ?? normalizeOptionalAgentId(defaultAgentId);
+  if (!agentId) {
+    throw new Error("Cron job requires an agent id or prepared configured default.");
+  }
+  return agentId;
 }
 
 function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {

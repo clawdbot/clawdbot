@@ -10,7 +10,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions } from "./session-reaper.js";
+import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
@@ -18,6 +18,12 @@ const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAc
 const taskStatusMocks = vi.hoisted(() => ({
   buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
 }));
+
+function sweepCronRunSessions(
+  params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId">,
+) {
+  return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
+}
 
 vi.mock("../tasks/task-status-access.js", () => ({
   buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
@@ -37,13 +43,16 @@ async function seedSessionEntries(
   entries: Record<string, SessionEntry>,
 ): Promise<void> {
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
   }
 }
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
 }
 
