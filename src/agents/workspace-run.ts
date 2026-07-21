@@ -8,7 +8,6 @@ import { logWarn } from "../logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import {
   classifySessionKeyShape,
-  DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -50,10 +49,9 @@ function resolveRunAgentId(params: {
     return { agentId: explicit, agentIdSource: "explicit" };
   }
 
-  const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
   if (shape === "missing" || shape === "legacy_or_alias") {
     return {
-      agentId: defaultAgentId || DEFAULT_AGENT_ID,
+      agentId: resolveDefaultAgentId(params.config ?? {}),
       agentIdSource: "default",
     };
   }
@@ -67,10 +65,7 @@ function resolveRunAgentId(params: {
   }
 
   // Defensive fallback, should be unreachable for non-malformed shapes.
-  return {
-    agentId: defaultAgentId || DEFAULT_AGENT_ID,
-    agentIdSource: "default",
-  };
+  throw new Error("Session key does not resolve to a configured agent.");
 }
 
 /** Redacts a run/session identifier for logs and prompts. */

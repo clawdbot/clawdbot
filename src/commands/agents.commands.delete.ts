@@ -1,6 +1,10 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -21,7 +25,7 @@ import {
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -92,15 +96,16 @@ export async function agentsDeleteCommand(
   if (agentId !== input) {
     runtime.log(`Normalized agent id to "${agentId}".`);
   }
-  if (agentId === DEFAULT_AGENT_ID) {
-    runtime.error(`"${DEFAULT_AGENT_ID}" cannot be deleted.`);
-    runtime.exit(1);
-    return;
-  }
-
   if (findAgentEntryIndex(listAgentEntries(cfg), agentId) < 0) {
     runtime.error(
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (listAgentEntries(cfg).length > 0 && agentId === resolveDefaultAgentId(cfg)) {
+    runtime.error(
+      `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
     );
     runtime.exit(1);
     return;

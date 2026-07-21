@@ -94,7 +94,7 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
       `Invalid agent roster: expected exactly one default=true entry, found ${defaults.length}. Run \`openclaw doctor --fix\`.`,
     );
   }
-  return normalizeAgentId(defaults[0].id);
+  return normalizeAgentId(defaults[0]!.id);
 }
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {

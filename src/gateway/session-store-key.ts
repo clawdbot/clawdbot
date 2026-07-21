@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
@@ -11,7 +11,6 @@ import {
 } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -36,39 +35,16 @@ function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
   return normalizeAgentId(resolveDefaultAgentId(cfg));
 }
 
-function shouldRemapLegacyDefaultMainAlias(
-  cfg: OpenClawConfig,
-  parsed: ParsedAgentSessionKey,
-  options?: { storeAgentId?: string },
-): boolean {
-  const agentId = normalizeAgentId(parsed.agentId);
-  if (agentId !== DEFAULT_AGENT_ID || listAgentIds(cfg).includes(DEFAULT_AGENT_ID)) {
-    return false;
-  }
-  const defaultAgentId = resolveDefaultStoreAgentId(cfg);
-  if (options?.storeAgentId && normalizeAgentId(options.storeAgentId) !== defaultAgentId) {
-    return false;
-  }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  return rest === "main" || rest === mainKey;
-}
-
 function resolveParsedSessionStoreKey(
-  cfg: OpenClawConfig,
+  _cfg: OpenClawConfig,
   raw: string,
   parsed: ParsedAgentSessionKey,
-  options?: { storeAgentId?: string },
+  _options?: { storeAgentId?: string },
 ): { agentId: string; sessionKey: string } {
-  if (!shouldRemapLegacyDefaultMainAlias(cfg, parsed, options)) {
-    return {
-      agentId: normalizeAgentId(parsed.agentId),
-      sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
-    };
-  }
-  const agentId = resolveDefaultStoreAgentId(cfg);
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  return { agentId, sessionKey: `agent:${agentId}:${rest}` };
+  return {
+    agentId: normalizeAgentId(parsed.agentId),
+    sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
+  };
 }
 
 /** Resolve any incoming session key into the canonical key used in persisted session stores. */

@@ -128,9 +128,20 @@ export function toAgentStoreSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
 }
 
-export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
+export function resolveAgentIdFromSessionKey(
+  sessionKey: string | undefined | null,
+  configuredDefaultAgentId?: string,
+): string {
   const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  if (configuredDefaultAgentId) {
+    return normalizeAgentId(configuredDefaultAgentId);
+  }
+  throw new Error(
+    "Session key does not contain an agent id; resolve it with the configured default agent.",
+  );
 }
 
 export function classifySessionKeyShape(sessionKey: string | undefined | null): SessionKeyShape {

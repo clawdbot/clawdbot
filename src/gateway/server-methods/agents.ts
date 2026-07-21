@@ -34,6 +34,7 @@ import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -80,7 +81,7 @@ import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
@@ -1033,11 +1034,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
-    if (agentId === DEFAULT_AGENT_ID) {
+    if (agentId === resolveDefaultAgentId(cfg)) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `"${DEFAULT_AGENT_ID}" cannot be deleted`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+        ),
       );
       return;
     }
@@ -1054,6 +1058,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
       typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
     try {
       const result = await withConfigMutationExclusive(async (lockedConfig) => {
+        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(
+            `agent "${agentId}" is the default; reassign default first`,
+          );
+        }
         let lockedJournal = readAgentDeletionJournal(agentId);
         const configured = isConfiguredAgent(lockedConfig, agentId);
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
