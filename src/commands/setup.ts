@@ -151,7 +151,7 @@ export async function setupCommand(
   const workspace =
     desiredWorkspace ?? defaults.workspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
 
-  const next: OpenClawConfig = {
+  const baseline: OpenClawConfig = {
     ...cfg,
     agents: {
       ...cfg.agents,
@@ -165,9 +165,19 @@ export async function setupCommand(
       mode: cfg.gateway?.mode ?? "local",
     },
   };
+  const staged =
+    (baseline.agents?.list?.length ?? 0) === 0
+      ? (await import("./onboard-agent.js")).stageOnboardingAgent({
+          config: baseline,
+          name: "main",
+          workspace,
+        })
+      : { config: baseline, agent: undefined };
+  const next = staged.config;
 
   if (
     !snapshot.exists ||
+    staged.agent !== undefined ||
     defaults.workspace !== workspace ||
     cfg.gateway?.mode !== next.gateway?.mode
   ) {
@@ -191,6 +201,9 @@ export async function setupCommand(
       if (cfg.gateway?.mode !== next.gateway?.mode) {
         updates.push("set gateway.mode");
       }
+      if (staged.agent) {
+        updates.push("created default agent main");
+      }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
       await (deps.logConfigUpdated ?? logDefaultConfigUpdated)(runtime, {
         path: configPath,
@@ -200,6 +213,12 @@ export async function setupCommand(
   } else {
     const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
     runtime.log(`Config OK: ${await formatConfigPath(configPath)}`);
+  }
+
+  const { isLegacyImplicitMainOnlyRoster, migrateLegacyMainSessionStateOrThrow } =
+    await import("./doctor/shared/legacy-main-session-migration.js");
+  if (isLegacyImplicitMainOnlyRoster(next)) {
+    await migrateLegacyMainSessionStateOrThrow(next);
   }
 
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({

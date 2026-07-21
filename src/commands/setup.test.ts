@@ -5,6 +5,12 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "../config/io.js";
 import { replaceConfigFile } from "../config/mutate.js";
+import {
+  loadExactSqliteSessionEntry,
+  replaceSqliteSessionEntrySync,
+} from "../config/sessions/session-accessor.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setupCommand } from "./setup.js";
 
 function createSetupDeps(home: string) {
@@ -71,15 +77,12 @@ describe("setupCommand", () => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
 
-      expect(raw).toStrictEqual({
+      expect(raw).toMatchObject({
         agents: {
-          defaults: {
-            workspace,
-          },
+          defaults: { workspace },
+          list: [{ id: "main", default: true, workspace }],
         },
-        gateway: {
-          mode: "local",
-        },
+        gateway: { mode: "local" },
       });
       expect(deps.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -90,6 +93,7 @@ describe("setupCommand", () => {
           }),
         }),
       );
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("main");
     });
   });
 
@@ -148,6 +152,109 @@ describe("setupCommand", () => {
       expect(raw.agents?.defaults?.workspace).toBe(workspace);
       expect(raw.gateway?.mode).toBe("local");
     });
+  });
+
+  it("materializes main for an existing valid empty-roster baseline", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const workspace = path.join(home, "baseline-workspace");
+      const deps = createSetupDeps(home);
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: { defaults: { workspace }, list: [] },
+          gateway: { mode: "local" },
+        }),
+      );
+
+      await setupCommand(undefined, runtime, deps);
+
+      const raw = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+        agents?: { list?: Array<{ id: string; default?: boolean }> };
+      };
+      expect(raw.agents?.list).toEqual([
+        expect.objectContaining({ id: "main", default: true, workspace }),
+      ]);
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("main");
+    });
+  });
+
+  it("preserves an existing non-main roster", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const workspace = path.join(home, "ops-workspace");
+      const deps = createSetupDeps(home);
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: { workspace },
+            list: [{ id: "ops", default: true, workspace }],
+          },
+          gateway: { mode: "local" },
+        }),
+      );
+
+      await setupCommand(undefined, runtime, deps);
+
+      const raw = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+        agents?: { list?: Array<{ id: string; default?: boolean }> };
+      };
+      expect(raw.agents?.list).toEqual([
+        expect.objectContaining({ id: "ops", default: true, workspace }),
+      ]);
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
+    });
+  });
+
+  it("migrates legacy main sessions when materializing the baseline roster", async () => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      scenario: "minimal",
+      label: "setup-legacy-main",
+    });
+    const customStore = state.path("legacy-sessions", "sessions.json");
+    const legacySqlite = state.path("legacy-sessions", "openclaw-agent.sqlite");
+
+    try {
+      await state.writeConfig({
+        agents: { list: [] },
+        session: { store: customStore },
+      });
+      replaceSqliteSessionEntrySync(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          storePath: legacySqlite,
+        },
+        { sessionId: "legacy-setup-session", updatedAt: 1 },
+      );
+
+      await setupCommand(undefined, { log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+
+      expect(
+        loadExactSqliteSessionEntry({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          storePath: customStore,
+        }),
+      ).toMatchObject({ entry: { sessionId: "legacy-setup-session" } });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    }
   });
 
   it("threads skipOptionalBootstrapFiles into workspace creation", async () => {
