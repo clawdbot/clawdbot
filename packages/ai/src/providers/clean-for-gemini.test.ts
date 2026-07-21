@@ -226,6 +226,16 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties?.agentId?.type).toBe("string");
   });
 
+  it("collapses multi-type arrays to a representative scalar type", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: ["string", "number"],
+      description: "string or number",
+    }) as Record<string, unknown>;
+
+    expect(cleaned.type).toBe("string");
+    expect(cleaned.description).toBe("string or number");
+  });
+
   it.each([
     {
       name: "integer enum",
