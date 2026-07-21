@@ -161,6 +161,7 @@ export async function downloadDirectUploadUrl(
   const { response, release } = await fetchDirectUploadDownload(parsed.toString());
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
     }
     return await readDirectUploadResponse(response, opts.maxBytes ?? MAX_UPLOAD_SIZE);
