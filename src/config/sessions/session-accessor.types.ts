@@ -61,7 +61,11 @@ export type LogicalSessionAccessScope = {
   sessionKey: string;
 };
 
-export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">>;
+export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">> & {
+  light?: boolean;
+  limit?: number;
+  offset?: number;
+};
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
 export type ResolvedSessionEntryAccessTarget = {

@@ -65,6 +65,7 @@ import {
   parseSqliteSessionEntryJson as parseSessionEntryRow,
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
@@ -135,26 +136,44 @@ export function resolveSqliteSessionKeyBySessionId(
 }
 
 /** Lists session entries from the additive SQLite session store. */
-export function listSqliteSessionEntries(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
-): SessionEntrySummary[] {
+export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+
+  if (scope.light) {
+    return listSqliteSessionEntriesLight(scope);
+  }
+
   if (isSessionStoreCacheEnabled()) {
     const cached = readSessionStoreCache({ storePath: dbPath, clone: false });
     if (cached) {
-      return Object.entries(cached)
+      let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
         .map(([sessionKey, entry]) => ({ sessionKey, entry }));
+      if (scope.offset) entries = entries.slice(scope.offset);
+      if (scope.limit) entries = entries.slice(0, scope.limit);
+      return entries;
     }
   }
-  const result = listSqliteSessionEntriesFromDatabase(database);
+
+  const result = listSqliteSessionEntriesFromDatabase(database, false, scope.limit, scope.offset);
+
   if (isSessionStoreCacheEnabled()) {
     const storeRecord = readSqliteSessionEntryStore(database);
     writeSessionStoreCache({ storePath: dbPath, store: storeRecord, takeOwnership: true });
   }
+
   return result;
+}
+
+/** Lists session entries with heavy list-view fields stripped from each entry. */
+export function listSqliteSessionEntriesLight(
+  scope: SessionEntryListScope = {},
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return listSqliteSessionEntriesFromDatabase(database, true, scope.limit, scope.offset);
 }
 
 /**
@@ -163,32 +182,49 @@ export function listSqliteSessionEntries(
  * acceptable degradation (health snapshots) or hides real state (migration detection).
  */
 export function listSqliteSessionEntriesReadOnly(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database),
+    (database) =>
+      listSqliteSessionEntriesFromDatabase(database, scope.light, scope.limit, scope.offset),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
 }
 
-function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
+function listSqliteSessionEntriesFromDatabase(
+  database: { db: DatabaseSync },
+  light?: boolean,
+  limit?: number,
+  offset?: number,
+) {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["session_key", "entry_json", "current_session_id", "updated_at"])
-      .orderBy("session_key", "asc"),
-  ).rows;
+  let query = db
+    .selectFrom("session_nodes")
+    .select(["session_key", "entry_json", "current_session_id", "updated_at"])
+    .orderBy("session_key", "asc");
+  if (limit) {
+    query = query.limit(limit);
+  }
+  if (offset) {
+    query = query.offset(offset);
+  }
+  const rows = executeSqliteQuerySync(database.db, query).rows;
   return rows
     .map((row) => {
       if (isInternalSessionEffectsKey(row.session_key)) {
         return undefined;
       }
       const entry = parseSessionEntryRow(row);
-      return entry ? { sessionKey: row.session_key, entry } : undefined;
+      if (!entry) {
+        return undefined;
+      }
+      if (light) {
+        const { systemPromptReport: _systemPromptReport, skillsSnapshot: _skillsSnapshot, ...lightEntry } = entry;
+        return { sessionKey: row.session_key, entry: lightEntry as SessionEntry };
+      }
+      return { sessionKey: row.session_key, entry };
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
 }
