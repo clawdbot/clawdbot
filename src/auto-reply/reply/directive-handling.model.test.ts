@@ -1935,6 +1935,26 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("announces the model change before the thinking remap in the ack", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
+        sessionEntry,
+      }),
+    );
+
+    const text = result?.text ?? "";
+    expect(text).toContain("Model set to openai/gpt-4o for this session.");
+    expect(text).toContain(
+      "Thinking level set to medium (adaptive not supported for openai/gpt-4o).",
+    );
+    // The model change (cause) must be reported before the thinking remap (effect).
+    expect(text.indexOf("Model set to")).toBeLessThan(text.indexOf("Thinking level set to"));
+  });
+
   it("fires session:patch when /model changes the persisted session model", async () => {
     const events: InternalHookEvent[] = [];
     registerInternalHook("session:patch", async (event) => {
